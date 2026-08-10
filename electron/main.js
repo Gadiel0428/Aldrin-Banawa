@@ -2,11 +2,30 @@ import { app, BrowserWindow, shell, ipcMain } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const require = createRequire(import.meta.url);
 
 let mainWindow = null;
+let serverStarted = false;
+
+function startEmbeddedServer() {
+  if (serverStarted) return;
+  try {
+    const serverPath = path.join(__dirname, '../dist/server.cjs');
+    if (fs.existsSync(serverPath)) {
+      console.log('Starting JUWEI WMS Node Express & WebSocket Server from:', serverPath);
+      require(serverPath);
+      serverStarted = true;
+    } else {
+      console.warn('Embedded server bundle dist/server.cjs not found at:', serverPath);
+    }
+  } catch (err) {
+    console.error('Error starting embedded JUWEI WMS server:', err);
+  }
+}
 
 function createWindow() {
   const iconPath = path.join(__dirname, '../public/favicon.ico');
@@ -20,7 +39,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: true,
+      webSecurity: false,
     },
     autoHideMenuBar: false,
     backgroundColor: '#0f172a',
@@ -38,12 +57,17 @@ function createWindow() {
   if (isDev && process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    // In production build load local compiled HTML
-    const indexPath = path.join(__dirname, '../dist/index.html');
-    mainWindow.loadFile(indexPath).catch(() => {
-      // Fallback if running from custom server
-      mainWindow.loadURL('http://localhost:3000');
-    });
+    // In production desktop EXE build, start embedded Express & WebSocket real-time server
+    startEmbeddedServer();
+
+    // Load from local HTTP server so WebSockets and HTTP routes connect natively to localhost:3000
+    setTimeout(() => {
+      mainWindow.loadURL('http://localhost:3000').catch(() => {
+        // Fallback to local file if server failed to start
+        const indexPath = path.join(__dirname, '../dist/index.html');
+        mainWindow.loadFile(indexPath);
+      });
+    }, 500);
   }
 
   mainWindow.once('ready-to-show', () => {

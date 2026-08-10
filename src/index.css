@@ -17,6 +17,13 @@
     color: #000000 !important;
   }
 
+  .operator-login-portal input:not([type="checkbox"]):not([type="radio"]),
+  .operator-login-portal select,
+  .operator-login-portal textarea,
+  #operator-login-portal input:not([type="checkbox"]):not([type="radio"]) {
+    color: #ffffff !important;
+  }
+
   input, select, textarea, button, th, td, label, p, span, h1, h2, h3, h4, h5, h6, div {
     text-transform: uppercase;
   }
