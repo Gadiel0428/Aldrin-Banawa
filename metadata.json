@@ -1,0 +1,6 @@
+{
+  "name": "JUWEI WAREHOUSE MANAGEMENT SYSTEM",
+  "description": "A comprehensive Warehouse Management System (JUWEI WMS) built according to standard operating procedures for material receiving, control, stock rotation (FIFO/FEFO), shelf life monitoring, recycling, issuance, and delivery.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,22 @@
+{
+  "short_name": "JUWEI WMS",
+  "name": "JUWEI Warehouse Management System Desktop",
+  "icons": [
+    {
+      "src": "pwa-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "pwa-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#0f172a",
+  "theme_color": "#4f46e5",
+  "display": "standalone",
+  "orientation": "any",
+  "description": "JUWEI Warehouse Management System Desktop Application for Inventory & Logistics Control"
+}

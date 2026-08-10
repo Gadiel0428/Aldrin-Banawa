@@ -13,15 +13,46 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Locate project directory
+        id: locate
+        shell: powershell
+        run: |
+          $root = (Get-Location).ProviderPath
+          $pkg = Get-ChildItem -Path $root -Recurse -Filter "package.json" | Where-Object { $_.FullName -notmatch '[\\/]node_modules[\\/]' } | Select-Object -First 1
+
+          if (-not $pkg) {
+            Write-Error "Could not find package.json anywhere in repository."
+            exit 1
+          }
+
+          $dirPath = $pkg.DirectoryName
+          if ($dirPath.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $rel = $dirPath.Substring($root.Length).TrimStart('\', '/')
+            if ([string]::IsNullOrWhiteSpace($rel)) {
+              $rel = "."
+            }
+          } else {
+            $rel = "."
+          }
+
+          Write-Host "Project directory located at relative path: '$rel'"
+          "dir=$rel" >> $env:GITHUB_OUTPUT
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install dependencies
+        working-directory: ${{ steps.locate.outputs.dir }}
         run: npm install
 
       - name: Build Windows EXE Setup
+        working-directory: ${{ steps.locate.outputs.dir }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist:exe
 
       - name: Upload Installer Artifact
@@ -29,5 +60,7 @@ jobs:
         with:
           name: JUWEI-WMS-Desktop-Installer
           path: |
+            ${{ steps.locate.outputs.dir }}/release/*.exe
             release/*.exe
-            release/*.zip
+
+

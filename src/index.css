@@ -1,0 +1,113 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  body {
+    font-family: var(--font-sans);
+    text-transform: uppercase;
+    @apply bg-slate-50 text-slate-900 antialiased;
+  }
+
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+    color: #000000 !important;
+  }
+
+  input, select, textarea, button, th, td, label, p, span, h1, h2, h3, h4, h5, h6, div {
+    text-transform: uppercase;
+  }
+
+  input::placeholder, textarea::placeholder {
+    text-transform: uppercase;
+  }
+}
+
+@keyframes scanY {
+  0%, 100% {
+    transform: translateY(-110px);
+    opacity: 0.8;
+  }
+  50% {
+    transform: translateY(110px);
+    opacity: 1;
+  }
+}
+
+.animate-scan-y {
+  animation: scanY 2.2s ease-in-out infinite;
+}
+
+/* Print-specific stylesheet formatting for reports & tables */
+@media print {
+  header, nav, button, .no-print, form {
+    display: none !important;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  #printable-picking-document, #printable-picking-document *,
+  #printable-document-container, #printable-document-container * {
+    visibility: visible !important;
+  }
+
+  #printable-picking-document,
+  #printable-document-container {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 15px !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-size: 10pt !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  #root, main, div {
+    box-shadow: none !important;
+  }
+
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    page-break-inside: auto !important;
+  }
+
+  tr {
+    page-break-inside: avoid !important;
+    page-break-after: auto !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  th, td {
+    border: 1px solid #94a3b8 !important;
+    padding: 6px 8px !important;
+    color: #000000 !important;
+    background: transparent !important;
+    font-size: 8.5pt !important;
+  }
+
+  th {
+    font-weight: 700 !important;
+    background-color: #f1f5f9 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
+
