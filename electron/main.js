@@ -14,6 +14,7 @@ let serverStarted = false;
 function startEmbeddedServer() {
   if (serverStarted) return;
   try {
+    process.env.NODE_ENV = 'production';
     const serverPath = path.join(__dirname, '../dist/server.cjs');
     if (fs.existsSync(serverPath)) {
       console.log('Starting JUWEI WMS Node Express & WebSocket Server from:', serverPath);
@@ -61,13 +62,21 @@ function createWindow() {
     startEmbeddedServer();
 
     // Load from local HTTP server so WebSockets and HTTP routes connect natively to localhost:3000
-    setTimeout(() => {
-      mainWindow.loadURL('http://localhost:3000').catch(() => {
-        // Fallback to local file if server failed to start
-        const indexPath = path.join(__dirname, '../dist/index.html');
-        mainWindow.loadFile(indexPath);
+    let retries = 0;
+    const loadApp = () => {
+      mainWindow.loadURL('http://localhost:3000').catch((err) => {
+        if (retries < 6) {
+          retries++;
+          setTimeout(loadApp, 400);
+        } else {
+          console.warn('Could not connect to http://localhost:3000, loading fallback local HTML file:', err);
+          const indexPath = path.join(__dirname, '../dist/index.html');
+          mainWindow.loadFile(indexPath);
+        }
       });
-    }, 500);
+    };
+
+    setTimeout(loadApp, 300);
   }
 
   mainWindow.once('ready-to-show', () => {

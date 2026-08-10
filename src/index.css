@@ -20,7 +20,8 @@
   .operator-login-portal input:not([type="checkbox"]):not([type="radio"]),
   .operator-login-portal select,
   .operator-login-portal textarea,
-  #operator-login-portal input:not([type="checkbox"]):not([type="radio"]) {
+  #operator-login-portal input:not([type="checkbox"]):not([type="radio"]),
+  #wms-server-ip-input {
     color: #ffffff !important;
   }
 

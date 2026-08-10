@@ -184,18 +184,25 @@ export default function App() {
   const [showNewlyRegisteredPin, setShowNewlyRegisteredPin] = useState<boolean>(false);
   const [confirmActionApp, setConfirmActionApp] = useState<ConfirmActionConfig | null>(null);
   
+  const superAdminAccount = { username: 'ALDRIN BANAWA', role: 'SUPER ADMINISTRATOR', employeeId: 'JPMP-002', permission: 'FULL_ACCESS', pin: '0423' };
+
   const [registeredUsers, setRegisteredUsers] = useState<{username: string; role: string; employeeId: string; permission?: string; pin?: string}[]>(() => {
-    const superAdminAccount = { username: 'SUPER ADMIN', role: 'SUPER ADMINISTRATOR', employeeId: 'JPMP-002', permission: 'FULL_ACCESS', pin: '0002' };
     const cached = localStorage.getItem('juwei_wms_registeredUsers');
     if (cached) {
       try {
         const list = JSON.parse(cached);
-        if (Array.isArray(list)) {
-          const onlySuperAdmin = list.filter(u => u.employeeId === 'JPMP-002' || u.role === 'SUPER ADMINISTRATOR');
-          if (onlySuperAdmin.length > 0) {
-            localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(onlySuperAdmin));
-            return onlySuperAdmin;
+        if (Array.isArray(list) && list.length > 0) {
+          const updatedList = list.map(u => {
+            if (u.employeeId === 'JPMP-002' || u.username === 'SUPER ADMIN' || u.username === 'ALDRIN BANAWA') {
+              return superAdminAccount;
+            }
+            return u;
+          });
+          if (!updatedList.some(u => u.employeeId === 'JPMP-002')) {
+            updatedList.unshift(superAdminAccount);
           }
+          localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(updatedList));
+          return updatedList;
         }
       } catch (e) {
         // Fallback
@@ -204,6 +211,16 @@ export default function App() {
     localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify([superAdminAccount]));
     return [superAdminAccount];
   });
+
+  // Live real-time system clock
+  const [currentTime, setCurrentTime] = useState<Date>(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Initialize standard fallback state
   const resetStateToDefaults = () => {
@@ -245,10 +262,6 @@ export default function App() {
 
     const connect = () => {
       if (!isMounted) return;
-      if (!isLoggedIn || !currentUser) {
-        setConnectionStatus('disconnected');
-        return;
-      }
       setConnectionStatus('connecting');
 
       let targetAddr = serverAddress.trim();
@@ -278,7 +291,7 @@ export default function App() {
         setConnectionStatus('disconnected');
         reconnectTimeout = setTimeout(() => {
           if (isMounted) connect();
-        }, 4000);
+        }, 3000);
         return;
       }
 
@@ -286,9 +299,10 @@ export default function App() {
         if (!isMounted) return;
         console.log('Connected to real-time server!');
         setConnectionStatus('connected');
+        setSocket(ws);
         ws?.send(JSON.stringify({
           type: 'join',
-          username: currentUser
+          username: currentUser || 'JUWEI OPERATOR'
         }));
       };
 
@@ -300,15 +314,23 @@ export default function App() {
           
           switch (payload.type) {
             case 'init': {
-              const { stocks, receiving, returns, recycling, issuances, deliveries, envLogs, forkliftChecks, chatMessages } = payload.data;
-              setStocks(stocks);
-              setReceiving(receiving);
-              setReturns(returns);
-              setRecycling(recycling);
-              setIssuances(issuances);
-              setDeliveries(deliveries);
-              setEnvLogs(envLogs);
-              setForkliftChecks(forkliftChecks);
+              const { stocks, receiving, returns, recycling, issuances, deliveries, envLogs, forkliftChecks, registries, registeredUsers: serverUsers, chatMessages } = payload.data;
+              if (stocks && stocks.length > 0) setStocks(stocks);
+              if (receiving && receiving.length > 0) setReceiving(receiving);
+              if (returns && returns.length > 0) setReturns(returns);
+              if (recycling && recycling.length > 0) setRecycling(recycling);
+              if (issuances && issuances.length > 0) setIssuances(issuances);
+              if (deliveries && deliveries.length > 0) setDeliveries(deliveries);
+              if (envLogs && envLogs.length > 0) setEnvLogs(envLogs);
+              if (forkliftChecks && forkliftChecks.length > 0) setForkliftChecks(forkliftChecks);
+              if (registries && registries.length > 0) setRegistries(registries);
+              if (serverUsers && serverUsers.length > 0) {
+                const sanitized = serverUsers.map((u: any) => 
+                  (u.employeeId === 'JPMP-002' || u.username === 'SUPER ADMIN' || u.username === 'ALDRIN BANAWA') ? superAdminAccount : u
+                );
+                if (!sanitized.some((u: any) => u.employeeId === 'JPMP-002')) sanitized.unshift(superAdminAccount);
+                setRegisteredUsers(sanitized);
+              }
               setChatMessages(chatMessages || []);
               setActiveUsers(payload.activeUsers || []);
               break;
@@ -324,6 +346,15 @@ export default function App() {
                 case 'deliveries': setDeliveries(data); break;
                 case 'envLogs': setEnvLogs(data); break;
                 case 'forkliftChecks': setForkliftChecks(data); break;
+                case 'registries': setRegistries(data); break;
+                case 'registeredUsers': {
+                  const sanitized = (data || []).map((u: any) => 
+                    (u.employeeId === 'JPMP-002' || u.username === 'SUPER ADMIN' || u.username === 'ALDRIN BANAWA') ? superAdminAccount : u
+                  );
+                  if (!sanitized.some((u: any) => u.employeeId === 'JPMP-002')) sanitized.unshift(superAdminAccount);
+                  setRegisteredUsers(sanitized);
+                  break;
+                }
               }
               break;
             }
@@ -357,8 +388,6 @@ export default function App() {
           connect();
         }, 3000);
       };
-
-      setSocket(ws);
     };
 
     connect();
@@ -429,6 +458,7 @@ export default function App() {
     const nextUsers = [...registeredUsers, newUser];
     setRegisteredUsers(nextUsers);
     localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(nextUsers));
+    syncCollection('registeredUsers', nextUsers);
     
     // Set state to trigger the secure PIN confirmation overlay
     setNewlyRegisteredUser(newUser);
@@ -439,12 +469,14 @@ export default function App() {
     const nextUsers = registeredUsers.filter(u => u.employeeId !== employeeId);
     setRegisteredUsers(nextUsers);
     localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(nextUsers));
+    syncCollection('registeredUsers', nextUsers);
   };
 
   const handleUpdateAccount = (oldEmpId: string, updated: RegisteredAccount) => {
     const nextUsers = registeredUsers.map(u => u.employeeId === oldEmpId ? updated : u);
     setRegisteredUsers(nextUsers);
     localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(nextUsers));
+    syncCollection('registeredUsers', nextUsers);
   };
 
   const handleDirectLogin = (e: React.FormEvent) => {
@@ -1534,13 +1566,6 @@ export default function App() {
 
         {/* Sidebar Footer with system values */}
         <div className="p-4 border-t border-slate-800 space-y-4">
-          <div className="flex justify-between items-center bg-slate-950 p-2.5 rounded-lg text-xs font-mono text-slate-400">
-            <div className="flex items-center gap-1.5">
-              <Clock className="h-3.5 w-3.5 text-indigo-400" /> Date
-            </div>
-            <span className="font-bold text-white">2026-07-19</span>
-          </div>
-
           <div className="space-y-1.5">
             {currentEmployeeId === 'JPMP-002' ? (
               <>
@@ -1604,36 +1629,30 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-3 text-xs font-semibold">
-            {/* Real-time Connection status indicator */}
-            <button
-              type="button"
-              onClick={() => {
-                setTempServerAddress(serverAddress);
-                setShowServerSettingsModal(true);
-              }}
-              title="Click to configure WMS Central Server IP / Connection settings"
-              className="cursor-pointer hover:opacity-90 transition"
-              id="btn-server-settings-trigger"
-            >
-              {connectionStatus === 'connected' && (
-                <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-xs">
+            {/* Real-time Connection status indicator with live Date & Time */}
+            {connectionStatus === 'connected' && (
+              <button
+                type="button"
+                onClick={() => {
+                  setTempServerAddress(serverAddress);
+                  setShowServerSettingsModal(true);
+                }}
+                title="Click to configure WMS Central Server IP / Connection settings"
+                className="cursor-pointer hover:opacity-90 transition flex flex-col items-end gap-1"
+                id="btn-server-settings-trigger"
+              >
+                <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-1.5 rounded-lg text-xs font-bold shadow-xs">
                   <Wifi className="h-3.5 w-3.5 text-emerald-600 animate-pulse shrink-0" />
-                  <span>Real-Time Connected ({serverAddress})</span>
+                  <span>REAL-TIME CONNECTED</span>
                 </div>
-              )}
-              {connectionStatus === 'connecting' && (
-                <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-200 text-amber-700 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-xs">
-                  <RefreshCw className="h-3.5 w-3.5 text-amber-600 animate-spin shrink-0" />
-                  <span>Syncing ({serverAddress})...</span>
+                <div className="flex items-center gap-1.5 text-[11px] font-mono font-semibold text-slate-500 uppercase tracking-tight pr-0.5">
+                  <Clock className="h-3 w-3 text-emerald-600" />
+                  <span>
+                    {currentTime.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' }).toUpperCase()} • {currentTime.toLocaleTimeString('en-US', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </span>
                 </div>
-              )}
-              {connectionStatus === 'disconnected' && (
-                <div className="flex items-center gap-1.5 bg-rose-50 border border-rose-200 text-rose-700 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-xs">
-                  <WifiOff className="h-3.5 w-3.5 text-rose-500 shrink-0" />
-                  <span>Offline / Standalone ({serverAddress})</span>
-                </div>
-              )}
-            </button>
+              </button>
+            )}
           </div>
         </header>
 
@@ -1664,12 +1683,72 @@ export default function App() {
                   CENTRAL SERVER IP / HOSTNAME
                 </label>
                 <input 
+                  id="wms-server-ip-input"
                   type="text" 
                   value={tempServerAddress} 
                   onChange={(e) => setTempServerAddress(e.target.value)}
                   placeholder="e.g. 192.168.1.100:3000 or localhost:3000"
-                  className="w-full bg-slate-950 border border-slate-800 text-white text-xs p-3 rounded-xl font-mono focus:border-indigo-500 focus:outline-none"
+                  style={{ color: '#ffffff' }}
+                  className="w-full bg-slate-950 border border-slate-800 text-white !text-white text-xs p-3 rounded-xl font-mono focus:border-indigo-500 focus:outline-none font-bold"
                 />
+              </div>
+
+              {/* Quick Select Presets / Helpful Links */}
+              <div className="space-y-2 pt-1">
+                <label className="text-[10px] font-bold text-slate-400 font-mono block">
+                  DETECTED CLOUD URL & PRESETS:
+                </label>
+                <div className="flex flex-col gap-1.5 font-mono text-[11px] normal-case">
+                  <button
+                    type="button"
+                    onClick={() => setTempServerAddress(window.location.host || 'localhost:3000')}
+                    className="flex items-center justify-between bg-indigo-950/60 hover:bg-indigo-900/80 border border-indigo-700/60 text-indigo-200 px-3 py-2 rounded-xl text-left cursor-pointer transition shadow-xs"
+                  >
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">This App's Cloud URL (Detected):</span>
+                      <span className="text-white font-bold text-xs select-all font-mono">{window.location.host || 'ais-dev-...'}</span>
+                    </div>
+                    <span className="text-[11px] bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1 rounded-lg font-bold shrink-0 ml-2">USE THIS</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setTempServerAddress('localhost:3000')}
+                    className="flex items-center justify-between bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white px-3 py-2 rounded-xl text-left cursor-pointer transition"
+                  >
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Local Computer Standalone:</span>
+                      <span className="text-white font-bold text-xs font-mono">localhost:3000</span>
+                    </div>
+                    <span className="text-[11px] bg-slate-800 text-slate-200 px-2.5 py-1 rounded-lg font-bold shrink-0 ml-2">USE THIS</span>
+                  </button>
+                </div>
+
+                {/* Step-by-Step Instructions box inside modal */}
+                <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-3 text-[11px] normal-case space-y-2 mt-2">
+                  <span className="font-bold text-indigo-300 uppercase tracking-wider text-[10px] block font-mono">
+                    💡 How to find these values on your computer:
+                  </span>
+                  
+                  <div className="space-y-1.5 text-slate-300">
+                    <div>
+                      <strong className="text-amber-300">1. Local LAN IP (For factory multi-PC setup):</strong>
+                      <p className="text-slate-400 text-[10.5px]">
+                        • <strong>Windows:</strong> Press <kbd className="bg-slate-800 px-1 text-slate-200 rounded">Win + R</kbd>, type <code className="text-white bg-slate-900 px-1 rounded">cmd</code>, press Enter, then type <code className="text-emerald-400 bg-slate-900 px-1 rounded">ipconfig</code>. Look for <strong>IPv4 Address</strong> (e.g. <code className="text-indigo-300 font-mono">192.168.1.100</code>) and add <code className="text-indigo-300 font-mono">:3000</code>.
+                      </p>
+                      <p className="text-slate-400 text-[10.5px] mt-0.5">
+                        • <strong>Mac:</strong> Open Settings → Wi-Fi / Network → Details, or run <code className="text-emerald-400 bg-slate-900 px-1 rounded">ifconfig</code> in Terminal.
+                      </p>
+                    </div>
+
+                    <div className="pt-1 border-t border-slate-800/60">
+                      <strong className="text-indigo-300">2. Cloud URL:</strong>
+                      <p className="text-slate-400 text-[10.5px]">
+                        Click the <span className="text-white font-bold bg-indigo-900/60 px-1 rounded">USE THIS</span> button above to automatically use your active AI Studio / Cloud web address!
+                      </p>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div className="flex gap-2 pt-2">

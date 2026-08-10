@@ -6,8 +6,8 @@
 import express from "express";
 import http from "http";
 import path from "path";
+import fs from "fs";
 import { WebSocketServer, WebSocket } from "ws";
-import { createServer as createViteServer } from "vite";
 
 // Load initial mock data to seed the server-authoritative state
 import { 
@@ -26,6 +26,14 @@ async function startServer() {
   const server = http.createServer(app);
   const PORT = 3000;
 
+  const defaultSuperAdmin = { 
+    username: 'ALDRIN BANAWA', 
+    role: 'SUPER ADMINISTRATOR', 
+    employeeId: 'JPMP-002', 
+    permission: 'FULL_ACCESS', 
+    pin: '0423' 
+  };
+
   // Server-authoritative in-memory state
   const state = {
     stocks: [...INITIAL_STOCK],
@@ -36,6 +44,8 @@ async function startServer() {
     deliveries: [...INITIAL_DELIVERIES],
     envLogs: [...INITIAL_ENV_LOGS],
     forkliftChecks: [...INITIAL_FORKLIFT_CHECKS],
+    registries: [],
+    registeredUsers: [defaultSuperAdmin],
   };
 
   interface ChatMessage {
@@ -210,18 +220,35 @@ async function startServer() {
 
   // Vite middleware for development or Static Assets for production
   if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
+    try {
+      const { createServer: createViteServer } = await import("vite");
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } catch (e) {
+      console.warn("Vite middleware omitted or unavailable:", e);
+    }
   } else {
-    const distPath = path.join(process.cwd(), "dist");
+    // In production build, dist files sit either in __dirname or process.cwd()/dist
+    let distPath = __dirname;
+    if (!fs.existsSync(path.join(distPath, "index.html"))) {
+      distPath = path.join(process.cwd(), "dist");
+    }
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
+
+  server.on("error", (err: any) => {
+    if (err.code === "EADDRINUSE") {
+      console.warn(`JUWEI WMS Server: Port ${PORT} already in use by active WMS service.`);
+    } else {
+      console.error("JUWEI WMS Server error:", err);
+    }
+  });
 
   // Use PORT 3000 (Required by container infrastructure)
   server.listen(PORT, "0.0.0.0", () => {
