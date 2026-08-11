@@ -113,10 +113,10 @@ function getDefaultServerAddress(): string {
     const clean = sanitizeServerHost(cached);
     if (clean) return clean;
   }
-  if (window.location.host && !window.location.host.includes('localhost')) {
+  if (window.location.host) {
     return sanitizeServerHost(window.location.host);
   }
-  return DEFAULT_ONLINE_CLOUD_HOST;
+  return 'localhost:3000';
 }
 
 export default function App() {
@@ -314,9 +314,9 @@ export default function App() {
       if (activeUsersList) setActiveUsers(activeUsersList);
     };
 
-    const tryHttpFallback = async (httpUrl: string) => {
+    const tryHttpFallback = async (httpUrl: string): Promise<boolean> => {
       try {
-        const res = await fetch(httpUrl);
+        const res = await fetch(httpUrl, { method: 'GET', headers: { 'Accept': 'application/json' } });
         if (res.ok) {
           const json = await res.json();
           if (isMounted) {
@@ -326,7 +326,34 @@ export default function App() {
           return true;
         }
       } catch (e) {
-        console.log("HTTP sync check failed:", e);
+        console.log("HTTP sync check failed for URL:", httpUrl, e);
+      }
+      return false;
+    };
+
+    const runSyncCheck = async (primaryHost: string, primaryHttpUrl: string): Promise<boolean> => {
+      // 1. Try primary configured host first via HTTP REST
+      const ok = await tryHttpFallback(primaryHttpUrl);
+      if (ok) return true;
+
+      // 2. Secondary check on local host if primary failed (without overwriting user's configured serverAddress)
+      const currentHost = sanitizeServerHost(window.location.host);
+      const fallbackHosts = [currentHost, 'localhost:3000', '127.0.0.1:3000'].filter(
+        (h, index, self) => h && h !== primaryHost && self.indexOf(h) === index
+      );
+
+      for (const fallbackHost of fallbackHosts) {
+        const fallbackProto = isSecureServerHost(fallbackHost) ? 'https:' : 'http:';
+        const fallbackUrl = `${fallbackProto}//${fallbackHost}/api/sync`;
+        const fallbackOk = await tryHttpFallback(fallbackUrl);
+        if (fallbackOk) {
+          console.log("Synced successfully via local fallback host:", fallbackHost);
+          return true;
+        }
+      }
+
+      if (isMounted) {
+        setConnectionStatus('disconnected');
       }
       return false;
     };
@@ -336,7 +363,7 @@ export default function App() {
       setConnectionStatus('connecting');
 
       let targetAddr = serverAddress.trim();
-      const cleanHost = sanitizeServerHost(targetAddr) || sanitizeServerHost(window.location.host) || DEFAULT_ONLINE_CLOUD_HOST;
+      const cleanHost = sanitizeServerHost(targetAddr) || sanitizeServerHost(window.location.host) || 'localhost:3000';
       const isHttps = isSecureServerHost(cleanHost, targetAddr);
       const wsProto = isHttps ? 'wss:' : 'ws:';
       const httpProto = isHttps ? 'https:' : 'http:';
@@ -345,37 +372,42 @@ export default function App() {
       const httpUrl = `${httpProto}//${cleanHost}/api/sync`;
 
       console.log("Connecting WebSocket to real-time server:", socketUrl);
+      let fallbackTriggered = false;
+      let pingInterval: any = null;
       
       try {
         ws = new WebSocket(socketUrl);
       } catch (err) {
         console.warn("WebSocket init error, attempting HTTP fallback:", err);
-        const ok = await tryHttpFallback(httpUrl);
-        if (!ok && cleanHost.includes('localhost') && window.location.host && !window.location.host.includes('localhost')) {
-          setServerAddress(sanitizeServerHost(window.location.host));
-          localStorage.setItem('juwei_wms_server_address', sanitizeServerHost(window.location.host));
-        } else if (!ok) {
-          setConnectionStatus('disconnected');
-        }
-        reconnectTimeout = setTimeout(connect, 4000);
+        await runSyncCheck(cleanHost, httpUrl);
+        reconnectTimeout = setTimeout(connect, 3000);
         return;
       }
 
       ws.onopen = () => {
         if (!isMounted) return;
-        console.log('Connected via WebSocket to real-time server!');
+        console.log('Connected via WebSocket to real-time server:', cleanHost);
         setConnectionStatus('connected');
         setSocket(ws);
         ws?.send(JSON.stringify({
           type: 'join',
           username: currentUser || 'JUWEI OPERATOR'
         }));
+
+        // Send heartbeat ping every 15 seconds to keep WSS connection alive
+        pingInterval = setInterval(() => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, 15000);
       };
 
       ws.onmessage = (event) => {
         if (!isMounted) return;
         try {
           const payload = JSON.parse(event.data);
+          if (payload.type === 'pong') return; // Heartbeat response
+
           switch (payload.type) {
             case 'init': {
               applyStatePayload(payload.data, payload.activeUsers);
@@ -421,29 +453,28 @@ export default function App() {
       ws.onerror = async () => {
         if (!isMounted) return;
         console.log('WebSocket connection error, testing HTTP REST sync...');
-        await tryHttpFallback(httpUrl);
+        if (!fallbackTriggered) {
+          fallbackTriggered = true;
+          await runSyncCheck(cleanHost, httpUrl);
+        }
       };
 
       ws.onclose = async () => {
         if (!isMounted) return;
+        if (pingInterval) clearInterval(pingInterval);
         console.log('WebSocket closed. Attempting HTTP sync & reconnection...');
         setSocket(null);
-        const ok = await tryHttpFallback(httpUrl);
-        if (!ok) {
-          if (cleanHost.includes('localhost') && window.location.host && !window.location.host.includes('localhost')) {
-            setServerAddress(window.location.host);
-            localStorage.setItem('juwei_wms_server_address', window.location.host);
-          } else {
-            setConnectionStatus('disconnected');
-          }
+        if (!fallbackTriggered) {
+          fallbackTriggered = true;
+          await runSyncCheck(cleanHost, httpUrl);
         }
-        reconnectTimeout = setTimeout(connect, 4000);
+        reconnectTimeout = setTimeout(connect, 3000);
       };
     };
 
     connect();
 
-    // Secondary HTTP poll every 8 seconds as safety net
+    // Secondary HTTP poll every 4 seconds as continuous safety net
     httpPollInterval = setInterval(async () => {
       let targetAddr = serverAddress.trim() || getDefaultServerAddress();
       const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
@@ -461,9 +492,25 @@ export default function App() {
           }
         }
       } catch (err) {
-        // Silent catch for background poll
+        // Try local host as secondary poll if target host is unreachable
+        const currentHost = sanitizeServerHost(window.location.host);
+        if (currentHost && currentHost !== cleanHost) {
+          try {
+            const localProto = isSecureServerHost(currentHost) ? 'https:' : 'http:';
+            const localRes = await fetch(`${localProto}//${currentHost}/api/sync`);
+            if (localRes.ok) {
+              const localJson = await localRes.json();
+              if (isMounted) {
+                setConnectionStatus('connected');
+                if (localJson.data) applyStatePayload(localJson.data, localJson.activeUsers);
+              }
+            }
+          } catch (e) {
+            // Ignore
+          }
+        }
       }
-    }, 8000);
+    }, 4000);
 
     return () => {
       isMounted = false;

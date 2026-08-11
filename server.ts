@@ -150,6 +150,11 @@ async function startServer() {
         const payload = JSON.parse(messageData.toString());
 
         switch (payload.type) {
+          case "ping": {
+            ws.send(JSON.stringify({ type: "pong" }));
+            break;
+          }
+
           case "join": {
             const username = payload.username || "Anonymous Officer";
             activeConnections.set(ws, username);
