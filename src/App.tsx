@@ -41,7 +41,9 @@ import {
   Sparkles,
   CheckCircle2,
   Monitor,
-  Loader2
+  Loader2,
+  Copy,
+  Check
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import AccountQRBadgeModal from './components/AccountQRBadgeModal';
@@ -214,6 +216,7 @@ export default function App() {
 
   // Live real-time system clock
   const [currentTime, setCurrentTime] = useState<Date>(new Date());
+  const [linkCopied, setLinkCopied] = useState<boolean>(false);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -1659,11 +1662,11 @@ export default function App() {
         {/* WMS CENTRAL SERVER SETTINGS MODAL */}
         {showServerSettingsModal && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 uppercase">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4 text-left relative">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-lg w-full shadow-2xl space-y-4 text-left relative max-h-[90vh] overflow-y-auto">
               <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                 <div className="flex items-center gap-2">
                   <Wifi className="h-5 w-5 text-indigo-400" />
-                  <h3 className="text-sm font-bold text-white tracking-tight font-mono">WMS CENTRAL SERVER IP</h3>
+                  <h3 className="text-sm font-bold text-white tracking-tight font-mono">WMS CENTRAL SERVER & MULTI-PC SYNC</h3>
                 </div>
                 <button 
                   type="button"
@@ -1673,82 +1676,79 @@ export default function App() {
                   ✕ CLOSE
                 </button>
               </div>
-              
-              <p className="text-[11px] text-slate-400 font-medium normal-case">
-                Configure the central JUWEI WMS Express/WebSocket server address. For single-desktop standalone operation, use <code className="text-indigo-300 bg-slate-950 px-1 py-0.5 rounded font-mono">localhost:3000</code>.
-              </p>
 
-              <div className="space-y-2">
+              {/* Instant Share Link Banner */}
+              <div className="bg-gradient-to-r from-indigo-950/90 to-purple-950/90 border border-indigo-500/40 rounded-xl p-3.5 space-y-2 normal-case">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-indigo-200 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                    <Sparkles className="h-3.5 w-3.5 text-amber-400" />
+                    1-CLICK LINK FOR OTHER PCs:
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300 font-medium">
+                  Click below to copy your app link. Send or paste this link on any second PC, laptop, or phone to sync live with this database!
+                </p>
+                <div className="flex flex-col sm:flex-row gap-2 pt-1 items-center">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const shareUrl = window.location.href;
+                      navigator.clipboard.writeText(shareUrl);
+                      setLinkCopied(true);
+                      setTimeout(() => setLinkCopied(false), 3000);
+                    }}
+                    className={`flex-1 w-full flex items-center justify-center gap-2 font-bold py-2.5 px-4 rounded-xl text-xs font-mono transition cursor-pointer ${
+                      linkCopied 
+                        ? 'bg-emerald-600 text-white' 
+                        : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/40'
+                    }`}
+                  >
+                    {linkCopied ? (
+                      <>
+                        <Check className="h-4 w-4 text-white" />
+                        <span>✅ LINK COPIED TO CLIPBOARD!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-4 w-4 text-indigo-200" />
+                        <span>📋 COPY CONNECTION LINK FOR OTHER PCs</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* QR Code & Mobile Scanner Section */}
+              <div className="flex flex-col sm:flex-row items-center gap-4 bg-slate-950 border border-slate-800 p-3.5 rounded-xl normal-case">
+                <div className="bg-white p-2 rounded-lg shrink-0 shadow-md">
+                  <QRCodeSVG value={window.location.href} size={110} level="M" />
+                </div>
+                <div className="space-y-1 text-left flex-1">
+                  <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider font-mono block">
+                    📱 SCAN QR CODE WITH OTHER DEVICE:
+                  </span>
+                  <p className="text-[11px] text-slate-300 font-medium">
+                    Scan with a tablet, phone, or handheld scanner camera to open and connect instantly.
+                  </p>
+                  <p className="text-[10px] text-slate-400 font-mono select-all break-all pt-1">
+                    {window.location.href}
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-2 pt-1">
                 <label className="text-[10px] font-bold text-slate-300 font-mono block">
-                  CENTRAL SERVER IP / HOSTNAME
+                  MANUAL CENTRAL SERVER IP / HOSTNAME:
                 </label>
                 <input 
                   id="wms-server-ip-input"
                   type="text" 
                   value={tempServerAddress} 
                   onChange={(e) => setTempServerAddress(e.target.value)}
-                  placeholder="e.g. 192.168.1.100:3000 or localhost:3000"
+                  placeholder="e.g. localhost:3000 or 192.168.1.100:3000"
                   style={{ color: '#ffffff' }}
                   className="w-full bg-slate-950 border border-slate-800 text-white !text-white text-xs p-3 rounded-xl font-mono focus:border-indigo-500 focus:outline-none font-bold"
                 />
-              </div>
-
-              {/* Quick Select Presets / Helpful Links */}
-              <div className="space-y-2 pt-1">
-                <label className="text-[10px] font-bold text-slate-400 font-mono block">
-                  DETECTED CLOUD URL & PRESETS:
-                </label>
-                <div className="flex flex-col gap-1.5 font-mono text-[11px] normal-case">
-                  <button
-                    type="button"
-                    onClick={() => setTempServerAddress(window.location.host || 'localhost:3000')}
-                    className="flex items-center justify-between bg-indigo-950/60 hover:bg-indigo-900/80 border border-indigo-700/60 text-indigo-200 px-3 py-2 rounded-xl text-left cursor-pointer transition shadow-xs"
-                  >
-                    <div className="flex flex-col">
-                      <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">This App's Cloud URL (Detected):</span>
-                      <span className="text-white font-bold text-xs select-all font-mono">{window.location.host || 'ais-dev-...'}</span>
-                    </div>
-                    <span className="text-[11px] bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1 rounded-lg font-bold shrink-0 ml-2">USE THIS</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setTempServerAddress('localhost:3000')}
-                    className="flex items-center justify-between bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white px-3 py-2 rounded-xl text-left cursor-pointer transition"
-                  >
-                    <div className="flex flex-col">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Local Computer Standalone:</span>
-                      <span className="text-white font-bold text-xs font-mono">localhost:3000</span>
-                    </div>
-                    <span className="text-[11px] bg-slate-800 text-slate-200 px-2.5 py-1 rounded-lg font-bold shrink-0 ml-2">USE THIS</span>
-                  </button>
-                </div>
-
-                {/* Step-by-Step Instructions box inside modal */}
-                <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-3 text-[11px] normal-case space-y-2 mt-2">
-                  <span className="font-bold text-indigo-300 uppercase tracking-wider text-[10px] block font-mono">
-                    💡 How to find these values on your computer:
-                  </span>
-                  
-                  <div className="space-y-1.5 text-slate-300">
-                    <div>
-                      <strong className="text-amber-300">1. Local LAN IP (For factory multi-PC setup):</strong>
-                      <p className="text-slate-400 text-[10.5px]">
-                        • <strong>Windows:</strong> Press <kbd className="bg-slate-800 px-1 text-slate-200 rounded">Win + R</kbd>, type <code className="text-white bg-slate-900 px-1 rounded">cmd</code>, press Enter, then type <code className="text-emerald-400 bg-slate-900 px-1 rounded">ipconfig</code>. Look for <strong>IPv4 Address</strong> (e.g. <code className="text-indigo-300 font-mono">192.168.1.100</code>) and add <code className="text-indigo-300 font-mono">:3000</code>.
-                      </p>
-                      <p className="text-slate-400 text-[10.5px] mt-0.5">
-                        • <strong>Mac:</strong> Open Settings → Wi-Fi / Network → Details, or run <code className="text-emerald-400 bg-slate-900 px-1 rounded">ifconfig</code> in Terminal.
-                      </p>
-                    </div>
-
-                    <div className="pt-1 border-t border-slate-800/60">
-                      <strong className="text-indigo-300">2. Cloud URL:</strong>
-                      <p className="text-slate-400 text-[10.5px]">
-                        Click the <span className="text-white font-bold bg-indigo-900/60 px-1 rounded">USE THIS</span> button above to automatically use your active AI Studio / Cloud web address!
-                      </p>
-                    </div>
-                  </div>
-                </div>
               </div>
 
               <div className="flex gap-2 pt-2">
