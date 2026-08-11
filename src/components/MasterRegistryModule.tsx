@@ -28,7 +28,8 @@ import {
   Factory,
   FileText
 } from 'lucide-react';
-import { MasterRegistryItem, RegistryType } from '../types';
+import { MasterRegistryItem, RegistryType, PresetSourceType } from '../types';
+import { ConfirmActionConfig } from './ConfirmModal';
 
 export const DEFAULT_MASTER_REGISTRIES: MasterRegistryItem[] = [];
 
@@ -63,12 +64,7 @@ export default function MasterRegistryModule({
   const [editingItem, setEditingItem] = useState<MasterRegistryItem | null>(null);
 
   // Yes / No Confirmation Modal State
-  const [confirmAction, setConfirmAction] = useState<{
-    title: string;
-    message: string;
-    confirmLabel?: string;
-    onConfirm: () => void;
-  } | null>(null);
+  const [confirmAction, setConfirmAction] = useState<ConfirmActionConfig | null>(null);
 
   // Form state
   const [formType, setFormType] = useState<RegistryType>('SUPPLIER');
@@ -77,7 +73,8 @@ export default function MasterRegistryModule({
   const [formDesc, setFormDesc] = useState('');
   const [formStatus, setFormStatus] = useState<'ACTIVE' | 'INACTIVE'>('ACTIVE');
   // Preset specific fields (referring to Log New Material Arrival)
-  const [formPresetSource, setFormPresetSource] = useState<string>('INTERNAL');
+  const [formPresetSource, setFormPresetSource] = useState<PresetSourceType>('INTERNAL');
+
   const [formCategory, setFormCategory] = useState('');
   const [formVendorSupplier, setFormVendorSupplier] = useState('');
   const [formUnit, setFormUnit] = useState('PCS');

@@ -692,17 +692,17 @@ export default function App() {
       alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
       return;
     }
-    const nextReceiving = receiving.map(r => r.id === id ? { ...r, iqcStatus, status: iqcStatus === 'APPROVED_IQC' ? 'VERIFIED' : 'QUARANTINED' } : r);
+    const nextReceiving: ReceivingRecord[] = receiving.map(r => r.id === id ? { ...r, iqcStatus, status: (iqcStatus === 'APPROVED_IQC' ? 'VERIFIED' : 'QUARANTINED') as ReceivingRecord['status'] } : r);
     setReceiving(nextReceiving);
     syncCollection('receiving', nextReceiving);
 
     const targetRec = receiving.find(r => r.id === id);
     if (targetRec) {
-      const nextStocks = stocks.map(s => {
+      const nextStocks: MaterialStockItem[] = stocks.map(s => {
         if (s.lotNumber === targetRec.lotNumber && s.partCode === targetRec.partCode) {
           return {
             ...s,
-            status: iqcStatus === 'APPROVED_IQC' ? 'APPROVED' : 'QUARANTINE',
+            status: (iqcStatus === 'APPROVED_IQC' ? 'APPROVED' : 'QUARANTINE') as MaterialStockItem['status'],
             location: iqcStatus === 'APPROVED_IQC' ? 'Designated Storage Bin' : 'Quarantine Area'
           };
         }
@@ -714,6 +714,7 @@ export default function App() {
       sendSystemActivity(`${currentUser} updated IQC evaluation for ${targetRec.partCode} (Lot: ${targetRec.lotNumber}) to ${iqcStatus}.`);
     }
   };
+
 
   const handleAddReturn = (record: ReturnRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
@@ -757,15 +758,15 @@ export default function App() {
       alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
       return;
     }
-    const nextReturns = returns.map(r => r.id === id ? { ...r, status, iqcEvaluation: 'APPROVED_IQC' } : r);
+    const nextReturns: ReturnRecord[] = returns.map(r => r.id === id ? { ...r, status, iqcEvaluation: 'APPROVED_IQC' as const } : r);
     setReturns(nextReturns);
     syncCollection('returns', nextReturns);
 
     const targetRet = returns.find(r => r.id === id);
     if (targetRet) {
-      const nextStocks = stocks.map(s => {
+      const nextStocks: MaterialStockItem[] = stocks.map(s => {
         if (s.lotNumber === targetRet.lotNumber && s.partCode === targetRet.partCode) {
-          return { ...s, status: 'APPROVED', location: 'Designated Storage Bin' };
+          return { ...s, status: 'APPROVED' as const, location: 'Designated Storage Bin' };
         }
         return s;
       });
@@ -775,6 +776,7 @@ export default function App() {
       sendSystemActivity(`${currentUser} approved returned item ${targetRet.partCode} back to active inventory.`);
     }
   };
+
 
   const handleAddRecycling = (record: RecyclingRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
