@@ -114,9 +114,12 @@ function getDefaultServerAddress(): string {
     if (clean) return clean;
   }
   if (window.location.host) {
-    return sanitizeServerHost(window.location.host);
+    const cleanHost = sanitizeServerHost(window.location.host);
+    if (cleanHost && (cleanHost.includes('.run.app') || cleanHost.includes('onrender.com') || cleanHost.includes('cloud') || cleanHost.includes('appspot') || cleanHost.includes('vercel.app'))) {
+      return cleanHost;
+    }
   }
-  return 'localhost:3000';
+  return DEFAULT_ONLINE_CLOUD_HOST;
 }
 
 export default function App() {
@@ -363,7 +366,7 @@ export default function App() {
       setConnectionStatus('connecting');
 
       let targetAddr = serverAddress.trim();
-      const cleanHost = sanitizeServerHost(targetAddr) || sanitizeServerHost(window.location.host) || 'localhost:3000';
+      const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
       const isHttps = isSecureServerHost(cleanHost, targetAddr);
       const wsProto = isHttps ? 'wss:' : 'ws:';
       const httpProto = isHttps ? 'https:' : 'http:';
@@ -2183,7 +2186,8 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => {
-                    const shareUrl = window.location.href;
+                    const activeHost = sanitizeServerHost(serverAddress) || DEFAULT_ONLINE_CLOUD_HOST;
+                    const shareUrl = isSecureServerHost(activeHost, serverAddress) ? `https://${activeHost}` : `http://${activeHost}`;
                     navigator.clipboard.writeText(shareUrl);
                     setLinkCopied(true);
                     setTimeout(() => setLinkCopied(false), 3000);
@@ -2210,22 +2214,28 @@ export default function App() {
             </div>
 
             {/* QR Code & Mobile Scanner Section */}
-            <div className="flex flex-col sm:flex-row items-center gap-4 bg-slate-950 border border-slate-800 p-3.5 rounded-xl normal-case">
-              <div className="bg-white p-2 rounded-lg shrink-0 shadow-md">
-                <QRCodeSVG value={window.location.href} size={110} level="M" />
-              </div>
-              <div className="space-y-1 text-left flex-1">
-                <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider font-mono block">
-                  📱 SCAN QR CODE WITH TABLET OR SCANNER:
-                </span>
-                <p className="text-[11px] text-slate-300 font-medium">
-                  Scan with mobile device or handheld barcode scanner camera to open and connect instantly.
-                </p>
-                <p className="text-[10px] text-slate-400 font-mono select-all break-all pt-1">
-                  {window.location.href}
-                </p>
-              </div>
-            </div>
+            {(() => {
+              const activeHost = sanitizeServerHost(serverAddress) || DEFAULT_ONLINE_CLOUD_HOST;
+              const shareUrl = isSecureServerHost(activeHost, serverAddress) ? `https://${activeHost}` : `http://${activeHost}`;
+              return (
+                <div className="flex flex-col sm:flex-row items-center gap-4 bg-slate-950 border border-slate-800 p-3.5 rounded-xl normal-case">
+                  <div className="bg-white p-2 rounded-lg shrink-0 shadow-md">
+                    <QRCodeSVG value={shareUrl} size={110} level="M" />
+                  </div>
+                  <div className="space-y-1 text-left flex-1">
+                    <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider font-mono block">
+                      📱 SCAN QR CODE WITH TABLET OR SCANNER:
+                    </span>
+                    <p className="text-[11px] text-slate-300 font-medium">
+                      Scan with mobile device or handheld barcode scanner camera to open and connect instantly.
+                    </p>
+                    <p className="text-[10px] text-slate-400 font-mono select-all break-all pt-1">
+                      {shareUrl}
+                    </p>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Manual Server IP Input & Quick Presets */}
             <div className="space-y-2 pt-1">
