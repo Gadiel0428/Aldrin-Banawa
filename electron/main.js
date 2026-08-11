@@ -63,20 +63,27 @@ function createWindow() {
 
     // Load from local HTTP server so WebSockets and HTTP routes connect natively to localhost:3000
     let retries = 0;
+    const maxRetries = 15;
     const loadApp = () => {
       mainWindow.loadURL('http://localhost:3000').catch((err) => {
-        if (retries < 6) {
+        if (retries < maxRetries) {
           retries++;
-          setTimeout(loadApp, 400);
+          setTimeout(loadApp, 300);
         } else {
           console.warn('Could not connect to http://localhost:3000, loading fallback local HTML file:', err);
           const indexPath = path.join(__dirname, '../dist/index.html');
-          mainWindow.loadFile(indexPath);
+          if (fs.existsSync(indexPath)) {
+            mainWindow.loadFile(indexPath).catch(loadErr => {
+              console.error('Failed to load local HTML fallback:', loadErr);
+            });
+          } else {
+            console.error('dist/index.html does not exist at path:', indexPath);
+          }
         }
       });
     };
 
-    setTimeout(loadApp, 300);
+    setTimeout(loadApp, 200);
   }
 
   mainWindow.once('ready-to-show', () => {

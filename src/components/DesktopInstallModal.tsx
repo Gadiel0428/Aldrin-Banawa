@@ -66,13 +66,20 @@ namespace JuweiWMS {
         static void Main() {
             try { SetProcessDPIAware(); } catch {}
             string url = "$Url";
+            ProcessStartInfo psi = new ProcessStartInfo();
+            psi.UseShellExecute = true;
+            psi.FileName = "msedge.exe";
+            psi.Arguments = "--app=\"" + url + "\" --window-size=1400,900 --title=\"JUWEI WMS Desktop\"";
             try {
-                Process.Start("msedge.exe", "--app=\"" + url + "\" --window-size=1400,900 --title=\"JUWEI WMS Desktop\"");
+                Process.Start(psi);
             } catch {
                 try {
-                    Process.Start("chrome.exe", "--app=\"" + url + "\" --window-size=1400,900 --title=\"JUWEI WMS Desktop\"");
+                    psi.FileName = "chrome.exe";
+                    Process.Start(psi);
                 } catch {
-                    Process.Start(url);
+                    psi.FileName = url;
+                    psi.Arguments = "";
+                    Process.Start(psi);
                 }
             }
         }
