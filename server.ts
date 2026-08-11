@@ -129,8 +129,8 @@ async function startServer() {
     }
   });
 
-  // Attach WebSocket server with path /ws
-  const wss = new WebSocketServer({ server, path: "/ws" });
+  // Attach WebSocket server to handle connection upgrades
+  const wss = new WebSocketServer({ server });
 
   // Helper to broadcast messages to all connected clients
   function broadcast(msg: any, excludeSocket?: WebSocket) {

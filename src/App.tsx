@@ -87,16 +87,34 @@ import MasterRegistryModule, { DEFAULT_MASTER_REGISTRIES } from './components/Ma
 
 const DEFAULT_ONLINE_CLOUD_HOST = 'ais-dev-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app';
 
+export function sanitizeServerHost(raw: string): string {
+  if (!raw) return '';
+  let cleaned = raw.trim();
+  cleaned = cleaned.replace(/^https?:\/\//i, '');
+  cleaned = cleaned.replace(/^wss?:\/\//i, '');
+  cleaned = cleaned.split('/')[0].trim().toLowerCase();
+  return cleaned;
+}
+
+export function isSecureServerHost(cleanHost: string, rawInput: string = ''): boolean {
+  if (!cleanHost) return false;
+  if (/^https:\/\//i.test(rawInput) || /^wss:\/\//i.test(rawInput)) return true;
+  if (cleanHost.includes('.run.app') || cleanHost.includes('cloud') || cleanHost.includes('appspot')) return true;
+  const isLocal = cleanHost.includes('localhost') || cleanHost.includes('127.0.0.1') || cleanHost.startsWith('192.168.') || cleanHost.startsWith('10.');
+  if (isLocal) {
+    return window.location.protocol === 'https:';
+  }
+  return true;
+}
+
 function getDefaultServerAddress(): string {
   const cached = localStorage.getItem('juwei_wms_server_address');
   if (cached) {
-    if (cached.includes('localhost') && window.location.host && !window.location.host.includes('localhost')) {
-      return window.location.host;
-    }
-    return cached;
+    const clean = sanitizeServerHost(cached);
+    if (clean) return clean;
   }
   if (window.location.host && !window.location.host.includes('localhost')) {
-    return window.location.host;
+    return sanitizeServerHost(window.location.host);
   }
   return DEFAULT_ONLINE_CLOUD_HOST;
 }
@@ -318,12 +336,8 @@ export default function App() {
       setConnectionStatus('connecting');
 
       let targetAddr = serverAddress.trim();
-      if (!targetAddr) {
-        targetAddr = getDefaultServerAddress();
-      }
-
-      const cleanHost = targetAddr.replace(/^https?:\/\//, '').replace(/^wss?:\/\//, '').split('/')[0];
-      const isHttps = window.location.protocol === 'https:' || targetAddr.startsWith('https://') || targetAddr.startsWith('wss://');
+      const cleanHost = sanitizeServerHost(targetAddr) || sanitizeServerHost(window.location.host) || DEFAULT_ONLINE_CLOUD_HOST;
+      const isHttps = isSecureServerHost(cleanHost, targetAddr);
       const wsProto = isHttps ? 'wss:' : 'ws:';
       const httpProto = isHttps ? 'https:' : 'http:';
       
@@ -338,8 +352,8 @@ export default function App() {
         console.warn("WebSocket init error, attempting HTTP fallback:", err);
         const ok = await tryHttpFallback(httpUrl);
         if (!ok && cleanHost.includes('localhost') && window.location.host && !window.location.host.includes('localhost')) {
-          setServerAddress(window.location.host);
-          localStorage.setItem('juwei_wms_server_address', window.location.host);
+          setServerAddress(sanitizeServerHost(window.location.host));
+          localStorage.setItem('juwei_wms_server_address', sanitizeServerHost(window.location.host));
         } else if (!ok) {
           setConnectionStatus('disconnected');
         }
@@ -432,8 +446,8 @@ export default function App() {
     // Secondary HTTP poll every 8 seconds as safety net
     httpPollInterval = setInterval(async () => {
       let targetAddr = serverAddress.trim() || getDefaultServerAddress();
-      const cleanHost = targetAddr.replace(/^https?:\/\//, '').replace(/^wss?:\/\//, '').split('/')[0];
-      const isHttps = window.location.protocol === 'https:' || targetAddr.startsWith('https://') || targetAddr.startsWith('wss://');
+      const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
+      const isHttps = isSecureServerHost(cleanHost, targetAddr);
       const httpProto = isHttps ? 'https:' : 'http:';
       const httpUrl = `${httpProto}//${cleanHost}/api/sync`;
       
@@ -468,9 +482,9 @@ export default function App() {
         data
       }));
     } else {
-      let targetAddr = serverAddress.trim() || window.location.host || 'localhost:3000';
-      const cleanHost = targetAddr.replace(/^https?:\/\//, '').replace(/^wss?:\/\//, '').split('/')[0];
-      const isHttps = window.location.protocol === 'https:' || targetAddr.startsWith('https://') || targetAddr.startsWith('wss://');
+      let targetAddr = serverAddress.trim() || getDefaultServerAddress();
+      const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
+      const isHttps = isSecureServerHost(cleanHost, targetAddr);
       const httpProto = isHttps ? 'https:' : 'http:';
       
       fetch(`${httpProto}//${cleanHost}/api/sync`, {
@@ -1749,7 +1763,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => {
-                setTempServerAddress(serverAddress);
+                setTempServerAddress(sanitizeServerHost(serverAddress) || getDefaultServerAddress());
                 setShowServerSettingsModal(true);
               }}
               title="Click to configure WMS Central Server IP / Connection settings"
@@ -2100,8 +2114,8 @@ export default function App() {
                   <span className="font-bold block uppercase">
                     STATUS: {connectionStatus.toUpperCase()}
                   </span>
-                  <span className="text-[10px] opacity-80 block font-mono">
-                    ACTIVE ADDR: {serverAddress}
+                  <span className="text-[10px] opacity-80 block font-mono break-all">
+                    ACTIVE ADDR: {isSecureServerHost(sanitizeServerHost(serverAddress), serverAddress) ? 'HTTPS://' : 'HTTP://'}{sanitizeServerHost(serverAddress) || DEFAULT_ONLINE_CLOUD_HOST}
                   </span>
                 </div>
               </div>
@@ -2211,9 +2225,10 @@ export default function App() {
               <button 
                 type="button"
                 onClick={() => {
-                  const val = tempServerAddress.trim() || getDefaultServerAddress();
+                  const val = sanitizeServerHost(tempServerAddress) || getDefaultServerAddress();
                   setServerAddress(val);
                   localStorage.setItem('juwei_wms_server_address', val);
+                  setTempServerAddress(val);
                   setShowServerSettingsModal(false);
                 }}
                 className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs font-mono transition uppercase cursor-pointer"
