@@ -67,6 +67,44 @@ async function startServer() {
     }
   ];
 
+  // Disk Persistence File
+  const DATA_FILE = path.join(process.cwd(), "data-store.json");
+
+  function loadStateFromDisk() {
+    try {
+      if (fs.existsSync(DATA_FILE)) {
+        const raw = fs.readFileSync(DATA_FILE, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.state && typeof parsed.state === "object") {
+          Object.keys(parsed.state).forEach((key) => {
+            if (key in state && Array.isArray(parsed.state[key])) {
+              (state as any)[key] = parsed.state[key];
+            }
+          });
+        }
+        if (parsed && Array.isArray(parsed.chatMessages)) {
+          chatMessages.length = 0;
+          chatMessages.push(...parsed.chatMessages);
+        }
+        console.log("JUWEI WMS: Loaded persisted database state from disk.");
+      }
+    } catch (err) {
+      console.error("JUWEI WMS: Error loading data-store.json:", err);
+    }
+  }
+
+  function saveStateToDisk() {
+    try {
+      const payload = JSON.stringify({ state, chatMessages }, null, 2);
+      fs.writeFileSync(DATA_FILE, payload, "utf-8");
+    } catch (err) {
+      console.error("JUWEI WMS: Error saving data-store.json:", err);
+    }
+  }
+
+  // Load existing persisted data on startup
+  loadStateFromDisk();
+
   // Middleware for JSON parsing and CORS
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true }));
@@ -113,6 +151,7 @@ async function startServer() {
       const { collection, data } = req.body;
       if (collection && collection in state) {
         (state as any)[collection] = data;
+        saveStateToDisk();
         
         // Broadcast change to all connected WebSockets
         broadcast({
@@ -193,6 +232,7 @@ async function startServer() {
             const { collection, data } = payload;
             if (collection in state) {
               (state as any)[collection] = data;
+              saveStateToDisk();
               
               // Broadcast the updated collection to all other clients
               broadcast({
@@ -214,6 +254,7 @@ async function startServer() {
             };
             chatMessages.push(newMsg);
             if (chatMessages.length > 100) chatMessages.shift();
+            saveStateToDisk();
             
             broadcast({
               type: "chat_broadcast",
@@ -232,6 +273,7 @@ async function startServer() {
             };
             chatMessages.push(newMsg);
             if (chatMessages.length > 100) chatMessages.shift();
+            saveStateToDisk();
             
             broadcast({
               type: "chat_broadcast",

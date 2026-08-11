@@ -297,24 +297,53 @@ export default function App() {
     const applyStatePayload = (dataPayload: any, activeUsersList?: string[]) => {
       if (!dataPayload) return;
       const { stocks, receiving, returns, recycling, issuances, deliveries, envLogs, forkliftChecks, registries, registeredUsers: serverUsers, chatMessages: msgs } = dataPayload;
-      if (stocks && stocks.length > 0) setStocks(stocks);
-      if (receiving && receiving.length > 0) setReceiving(receiving);
-      if (returns && returns.length > 0) setReturns(returns);
-      if (recycling && recycling.length > 0) setRecycling(recycling);
-      if (issuances && issuances.length > 0) setIssuances(issuances);
-      if (deliveries && deliveries.length > 0) setDeliveries(deliveries);
-      if (envLogs && envLogs.length > 0) setEnvLogs(envLogs);
-      if (forkliftChecks && forkliftChecks.length > 0) setForkliftChecks(forkliftChecks);
-      if (registries && registries.length > 0) setRegistries(registries);
-      if (serverUsers && serverUsers.length > 0) {
+      if (Array.isArray(stocks)) setStocks(stocks);
+      if (Array.isArray(receiving)) setReceiving(receiving);
+      if (Array.isArray(returns)) setReturns(returns);
+      if (Array.isArray(recycling)) setRecycling(recycling);
+      if (Array.isArray(issuances)) setIssuances(issuances);
+      if (Array.isArray(deliveries)) setDeliveries(deliveries);
+      if (Array.isArray(envLogs)) setEnvLogs(envLogs);
+      if (Array.isArray(forkliftChecks)) setForkliftChecks(forkliftChecks);
+      if (Array.isArray(registries)) setRegistries(registries);
+      
+      if (Array.isArray(serverUsers)) {
         const sanitized = serverUsers.map((u: any) => 
           (u.employeeId === 'JPMP-002' || u.username === 'SUPER ADMIN' || u.username === 'ALDRIN BANAWA') ? superAdminAccount : u
         );
         if (!sanitized.some((u: any) => u.employeeId === 'JPMP-002')) sanitized.unshift(superAdminAccount);
-        setRegisteredUsers(sanitized);
+
+        // Merge local accounts from localStorage if user registered locally
+        const cachedLocalUsers = localStorage.getItem('juwei_wms_registeredUsers');
+        let finalUsers = sanitized;
+        if (cachedLocalUsers) {
+          try {
+            const parsedLocal = JSON.parse(cachedLocalUsers);
+            if (Array.isArray(parsedLocal)) {
+              let hasNewLocal = false;
+              const merged = [...sanitized];
+              parsedLocal.forEach((localU: any) => {
+                if (localU && localU.employeeId && !merged.some(m => m.employeeId.toUpperCase() === localU.employeeId.toUpperCase())) {
+                  merged.push(localU);
+                  hasNewLocal = true;
+                }
+              });
+              if (hasNewLocal) {
+                finalUsers = merged;
+                // Upload merged accounts back to server so central database has all accounts
+                syncCollection('registeredUsers', finalUsers);
+              }
+            }
+          } catch (e) {
+            // Ignore parse errors
+          }
+        }
+
+        setRegisteredUsers(finalUsers);
+        localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(finalUsers));
       }
-      if (msgs) setChatMessages(msgs);
-      if (activeUsersList) setActiveUsers(activeUsersList);
+      if (msgs && Array.isArray(msgs)) setChatMessages(msgs);
+      if (activeUsersList && Array.isArray(activeUsersList)) setActiveUsers(activeUsersList);
     };
 
     const tryHttpFallback = async (httpUrl: string): Promise<boolean> => {
@@ -434,6 +463,7 @@ export default function App() {
                   );
                   if (!sanitized.some((u: any) => u.employeeId === 'JPMP-002')) sanitized.unshift(superAdminAccount);
                   setRegisteredUsers(sanitized);
+                  localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(sanitized));
                   break;
                 }
               }
@@ -523,26 +553,32 @@ export default function App() {
     };
   }, [currentUser, isLoggedIn, serverAddress]);
 
-  // Sync state helpers (supports both WebSocket and HTTP POST REST fallback)
+  // Sync state helpers (supports both WebSocket and HTTP POST REST dual broadcast)
   const syncCollection = (collection: string, data: any[]) => {
+    // 1. Send via WebSocket if active
     if (wsOpen(socket)) {
-      socket!.send(JSON.stringify({
-        type: 'update_collection',
-        collection,
-        data
-      }));
-    } else {
-      let targetAddr = serverAddress.trim() || getDefaultServerAddress();
-      const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
-      const isHttps = isSecureServerHost(cleanHost, targetAddr);
-      const httpProto = isHttps ? 'https:' : 'http:';
-      
-      fetch(`${httpProto}//${cleanHost}/api/sync`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ collection, data })
-      }).catch(err => console.warn('HTTP REST sync warning:', err));
+      try {
+        socket!.send(JSON.stringify({
+          type: 'update_collection',
+          collection,
+          data
+        }));
+      } catch (e) {
+        console.warn('WS send error:', e);
+      }
     }
+    
+    // 2. Dual-send via HTTP POST REST to guarantee server disk persistence & update
+    let targetAddr = serverAddress.trim() || getDefaultServerAddress();
+    const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
+    const isHttps = isSecureServerHost(cleanHost, targetAddr);
+    const httpProto = isHttps ? 'https:' : 'http:';
+    
+    fetch(`${httpProto}//${cleanHost}/api/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ collection, data })
+    }).catch(err => console.warn('HTTP REST sync warning:', err));
   };
 
   const handleRegister = (username: string, role: string, employeeId: string, permission?: string) => {
@@ -1069,6 +1105,39 @@ export default function App() {
   };
 
   // OPERATOR EDIT / DELETE HANDLERS
+  const handleAddStock = (item: MaterialStockItem) => {
+    if (currentPermission === 'VIEW_ONLY') {
+      alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
+      return;
+    }
+    const next = [item, ...stocks];
+    setStocks(next);
+    syncCollection('stocks', next);
+    sendSystemActivity(`${currentUser} added stock batch ${item.partCode} (${item.quantity} ${item.unit}).`);
+  };
+
+  const handleUpdateStockQty = (id: string, qty: number) => {
+    if (currentPermission === 'VIEW_ONLY') {
+      alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
+      return;
+    }
+    const next = stocks.map(s => s.id === id ? { ...s, quantity: qty } : s);
+    setStocks(next);
+    syncCollection('stocks', next);
+    sendSystemActivity(`${currentUser} updated stock ${id} quantity to ${qty}.`);
+  };
+
+  const handleUpdateStockStatus = (id: string, status: MaterialStockItem['status']) => {
+    if (currentPermission === 'VIEW_ONLY') {
+      alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
+      return;
+    }
+    const next = stocks.map(s => s.id === id ? { ...s, status } : s);
+    setStocks(next);
+    syncCollection('stocks', next);
+    sendSystemActivity(`${currentUser} updated stock ${id} status to ${status}.`);
+  };
+
   const handleEditStock = (item: MaterialStockItem) => {
     if (currentPermission === 'VIEW_ONLY') {
       alert("PERMISSION DENIED: OPERATORS IN VIEW ONLY MODE CANNOT EDIT STOCK ITEMS.");
@@ -1203,15 +1272,15 @@ export default function App() {
       fileReader.onload = (event) => {
         try {
           const parsed = JSON.parse(event.target?.result as string);
-          setStocks(parsed.stocks || INITIAL_STOCK);
-          setReceiving(parsed.receiving || INITIAL_RECEIVING);
-          setReturns(parsed.returns || INITIAL_RETURNS);
-          setRecycling(parsed.recycling || INITIAL_RECYCLING);
-          setIssuances(parsed.issuances || INITIAL_ISSUANCE);
-          setDeliveries(parsed.deliveries || INITIAL_DELIVERIES);
-          setEnvLogs(parsed.envLogs || INITIAL_ENV_LOGS);
-          setForkliftChecks(parsed.forkliftChecks || INITIAL_FORKLIFT_CHECKS);
-          alert('Backup restored successfully into JUWEI database!');
+          if (parsed.stocks) { setStocks(parsed.stocks); syncCollection('stocks', parsed.stocks); }
+          if (parsed.receiving) { setReceiving(parsed.receiving); syncCollection('receiving', parsed.receiving); }
+          if (parsed.returns) { setReturns(parsed.returns); syncCollection('returns', parsed.returns); }
+          if (parsed.recycling) { setRecycling(parsed.recycling); syncCollection('recycling', parsed.recycling); }
+          if (parsed.issuances) { setIssuances(parsed.issuances); syncCollection('issuances', parsed.issuances); }
+          if (parsed.deliveries) { setDeliveries(parsed.deliveries); syncCollection('deliveries', parsed.deliveries); }
+          if (parsed.envLogs) { setEnvLogs(parsed.envLogs); syncCollection('envLogs', parsed.envLogs); }
+          if (parsed.forkliftChecks) { setForkliftChecks(parsed.forkliftChecks); syncCollection('forkliftChecks', parsed.forkliftChecks); }
+          alert('Backup restored and synchronized successfully across all JUWEI real-time clients!');
         } catch (err) {
           alert('Invalid backup file structure.');
         }
@@ -2021,9 +2090,9 @@ export default function App() {
           {view === 'stock' && (
             <StockFIFOControl 
               stocks={stocks}
-              onAddStock={(item) => setStocks(prev => [item, ...prev])}
-              onUpdateStockQty={(id, q) => setStocks(prev => prev.map(s => s.id === id ? { ...s, quantity: q } : s))}
-              onUpdateStockStatus={(id, st) => setStocks(prev => prev.map(s => s.id === id ? { ...s, status: st } : s))}
+              onAddStock={handleAddStock}
+              onUpdateStockQty={handleUpdateStockQty}
+              onUpdateStockStatus={handleUpdateStockStatus}
               onEditStock={handleEditStock}
               onDeleteStock={handleDeleteStock}
               isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
