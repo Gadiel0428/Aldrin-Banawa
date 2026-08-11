@@ -21,8 +21,11 @@
   .operator-login-portal select,
   .operator-login-portal textarea,
   #operator-login-portal input:not([type="checkbox"]):not([type="radio"]),
-  #wms-server-ip-input {
-    color: #ffffff !important;
+  #wms-server-ip-input,
+  #wms-server-ip-input-global,
+  #wms-server-ip-input-login,
+  .wms-server-ip-bar {
+    color: #38bdf8 !important;
   }
 
   input, select, textarea, button, th, td, label, p, span, h1, h2, h3, h4, h5, h6, div {

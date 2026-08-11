@@ -67,16 +67,70 @@ async function startServer() {
     }
   ];
 
+  // Middleware for JSON parsing and CORS
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true }));
+
+  app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(200);
+    }
+    next();
+  });
+
   // Active connections tracker
   const activeConnections = new Map<WebSocket, string>();
 
+  // Helper to get array of all active users
+  function getActiveUsersList(): string[] {
+    const users = Array.from(activeConnections.values()).filter(Boolean);
+    return Array.from(new Set(users));
+  }
+
   // API health endpoint
   app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", clientsCount: activeConnections.size });
+    res.json({ status: "ok", clientsCount: activeConnections.size, timestamp: new Date().toISOString() });
   });
 
-  // Attach WebSocket server to the exact same HTTP server instance (Port 3000)
-  const wss = new WebSocketServer({ server });
+  // API full state sync endpoint for HTTP clients / fallback
+  app.get("/api/sync", (req, res) => {
+    res.json({
+      status: "ok",
+      data: {
+        ...state,
+        chatMessages
+      },
+      activeUsers: getActiveUsersList()
+    });
+  });
+
+  // API update collection endpoint for HTTP clients / fallback
+  app.post("/api/sync", (req, res) => {
+    try {
+      const { collection, data } = req.body;
+      if (collection && collection in state) {
+        (state as any)[collection] = data;
+        
+        // Broadcast change to all connected WebSockets
+        broadcast({
+          type: "collection_updated",
+          collection,
+          data
+        });
+
+        return res.json({ success: true, collection, updatedCount: Array.isArray(data) ? data.length : 1 });
+      }
+      res.status(400).json({ error: "Invalid collection" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Attach WebSocket server with path /ws
+  const wss = new WebSocketServer({ server, path: "/ws" });
 
   // Helper to broadcast messages to all connected clients
   function broadcast(msg: any, excludeSocket?: WebSocket) {
@@ -86,12 +140,6 @@ async function startServer() {
         client.send(rawMsg);
       }
     }
-  }
-
-  // Helper to get array of all active users
-  function getActiveUsersList(): string[] {
-    const users = Array.from(activeConnections.values()).filter(Boolean);
-    return Array.from(new Set(users));
   }
 
   wss.on("connection", (ws) => {

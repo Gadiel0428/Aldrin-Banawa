@@ -85,6 +85,22 @@ import EnvironmentalModule from './components/EnvironmentalModule';
 import RegisteredAccountsModule, { RegisteredAccount } from './components/RegisteredAccountsModule';
 import MasterRegistryModule, { DEFAULT_MASTER_REGISTRIES } from './components/MasterRegistryModule';
 
+const DEFAULT_ONLINE_CLOUD_HOST = 'ais-dev-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app';
+
+function getDefaultServerAddress(): string {
+  const cached = localStorage.getItem('juwei_wms_server_address');
+  if (cached) {
+    if (cached.includes('localhost') && window.location.host && !window.location.host.includes('localhost')) {
+      return window.location.host;
+    }
+    return cached;
+  }
+  if (window.location.host && !window.location.host.includes('localhost')) {
+    return window.location.host;
+  }
+  return DEFAULT_ONLINE_CLOUD_HOST;
+}
+
 export default function App() {
   const [view, setView] = useState<string>('dashboard');
   const [showDesktopInstallModal, setShowDesktopInstallModal] = useState<boolean>(false);
@@ -129,14 +145,7 @@ export default function App() {
   const [activeUsers, setActiveUsers] = useState<string[]>([]);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
-  const [serverAddress, setServerAddress] = useState<string>(() => {
-    const cached = localStorage.getItem('juwei_wms_server_address');
-    if (cached) return cached;
-    if (window.location.protocol === 'file:' || !window.location.host) {
-      return 'localhost:3000';
-    }
-    return window.location.host;
-  });
+  const [serverAddress, setServerAddress] = useState<string>(() => getDefaultServerAddress());
   const [showServerSettingsModal, setShowServerSettingsModal] = useState<boolean>(false);
   const [tempServerAddress, setTempServerAddress] = useState<string>('');
 
@@ -257,50 +266,90 @@ export default function App() {
     handleLogout();
   };
 
-  // Connect to the fullstack WebSocket server with robust reconnection logic
+  // Connect to fullstack WebSocket & HTTP Real-Time Server with automatic failover
   useEffect(() => {
     let ws: WebSocket | null = null;
     let reconnectTimeout: any = null;
+    let httpPollInterval: any = null;
     let isMounted = true;
 
-    const connect = () => {
+    const applyStatePayload = (dataPayload: any, activeUsersList?: string[]) => {
+      if (!dataPayload) return;
+      const { stocks, receiving, returns, recycling, issuances, deliveries, envLogs, forkliftChecks, registries, registeredUsers: serverUsers, chatMessages: msgs } = dataPayload;
+      if (stocks && stocks.length > 0) setStocks(stocks);
+      if (receiving && receiving.length > 0) setReceiving(receiving);
+      if (returns && returns.length > 0) setReturns(returns);
+      if (recycling && recycling.length > 0) setRecycling(recycling);
+      if (issuances && issuances.length > 0) setIssuances(issuances);
+      if (deliveries && deliveries.length > 0) setDeliveries(deliveries);
+      if (envLogs && envLogs.length > 0) setEnvLogs(envLogs);
+      if (forkliftChecks && forkliftChecks.length > 0) setForkliftChecks(forkliftChecks);
+      if (registries && registries.length > 0) setRegistries(registries);
+      if (serverUsers && serverUsers.length > 0) {
+        const sanitized = serverUsers.map((u: any) => 
+          (u.employeeId === 'JPMP-002' || u.username === 'SUPER ADMIN' || u.username === 'ALDRIN BANAWA') ? superAdminAccount : u
+        );
+        if (!sanitized.some((u: any) => u.employeeId === 'JPMP-002')) sanitized.unshift(superAdminAccount);
+        setRegisteredUsers(sanitized);
+      }
+      if (msgs) setChatMessages(msgs);
+      if (activeUsersList) setActiveUsers(activeUsersList);
+    };
+
+    const tryHttpFallback = async (httpUrl: string) => {
+      try {
+        const res = await fetch(httpUrl);
+        if (res.ok) {
+          const json = await res.json();
+          if (isMounted) {
+            setConnectionStatus('connected');
+            if (json.data) applyStatePayload(json.data, json.activeUsers);
+          }
+          return true;
+        }
+      } catch (e) {
+        console.log("HTTP sync check failed:", e);
+      }
+      return false;
+    };
+
+    const connect = async () => {
       if (!isMounted) return;
       setConnectionStatus('connecting');
 
       let targetAddr = serverAddress.trim();
       if (!targetAddr) {
-        targetAddr = window.location.host || 'localhost:3000';
+        targetAddr = getDefaultServerAddress();
       }
 
-      let socketUrl = '';
-      if (targetAddr.startsWith('ws://') || targetAddr.startsWith('wss://')) {
-        socketUrl = targetAddr;
-      } else if (targetAddr.startsWith('http://')) {
-        socketUrl = 'ws://' + targetAddr.slice(7);
-      } else if (targetAddr.startsWith('https://')) {
-        socketUrl = 'wss://' + targetAddr.slice(8);
-      } else {
-        const isHttps = window.location.protocol === 'https:';
-        const wsProto = isHttps ? 'wss:' : 'ws:';
-        socketUrl = `${wsProto}//${targetAddr}`;
-      }
+      const cleanHost = targetAddr.replace(/^https?:\/\//, '').replace(/^wss?:\/\//, '').split('/')[0];
+      const isHttps = window.location.protocol === 'https:' || targetAddr.startsWith('https://') || targetAddr.startsWith('wss://');
+      const wsProto = isHttps ? 'wss:' : 'ws:';
+      const httpProto = isHttps ? 'https:' : 'http:';
+      
+      const socketUrl = `${wsProto}//${cleanHost}/ws`;
+      const httpUrl = `${httpProto}//${cleanHost}/api/sync`;
 
       console.log("Connecting WebSocket to real-time server:", socketUrl);
       
       try {
         ws = new WebSocket(socketUrl);
       } catch (err) {
-        console.error("Failed creating WebSocket object:", err);
-        setConnectionStatus('disconnected');
-        reconnectTimeout = setTimeout(() => {
-          if (isMounted) connect();
-        }, 3000);
+        console.warn("WebSocket init error, attempting HTTP fallback:", err);
+        const ok = await tryHttpFallback(httpUrl);
+        if (!ok && cleanHost.includes('localhost') && window.location.host && !window.location.host.includes('localhost')) {
+          setServerAddress(window.location.host);
+          localStorage.setItem('juwei_wms_server_address', window.location.host);
+        } else if (!ok) {
+          setConnectionStatus('disconnected');
+        }
+        reconnectTimeout = setTimeout(connect, 4000);
         return;
       }
 
       ws.onopen = () => {
         if (!isMounted) return;
-        console.log('Connected to real-time server!');
+        console.log('Connected via WebSocket to real-time server!');
         setConnectionStatus('connected');
         setSocket(ws);
         ws?.send(JSON.stringify({
@@ -313,29 +362,9 @@ export default function App() {
         if (!isMounted) return;
         try {
           const payload = JSON.parse(event.data);
-          console.log("Received payload:", payload.type);
-          
           switch (payload.type) {
             case 'init': {
-              const { stocks, receiving, returns, recycling, issuances, deliveries, envLogs, forkliftChecks, registries, registeredUsers: serverUsers, chatMessages } = payload.data;
-              if (stocks && stocks.length > 0) setStocks(stocks);
-              if (receiving && receiving.length > 0) setReceiving(receiving);
-              if (returns && returns.length > 0) setReturns(returns);
-              if (recycling && recycling.length > 0) setRecycling(recycling);
-              if (issuances && issuances.length > 0) setIssuances(issuances);
-              if (deliveries && deliveries.length > 0) setDeliveries(deliveries);
-              if (envLogs && envLogs.length > 0) setEnvLogs(envLogs);
-              if (forkliftChecks && forkliftChecks.length > 0) setForkliftChecks(forkliftChecks);
-              if (registries && registries.length > 0) setRegistries(registries);
-              if (serverUsers && serverUsers.length > 0) {
-                const sanitized = serverUsers.map((u: any) => 
-                  (u.employeeId === 'JPMP-002' || u.username === 'SUPER ADMIN' || u.username === 'ALDRIN BANAWA') ? superAdminAccount : u
-                );
-                if (!sanitized.some((u: any) => u.employeeId === 'JPMP-002')) sanitized.unshift(superAdminAccount);
-                setRegisteredUsers(sanitized);
-              }
-              setChatMessages(chatMessages || []);
-              setActiveUsers(payload.activeUsers || []);
+              applyStatePayload(payload.data, payload.activeUsers);
               break;
             }
             case 'collection_updated': {
@@ -375,34 +404,62 @@ export default function App() {
         }
       };
 
-      ws.onerror = (err) => {
-        console.log('WebSocket state changed (handled gracefully):', err);
-        if (ws) {
-          ws.close();
-        }
+      ws.onerror = async () => {
+        if (!isMounted) return;
+        console.log('WebSocket connection error, testing HTTP REST sync...');
+        await tryHttpFallback(httpUrl);
       };
 
-      ws.onclose = () => {
+      ws.onclose = async () => {
         if (!isMounted) return;
-        console.log('WebSocket connection closed. Reconnecting in 3 seconds...');
-        setConnectionStatus('disconnected');
+        console.log('WebSocket closed. Attempting HTTP sync & reconnection...');
         setSocket(null);
-        reconnectTimeout = setTimeout(() => {
-          connect();
-        }, 3000);
+        const ok = await tryHttpFallback(httpUrl);
+        if (!ok) {
+          if (cleanHost.includes('localhost') && window.location.host && !window.location.host.includes('localhost')) {
+            setServerAddress(window.location.host);
+            localStorage.setItem('juwei_wms_server_address', window.location.host);
+          } else {
+            setConnectionStatus('disconnected');
+          }
+        }
+        reconnectTimeout = setTimeout(connect, 4000);
       };
     };
 
     connect();
 
+    // Secondary HTTP poll every 8 seconds as safety net
+    httpPollInterval = setInterval(async () => {
+      let targetAddr = serverAddress.trim() || getDefaultServerAddress();
+      const cleanHost = targetAddr.replace(/^https?:\/\//, '').replace(/^wss?:\/\//, '').split('/')[0];
+      const isHttps = window.location.protocol === 'https:' || targetAddr.startsWith('https://') || targetAddr.startsWith('wss://');
+      const httpProto = isHttps ? 'https:' : 'http:';
+      const httpUrl = `${httpProto}//${cleanHost}/api/sync`;
+      
+      try {
+        const res = await fetch(httpUrl);
+        if (res.ok) {
+          const json = await res.json();
+          if (isMounted) {
+            setConnectionStatus('connected');
+            if (json.data) applyStatePayload(json.data, json.activeUsers);
+          }
+        }
+      } catch (err) {
+        // Silent catch for background poll
+      }
+    }, 8000);
+
     return () => {
       isMounted = false;
       if (ws) ws.close();
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (httpPollInterval) clearInterval(httpPollInterval);
     };
   }, [currentUser, isLoggedIn, serverAddress]);
 
-  // Sync state helpers
+  // Sync state helpers (supports both WebSocket and HTTP POST REST fallback)
   const syncCollection = (collection: string, data: any[]) => {
     if (wsOpen(socket)) {
       socket!.send(JSON.stringify({
@@ -410,6 +467,17 @@ export default function App() {
         collection,
         data
       }));
+    } else {
+      let targetAddr = serverAddress.trim() || window.location.host || 'localhost:3000';
+      const cleanHost = targetAddr.replace(/^https?:\/\//, '').replace(/^wss?:\/\//, '').split('/')[0];
+      const isHttps = window.location.protocol === 'https:' || targetAddr.startsWith('https://') || targetAddr.startsWith('wss://');
+      const httpProto = isHttps ? 'https:' : 'http:';
+      
+      fetch(`${httpProto}//${cleanHost}/api/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ collection, data })
+      }).catch(err => console.warn('HTTP REST sync warning:', err));
     }
   };
 
@@ -1462,128 +1530,6 @@ export default function App() {
           </div>
         )}
 
-        {/* WMS CENTRAL SERVER SETTINGS MODAL FOR LOGIN VIEW */}
-        {showServerSettingsModal && (
-          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 uppercase">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-lg w-full shadow-2xl space-y-4 text-left relative max-h-[90vh] overflow-y-auto">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                <div className="flex items-center gap-2">
-                  <Wifi className="h-5 w-5 text-indigo-400" />
-                  <h3 className="text-sm font-bold text-white tracking-tight font-mono">WMS CENTRAL SERVER & MULTI-PC SYNC</h3>
-                </div>
-                <button 
-                  type="button"
-                  onClick={() => setShowServerSettingsModal(false)}
-                  className="text-slate-400 hover:text-white text-xs font-bold font-mono px-2 py-1 rounded cursor-pointer"
-                >
-                  ✕ CLOSE
-                </button>
-              </div>
-
-              {/* Instant Share Link Banner */}
-              <div className="bg-gradient-to-r from-indigo-950/90 to-purple-950/90 border border-indigo-500/40 rounded-xl p-3.5 space-y-2 normal-case">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-bold text-indigo-200 uppercase tracking-wider font-mono flex items-center gap-1.5">
-                    <Sparkles className="h-3.5 w-3.5 text-amber-400" />
-                    1-CLICK LINK FOR OTHER PCs:
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-300 font-medium">
-                  Click below to copy your app link. Send or paste this link on any second PC, laptop, or phone to sync live with this database!
-                </p>
-                <div className="flex flex-col sm:flex-row gap-2 pt-1 items-center">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const shareUrl = window.location.href;
-                      navigator.clipboard.writeText(shareUrl);
-                      setLinkCopied(true);
-                      setTimeout(() => setLinkCopied(false), 3000);
-                    }}
-                    className={`flex-1 w-full flex items-center justify-center gap-2 font-bold py-2.5 px-4 rounded-xl text-xs font-mono transition cursor-pointer ${
-                      linkCopied 
-                        ? 'bg-emerald-600 text-white' 
-                        : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/40'
-                    }`}
-                  >
-                    {linkCopied ? (
-                      <>
-                        <Check className="h-4 w-4 text-white" />
-                        <span>✅ LINK COPIED TO CLIPBOARD!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="h-4 w-4 text-indigo-200" />
-                        <span>📋 COPY CONNECTION LINK FOR OTHER PCs</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              {/* QR Code & Mobile Scanner Section */}
-              <div className="flex flex-col sm:flex-row items-center gap-4 bg-slate-950 border border-slate-800 p-3.5 rounded-xl normal-case">
-                <div className="bg-white p-2 rounded-lg shrink-0 shadow-md">
-                  <QRCodeSVG value={window.location.href} size={110} level="M" />
-                </div>
-                <div className="space-y-1 text-left flex-1">
-                  <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider font-mono block">
-                    📱 SCAN QR CODE WITH OTHER DEVICE:
-                  </span>
-                  <p className="text-[11px] text-slate-300 font-medium">
-                    Scan with a tablet, phone, or handheld scanner camera to open and connect instantly.
-                  </p>
-                  <p className="text-[10px] text-slate-400 font-mono select-all break-all pt-1">
-                    {window.location.href}
-                  </p>
-                </div>
-              </div>
-
-              <div className="space-y-2 pt-1">
-                <label className="text-[10px] font-bold text-slate-300 font-mono block">
-                  MANUAL CENTRAL SERVER IP / HOSTNAME:
-                </label>
-                <input 
-                  id="wms-server-ip-input-login"
-                  type="text" 
-                  value={tempServerAddress} 
-                  onChange={(e) => setTempServerAddress(e.target.value)}
-                  placeholder="e.g. localhost:3000 or 192.168.1.100:3000"
-                  style={{ color: '#ffffff' }}
-                  className="w-full bg-slate-950 border border-slate-800 text-white !text-white text-xs p-3 rounded-xl font-mono focus:border-indigo-500 focus:outline-none font-bold"
-                />
-              </div>
-
-              <div className="flex gap-2 pt-2">
-                <button 
-                  type="button"
-                  onClick={() => {
-                    const val = tempServerAddress.trim() || 'localhost:3000';
-                    setServerAddress(val);
-                    localStorage.setItem('juwei_wms_server_address', val);
-                    setShowServerSettingsModal(false);
-                  }}
-                  className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs font-mono transition uppercase cursor-pointer"
-                >
-                  SAVE & CONNECT
-                </button>
-                <button 
-                  type="button"
-                  onClick={() => {
-                    const defaultAddr = window.location.host || 'localhost:3000';
-                    setServerAddress(defaultAddr);
-                    localStorage.setItem('juwei_wms_server_address', defaultAddr);
-                    setTempServerAddress(defaultAddr);
-                    setShowServerSettingsModal(false);
-                  }}
-                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-4 rounded-xl text-xs font-mono transition uppercase cursor-pointer"
-                >
-                  RESET DEFAULT
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     );
   }
@@ -2115,6 +2061,182 @@ export default function App() {
 
       {/* Global Application Confirmation Modal with YES / NO options */}
       <ConfirmModal config={confirmActionApp} onClose={() => setConfirmActionApp(null)} />
+
+      {/* Global WMS Central Server & Real-time IP Config Modal */}
+      {showServerSettingsModal && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 uppercase">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-lg w-full shadow-2xl space-y-4 text-left relative max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Wifi className="h-5 w-5 text-indigo-400" />
+                <h3 className="text-sm font-bold text-white tracking-tight font-mono">WMS CENTRAL SERVER & MULTI-PC SYNC</h3>
+              </div>
+              <button 
+                type="button"
+                onClick={() => setShowServerSettingsModal(false)}
+                className="text-slate-400 hover:text-white text-xs font-bold font-mono px-2 py-1 rounded cursor-pointer"
+              >
+                ✕ CLOSE
+              </button>
+            </div>
+
+            {/* Connection Status Banner in Modal */}
+            <div className={`p-3 rounded-xl border text-xs font-mono flex items-center justify-between ${
+              connectionStatus === 'connected'
+                ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                : connectionStatus === 'connecting'
+                ? 'bg-amber-950/60 border-amber-500/40 text-amber-300'
+                : 'bg-rose-950/60 border-rose-500/40 text-rose-300'
+            }`}>
+              <div className="flex items-center gap-2">
+                {connectionStatus === 'connected' ? (
+                  <Wifi className="h-4 w-4 text-emerald-400 animate-pulse" />
+                ) : connectionStatus === 'connecting' ? (
+                  <Loader2 className="h-4 w-4 text-amber-400 animate-spin" />
+                ) : (
+                  <WifiOff className="h-4 w-4 text-rose-400" />
+                )}
+                <div>
+                  <span className="font-bold block uppercase">
+                    STATUS: {connectionStatus.toUpperCase()}
+                  </span>
+                  <span className="text-[10px] opacity-80 block font-mono">
+                    ACTIVE ADDR: {serverAddress}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Instant Share Link Banner */}
+            <div className="bg-gradient-to-r from-indigo-950/90 to-purple-950/90 border border-indigo-500/40 rounded-xl p-3.5 space-y-2 normal-case">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-indigo-200 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                  <Sparkles className="h-3.5 w-3.5 text-amber-400" />
+                  1-CLICK LINK FOR OTHER PCs / WORKSTATIONS:
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-300 font-medium">
+                Click below to copy your app link. Paste this URL on any second PC, laptop, or handheld scanner to sync in real-time!
+              </p>
+              <div className="flex flex-col sm:flex-row gap-2 pt-1 items-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const shareUrl = window.location.href;
+                    navigator.clipboard.writeText(shareUrl);
+                    setLinkCopied(true);
+                    setTimeout(() => setLinkCopied(false), 3000);
+                  }}
+                  className={`flex-1 w-full flex items-center justify-center gap-2 font-bold py-2.5 px-4 rounded-xl text-xs font-mono transition cursor-pointer ${
+                    linkCopied 
+                      ? 'bg-emerald-600 text-white' 
+                      : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/40'
+                  }`}
+                >
+                  {linkCopied ? (
+                    <>
+                      <Check className="h-4 w-4 text-white" />
+                      <span>✅ LINK COPIED TO CLIPBOARD!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-4 w-4 text-indigo-200" />
+                      <span>📋 COPY CONNECTION LINK FOR OTHER PCs</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* QR Code & Mobile Scanner Section */}
+            <div className="flex flex-col sm:flex-row items-center gap-4 bg-slate-950 border border-slate-800 p-3.5 rounded-xl normal-case">
+              <div className="bg-white p-2 rounded-lg shrink-0 shadow-md">
+                <QRCodeSVG value={window.location.href} size={110} level="M" />
+              </div>
+              <div className="space-y-1 text-left flex-1">
+                <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider font-mono block">
+                  📱 SCAN QR CODE WITH TABLET OR SCANNER:
+                </span>
+                <p className="text-[11px] text-slate-300 font-medium">
+                  Scan with mobile device or handheld barcode scanner camera to open and connect instantly.
+                </p>
+                <p className="text-[10px] text-slate-400 font-mono select-all break-all pt-1">
+                  {window.location.href}
+                </p>
+              </div>
+            </div>
+
+            {/* Manual Server IP Input & Quick Presets */}
+            <div className="space-y-2 pt-1">
+              <label className="text-[10px] font-bold text-slate-300 font-mono block">
+                CENTRAL SERVER IP / HOSTNAME / WEB URL:
+              </label>
+              <input 
+                id="wms-server-ip-input-global"
+                type="text" 
+                value={tempServerAddress} 
+                onChange={(e) => setTempServerAddress(e.target.value)}
+                placeholder="e.g. ais-dev-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app or 192.168.1.100:3000"
+                style={{ color: '#38bdf8' }}
+                className="w-full bg-slate-950 border border-slate-800 text-sky-400 !text-sky-400 text-xs p-3 rounded-xl font-mono focus:border-indigo-500 focus:outline-none font-bold wms-server-ip-bar"
+              />
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setTempServerAddress(DEFAULT_ONLINE_CLOUD_HOST)}
+                  className="text-[10px] bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-500/40 px-2.5 py-1 rounded-lg font-mono font-bold transition cursor-pointer"
+                >
+                  🌐 Online Cloud Server ({DEFAULT_ONLINE_CLOUD_HOST})
+                </button>
+                {window.location.host && window.location.host !== DEFAULT_ONLINE_CLOUD_HOST && (
+                  <button
+                    type="button"
+                    onClick={() => setTempServerAddress(window.location.host)}
+                    className="text-[10px] bg-slate-800 hover:bg-slate-700 text-sky-300 px-2.5 py-1 rounded-lg font-mono font-bold transition cursor-pointer"
+                  >
+                    ⚡ Current App Host ({window.location.host})
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setTempServerAddress('localhost:3000')}
+                  className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-400 px-2.5 py-1 rounded-lg font-mono font-bold transition cursor-pointer"
+                >
+                  💻 Localhost (localhost:3000)
+                </button>
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button 
+                type="button"
+                onClick={() => {
+                  const val = tempServerAddress.trim() || getDefaultServerAddress();
+                  setServerAddress(val);
+                  localStorage.setItem('juwei_wms_server_address', val);
+                  setShowServerSettingsModal(false);
+                }}
+                className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs font-mono transition uppercase cursor-pointer"
+              >
+                SAVE & CONNECT NOW
+              </button>
+              <button 
+                type="button"
+                onClick={() => {
+                  const defaultAddr = getDefaultServerAddress();
+                  setServerAddress(defaultAddr);
+                  localStorage.setItem('juwei_wms_server_address', defaultAddr);
+                  setTempServerAddress(defaultAddr);
+                  setShowServerSettingsModal(false);
+                }}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-4 rounded-xl text-xs font-mono transition uppercase cursor-pointer"
+              >
+                RESET DEFAULT CLOUD SERVER
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
