@@ -108,18 +108,49 @@ export function isSecureServerHost(cleanHost: string, rawInput: string = ''): bo
 }
 
 function getDefaultServerAddress(): string {
+  if (typeof window !== 'undefined' && window.location && window.location.host) {
+    const cleanHost = sanitizeServerHost(window.location.host);
+    if (cleanHost) {
+      return cleanHost;
+    }
+  }
   const cached = localStorage.getItem('juwei_wms_server_address');
   if (cached) {
     const clean = sanitizeServerHost(cached);
     if (clean) return clean;
   }
-  if (window.location.host) {
-    const cleanHost = sanitizeServerHost(window.location.host);
-    if (cleanHost && (cleanHost.includes('.run.app') || cleanHost.includes('onrender.com') || cleanHost.includes('cloud') || cleanHost.includes('appspot') || cleanHost.includes('vercel.app'))) {
-      return cleanHost;
-    }
-  }
   return DEFAULT_ONLINE_CLOUD_HOST;
+}
+
+export function wsOpen(ws: WebSocket | null): boolean {
+  return ws !== null && ws.readyState === WebSocket.OPEN;
+}
+
+// Helpers for offline mutation sync queue
+function getPendingSyncQueue(): Record<string, any[]> {
+  try {
+    const raw = localStorage.getItem('juwei_wms_pending_sync');
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return {};
+}
+
+function savePendingSyncQueue(queue: Record<string, any[]>) {
+  try {
+    localStorage.setItem('juwei_wms_pending_sync', JSON.stringify(queue));
+  } catch (e) {}
+}
+
+function markPendingSync(collection: string, data: any[]) {
+  const q = getPendingSyncQueue();
+  q[collection] = data;
+  savePendingSyncQueue(q);
+}
+
+function clearPendingSync(collection: string) {
+  const q = getPendingSyncQueue();
+  delete q[collection];
+  savePendingSyncQueue(q);
 }
 
 export default function App() {
@@ -293,6 +324,7 @@ export default function App() {
     let reconnectTimeout: any = null;
     let httpPollInterval: any = null;
     let isMounted = true;
+    let hasConnectedOnce = false;
 
     const applyStatePayload = (dataPayload: any, activeUsersList?: string[]) => {
       if (!dataPayload) return;
@@ -330,7 +362,6 @@ export default function App() {
               });
               if (hasNewLocal) {
                 finalUsers = merged;
-                // Upload merged accounts back to server so central database has all accounts
                 syncCollection('registeredUsers', finalUsers);
               }
             }
@@ -346,79 +377,116 @@ export default function App() {
       if (activeUsersList && Array.isArray(activeUsersList)) setActiveUsers(activeUsersList);
     };
 
-    const tryHttpFallback = async (httpUrl: string): Promise<boolean> => {
+    const tryFetchSync = async (url: string): Promise<boolean> => {
       try {
-        const res = await fetch(httpUrl, { method: 'GET', headers: { 'Accept': 'application/json' } });
+        const res = await fetch(url, { method: 'GET', headers: { 'Accept': 'application/json' } });
         if (res.ok) {
           const json = await res.json();
           if (isMounted) {
+            hasConnectedOnce = true;
             setConnectionStatus('connected');
             if (json.data) applyStatePayload(json.data, json.activeUsers);
           }
           return true;
         }
       } catch (e) {
-        console.log("HTTP sync check failed for URL:", httpUrl, e);
+        // Fetch failed
       }
       return false;
     };
 
-    const runSyncCheck = async (primaryHost: string, primaryHttpUrl: string): Promise<boolean> => {
-      // 1. Try primary configured host first via HTTP REST
-      const ok = await tryHttpFallback(primaryHttpUrl);
-      if (ok) return true;
+    const flushPendingSyncQueue = async () => {
+      const q = getPendingSyncQueue();
+      const collections = Object.keys(q);
+      if (collections.length === 0) return;
 
-      // 2. Secondary check on local host if primary failed (without overwriting user's configured serverAddress)
-      const currentHost = sanitizeServerHost(window.location.host);
-      const fallbackHosts = [currentHost, 'localhost:3000', '127.0.0.1:3000'].filter(
-        (h, index, self) => h && h !== primaryHost && self.indexOf(h) === index
-      );
+      let targetAddr = serverAddress.trim() || getDefaultServerAddress();
+      const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
+      const isHttps = isSecureServerHost(cleanHost, targetAddr);
+      const httpProto = isHttps ? 'https:' : 'http:';
 
-      for (const fallbackHost of fallbackHosts) {
-        const fallbackProto = isSecureServerHost(fallbackHost) ? 'https:' : 'http:';
-        const fallbackUrl = `${fallbackProto}//${fallbackHost}/api/sync`;
-        const fallbackOk = await tryHttpFallback(fallbackUrl);
-        if (fallbackOk) {
-          console.log("Synced successfully via local fallback host:", fallbackHost);
-          return true;
+      for (const collection of collections) {
+        const data = q[collection];
+        if (data && Array.isArray(data)) {
+          try {
+            const res = await fetch('/api/sync', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ collection, data })
+            });
+            if (res.ok) {
+              clearPendingSync(collection);
+            }
+          } catch (e) {
+            try {
+              const resFallback = await fetch(`${httpProto}//${cleanHost}/api/sync`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ collection, data })
+              });
+              if (resFallback.ok) {
+                clearPendingSync(collection);
+              }
+            } catch (err) {
+              // Still offline
+            }
+          }
         }
       }
+    };
 
-      if (isMounted) {
+    const runSyncCheck = async (): Promise<boolean> => {
+      // 0. Flush any pending offline mutations first
+      await flushPendingSyncQueue();
+
+      // 1. Try relative URL /api/sync first (fastest, guaranteed on same origin)
+      const relOk = await tryFetchSync('/api/sync');
+      if (relOk) return true;
+
+      // 2. Try window host if available
+      if (window.location.host) {
+        const localProto = window.location.protocol === 'https:' ? 'https:' : 'http:';
+        const localOk = await tryFetchSync(`${localProto}//${window.location.host}/api/sync`);
+        if (localOk) return true;
+      }
+
+      // 3. Try configured server host address
+      let targetAddr = serverAddress.trim();
+      const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
+      const isHttps = isSecureServerHost(cleanHost, targetAddr);
+      const httpProto = isHttps ? 'https:' : 'http:';
+      const httpUrl = `${httpProto}//${cleanHost}/api/sync`;
+
+      const hostOk = await tryFetchSync(httpUrl);
+      if (hostOk) return true;
+
+      if (isMounted && !hasConnectedOnce) {
         setConnectionStatus('disconnected');
       }
       return false;
     };
 
-    const connect = async () => {
+    const connectWebSocket = async () => {
       if (!isMounted) return;
-      setConnectionStatus('connecting');
 
       let targetAddr = serverAddress.trim();
       const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
       const isHttps = isSecureServerHost(cleanHost, targetAddr);
       const wsProto = isHttps ? 'wss:' : 'ws:';
-      const httpProto = isHttps ? 'https:' : 'http:';
-      
       const socketUrl = `${wsProto}//${cleanHost}/ws`;
-      const httpUrl = `${httpProto}//${cleanHost}/api/sync`;
 
-      console.log("Connecting WebSocket to real-time server:", socketUrl);
-      let fallbackTriggered = false;
       let pingInterval: any = null;
       
       try {
         ws = new WebSocket(socketUrl);
       } catch (err) {
-        console.warn("WebSocket init error, attempting HTTP fallback:", err);
-        await runSyncCheck(cleanHost, httpUrl);
-        reconnectTimeout = setTimeout(connect, 3000);
+        reconnectTimeout = setTimeout(connectWebSocket, 5000);
         return;
       }
 
       ws.onopen = () => {
         if (!isMounted) return;
-        console.log('Connected via WebSocket to real-time server:', cleanHost);
+        hasConnectedOnce = true;
         setConnectionStatus('connected');
         setSocket(ws);
         ws?.send(JSON.stringify({
@@ -426,7 +494,6 @@ export default function App() {
           username: currentUser || 'JUWEI OPERATOR'
         }));
 
-        // Send heartbeat ping every 15 seconds to keep WSS connection alive
         pingInterval = setInterval(() => {
           if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'ping' }));
@@ -438,10 +505,12 @@ export default function App() {
         if (!isMounted) return;
         try {
           const payload = JSON.parse(event.data);
-          if (payload.type === 'pong') return; // Heartbeat response
+          if (payload.type === 'pong') return;
 
           switch (payload.type) {
             case 'init': {
+              hasConnectedOnce = true;
+              setConnectionStatus('connected');
               applyStatePayload(payload.data, payload.activeUsers);
               break;
             }
@@ -483,78 +552,71 @@ export default function App() {
         }
       };
 
-      ws.onerror = async () => {
-        if (!isMounted) return;
-        console.log('WebSocket connection error, testing HTTP REST sync...');
-        if (!fallbackTriggered) {
-          fallbackTriggered = true;
-          await runSyncCheck(cleanHost, httpUrl);
-        }
+      ws.onerror = () => {
+        // Quiet fallback to HTTP sync
+        runSyncCheck();
       };
 
-      ws.onclose = async () => {
+      ws.onclose = () => {
         if (!isMounted) return;
         if (pingInterval) clearInterval(pingInterval);
-        console.log('WebSocket closed. Attempting HTTP sync & reconnection...');
         setSocket(null);
-        if (!fallbackTriggered) {
-          fallbackTriggered = true;
-          await runSyncCheck(cleanHost, httpUrl);
-        }
-        reconnectTimeout = setTimeout(connect, 3000);
+        runSyncCheck();
+        reconnectTimeout = setTimeout(connectWebSocket, 5000);
       };
     };
 
-    connect();
-
-    // Secondary HTTP poll every 4 seconds as continuous safety net
-    httpPollInterval = setInterval(async () => {
-      let targetAddr = serverAddress.trim() || getDefaultServerAddress();
-      const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
-      const isHttps = isSecureServerHost(cleanHost, targetAddr);
-      const httpProto = isHttps ? 'https:' : 'http:';
-      const httpUrl = `${httpProto}//${cleanHost}/api/sync`;
-      
-      try {
-        const res = await fetch(httpUrl);
-        if (res.ok) {
-          const json = await res.json();
-          if (isMounted) {
-            setConnectionStatus('connected');
-            if (json.data) applyStatePayload(json.data, json.activeUsers);
-          }
-        }
-      } catch (err) {
-        // Try local host as secondary poll if target host is unreachable
-        const currentHost = sanitizeServerHost(window.location.host);
-        if (currentHost && currentHost !== cleanHost) {
-          try {
-            const localProto = isSecureServerHost(currentHost) ? 'https:' : 'http:';
-            const localRes = await fetch(`${localProto}//${currentHost}/api/sync`);
-            if (localRes.ok) {
-              const localJson = await localRes.json();
-              if (isMounted) {
-                setConnectionStatus('connected');
-                if (localJson.data) applyStatePayload(localJson.data, localJson.activeUsers);
-              }
-            }
-          } catch (e) {
-            // Ignore
-          }
+    // Re-sync handlers when internet connection is restored or page is focused
+    const handleOnlineOrFocus = () => {
+      if (isMounted) {
+        flushPendingSyncQueue().then(() => runSyncCheck());
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          connectWebSocket();
         }
       }
-    }, 4000);
+    };
+
+    window.addEventListener('online', handleOnlineOrFocus);
+    window.addEventListener('focus', handleOnlineOrFocus);
+    document.addEventListener('visibilitychange', handleOnlineOrFocus);
+
+    // Run immediate sync on mount
+    runSyncCheck().then((ok) => {
+      if (!ok && isMounted) {
+        setConnectionStatus('connecting');
+      }
+    });
+
+    connectWebSocket();
+
+    // Continuous HTTP background polling every 3 seconds
+    httpPollInterval = setInterval(() => {
+      if (isMounted) {
+        runSyncCheck();
+      }
+    }, 3000);
 
     return () => {
       isMounted = false;
       if (ws) ws.close();
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (httpPollInterval) clearInterval(httpPollInterval);
+      window.removeEventListener('online', handleOnlineOrFocus);
+      window.removeEventListener('focus', handleOnlineOrFocus);
+      document.removeEventListener('visibilitychange', handleOnlineOrFocus);
     };
   }, [currentUser, isLoggedIn, serverAddress]);
 
   // Sync state helpers (supports both WebSocket and HTTP POST REST dual broadcast)
   const syncCollection = (collection: string, data: any[]) => {
+    // Save to local cache
+    try {
+      localStorage.setItem(`juwei_wms_cache_${collection}`, JSON.stringify(data));
+    } catch (e) {}
+
+    // Mark as pending before network request
+    markPendingSync(collection, data);
+
     // 1. Send via WebSocket if active
     if (wsOpen(socket)) {
       try {
@@ -574,11 +636,29 @@ export default function App() {
     const isHttps = isSecureServerHost(cleanHost, targetAddr);
     const httpProto = isHttps ? 'https:' : 'http:';
     
-    fetch(`${httpProto}//${cleanHost}/api/sync`, {
+    fetch('/api/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ collection, data })
-    }).catch(err => console.warn('HTTP REST sync warning:', err));
+    })
+    .then(res => {
+      if (res.ok) {
+        clearPendingSync(collection);
+      }
+    })
+    .catch(() => {
+      fetch(`${httpProto}//${cleanHost}/api/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ collection, data })
+      })
+      .then(res => {
+        if (res.ok) {
+          clearPendingSync(collection);
+        }
+      })
+      .catch(err => console.warn('HTTP REST sync warning:', err));
+    });
   };
 
   const handleRegister = (username: string, role: string, employeeId: string, permission?: string) => {
