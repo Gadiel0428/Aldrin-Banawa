@@ -43,7 +43,8 @@ import {
   Monitor,
   Loader2,
   Copy,
-  Check
+  Check,
+  X
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import AccountQRBadgeModal from './components/AccountQRBadgeModal';
@@ -329,15 +330,66 @@ export default function App() {
     const applyStatePayload = (dataPayload: any, activeUsersList?: string[]) => {
       if (!dataPayload) return;
       const { stocks, receiving, returns, recycling, issuances, deliveries, envLogs, forkliftChecks, registries, registeredUsers: serverUsers, chatMessages: msgs } = dataPayload;
-      if (Array.isArray(stocks)) setStocks(stocks);
-      if (Array.isArray(receiving)) setReceiving(receiving);
-      if (Array.isArray(returns)) setReturns(returns);
-      if (Array.isArray(recycling)) setRecycling(recycling);
-      if (Array.isArray(issuances)) setIssuances(issuances);
-      if (Array.isArray(deliveries)) setDeliveries(deliveries);
-      if (Array.isArray(envLogs)) setEnvLogs(envLogs);
-      if (Array.isArray(forkliftChecks)) setForkliftChecks(forkliftChecks);
-      if (Array.isArray(registries)) setRegistries(registries);
+
+      if (Array.isArray(stocks)) {
+        if (stocks.length > 0) {
+          setStocks(stocks);
+        } else if (stocks.length === 0 && INITIAL_STOCK.length > 0) {
+          syncCollection('stocks', INITIAL_STOCK);
+        }
+      }
+
+      if (Array.isArray(receiving)) {
+        if (receiving.length > 0) setReceiving(receiving);
+        else if (INITIAL_RECEIVING.length > 0) syncCollection('receiving', INITIAL_RECEIVING);
+      }
+
+      if (Array.isArray(returns)) {
+        if (returns.length > 0) setReturns(returns);
+        else if (INITIAL_RETURNS.length > 0) syncCollection('returns', INITIAL_RETURNS);
+      }
+
+      if (Array.isArray(recycling)) {
+        if (recycling.length > 0) setRecycling(recycling);
+        else if (INITIAL_RECYCLING.length > 0) syncCollection('recycling', INITIAL_RECYCLING);
+      }
+
+      if (Array.isArray(issuances)) {
+        if (issuances.length > 0) setIssuances(issuances);
+        else if (INITIAL_ISSUANCE.length > 0) syncCollection('issuances', INITIAL_ISSUANCE);
+      }
+
+      if (Array.isArray(deliveries)) {
+        if (deliveries.length > 0) setDeliveries(deliveries);
+        else if (INITIAL_DELIVERIES.length > 0) syncCollection('deliveries', INITIAL_DELIVERIES);
+      }
+
+      if (Array.isArray(envLogs)) {
+        if (envLogs.length > 0) setEnvLogs(envLogs);
+        else if (INITIAL_ENV_LOGS.length > 0) syncCollection('envLogs', INITIAL_ENV_LOGS);
+      }
+
+      if (Array.isArray(forkliftChecks)) {
+        if (forkliftChecks.length > 0) setForkliftChecks(forkliftChecks);
+        else if (INITIAL_FORKLIFT_CHECKS.length > 0) syncCollection('forkliftChecks', INITIAL_FORKLIFT_CHECKS);
+      }
+
+      if (Array.isArray(registries)) {
+        if (registries.length > 0) {
+          setRegistries(registries);
+        } else {
+          const cachedReg = localStorage.getItem('juwei_wms_master_registries');
+          if (cachedReg) {
+            try {
+              const parsed = JSON.parse(cachedReg);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                setRegistries(parsed);
+                syncCollection('registries', parsed);
+              }
+            } catch (e) {}
+          }
+        }
+      }
       
       if (Array.isArray(serverUsers)) {
         const sanitized = serverUsers.map((u: any) => 
@@ -468,6 +520,9 @@ export default function App() {
 
     const connectWebSocket = async () => {
       if (!isMounted) return;
+      if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+        return;
+      }
 
       let targetAddr = serverAddress.trim();
       const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
@@ -489,14 +544,25 @@ export default function App() {
         hasConnectedOnce = true;
         setConnectionStatus('connected');
         setSocket(ws);
-        ws?.send(JSON.stringify({
-          type: 'join',
-          username: currentUser || 'JUWEI OPERATOR'
-        }));
+        
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(JSON.stringify({
+              type: 'join',
+              username: currentUser || 'JUWEI OPERATOR'
+            }));
+          } catch (e) {
+            console.warn('WS send join error:', e);
+          }
+        }
 
         pingInterval = setInterval(() => {
           if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'ping' }));
+            try {
+              ws.send(JSON.stringify({ type: 'ping' }));
+            } catch (e) {
+              console.warn('WS ping error:', e);
+            }
           }
         }, 15000);
       };
@@ -570,7 +636,7 @@ export default function App() {
     const handleOnlineOrFocus = () => {
       if (isMounted) {
         flushPendingSyncQueue().then(() => runSyncCheck());
-        if (!socket || socket.readyState !== WebSocket.OPEN) {
+        if (!ws || (ws.readyState !== WebSocket.OPEN && ws.readyState !== WebSocket.CONNECTING)) {
           connectWebSocket();
         }
       }
@@ -845,20 +911,40 @@ export default function App() {
 
   const sendSystemActivity = (text: string) => {
     if (wsOpen(socket)) {
-      socket!.send(JSON.stringify({
-        type: 'system_activity',
-        text
-      }));
+      try {
+        socket!.send(JSON.stringify({
+          type: 'system_activity',
+          text
+        }));
+      } catch (e) {
+        console.warn('WS system activity error:', e);
+      }
+    } else {
+      fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'System Audit', text, isSystem: true })
+      }).catch(() => {});
     }
   };
 
   const sendChatMessage = (text: string) => {
     if (wsOpen(socket)) {
-      socket!.send(JSON.stringify({
-        type: 'chat',
-        username: currentUser,
-        text
-      }));
+      try {
+        socket!.send(JSON.stringify({
+          type: 'chat',
+          username: currentUser,
+          text
+        }));
+      } catch (e) {
+        console.warn('WS chat error:', e);
+      }
+    } else {
+      fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: currentUser, text, isSystem: false })
+      }).catch(() => {});
     }
   };
 
@@ -1524,46 +1610,26 @@ export default function App() {
           {/* Accent Glow */}
           <div className="absolute top-0 left-1/4 w-1/2 h-1 bg-gradient-to-r from-transparent via-indigo-500 to-transparent animate-pulse" />
           
-          {/* Central Server Connection Status & Config Bar */}
-          <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2 font-mono text-xs">
-            <div className="flex items-center gap-2.5 min-w-0">
+          {/* Central Server Connection Status Bar */}
+          <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex items-center justify-center gap-2 font-mono text-xs">
+            <div className="flex items-center gap-2.5">
               {connectionStatus === 'connected' ? (
                 <>
                   <Wifi className="h-4 w-4 text-emerald-400 shrink-0 animate-pulse" />
-                  <div className="truncate">
-                    <span className="text-[10px] text-emerald-400 font-bold block uppercase tracking-wider">REAL-TIME CONNECTED</span>
-                    <span className="text-[9px] text-slate-400 block truncate font-mono">{serverAddress}</span>
-                  </div>
+                  <span className="text-xs text-emerald-400 font-bold uppercase tracking-wider">REAL-TIME CONNECTED</span>
                 </>
               ) : connectionStatus === 'connecting' ? (
                 <>
                   <Loader2 className="h-4 w-4 text-amber-400 animate-spin shrink-0" />
-                  <div className="truncate">
-                    <span className="text-[10px] text-amber-300 font-bold block uppercase tracking-wider">CONNECTING TO SERVER...</span>
-                    <span className="text-[9px] text-slate-400 block truncate font-mono">{serverAddress}</span>
-                  </div>
+                  <span className="text-xs text-amber-300 font-bold uppercase tracking-wider">CONNECTING TO SERVER...</span>
                 </>
               ) : (
                 <>
                   <WifiOff className="h-4 w-4 text-rose-400 shrink-0" />
-                  <div className="truncate">
-                    <span className="text-[10px] text-rose-300 font-bold block uppercase tracking-wider">DISCONNECTED</span>
-                    <span className="text-[9px] text-slate-400 block truncate font-mono">{serverAddress}</span>
-                  </div>
+                  <span className="text-xs text-rose-300 font-bold uppercase tracking-wider">DISCONNECTED</span>
                 </>
               )}
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setTempServerAddress(serverAddress);
-                setShowServerSettingsModal(true);
-              }}
-              className="bg-indigo-600/30 hover:bg-indigo-600/60 text-indigo-200 border border-indigo-500/40 px-3 py-1.5 rounded-lg text-[10px] font-bold transition flex items-center gap-1.5 shrink-0 uppercase cursor-pointer font-mono shadow-xs"
-              id="btn-login-server-config"
-            >
-              <Wifi className="h-3.5 w-3.5 text-indigo-400" /> SERVER IP / URL
-            </button>
           </div>
 
           <div className="flex flex-col items-center text-center">
@@ -2277,157 +2343,131 @@ export default function App() {
 
       {/* Global WMS Central Server & Real-time IP Config Modal */}
       {showServerSettingsModal && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 uppercase">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-lg w-full shadow-2xl space-y-4 text-left relative max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 max-w-md w-full shadow-2xl space-y-4 text-left relative">
+            {/* Minimal Header */}
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
               <div className="flex items-center gap-2">
-                <Wifi className="h-5 w-5 text-indigo-400" />
-                <h3 className="text-sm font-bold text-white tracking-tight font-mono">WMS CENTRAL SERVER & MULTI-PC SYNC</h3>
+                <div className="p-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
+                  <Wifi className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-white tracking-wider font-mono uppercase">Multi-PC Real-Time Sync</h3>
+                  <p className="text-[10px] text-slate-400 font-mono">Central Server Network Node</p>
+                </div>
               </div>
               <button 
                 type="button"
                 onClick={() => setShowServerSettingsModal(false)}
-                className="text-slate-400 hover:text-white text-xs font-bold font-mono px-2 py-1 rounded cursor-pointer"
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
               >
-                ✕ CLOSE
+                <X className="h-4 w-4" />
               </button>
             </div>
 
-            {/* Connection Status Banner in Modal */}
-            <div className={`p-3 rounded-xl border text-xs font-mono flex items-center justify-between ${
+            {/* Connection Status Pill */}
+            <div className={`px-3 py-2 rounded-xl border text-xs font-mono flex items-center justify-between ${
               connectionStatus === 'connected'
-                ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-400'
                 : connectionStatus === 'connecting'
-                ? 'bg-amber-950/60 border-amber-500/40 text-amber-300'
-                : 'bg-rose-950/60 border-rose-500/40 text-rose-300'
+                ? 'bg-amber-950/40 border-amber-500/30 text-amber-300'
+                : 'bg-rose-950/40 border-rose-500/30 text-rose-400'
             }`}>
               <div className="flex items-center gap-2">
-                {connectionStatus === 'connected' ? (
-                  <Wifi className="h-4 w-4 text-emerald-400 animate-pulse" />
-                ) : connectionStatus === 'connecting' ? (
-                  <Loader2 className="h-4 w-4 text-amber-400 animate-spin" />
-                ) : (
-                  <WifiOff className="h-4 w-4 text-rose-400" />
-                )}
-                <div>
-                  <span className="font-bold block uppercase">
-                    STATUS: {connectionStatus.toUpperCase()}
-                  </span>
-                  <span className="text-[10px] opacity-80 block font-mono break-all">
-                    ACTIVE ADDR: {isSecureServerHost(sanitizeServerHost(serverAddress), serverAddress) ? 'HTTPS://' : 'HTTP://'}{sanitizeServerHost(serverAddress) || DEFAULT_ONLINE_CLOUD_HOST}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Instant Share Link Banner */}
-            <div className="bg-gradient-to-r from-indigo-950/90 to-purple-950/90 border border-indigo-500/40 rounded-xl p-3.5 space-y-2 normal-case">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold text-indigo-200 uppercase tracking-wider font-mono flex items-center gap-1.5">
-                  <Sparkles className="h-3.5 w-3.5 text-amber-400" />
-                  1-CLICK LINK FOR OTHER PCs / WORKSTATIONS:
+                <span className={`h-2 w-2 rounded-full ${
+                  connectionStatus === 'connected' ? 'bg-emerald-400 animate-pulse' :
+                  connectionStatus === 'connecting' ? 'bg-amber-400 animate-ping' : 'bg-rose-500'
+                }`} />
+                <span className="font-bold text-[11px] uppercase tracking-wider">
+                  {connectionStatus === 'connected' ? 'Real-Time Connected' : connectionStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
                 </span>
               </div>
-              <p className="text-[11px] text-slate-300 font-medium">
-                Click below to copy your app link. Paste this URL on any second PC, laptop, or handheld scanner to sync in real-time!
-              </p>
-              <div className="flex flex-col sm:flex-row gap-2 pt-1 items-center">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const activeHost = sanitizeServerHost(serverAddress) || DEFAULT_ONLINE_CLOUD_HOST;
-                    const shareUrl = isSecureServerHost(activeHost, serverAddress) ? `https://${activeHost}` : `http://${activeHost}`;
-                    navigator.clipboard.writeText(shareUrl);
-                    setLinkCopied(true);
-                    setTimeout(() => setLinkCopied(false), 3000);
-                  }}
-                  className={`flex-1 w-full flex items-center justify-center gap-2 font-bold py-2.5 px-4 rounded-xl text-xs font-mono transition cursor-pointer ${
-                    linkCopied 
-                      ? 'bg-emerald-600 text-white' 
-                      : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/40'
-                  }`}
-                >
-                  {linkCopied ? (
-                    <>
-                      <Check className="h-4 w-4 text-white" />
-                      <span>✅ LINK COPIED TO CLIPBOARD!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-4 w-4 text-indigo-200" />
-                      <span>📋 COPY CONNECTION LINK FOR OTHER PCs</span>
-                    </>
-                  )}
-                </button>
-              </div>
+              <span className="text-[10px] text-slate-400 font-mono font-medium">Node Port 3000</span>
             </div>
 
-            {/* QR Code & Mobile Scanner Section */}
+            {/* Compact Quick Sync & QR Card */}
             {(() => {
-              const activeHost = sanitizeServerHost(serverAddress) || DEFAULT_ONLINE_CLOUD_HOST;
+              const activeHost = sanitizeServerHost(serverAddress) || getDefaultServerAddress();
               const shareUrl = isSecureServerHost(activeHost, serverAddress) ? `https://${activeHost}` : `http://${activeHost}`;
               return (
-                <div className="flex flex-col sm:flex-row items-center gap-4 bg-slate-950 border border-slate-800 p-3.5 rounded-xl normal-case">
-                  <div className="bg-white p-2 rounded-lg shrink-0 shadow-md">
-                    <QRCodeSVG value={shareUrl} size={110} level="M" />
+                <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-3 flex items-center gap-3">
+                  <div className="bg-white p-1.5 rounded-lg shrink-0">
+                    <QRCodeSVG value={shareUrl} size={72} level="M" />
                   </div>
-                  <div className="space-y-1 text-left flex-1">
-                    <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider font-mono block">
-                      📱 SCAN QR CODE WITH TABLET OR SCANNER:
-                    </span>
-                    <p className="text-[11px] text-slate-300 font-medium">
-                      Scan with mobile device or handheld barcode scanner camera to open and connect instantly.
-                    </p>
-                    <p className="text-[10px] text-slate-400 font-mono select-all break-all pt-1">
-                      {shareUrl}
-                    </p>
+                  <div className="flex-1 space-y-1.5 min-w-0">
+                    <div>
+                      <span className="text-[10px] font-bold text-slate-300 uppercase tracking-wider font-mono block">
+                        Sync Workstations
+                      </span>
+                      <p className="text-[10px] text-slate-400 truncate font-mono">
+                        Scan QR code or copy URL to pair
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(shareUrl);
+                        setLinkCopied(true);
+                        setTimeout(() => setLinkCopied(false), 2500);
+                      }}
+                      className={`w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg text-[11px] font-mono font-bold transition cursor-pointer ${
+                        linkCopied
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/30'
+                      }`}
+                    >
+                      {linkCopied ? (
+                        <>
+                          <Check className="h-3.5 w-3.5 text-white" />
+                          <span>Copied to Clipboard!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3.5 w-3.5 text-indigo-300" />
+                          <span>Copy Connection Link</span>
+                        </>
+                      )}
+                    </button>
                   </div>
                 </div>
               );
             })()}
 
-            {/* Manual Server IP Input & Quick Presets */}
-            <div className="space-y-2 pt-1">
-              <label className="text-[10px] font-bold text-slate-300 font-mono block">
-                CENTRAL SERVER IP / HOSTNAME / WEB URL:
+            {/* Minimal Server Host Input */}
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-bold text-slate-400 font-mono uppercase tracking-wider block">
+                Server Address / Hostname
               </label>
               <input 
                 id="wms-server-ip-input-global"
                 type="text" 
                 value={tempServerAddress} 
                 onChange={(e) => setTempServerAddress(e.target.value)}
-                placeholder="e.g. ais-dev-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app or 192.168.1.100:3000"
-                style={{ color: '#38bdf8' }}
-                className="w-full bg-slate-950 border border-slate-800 text-sky-400 !text-sky-400 text-xs p-3 rounded-xl font-mono focus:border-indigo-500 focus:outline-none font-bold wms-server-ip-bar"
+                placeholder="e.g. 192.168.1.100:3000"
+                className="w-full bg-slate-950 border border-slate-800 text-sky-400 text-xs p-2.5 rounded-xl font-mono focus:border-indigo-500 focus:outline-none font-bold"
               />
-              <div className="flex flex-wrap gap-1.5 pt-1">
+              <div className="flex items-center gap-1.5">
                 <button
                   type="button"
-                  onClick={() => setTempServerAddress(DEFAULT_ONLINE_CLOUD_HOST)}
-                  className="text-[10px] bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-500/40 px-2.5 py-1 rounded-lg font-mono font-bold transition cursor-pointer"
+                  onClick={() => setTempServerAddress(getDefaultServerAddress())}
+                  className="text-[9px] bg-slate-800/80 hover:bg-slate-800 text-slate-300 px-2 py-1 rounded-md font-mono font-bold transition cursor-pointer"
                 >
-                  🌐 Online Cloud Server ({DEFAULT_ONLINE_CLOUD_HOST})
+                  Reset Default
                 </button>
-                {window.location.host && window.location.host !== DEFAULT_ONLINE_CLOUD_HOST && (
+                {window.location.host && (
                   <button
                     type="button"
                     onClick={() => setTempServerAddress(window.location.host)}
-                    className="text-[10px] bg-slate-800 hover:bg-slate-700 text-sky-300 px-2.5 py-1 rounded-lg font-mono font-bold transition cursor-pointer"
+                    className="text-[9px] bg-slate-800/80 hover:bg-slate-800 text-sky-300 px-2 py-1 rounded-md font-mono font-bold transition cursor-pointer"
                   >
-                    ⚡ Current App Host ({window.location.host})
+                    Use Current Host
                   </button>
                 )}
-                <button
-                  type="button"
-                  onClick={() => setTempServerAddress('localhost:3000')}
-                  className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-400 px-2.5 py-1 rounded-lg font-mono font-bold transition cursor-pointer"
-                >
-                  💻 Localhost (localhost:3000)
-                </button>
               </div>
             </div>
 
-            <div className="flex gap-2 pt-2">
+            {/* Action Buttons */}
+            <div className="pt-1 flex gap-2">
               <button 
                 type="button"
                 onClick={() => {
@@ -2437,22 +2477,9 @@ export default function App() {
                   setTempServerAddress(val);
                   setShowServerSettingsModal(false);
                 }}
-                className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs font-mono transition uppercase cursor-pointer"
+                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs font-mono transition uppercase cursor-pointer shadow-lg shadow-indigo-900/30"
               >
-                SAVE & CONNECT NOW
-              </button>
-              <button 
-                type="button"
-                onClick={() => {
-                  const defaultAddr = getDefaultServerAddress();
-                  setServerAddress(defaultAddr);
-                  localStorage.setItem('juwei_wms_server_address', defaultAddr);
-                  setTempServerAddress(defaultAddr);
-                  setShowServerSettingsModal(false);
-                }}
-                className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-4 rounded-xl text-xs font-mono transition uppercase cursor-pointer"
-              >
-                RESET DEFAULT CLOUD SERVER
+                Save & Connect
               </button>
             </div>
           </div>

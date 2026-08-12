@@ -149,6 +149,13 @@ async function startServer() {
   app.post("/api/sync", (req, res) => {
     try {
       const { collection, data } = req.body;
+      if (collection === "chatMessages" && Array.isArray(data)) {
+        chatMessages.length = 0;
+        chatMessages.push(...data);
+        saveStateToDisk();
+        broadcast({ type: "chat_broadcast_all", messages: chatMessages });
+        return res.json({ success: true, collection });
+      }
       if (collection && collection in state) {
         (state as any)[collection] = data;
         saveStateToDisk();
@@ -168,8 +175,56 @@ async function startServer() {
     }
   });
 
-  // Attach WebSocket server to handle connection upgrades
-  const wss = new WebSocketServer({ server });
+  // REST chat and activity logging endpoint
+  app.post("/api/chat", (req, res) => {
+    try {
+      const { username, text, isSystem } = req.body;
+      if (!text) return res.status(400).json({ error: "Text required" });
+
+      const newMsg: ChatMessage = {
+        id: `${isSystem ? 'sys' : 'msg'}-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        sender: username || (isSystem ? "System Audit" : "Staff"),
+        text,
+        timestamp: new Date().toISOString(),
+        isSystem: !!isSystem
+      };
+
+      chatMessages.push(newMsg);
+      if (chatMessages.length > 100) chatMessages.shift();
+      saveStateToDisk();
+
+      broadcast({
+        type: "chat_broadcast",
+        message: newMsg
+      });
+
+      res.json({ success: true, message: newMsg });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // API proxy endpoint to bypass browser Mixed Content restrictions when syncing across IPs
+  app.post("/api/proxy-sync", async (req, res) => {
+    try {
+      const { targetUrl, body } = req.body;
+      if (!targetUrl || typeof targetUrl !== "string") {
+        return res.status(400).json({ error: "Target URL required" });
+      }
+      const remoteRes = await fetch(targetUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const data = await remoteRes.json();
+      res.json(data);
+    } catch (err: any) {
+      res.status(502).json({ error: "Proxy sync failed: " + err.message });
+    }
+  });
+
+  // Attach WebSocket server on explicit /ws path
+  const wss = new WebSocketServer({ server, path: "/ws" });
 
   // Helper to broadcast messages to all connected clients
   function broadcast(msg: any, excludeSocket?: WebSocket) {
