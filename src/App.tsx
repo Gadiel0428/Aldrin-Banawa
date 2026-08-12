@@ -1668,62 +1668,62 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col md:flex-row bg-slate-50 font-sans" id="juwei-app-container">
+    <div className="min-h-screen flex flex-col md:flex-row bg-blue-50 font-sans" id="juwei-app-container">
       {/* Sidebar navigation */}
-      <aside className="w-full md:w-64 bg-slate-900 text-slate-300 flex flex-col justify-between border-r border-slate-800" id="sidebar-nav">
+      <aside className="w-full md:w-64 bg-blue-950 text-white flex flex-col justify-between border-r border-blue-900" id="sidebar-nav">
         <div>
           {/* Logged in Operator badge */}
-          <div className="p-4 bg-slate-950 border-b border-slate-800 flex flex-col gap-2">
+          <div className="p-4 bg-blue-900 border-b border-blue-800 flex flex-col gap-2">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <div className="bg-slate-900 border border-slate-800 p-1.5 rounded-lg text-indigo-400 shrink-0">
+                <div className="bg-blue-950 border border-blue-800 p-1.5 rounded-lg text-blue-200 shrink-0">
                   <User className="h-4 w-4" />
                 </div>
                 <div className="text-left leading-tight">
                   <div className="font-bold text-white text-xs">
                     {currentUser}
                   </div>
-                  <div className="text-[10px] font-mono text-slate-400 py-0.5">
+                  <div className="text-[10px] font-mono text-blue-200 py-0.5">
                     ({currentEmployeeId})
                   </div>
-                  <div className="text-[9px] text-indigo-400 font-bold uppercase tracking-wider">{currentRole}</div>
+                  <div className="text-[9px] text-blue-300 font-bold uppercase tracking-wider">{currentRole}</div>
                 </div>
               </div>
               <button
                 onClick={handleLogout}
                 title="Log Out / Switch Operator"
-                className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-950/30 border border-slate-800 hover:border-rose-900 rounded-lg transition"
+                className="p-1.5 text-blue-200 hover:text-white hover:bg-blue-800 border border-blue-800 rounded-lg transition"
               >
                 <LogOut className="h-3.5 w-3.5" />
               </button>
             </div>
             
             {currentPermission === 'VIEW_ONLY' ? (
-              <div className="bg-rose-950/40 border border-rose-900/40 text-rose-300 px-2.5 py-1 rounded text-[9px] font-bold flex items-center justify-center gap-1 font-mono uppercase" title="VIEW ONLY MODE: ACTIONS ARE RESTRICTED">
-                <Lock className="h-3 w-3 text-rose-400 shrink-0" />
+              <div className="bg-blue-950 border border-blue-800 text-blue-200 px-2.5 py-1 rounded text-[9px] font-bold flex items-center justify-center gap-1 font-mono uppercase" title="VIEW ONLY MODE: ACTIONS ARE RESTRICTED">
+                <Lock className="h-3 w-3 text-blue-300 shrink-0" />
                 <span>VIEW ONLY ACCESS</span>
               </div>
             ) : currentPermission === 'LIMITED_ACCESS' ? (
-              <div className="bg-blue-950/40 border border-blue-900/40 text-blue-300 px-2.5 py-1 rounded text-[9px] font-bold flex items-center justify-center gap-1 font-mono uppercase" title="LIMITED ACCESS MODE: CREATE & EDIT PERMITTED">
-                <Edit3 className="h-3 w-3 text-blue-400 shrink-0" />
+              <div className="bg-blue-950 border border-blue-800 text-blue-200 px-2.5 py-1 rounded text-[9px] font-bold flex items-center justify-center gap-1 font-mono uppercase" title="LIMITED ACCESS MODE: CREATE & EDIT PERMITTED">
+                <Edit3 className="h-3 w-3 text-blue-300 shrink-0" />
                 <span>LIMITED ACCESS (EDIT ALLOWED)</span>
               </div>
             ) : (
-              <div className="bg-emerald-950/40 border border-emerald-900/40 text-emerald-300 px-2.5 py-1 rounded text-[9px] font-bold flex items-center justify-center gap-1 font-mono uppercase" title="FULL ACCESS MODE: ALL ACTIONS ENABLED">
-                <Unlock className="h-3 w-3 text-emerald-400 shrink-0" />
+              <div className="bg-blue-950 border border-blue-800 text-blue-200 px-2.5 py-1 rounded text-[9px] font-bold flex items-center justify-center gap-1 font-mono uppercase" title="FULL ACCESS MODE: ALL ACTIONS ENABLED">
+                <Unlock className="h-3 w-3 text-blue-300 shrink-0" />
                 <span>FULL ACCESS</span>
               </div>
             )}
           </div>
 
           {/* Header Branding */}
-          <div className="p-4 bg-slate-900 border-b border-slate-800 flex items-center justify-between">
+          <div className="p-4 bg-blue-950 border-b border-blue-900 flex items-center justify-between">
             <div>
               <span className="text-white font-mono font-bold tracking-wider text-sm block">JUWEI WMS</span>
-              <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">Juwei Plastic Moulding Phils. Inc.</span>
-              <span className="text-[10px] font-mono font-bold text-indigo-400 tracking-wider block mt-0.5">WMS v1.0</span>
+              <span className="text-[9px] text-blue-200 font-bold uppercase tracking-wider block">Juwei Plastic Moulding Phils. Inc.</span>
+              <span className="text-[10px] font-mono font-bold text-blue-300 tracking-wider block mt-0.5">WMS v1.0</span>
             </div>
-            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" title="System Live" />
+            <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse" title="System Live" />
           </div>
 
           {/* Navigation Links */}
@@ -1731,7 +1731,7 @@ export default function App() {
             <button 
               onClick={() => setView('dashboard')}
               className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                view === 'dashboard' ? 'bg-indigo-600 text-white shadow-sm' : 'hover:bg-slate-800 hover:text-white'
+                view === 'dashboard' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
               }`}
             >
               <LayoutDashboard className="h-4 w-4" /> Dashboard Overview
@@ -1740,7 +1740,7 @@ export default function App() {
             <button 
               onClick={() => setView('receiving')}
               className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                view === 'receiving' ? 'bg-indigo-600 text-white shadow-sm' : 'hover:bg-slate-800 hover:text-white'
+                view === 'receiving' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
               }`}
             >
               <ArrowLeftRight className="h-4 w-4" /> Receiving & Returns
@@ -1749,7 +1749,7 @@ export default function App() {
             <button 
               onClick={() => setView('stock')}
               className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                view === 'stock' ? 'bg-indigo-600 text-white shadow-sm' : 'hover:bg-slate-800 hover:text-white'
+                view === 'stock' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
               }`}
             >
               <PackageSearch className="h-4 w-4" /> Stock & FIFO Bins
@@ -1758,7 +1758,7 @@ export default function App() {
             <button 
               onClick={() => setView('recycling')}
               className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                view === 'recycling' ? 'bg-indigo-600 text-white shadow-sm' : 'hover:bg-slate-800 hover:text-white'
+                view === 'recycling' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
               }`}
             >
               <RotateCcw className="h-4 w-4" /> Packaging Recycling
@@ -1767,7 +1767,7 @@ export default function App() {
             <button 
               onClick={() => setView('issuance')}
               className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                view === 'issuance' ? 'bg-indigo-600 text-white shadow-sm' : 'hover:bg-slate-800 hover:text-white'
+                view === 'issuance' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
               }`}
             >
               <Briefcase className="h-4 w-4" /> Production Issuance
@@ -1776,7 +1776,7 @@ export default function App() {
             <button 
               onClick={() => setView('delivery')}
               className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                view === 'delivery' ? 'bg-indigo-600 text-white shadow-sm' : 'hover:bg-slate-800 hover:text-white'
+                view === 'delivery' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
               }`}
             >
               <Truck className="h-4 w-4" /> Outbound & Gate Pass
@@ -1785,7 +1785,7 @@ export default function App() {
             <button 
               onClick={() => setView('environmental')}
               className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                view === 'environmental' ? 'bg-indigo-600 text-white shadow-sm' : 'hover:bg-slate-800 hover:text-white'
+                view === 'environmental' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
               }`}
             >
               <Boxes className="h-4 w-4" /> Space Utilization
@@ -1794,7 +1794,7 @@ export default function App() {
             <button 
               onClick={() => setView('master-registry')}
               className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                view === 'master-registry' ? 'bg-indigo-600 text-white shadow-sm' : 'hover:bg-slate-800 hover:text-white'
+                view === 'master-registry' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
               }`}
               id="nav-master-registry"
             >
@@ -1804,7 +1804,7 @@ export default function App() {
             <button 
               onClick={() => setView('accounts')}
               className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                view === 'accounts' ? 'bg-indigo-600 text-white shadow-sm' : 'hover:bg-slate-800 hover:text-white'
+                view === 'accounts' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
               }`}
               id="nav-registered-accounts"
             >

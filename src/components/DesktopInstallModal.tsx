@@ -157,23 +157,23 @@ MsgBox "JUWEI WMS Desktop Shortcut successfully created on your Windows Desktop!
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4 animate-in fade-in duration-200">
-      <div className="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-xl w-full text-slate-100 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-blue-950/80 backdrop-blur-md p-4 animate-in fade-in duration-200">
+      <div className="bg-blue-900 border-2 border-blue-700 rounded-2xl max-w-xl w-full text-white shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         
         {/* Header */}
-        <div className="p-5 border-b border-slate-800 bg-slate-900 flex items-center justify-between">
+        <div className="p-5 border-b border-blue-800 bg-blue-950 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-indigo-600/20 text-indigo-400 rounded-xl border border-indigo-500/30">
+            <div className="p-2.5 bg-blue-800 text-blue-200 rounded-xl border border-blue-600">
               <Monitor className="h-6 w-6" />
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-lg font-extrabold tracking-tight text-white">JUWEI WMS Desktop Installer</h2>
-                <span className="px-2 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-mono font-bold rounded-full">
+                <span className="px-2 py-0.5 bg-blue-800 text-blue-100 border border-blue-600 text-[10px] font-mono font-bold rounded-full">
                   Windows 10/11
                 </span>
               </div>
-              <p className="text-xs text-slate-400 mt-0.5">
+              <p className="text-xs text-blue-200 mt-0.5">
                 Install JUWEI Warehouse Management System as a Standalone Windows Application
               </p>
             </div>
@@ -181,7 +181,7 @@ MsgBox "JUWEI WMS Desktop Shortcut successfully created on your Windows Desktop!
 
           <button 
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer"
+            className="p-1.5 text-blue-200 hover:text-white hover:bg-blue-800 rounded-lg transition cursor-pointer"
           >
             <X className="h-5 w-5" />
           </button>
@@ -191,85 +191,85 @@ MsgBox "JUWEI WMS Desktop Shortcut successfully created on your Windows Desktop!
         <div className="p-6 space-y-4 text-xs overflow-y-auto">
 
           {/* METHOD 1: Native Windows PWA Application */}
-          <div className="p-4 bg-indigo-950/40 border border-indigo-800/50 rounded-xl space-y-3">
+          <div className="p-4 bg-blue-950 border border-blue-700 rounded-xl space-y-3">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-indigo-300 font-bold text-sm">
-                <Sparkles className="h-4 w-4 text-indigo-400" /> Option 1: Install Native Windows Application
+              <div className="flex items-center gap-2 text-white font-bold text-sm">
+                <Sparkles className="h-4 w-4 text-blue-300" /> Option 1: Install Native Windows Application
               </div>
               {installedPWA ? (
-                <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded text-[10px] font-bold flex items-center gap-1">
+                <span className="px-2 py-0.5 bg-blue-800 text-blue-100 border border-blue-600 rounded text-[10px] font-bold flex items-center gap-1">
                   <CheckCircle2 className="h-3 w-3" /> Installed
                 </span>
               ) : (
-                <span className="px-2 py-0.5 bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 rounded text-[10px] font-mono font-bold">
+                <span className="px-2 py-0.5 bg-blue-800 text-blue-100 border border-blue-600 rounded text-[10px] font-mono font-bold">
                   RECOMMENDED
                 </span>
               )}
             </div>
 
-            <p className="text-slate-300 leading-relaxed text-[11px]">
+            <p className="text-blue-100 leading-relaxed text-[11px]">
               Installs JUWEI WMS directly into your Windows Start Menu, Taskbar, and Desktop as an official signed Windows app window.
             </p>
 
             <button
               onClick={handlePWAInstall}
-              className="w-full py-3 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-2 text-xs transition cursor-pointer"
+              className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 text-xs transition cursor-pointer"
             >
               <Monitor className="h-4 w-4" /> Install JUWEI WMS Windows Application
             </button>
           </div>
 
           {/* METHOD 2: Native .EXE Compiler Generator */}
-          <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-3">
+          <div className="p-4 bg-blue-950 border border-blue-700 rounded-xl space-y-3">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-slate-200 font-bold text-sm">
-                <Cpu className="h-4 w-4 text-emerald-400" /> Option 2: Generate JUWEI-WMS-Desktop.exe
+              <div className="flex items-center gap-2 text-white font-bold text-sm">
+                <Cpu className="h-4 w-4 text-blue-300" /> Option 2: Generate JUWEI-WMS-Desktop.exe
               </div>
-              <span className="px-2 py-0.5 bg-slate-800 text-slate-300 border border-slate-700 rounded text-[10px] font-mono font-bold">
+              <span className="px-2 py-0.5 bg-blue-800 text-blue-100 border border-blue-600 rounded text-[10px] font-mono font-bold">
                 NATIVE .EXE
               </span>
             </div>
 
-            <p className="text-slate-300 leading-relaxed text-[11px]">
+            <p className="text-blue-100 leading-relaxed text-[11px]">
               Downloads <code>Build-JUWEI-WMS-EXE.ps1</code>. Right-click &gt; <em>Run with PowerShell</em> to instantly compile a genuine <code>JUWEI-WMS-Desktop.exe</code> file directly on your Windows Desktop!
             </p>
 
             <button
               onClick={downloadExeCompilerScript}
-              className="w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 font-bold rounded-xl flex items-center justify-center gap-2 text-xs transition cursor-pointer"
+              className="w-full py-2.5 px-4 bg-blue-800 hover:bg-blue-700 text-white border border-blue-600 font-bold rounded-xl flex items-center justify-center gap-2 text-xs transition cursor-pointer"
             >
-              <Download className="h-4 w-4 text-emerald-400" /> Download Build-JUWEI-WMS-EXE.ps1
+              <Download className="h-4 w-4 text-blue-200" /> Download Build-JUWEI-WMS-EXE.ps1
             </button>
           </div>
 
           {/* METHOD 3: Desktop Shortcut Creator (.vbs) */}
-          <div className="p-3.5 bg-slate-950/70 border border-slate-800/80 rounded-xl space-y-2">
+          <div className="p-3.5 bg-blue-950 border border-blue-700 rounded-xl space-y-2">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-slate-300 font-bold text-xs">
-                <Terminal className="h-3.5 w-3.5 text-slate-400" /> Option 3: 1-Click Desktop Shortcut Creator (.vbs)
+              <div className="flex items-center gap-2 text-white font-bold text-xs">
+                <Terminal className="h-3.5 w-3.5 text-blue-300" /> Option 3: 1-Click Desktop Shortcut Creator (.vbs)
               </div>
             </div>
-            <p className="text-slate-400 text-[11px] leading-relaxed">
+            <p className="text-blue-200 text-[11px] leading-relaxed">
               Creates a clean <strong>JUWEI WMS Desktop</strong> shortcut icon directly on your Windows Desktop.
             </p>
             <button
               onClick={downloadVbsShortcut}
-              className="w-full py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 font-bold rounded-xl flex items-center justify-center gap-2 text-xs transition cursor-pointer"
+              className="w-full py-2 px-3 bg-blue-800 hover:bg-blue-700 text-white border border-blue-600 font-bold rounded-xl flex items-center justify-center gap-2 text-xs transition cursor-pointer"
             >
-              <Download className="h-3.5 w-3.5 text-indigo-400" /> Download Create-JUWEI-WMS-Shortcut.vbs
+              <Download className="h-3.5 w-3.5 text-blue-300" /> Download Create-JUWEI-WMS-Shortcut.vbs
             </button>
           </div>
 
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-slate-800 bg-slate-950/80 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono">
-            <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" /> JUWEI Moulding Corp WMS Desktop
+        <div className="p-4 border-t border-blue-800 bg-blue-950 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-[11px] text-blue-200 font-mono">
+            <ShieldCheck className="h-3.5 w-3.5 text-blue-300" /> JUWEI Moulding Corp WMS Desktop
           </div>
           <button
             onClick={onClose}
-            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition cursor-pointer"
+            className="px-4 py-2 bg-blue-800 hover:bg-blue-700 text-white border border-blue-600 rounded-xl text-xs font-bold transition cursor-pointer"
           >
             Close
           </button>

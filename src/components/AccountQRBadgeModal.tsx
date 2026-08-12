@@ -177,29 +177,29 @@ export default function AccountQRBadgeModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full shadow-2xl text-white overflow-hidden flex flex-col relative">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-blue-950/80 backdrop-blur-md animate-fadeIn">
+      <div className="bg-blue-900 border-2 border-blue-700 rounded-2xl max-w-sm w-full shadow-2xl text-white overflow-hidden flex flex-col relative">
         {/* Top Accent Line */}
-        <div className="h-1.5 bg-gradient-to-r from-indigo-500 via-sky-400 to-emerald-400 w-full" />
+        <div className="h-1.5 bg-blue-500 w-full" />
 
         {/* Modal Header */}
-        <div className="px-5 py-4 border-b border-slate-800 flex justify-between items-center bg-slate-900/90">
+        <div className="px-5 py-4 border-b border-blue-800 flex justify-between items-center bg-blue-950">
           <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-indigo-500/20 text-indigo-400 rounded-xl border border-indigo-500/30">
+            <div className="p-2 bg-blue-800 text-blue-200 rounded-xl border border-blue-600">
               <QrCode className="h-5 w-5" />
             </div>
             <div>
               <h3 className="font-bold text-sm text-white flex items-center gap-1.5">
                 Operator Login QR Badge
               </h3>
-              <p className="text-[10px] text-slate-400 font-mono uppercase">
+              <p className="text-[10px] text-blue-200 font-mono uppercase">
                 Juwei WMS Gateway Pass
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+            className="text-blue-200 hover:text-white p-1 rounded-lg hover:bg-blue-800 transition cursor-pointer"
           >
             <X className="h-5 w-5" />
           </button>
@@ -208,20 +208,20 @@ export default function AccountQRBadgeModal({
         {/* Badge Card Body */}
         <div className="p-5 space-y-4">
           {/* Official Pass Badge Graphic */}
-          <div className="bg-white rounded-2xl p-5 border-2 border-slate-800 shadow-xl text-slate-900 text-center space-y-3 relative overflow-hidden">
+          <div className="bg-white rounded-2xl p-5 border-2 border-blue-900 shadow-xl text-blue-950 text-center space-y-3 relative overflow-hidden">
             {/* Watermark / Header */}
-            <div className="border-b-2 border-slate-100 pb-2">
-              <div className="text-[10px] font-extrabold text-indigo-600 font-mono tracking-widest uppercase">
+            <div className="border-b-2 border-blue-100 pb-2">
+              <div className="text-[10px] font-extrabold text-blue-800 font-mono tracking-widest uppercase">
                 JUWEI PLASTIC MOULDING PHILS. INC.
               </div>
-              <div className="text-xs font-black text-slate-900 tracking-tight uppercase flex items-center justify-center gap-1 mt-0.5">
-                <CreditCard className="h-3.5 w-3.5 text-indigo-600" />
+              <div className="text-xs font-black text-blue-950 tracking-tight uppercase flex items-center justify-center gap-1 mt-0.5">
+                <CreditCard className="h-3.5 w-3.5 text-blue-600" />
                 WMS OPERATOR LOGIN QR PASS
               </div>
             </div>
 
             {/* QR Code Container */}
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 inline-block shadow-inner my-1" id="badge-qr-svg-wrapper">
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 inline-block shadow-inner my-1" id="badge-qr-svg-wrapper">
               <QRCodeSVG
                 value={qrPayload}
                 size={160}
@@ -232,30 +232,30 @@ export default function AccountQRBadgeModal({
             </div>
 
             {/* Operator Credentials */}
-            <div className="bg-slate-900 text-white p-3.5 rounded-xl text-center space-y-1">
-              <div className="text-xs font-black uppercase text-sky-400 tracking-wide">
+            <div className="bg-blue-950 text-white p-3.5 rounded-xl text-center space-y-1">
+              <div className="text-xs font-black uppercase text-white tracking-wide">
                 {account.username}
               </div>
-              <div className="text-[11px] font-mono font-bold text-indigo-300">
+              <div className="text-[11px] font-mono font-bold text-blue-200">
                 EMPLOYEE ID: {account.employeeId}
               </div>
-              <div className="text-[10px] font-semibold text-slate-400 uppercase">
+              <div className="text-[10px] font-semibold text-blue-300 uppercase">
                 {account.role}
               </div>
 
               {/* Security PIN Display */}
-              <div className="pt-2 border-t border-slate-800 mt-2 flex items-center justify-between px-2">
-                <span className="text-[9px] font-mono font-bold text-slate-400 uppercase flex items-center gap-1">
-                  <Lock className="h-3 w-3 text-emerald-400" /> LOGIN PIN:
+              <div className="pt-2 border-t border-blue-800 mt-2 flex items-center justify-between px-2">
+                <span className="text-[9px] font-mono font-bold text-blue-200 uppercase flex items-center gap-1">
+                  <Lock className="h-3 w-3 text-blue-300" /> LOGIN PIN:
                 </span>
                 <div className="flex items-center gap-1.5">
-                  <span className="text-sm font-mono font-black text-emerald-400 bg-slate-950 px-2.5 py-0.5 rounded border border-emerald-500/40 tracking-widest min-w-[58px] text-center">
+                  <span className="text-sm font-mono font-black text-white bg-blue-900 px-2.5 py-0.5 rounded border border-blue-500 tracking-widest min-w-[58px] text-center">
                     {showPin ? (account.pin || '1234') : '••••'}
                   </span>
                   <button
                     type="button"
                     onClick={() => setShowPin(!showPin)}
-                    className="p-1 text-slate-400 hover:text-emerald-400 transition cursor-pointer"
+                    className="p-1 text-blue-300 hover:text-white transition cursor-pointer"
                     title={showPin ? "Hide PIN" : "Reveal PIN"}
                   >
                     {showPin ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
@@ -264,7 +264,7 @@ export default function AccountQRBadgeModal({
               </div>
             </div>
 
-            <div className="text-[8px] text-slate-400 font-mono font-bold tracking-tight uppercase">
+            <div className="text-[8px] text-blue-900 font-mono font-bold tracking-tight uppercase">
               SCAN QR CODE AT WMS LOG IN GATEWAY TO ACCESS SESSION
             </div>
           </div>
@@ -278,7 +278,7 @@ export default function AccountQRBadgeModal({
                   onDirectLogin(account);
                   onClose();
                 }}
-                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition flex items-center justify-center gap-2 shadow-md uppercase cursor-pointer"
+                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition flex items-center justify-center gap-2 shadow-md uppercase cursor-pointer"
               >
                 <UserCheck className="h-4 w-4" /> LOG IN AS {account.username}
               </button>
@@ -288,7 +288,7 @@ export default function AccountQRBadgeModal({
               <button
                 type="button"
                 onClick={handlePrintBadge}
-                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 px-3 rounded-xl text-xs transition flex items-center justify-center gap-1.5 shadow-sm uppercase cursor-pointer"
+                className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-3 rounded-xl text-xs transition flex items-center justify-center gap-1.5 shadow-sm uppercase cursor-pointer"
               >
                 <Printer className="h-4 w-4" /> PRINT BADGE
               </button>
@@ -296,15 +296,15 @@ export default function AccountQRBadgeModal({
               <button
                 type="button"
                 onClick={handleCopyPayload}
-                className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold py-2 px-3 rounded-xl text-xs transition flex items-center justify-center gap-1.5 uppercase cursor-pointer"
+                className="bg-blue-950 hover:bg-blue-800 text-white border border-blue-700 font-bold py-2 px-3 rounded-xl text-xs transition flex items-center justify-center gap-1.5 uppercase cursor-pointer"
               >
                 {copied ? (
                   <>
-                    <Check className="h-4 w-4 text-emerald-400" /> COPIED!
+                    <Check className="h-4 w-4 text-blue-300" /> COPIED!
                   </>
                 ) : (
                   <>
-                    <Copy className="h-4 w-4 text-indigo-400" /> COPY DATA
+                    <Copy className="h-4 w-4 text-blue-300" /> COPY DATA
                   </>
                 )}
               </button>
@@ -313,7 +313,7 @@ export default function AccountQRBadgeModal({
         </div>
 
         {/* Modal Footer */}
-        <div className="px-5 py-3 border-t border-slate-800 bg-slate-950/80 text-[10px] text-slate-500 font-mono text-center">
+        <div className="px-5 py-3 border-t border-blue-800 bg-blue-950 text-[10px] text-blue-300 font-mono text-center">
           JUWEI WMS OPERATOR SECURITY SYSTEM • QR VERIFICATION ENABLED
         </div>
       </div>

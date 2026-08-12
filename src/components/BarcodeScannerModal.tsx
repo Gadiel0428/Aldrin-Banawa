@@ -125,15 +125,15 @@ export default function BarcodeScannerModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-blue-950/80 backdrop-blur-md animate-fade-in">
       {/* Hidden container for Html5Qrcode offline image scanner engine */}
       <div id={hiddenScannerRegionId} className="hidden" />
 
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg shadow-2xl text-white overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-blue-900 border-2 border-blue-700 rounded-2xl w-full max-w-lg shadow-2xl text-white overflow-hidden flex flex-col max-h-[90vh]">
         {/* Modal Header */}
-        <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between gap-3 bg-slate-900/90">
+        <div className="px-5 py-4 border-b border-blue-800 flex items-center justify-between gap-3 bg-blue-950">
           <div className="flex items-center gap-3 min-w-0 flex-1">
-            <div className="p-2.5 bg-indigo-600/30 text-indigo-400 rounded-xl border border-indigo-500/30 shrink-0">
+            <div className="p-2.5 bg-blue-800 text-blue-200 rounded-xl border border-blue-600 shrink-0">
               <Barcode className="h-5 w-5" />
             </div>
             <div className="min-w-0 flex-1">
@@ -141,11 +141,11 @@ export default function BarcodeScannerModal({
                 <h3 className="font-bold text-sm sm:text-base text-white tracking-tight leading-tight">
                   {title}
                 </h3>
-                <span className="text-[10px] font-mono font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-2.5 py-0.5 rounded-full uppercase tracking-wider whitespace-nowrap shrink-0">
+                <span className="text-[10px] font-mono font-bold bg-blue-800 text-blue-100 border border-blue-600 px-2.5 py-0.5 rounded-full uppercase tracking-wider whitespace-nowrap shrink-0">
                   WMS HARDWARE SCANNER
                 </span>
               </div>
-              <p className="text-xs text-slate-400 mt-1 leading-normal">{subtitle}</p>
+              <p className="text-xs text-blue-200 mt-1 leading-normal">{subtitle}</p>
             </div>
           </div>
 
@@ -155,7 +155,7 @@ export default function BarcodeScannerModal({
               onClick={() => setAudioEnabled(!audioEnabled)}
               title={audioEnabled ? "Mute scan sound" : "Enable scan sound"}
               className={`p-2 rounded-lg transition border cursor-pointer ${
-                audioEnabled ? 'bg-slate-800 text-indigo-400 border-slate-700' : 'bg-slate-800/50 text-slate-500 border-slate-800'
+                audioEnabled ? 'bg-blue-800 text-white border-blue-600' : 'bg-blue-950 text-blue-300 border-blue-800'
               }`}
             >
               {audioEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
@@ -163,7 +163,7 @@ export default function BarcodeScannerModal({
             <button
               type="button"
               onClick={onClose}
-              className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer"
+              className="p-2 text-blue-200 hover:text-white hover:bg-blue-800 rounded-lg transition cursor-pointer"
             >
               <X className="h-5 w-5" />
             </button>
@@ -171,13 +171,13 @@ export default function BarcodeScannerModal({
         </div>
 
         {/* Tab Switcher */}
-        <div className="flex border-b border-slate-800 bg-slate-950/60 p-1.5 gap-1.5 text-xs font-semibold">
+        <div className="flex border-b border-blue-800 bg-blue-950 p-1.5 gap-1.5 text-xs font-semibold">
           <button
             onClick={() => setActiveTab('scanner')}
             className={`flex-1 py-2 px-3 rounded-lg transition flex items-center justify-center gap-2 cursor-pointer ${
               activeTab === 'scanner'
-                ? 'bg-indigo-600 text-white font-bold shadow-md'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                ? 'bg-blue-600 text-white font-bold shadow-md'
+                : 'text-blue-200 hover:text-white hover:bg-blue-800'
             }`}
           >
             <Barcode className="h-4 w-4" />
@@ -187,8 +187,8 @@ export default function BarcodeScannerModal({
             onClick={() => setActiveTab('upload')}
             className={`flex-1 py-2 px-3 rounded-lg transition flex items-center justify-center gap-2 cursor-pointer ${
               activeTab === 'upload'
-                ? 'bg-indigo-600 text-white font-bold shadow-md'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                ? 'bg-blue-600 text-white font-bold shadow-md'
+                : 'text-blue-200 hover:text-white hover:bg-blue-800'
             }`}
           >
             <Upload className="h-4 w-4" />
