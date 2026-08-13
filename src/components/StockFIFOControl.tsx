@@ -19,7 +19,8 @@ import {
   Plus,
   Users,
   Edit,
-  Download
+  Download,
+  X
 } from 'lucide-react';
 import { MaterialStockItem, MaterialType, getCustomerForPart, UOM_OPTIONS } from '../types';
 import { FIFO_COLORS_BY_MONTH } from '../data';
@@ -142,9 +143,12 @@ export default function StockFIFOControl({
 
   // Filter lists
   const filteredStocks = stocks.filter(item => {
-    const matchesSearch = item.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          item.partCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          item.lotNumber.toLowerCase().includes(searchQuery.toLowerCase());
+    const q = searchQuery.trim().toLowerCase();
+    const matchesSearch = !q || 
+                          (item.partCode || '').toLowerCase().includes(q) ||
+                          (item.description || '').toLowerCase().includes(q) ||
+                          (item.lotNumber || '').toLowerCase().includes(q) ||
+                          (item.location || '').toLowerCase().includes(q);
     const matchesType = selectedType === 'ALL' || item.type === selectedType;
     const matchesStatus = selectedStatus === 'ALL' || item.status === selectedStatus;
     
@@ -260,18 +264,36 @@ export default function StockFIFOControl({
 
       {/* Grid Controls */}
       <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4">
-        {/* Search */}
-        <div className="relative flex-1 max-w-sm">
-          <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
-            <Search className="h-4 w-4" />
-          </span>
-          <input 
-            type="text" 
-            placeholder="Search stock by Part Code, description, lot..." 
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-slate-400 focus:outline-none"
-          />
+        {/* Real-time Text Search Input */}
+        <div className="relative flex-1 max-w-md">
+          <div className="relative">
+            <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400 pointer-events-none">
+              <Search className="h-4 w-4" />
+            </span>
+            <input 
+              id="stock-search-input"
+              type="text" 
+              placeholder="Search by Part Code, Description, Lot #..." 
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-8 py-2 border border-slate-200 rounded-lg text-xs font-medium focus:ring-2 focus:ring-slate-400/20 focus:border-slate-400 focus:outline-none transition-all bg-white shadow-xs"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                title="Clear search input"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          {searchQuery.trim() && (
+            <div className="mt-1 text-[11px] text-slate-500 font-medium flex items-center gap-1">
+              <span>Showing <strong>{filteredStocks.length}</strong> matching item{filteredStocks.length !== 1 ? 's' : ''} for "{searchQuery.trim()}"</span>
+            </div>
+          )}
         </div>
 
         {/* Filters and Add */}

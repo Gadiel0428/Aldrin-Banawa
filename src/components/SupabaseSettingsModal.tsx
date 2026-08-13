@@ -88,7 +88,15 @@ export default function SupabaseSettingsModal({
     }
 
     saveStoredSupabaseConfig({ url: cleanUrl, anonKey: cleanKey });
-    setTestResult({ success: true, message: 'Supabase configuration saved successfully. Reconnecting...' });
+    
+    // Broadcast config to central server so all other network PCs receive it automatically
+    fetch('/api/supabase-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: cleanUrl, anonKey: cleanKey })
+    }).catch(() => {});
+
+    setTestResult({ success: true, message: 'Supabase configuration saved successfully. Syncing across all PCs...' });
     setTimeout(() => {
       onForceSync();
     }, 500);
@@ -149,9 +157,15 @@ export default function SupabaseSettingsModal({
           });
         }
       } else {
+        fetch('/api/supabase-config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: cleanUrl, anonKey: cleanKey })
+        }).catch(() => {});
+
         setTestResult({ 
           success: true, 
-          message: 'Connection Successful! Supabase PostgreSQL database is responsive and RLS policies are active.' 
+          message: 'Connection Successful! Supabase PostgreSQL database is active and synced across all network PCs.' 
         });
         await processPendingSupabaseMutations();
         onForceSync();

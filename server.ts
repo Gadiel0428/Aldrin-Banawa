@@ -27,9 +27,21 @@ async function startServer() {
   const server = http.createServer(app);
   const PORT = 3000;
 
-  // Initialize Supabase Server Client if environment variables exist
-  const supabaseUrl = process.env.VITE_SUPABASE_URL || "";
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
+  // Initialize Supabase Server Client if environment variables or config file exist
+  const CONFIG_SUPABASE_FILE = path.join(process.cwd(), "supabase-config.json");
+  let supabaseUrl = process.env.VITE_SUPABASE_URL || "";
+  let supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
+  
+  if (fs.existsSync(CONFIG_SUPABASE_FILE)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(CONFIG_SUPABASE_FILE, "utf-8"));
+      if (cfg && cfg.url && cfg.anonKey) {
+        supabaseUrl = cfg.url.trim();
+        supabaseKey = cfg.anonKey.trim();
+      }
+    } catch (e) {}
+  }
+
   let supabaseServer: SupabaseClient | null = null;
 
   if (supabaseUrl && supabaseKey) {
@@ -178,14 +190,56 @@ async function startServer() {
     res.json({ status: "ok", clientsCount: activeConnections.size, timestamp: new Date().toISOString() });
   });
 
-  // Route to inspect Supabase integration status and credentials
+  // Route to inspect and fetch shared Supabase integration status and credentials
   app.get("/api/supabase-config", (req, res) => {
     res.json({
-      configured: Boolean(supabaseServer),
+      configured: Boolean(supabaseServer || (supabaseUrl && supabaseKey)),
       url: supabaseUrl || null,
-      hasAnonKey: Boolean(process.env.VITE_SUPABASE_ANON_KEY),
-      hasServiceRoleKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY)
+      anonKey: supabaseKey || null
     });
+  });
+
+  // Endpoint to update shared Supabase credentials across all network PCs
+  app.post("/api/supabase-config", async (req, res) => {
+    try {
+      const { url, anonKey } = req.body;
+      if (!url || !anonKey) {
+        return res.status(400).json({ error: "URL and Anon Key required" });
+      }
+      let cleanUrl = url.trim();
+      if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
+        cleanUrl = `https://${cleanUrl}`;
+      }
+      const cleanKey = anonKey.trim();
+
+      supabaseUrl = cleanUrl;
+      supabaseKey = cleanKey;
+      process.env.VITE_SUPABASE_URL = cleanUrl;
+      process.env.VITE_SUPABASE_ANON_KEY = cleanKey;
+
+      try {
+        fs.writeFileSync(CONFIG_SUPABASE_FILE, JSON.stringify({ url: cleanUrl, anonKey: cleanKey }, null, 2), "utf-8");
+      } catch (err) {
+        console.warn("Failed to write supabase-config.json:", err);
+      }
+
+      try {
+        supabaseServer = createClient(cleanUrl, cleanKey);
+        console.log("JUWEI WMS: Re-initialized Supabase server client with URL:", cleanUrl);
+      } catch (err) {
+        console.warn("JUWEI WMS: Error creating Supabase client:", err);
+      }
+
+      broadcast({
+        type: "supabase_config_updated",
+        url: cleanUrl,
+        anonKey: cleanKey
+      });
+
+      return res.json({ success: true, url: cleanUrl });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
   });
 
   // API full state sync endpoint for HTTP clients / fallback
@@ -198,6 +252,16 @@ async function startServer() {
         chatMessages
       },
       activeUsers: getActiveUsersList()
+    });
+  });
+
+  // API endpoint for version check and auto-update prompts
+  app.get("/api/version", (req, res) => {
+    res.json({
+      version: "1.0.0",
+      productName: "JUWEI WMS Desktop System",
+      buildDate: new Date().toISOString().split('T')[0],
+      downloadUrl: process.env.APP_DOWNLOAD_URL || "https://github.com/your-org/juwei-wms/releases/latest"
     });
   });
 

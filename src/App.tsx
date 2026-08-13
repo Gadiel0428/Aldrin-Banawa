@@ -56,6 +56,7 @@ import SupabaseSettingsModal from './components/SupabaseSettingsModal';
 
 import { 
   getStoredSupabaseConfig, 
+  saveStoredSupabaseConfig,
   isSupabaseConfigured, 
   fetchCollectionFromSupabase, 
   syncCollectionToSupabase, 
@@ -688,17 +689,21 @@ export default function App() {
     };
   }, [currentUser, isLoggedIn, serverAddress]);
 
-  // Supabase PostgreSQL Realtime Subscription & Initial Fetch Engine
+  // Supabase PostgreSQL Realtime Subscription, Auto-Config & Continuous Cloud Sync Engine
   useEffect(() => {
     let channel: any = null;
+    let supabasePollInterval: any = null;
+    let isMounted = true;
 
-    if (isSupabaseConfigured()) {
-      // 1. Fetch initial state from Supabase Cloud
+    const startSupabaseSync = () => {
+      if (!isMounted) return;
+
       const loadSupabaseData = async () => {
         const collections = ['stocks', 'receiving', 'returns', 'recycling', 'issuances', 'deliveries', 'envLogs', 'forkliftChecks', 'registries', 'registeredUsers', 'chatMessages'];
         for (const col of collections) {
+          if (!isMounted) break;
           const items = await fetchCollectionFromSupabase(col);
-          if (Array.isArray(items) && items.length > 0) {
+          if (Array.isArray(items)) {
             if (col === 'stocks') setStocks(items);
             else if (col === 'receiving') setReceiving(items);
             else if (col === 'returns') setReturns(items);
@@ -708,16 +713,18 @@ export default function App() {
             else if (col === 'envLogs') setEnvLogs(items);
             else if (col === 'forkliftChecks') setForkliftChecks(items);
             else if (col === 'registries') setRegistries(items);
-            else if (col === 'registeredUsers') setRegisteredUsers(items);
+            else if (col === 'registeredUsers' && items.length > 0) setRegisteredUsers(items);
             else if (col === 'chatMessages') setChatMessages(items);
           }
         }
       };
+
       loadSupabaseData();
 
-      // 2. Setup Realtime subscription
+      // Setup Realtime subscription
       channel = setupSupabaseRealtimeSubscriptions(
         async (col) => {
+          if (!isMounted) return;
           const updatedItems = await fetchCollectionFromSupabase(col);
           if (Array.isArray(updatedItems)) {
             if (col === 'stocks') setStocks(updatedItems);
@@ -729,24 +736,55 @@ export default function App() {
             else if (col === 'envLogs') setEnvLogs(updatedItems);
             else if (col === 'forkliftChecks') setForkliftChecks(updatedItems);
             else if (col === 'registries') setRegistries(updatedItems);
-            else if (col === 'registeredUsers') setRegisteredUsers(updatedItems);
+            else if (col === 'registeredUsers' && updatedItems.length > 0) setRegisteredUsers(updatedItems);
           }
         },
         (msg) => {
-          setChatMessages(prev => [...prev, msg]);
+          if (!isMounted) return;
+          setChatMessages(prev => {
+            if (prev.some(m => m.id === msg.id)) return prev;
+            return [...prev, msg];
+          });
         },
         (status) => {
-          setSupabaseStatus(status);
+          if (isMounted) setSupabaseStatus(status);
         }
       );
-    } else {
-      setSupabaseStatus('disconnected');
-    }
+
+      // 5-second continuous cloud poll backup to guarantee multi-PC sync even behind strict firewalls
+      supabasePollInterval = setInterval(() => {
+        if (isMounted && isSupabaseConfigured()) {
+          loadSupabaseData();
+        }
+      }, 5000);
+    };
+
+    // Check if server has shared Supabase config first
+    fetch('/api/supabase-config')
+      .then(res => res.json())
+      .then(cfg => {
+        if (cfg && cfg.configured && cfg.url && cfg.anonKey) {
+          const current = getStoredSupabaseConfig();
+          if (!current.url || !current.anonKey) {
+            saveStoredSupabaseConfig({ url: cfg.url, anonKey: cfg.anonKey });
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (isSupabaseConfigured()) {
+          startSupabaseSync();
+        } else {
+          setSupabaseStatus('disconnected');
+        }
+      });
 
     return () => {
+      isMounted = false;
       if (channel && typeof channel.unsubscribe === 'function') {
         channel.unsubscribe();
       }
+      if (supabasePollInterval) clearInterval(supabasePollInterval);
     };
   }, []);
 
