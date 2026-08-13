@@ -20,9 +20,14 @@ import {
   Users,
   Edit,
   Download,
-  X
+  X,
+  History,
+  FileSpreadsheet,
+  ArrowDownLeft,
+  ArrowUpRight,
+  RotateCcw
 } from 'lucide-react';
-import { MaterialStockItem, MaterialType, getCustomerForPart, UOM_OPTIONS } from '../types';
+import { MaterialStockItem, MaterialType, getCustomerForPart, UOM_OPTIONS, ReceivingRecord, IssuanceRecord, ReturnRecord } from '../types';
 import { FIFO_COLORS_BY_MONTH } from '../data';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 
@@ -34,6 +39,9 @@ interface StockFIFOControlProps {
   onEditStock?: (item: MaterialStockItem) => void;
   onDeleteStock?: (id: string) => void;
   isSuperAdmin?: boolean;
+  receiving?: ReceivingRecord[];
+  issuances?: IssuanceRecord[];
+  returns?: ReturnRecord[];
 }
 
 export default function StockFIFOControl({
@@ -43,13 +51,19 @@ export default function StockFIFOControl({
   onUpdateStockStatus,
   onEditStock,
   onDeleteStock,
-  isSuperAdmin = false
+  isSuperAdmin = false,
+  receiving = [],
+  issuances = [],
+  returns = []
 }: StockFIFOControlProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedType, setSelectedType] = useState<MaterialType | 'ALL'>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<MaterialStockItem['status'] | 'ALL'>('ALL');
   const [selectedCustomer, setSelectedCustomer] = useState<string>('ALL');
   
+  // State for Item History Modal
+  const [historyStockItem, setHistoryStockItem] = useState<MaterialStockItem | null>(null);
+
   // States for manual stock additions / adjustment modal
   const [showAdjustModal, setShowAdjustModal] = useState<string | null>(null);
   const [adjustQty, setAdjustQty] = useState(0);
@@ -640,61 +654,74 @@ export default function StockFIFOControl({
                         </span>
                       )}
                     </td>
-                     <td className="p-4">
-                      {isSuperAdmin ? (
-                        <select
-                          defaultValue=""
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            if (val === 'ADJUST') {
-                              setShowAdjustModal(item.id);
-                              setAdjustQty(item.quantity);
-                            } else if (val === 'EDIT') {
-                              setEditingStockItem({ ...item });
-                            } else if (val === 'RELEASE') {
-                              setConfirmAction({
-                                title: 'Release Stock Item',
-                                message: `Are you sure you want to release stock item ${item.partCode} (Lot: ${item.lotNumber}) to active inventory?`,
-                                confirmLabel: 'YES, RELEASE STOCK',
-                                confirmVariant: 'primary',
-                                onConfirm: () => onUpdateStockStatus(item.id, 'APPROVED')
-                              });
-                            } else if (val === 'QUARANTINE') {
-                              setConfirmAction({
-                                title: 'Quarantine Stock Item',
-                                message: `Are you sure you want to place stock item ${item.partCode} (Lot: ${item.lotNumber}) into Quarantine?`,
-                                confirmLabel: 'YES, QUARANTINE',
-                                confirmVariant: 'warning',
-                                onConfirm: () => onUpdateStockStatus(item.id, 'QUARANTINE')
-                              });
-                            } else if (val === 'DELETE') {
-                              setConfirmAction({
-                                title: 'Delete Stock Item',
-                                message: `Are you sure you want to delete registered stock item ${item.partCode} (Lot: ${item.lotNumber})?`,
-                                confirmLabel: 'YES, DELETE ITEM',
-                                confirmVariant: 'danger',
-                                onConfirm: () => onDeleteStock?.(item.id)
-                              });
-                            }
-                            e.target.value = '';
-                          }}
-                          className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
-                          id={`action-select-stock-${item.id}`}
-                        >
-                          <option value="" disabled>Actions...</option>
-                          <option value="ADJUST">✏️ Adjust Quantity</option>
-                          <option value="EDIT">📝 Edit Details</option>
-                          {item.status !== 'APPROVED' ? (
-                            <option value="RELEASE">✅ Release Stock</option>
-                          ) : (
-                            <option value="QUARANTINE">⚠️ Quarantine Stock</option>
+                    <td className="p-4">
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setHistoryStockItem(item)}
+                            className="flex items-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs transition-colors cursor-pointer shrink-0"
+                            title={`View complete transaction history for Part ${item.partCode} (Lot: ${item.lotNumber})`}
+                          >
+                            <History className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+                            <span>History</span>
+                          </button>
+
+                          {isSuperAdmin && (
+                            <select
+                              defaultValue=""
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === 'HISTORY') {
+                                  setHistoryStockItem(item);
+                                } else if (val === 'ADJUST') {
+                                  setShowAdjustModal(item.id);
+                                  setAdjustQty(item.quantity);
+                                } else if (val === 'EDIT') {
+                                  setEditingStockItem({ ...item });
+                                } else if (val === 'RELEASE') {
+                                  setConfirmAction({
+                                    title: 'Release Stock Item',
+                                    message: `Are you sure you want to release stock item ${item.partCode} (Lot: ${item.lotNumber}) to active inventory?`,
+                                    confirmLabel: 'YES, RELEASE STOCK',
+                                    confirmVariant: 'primary',
+                                    onConfirm: () => onUpdateStockStatus(item.id, 'APPROVED')
+                                  });
+                                } else if (val === 'QUARANTINE') {
+                                  setConfirmAction({
+                                    title: 'Quarantine Stock Item',
+                                    message: `Are you sure you want to place stock item ${item.partCode} (Lot: ${item.lotNumber}) into Quarantine?`,
+                                    confirmLabel: 'YES, QUARANTINE',
+                                    confirmVariant: 'warning',
+                                    onConfirm: () => onUpdateStockStatus(item.id, 'QUARANTINE')
+                                  });
+                                } else if (val === 'DELETE') {
+                                  setConfirmAction({
+                                    title: 'Delete Stock Item',
+                                    message: `Are you sure you want to delete registered stock item ${item.partCode} (Lot: ${item.lotNumber})?`,
+                                    confirmLabel: 'YES, DELETE ITEM',
+                                    confirmVariant: 'danger',
+                                    onConfirm: () => onDeleteStock?.(item.id)
+                                  });
+                                }
+                                e.target.value = '';
+                              }}
+                              className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
+                              id={`action-select-stock-${item.id}`}
+                            >
+                              <option value="" disabled>Actions...</option>
+                              <option value="HISTORY">📜 View History</option>
+                              <option value="ADJUST">✏️ Adjust Quantity</option>
+                              <option value="EDIT">📝 Edit Details</option>
+                              {item.status !== 'APPROVED' ? (
+                                <option value="RELEASE">✅ Release Stock</option>
+                              ) : (
+                                <option value="QUARANTINE">⚠️ Quarantine Stock</option>
+                              )}
+                              <option value="DELETE">🗑️ Delete Item</option>
+                            </select>
                           )}
-                          <option value="DELETE">🗑️ Delete Item</option>
-                        </select>
-                      ) : (
-                        <span className="text-slate-400 font-mono italic text-[11px]">Super Admin Only</span>
-                      )}
-                    </td>
+                        </div>
+                      </td>
                   </tr>
                 );
               })}
@@ -925,6 +952,276 @@ export default function StockFIFOControl({
           </div>
         </div>
       )}
+
+      {/* Item Transaction History Modal */}
+      {historyStockItem && (() => {
+        const pCode = historyStockItem.partCode.trim().toLowerCase();
+        const lNum = (historyStockItem.lotNumber || '').trim().toLowerCase();
+
+        // Matching Receivings
+        const matchedReceivings = receiving.filter(r => {
+          const matchCode = (r.partCode || '').trim().toLowerCase() === pCode;
+          const matchLot = !lNum || !r.lotNumber || (r.lotNumber || '').trim().toLowerCase() === lNum;
+          return matchCode && matchLot;
+        });
+
+        // Matching Issuances
+        const matchedIssuances = issuances.filter(i => {
+          const matchCode = (i.partCode || '').trim().toLowerCase() === pCode;
+          const matchLot = !lNum || !i.lotNumber || (i.lotNumber || '').trim().toLowerCase() === lNum;
+          return matchCode && matchLot;
+        });
+
+        // Matching Returns
+        const matchedReturns = returns.filter(ret => {
+          const matchCode = (ret.partCode || '').trim().toLowerCase() === pCode;
+          const matchLot = !lNum || !ret.lotNumber || (ret.lotNumber || '').trim().toLowerCase() === lNum;
+          return matchCode && matchLot;
+        });
+
+        const totalReceivedQty = matchedReceivings.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
+        const totalIssuedQty = matchedIssuances.reduce((sum, i) => sum + (Number(i.quantityIssued) || 0), 0);
+        const totalReturnedQty = matchedReturns.reduce((sum, ret) => sum + (Number(ret.quantity) || 0), 0);
+
+        // Combine into unified history timeline
+        const historyEvents: Array<{
+          id: string;
+          type: 'RECEIVING' | 'ISSUANCE' | 'RETURN';
+          date: string;
+          refNumber: string;
+          qty: number;
+          unit: string;
+          party: string;
+          status: string;
+          details: string;
+        }> = [
+          ...matchedReceivings.map(r => ({
+            id: r.id,
+            type: 'RECEIVING' as const,
+            date: r.receivedDate || r.date,
+            refNumber: r.rrNumber || r.poNumber || r.id,
+            qty: r.quantity,
+            unit: r.unit,
+            party: r.supplierOrDept || r.vendorSupplier || 'External Supplier',
+            status: r.iqcStatus === 'APPROVED_IQC' ? 'IQC APPROVED' : r.iqcStatus === 'REJECTED_IQC' ? 'IQC REJECTED' : r.iqcStatus,
+            details: `Lot: ${r.lotNumber} • Location: ${r.location || 'Warehouse'}`
+          })),
+          ...matchedIssuances.map(i => ({
+            id: i.id,
+            type: 'ISSUANCE' as const,
+            date: i.date,
+            refNumber: i.requisitionNumber || i.id,
+            qty: i.quantityIssued,
+            unit: historyStockItem.unit,
+            party: i.department || 'Production Line',
+            status: i.fifoVerified ? 'FIFO VERIFIED' : 'ISSUED',
+            details: `Issued By: ${i.issuedBy || 'Operator'} → Received By: ${i.receivedBy || 'Dept'}`
+          })),
+          ...matchedReturns.map(ret => ({
+            id: ret.id,
+            type: 'RETURN' as const,
+            date: ret.date,
+            refNumber: ret.returnSlipFormNumber || ret.id,
+            qty: ret.quantity,
+            unit: ret.unit,
+            party: ret.department || 'Department Return',
+            status: ret.status,
+            details: `Condition: ${ret.condition} • Reason: ${ret.reason}`
+          }))
+        ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+        const downloadHistoryCSV = () => {
+          const csvHeaders = ['Transaction Type', 'Date', 'Reference #', 'Quantity', 'Unit', 'Source / Department', 'Status', 'Lot Number', 'Details'];
+          const csvRows = historyEvents.map(e => [
+            `"${e.type}"`,
+            `"${e.date}"`,
+            `"${e.refNumber.replace(/"/g, '""')}"`,
+            e.qty,
+            `"${e.unit}"`,
+            `"${e.party.replace(/"/g, '""')}"`,
+            `"${e.status.replace(/"/g, '""')}"`,
+            `"${historyStockItem.lotNumber}"`,
+            `"${e.details.replace(/"/g, '""')}"`
+          ]);
+
+          const csvData = [
+            `"JUWEI WMS - ITEM TRANSACTION HISTORY"`,
+            `"Part Code","${historyStockItem.partCode}"`,
+            `"Description","${historyStockItem.description}"`,
+            `"Lot Number","${historyStockItem.lotNumber}"`,
+            `"Current Quantity","${historyStockItem.quantity} ${historyStockItem.unit}"`,
+            [],
+            csvHeaders.join(','),
+            ...csvRows.map(r => r.join(','))
+          ].join('\n');
+
+          const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `Transaction_History_${historyStockItem.partCode}_${historyStockItem.lotNumber}_${new Date().toISOString().slice(0, 10)}.csv`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        };
+
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+            <div className="bg-white rounded-2xl max-w-4xl w-full shadow-2xl border border-slate-200 overflow-hidden my-8 max-h-[90vh] flex flex-col">
+              
+              {/* Header */}
+              <div className="bg-blue-950 text-white p-5 flex items-start justify-between shrink-0">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-blue-800 text-blue-200 rounded-xl border border-blue-700">
+                    <History className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-lg font-bold font-mono">{historyStockItem.partCode}</h3>
+                      <span className="bg-blue-800 text-blue-100 px-2 py-0.5 rounded text-[10px] font-bold font-mono">
+                        LOT: {historyStockItem.lotNumber}
+                      </span>
+                    </div>
+                    <p className="text-xs text-blue-200 mt-0.5 truncate max-w-lg">
+                      {historyStockItem.description}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setHistoryStockItem(null)}
+                  className="text-blue-300 hover:text-white p-1 rounded-lg hover:bg-blue-900 transition cursor-pointer"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-6 overflow-y-auto space-y-5 flex-1">
+                
+                {/* Stats row */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                    <span className="text-[10px] font-bold text-slate-400 font-mono uppercase block">Current On-Hand</span>
+                    <span className="text-xl font-bold text-indigo-950">{historyStockItem.quantity} {historyStockItem.unit}</span>
+                    <span className="text-[10px] text-slate-500 block">Bin Location: {historyStockItem.location}</span>
+                  </div>
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl">
+                    <span className="text-[10px] font-bold text-emerald-600 font-mono uppercase block">Total Received</span>
+                    <span className="text-xl font-bold">{totalReceivedQty} {historyStockItem.unit}</span>
+                    <span className="text-[10px] text-emerald-700 block">{matchedReceivings.length} receiving logs</span>
+                  </div>
+                  <div className="p-3 bg-blue-50 border border-blue-200 text-blue-900 rounded-xl">
+                    <span className="text-[10px] font-bold text-blue-600 font-mono uppercase block">Total Issued</span>
+                    <span className="text-xl font-bold">{totalIssuedQty} {historyStockItem.unit}</span>
+                    <span className="text-[10px] text-blue-700 block">{matchedIssuances.length} issuance logs</span>
+                  </div>
+                  <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl">
+                    <span className="text-[10px] font-bold text-amber-600 font-mono uppercase block">Total Returned</span>
+                    <span className="text-xl font-bold">{totalReturnedQty} {historyStockItem.unit}</span>
+                    <span className="text-[10px] text-amber-700 block">{matchedReturns.length} return logs</span>
+                  </div>
+                </div>
+
+                {/* Timeline table */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider font-mono">
+                      Audit Timeline ({historyEvents.length} transactions)
+                    </h4>
+                    <span className="text-[11px] text-slate-500">Sorted by newest date</span>
+                  </div>
+
+                  <div className="border border-slate-200 rounded-xl overflow-hidden bg-white text-xs">
+                    <div className="max-h-72 overflow-y-auto">
+                      <table className="w-full text-left border-collapse">
+                        <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[10px] sticky top-0 bg-slate-50">
+                          <tr>
+                            <th className="p-2.5">Type</th>
+                            <th className="p-2.5">Date</th>
+                            <th className="p-2.5">Ref / Form #</th>
+                            <th className="p-2.5 text-right">Qty Transacted</th>
+                            <th className="p-2.5">Source / Recipient</th>
+                            <th className="p-2.5">Status</th>
+                            <th className="p-2.5">Traceability Details</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
+                          {historyEvents.length === 0 ? (
+                            <tr>
+                              <td colSpan={7} className="p-8 text-center text-slate-400 italic">
+                                No historical transactions found for Part Code "{historyStockItem.partCode}" and Lot "{historyStockItem.lotNumber}".
+                              </td>
+                            </tr>
+                          ) : (
+                            historyEvents.map(evt => (
+                              <tr key={evt.id} className="hover:bg-slate-50">
+                                <td className="p-2.5">
+                                  {evt.type === 'RECEIVING' && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                      <ArrowDownLeft className="h-3 w-3" /> RECEIVING
+                                    </span>
+                                  )}
+                                  {evt.type === 'ISSUANCE' && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200">
+                                      <ArrowUpRight className="h-3 w-3" /> ISSUANCE
+                                    </span>
+                                  )}
+                                  {evt.type === 'RETURN' && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                                      <RotateCcw className="h-3 w-3" /> RETURN
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="p-2.5 font-mono text-[11px] text-slate-800 font-semibold">{evt.date}</td>
+                                <td className="p-2.5 font-mono text-indigo-900 font-bold">{evt.refNumber}</td>
+                                <td className="p-2.5 text-right font-bold text-slate-900">
+                                  {evt.type === 'ISSUANCE' ? `-${evt.qty}` : `+${evt.qty}`} {evt.unit}
+                                </td>
+                                <td className="p-2.5">{evt.party}</td>
+                                <td className="p-2.5">
+                                  <span className="px-1.5 py-0.5 bg-slate-100 text-slate-700 font-mono text-[10px] rounded font-semibold border border-slate-200">
+                                    {evt.status}
+                                  </span>
+                                </td>
+                                <td className="p-2.5 text-[11px] text-slate-500">{evt.details}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Footer */}
+              <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
+                <div className="text-xs text-slate-500 font-medium">
+                  Full trace of inventory lifecycle from receiving inspection to production dispatch.
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setHistoryStockItem(null)}
+                    className="px-4 py-2 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                  >
+                    Close
+                  </button>
+                  <button
+                    onClick={downloadHistoryCSV}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-blue-900 hover:bg-blue-950 text-white rounded-lg text-xs font-bold cursor-pointer transition shadow-xs"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Export History CSV
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Reusable Confirmation Modal with YES / NO options */}
       <ConfirmModal config={confirmAction} onClose={() => setConfirmAction(null)} />

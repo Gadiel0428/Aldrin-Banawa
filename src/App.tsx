@@ -2253,6 +2253,9 @@ export default function App() {
               onEditStock={handleEditStock}
               onDeleteStock={handleDeleteStock}
               isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
+              receiving={receiving}
+              issuances={issuances}
+              returns={returns}
             />
           )}
 
