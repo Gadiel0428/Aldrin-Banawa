@@ -628,6 +628,19 @@ export default function App() {
               setActiveUsers(payload.activeUsers || []);
               break;
             }
+            case 'supabase_config_updated': {
+              if (payload.url && payload.anonKey) {
+                saveStoredSupabaseConfig({ url: payload.url, anonKey: payload.anonKey });
+                setSupabaseStatus('connecting');
+                fetchCollectionFromSupabase('stocks').then((items) => {
+                  if (Array.isArray(items)) {
+                    setSupabaseStatus('connected');
+                    setStocks(items);
+                  }
+                });
+              }
+              break;
+            }
           }
         } catch (err) {
           console.error('Error parsing WS message', err);
@@ -699,11 +712,13 @@ export default function App() {
       if (!isMounted) return;
 
       const loadSupabaseData = async () => {
+        let hasSuccess = false;
         const collections = ['stocks', 'receiving', 'returns', 'recycling', 'issuances', 'deliveries', 'envLogs', 'forkliftChecks', 'registries', 'registeredUsers', 'chatMessages'];
         for (const col of collections) {
           if (!isMounted) break;
           const items = await fetchCollectionFromSupabase(col);
           if (Array.isArray(items)) {
+            hasSuccess = true;
             if (col === 'stocks') setStocks(items);
             else if (col === 'receiving') setReceiving(items);
             else if (col === 'returns') setReturns(items);
@@ -717,6 +732,13 @@ export default function App() {
             else if (col === 'chatMessages') setChatMessages(items);
           }
         }
+        if (isMounted) {
+          if (hasSuccess) {
+            setSupabaseStatus('connected');
+          } else if (!isSupabaseConfigured()) {
+            setSupabaseStatus('disconnected');
+          }
+        }
       };
 
       loadSupabaseData();
@@ -727,6 +749,7 @@ export default function App() {
           if (!isMounted) return;
           const updatedItems = await fetchCollectionFromSupabase(col);
           if (Array.isArray(updatedItems)) {
+            setSupabaseStatus('connected');
             if (col === 'stocks') setStocks(updatedItems);
             else if (col === 'receiving') setReceiving(updatedItems);
             else if (col === 'returns') setReturns(updatedItems);
@@ -747,7 +770,11 @@ export default function App() {
           });
         },
         (status) => {
-          if (isMounted) setSupabaseStatus(status);
+          if (isMounted) {
+            if (status === 'connected') {
+              setSupabaseStatus('connected');
+            }
+          }
         }
       );
 
@@ -2477,15 +2504,22 @@ export default function App() {
         connectionStatus={supabaseStatus}
         onForceSync={() => {
           const collections = ['stocks', 'receiving', 'returns', 'recycling', 'issuances', 'deliveries', 'envLogs', 'forkliftChecks', 'registries', 'registeredUsers'];
-          collections.forEach(col => {
+          collections.forEach(async (col) => {
             const cached = localStorage.getItem(`juwei_wms_cache_${col}`);
             if (cached) {
               try {
                 const parsed = JSON.parse(cached);
-                if (Array.isArray(parsed)) {
-                  syncCollectionToSupabase(col, parsed);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                  await syncCollectionToSupabase(col, parsed);
                 }
               } catch (e) {}
+            }
+          });
+
+          fetchCollectionFromSupabase('stocks').then((items) => {
+            if (Array.isArray(items)) {
+              setSupabaseStatus('connected');
+              setStocks(items);
             }
           });
         }}

@@ -28,7 +28,8 @@ import {
   saveStoredSupabaseConfig, 
   isSupabaseConfigured, 
   getSupabase,
-  processPendingSupabaseMutations 
+  processPendingSupabaseMutations,
+  testSupabaseConnection
 } from '../lib/supabase';
 
 interface SupabaseSettingsModalProps {
@@ -62,7 +63,7 @@ export default function SupabaseSettingsModal({
 
   if (!isOpen) return null;
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     let cleanUrl = url.trim();
     if (cleanUrl && !cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
@@ -96,10 +97,13 @@ export default function SupabaseSettingsModal({
       body: JSON.stringify({ url: cleanUrl, anonKey: cleanKey })
     }).catch(() => {});
 
-    setTestResult({ success: true, message: 'Supabase configuration saved successfully. Syncing across all PCs...' });
-    setTimeout(() => {
+    const testRes = await testSupabaseConnection();
+    setTestResult(testRes);
+
+    if (testRes.success) {
+      await processPendingSupabaseMutations();
       onForceSync();
-    }, 500);
+    }
   };
 
   const handleTestConnection = async () => {
@@ -133,40 +137,17 @@ export default function SupabaseSettingsModal({
 
     try {
       saveStoredSupabaseConfig({ url: cleanUrl, anonKey: cleanKey });
-      const supabase = getSupabase();
-      if (!supabase) {
-        setTestResult({ 
-          success: false, 
-          message: 'Invalid URL format or API Key. Please check that the URL starts with https:// and ends with .supabase.co' 
-        });
-        setTestingConnection(false);
-        return;
-      }
+      
+      const testRes = await testSupabaseConnection();
+      setTestResult(testRes);
 
-      const { data, error } = await supabase.from('stocks').select('id').limit(1);
-      if (error) {
-        if (error.code === 'PGRST301' || error.message.includes('JWT') || error.message.includes('API key')) {
-          setTestResult({
-            success: false,
-            message: 'Invalid Anon Public API Key. Please verify the "anon / public" key in your Supabase Dashboard under Project Settings > API.'
-          });
-        } else {
-          setTestResult({ 
-            success: false, 
-            message: `Connected to Supabase, but table query returned: "${error.message}". Ensure you have run the Schema SQL below in the Supabase SQL Editor!` 
-          });
-        }
-      } else {
+      if (testRes.success) {
         fetch('/api/supabase-config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url: cleanUrl, anonKey: cleanKey })
         }).catch(() => {});
 
-        setTestResult({ 
-          success: true, 
-          message: 'Connection Successful! Supabase PostgreSQL database is active and synced across all network PCs.' 
-        });
         await processPendingSupabaseMutations();
         onForceSync();
       }

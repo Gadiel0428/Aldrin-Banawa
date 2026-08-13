@@ -94,6 +94,55 @@ export function getSupabase(): SupabaseClient | null {
   }
 }
 
+export async function testSupabaseConnection(): Promise<{ success: boolean; message: string }> {
+  if (!isSupabaseConfigured()) {
+    return {
+      success: false,
+      message: 'Supabase URL or API Key is missing or default placeholder. Please enter your project credentials.'
+    };
+  }
+
+  const supabase = getSupabase();
+  if (!supabase) {
+    return {
+      success: false,
+      message: 'Failed to create Supabase client instance.'
+    };
+  }
+
+  try {
+    const { error } = await supabase.from('stocks').select('id').limit(1);
+    if (error) {
+      if (error.code === 'PGRST301' || error.message.includes('JWT') || error.message.includes('API key')) {
+        return {
+          success: false,
+          message: 'Invalid Anon Public API Key. Please verify the "anon / public" key in your Supabase Dashboard (Project Settings > API).'
+        };
+      }
+      if (error.message.includes('relation') || error.message.includes('does not exist')) {
+        return {
+          success: false,
+          message: 'Connected to Supabase, but the WMS tables do not exist yet. Please copy the SQL below and run it in the Supabase SQL Editor!'
+        };
+      }
+      return {
+        success: false,
+        message: `Connected to Supabase, but query returned: "${error.message}". Please ensure Schema SQL below is executed in Supabase SQL Editor.`
+      };
+    }
+
+    return {
+      success: true,
+      message: 'Connection Successful! Supabase PostgreSQL database is active and responding.'
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: `Connection test failed: ${err?.message || 'Network error'}`
+    };
+  }
+}
+
 // --------------------------------------------------------------------
 // DB COLUMN MAPPER HELPERS (CamelCase JS <-> snake_case Postgres)
 // --------------------------------------------------------------------
