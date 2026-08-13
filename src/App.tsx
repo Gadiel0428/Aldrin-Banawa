@@ -44,13 +44,24 @@ import {
   Loader2,
   Copy,
   Check,
-  X
+  X,
+  Database
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import AccountQRBadgeModal from './components/AccountQRBadgeModal';
 import DesktopInstallModal from './components/DesktopInstallModal';
 import { ConfirmModal, ConfirmActionConfig } from './components/ConfirmModal';
 import BarcodeScannerModal from './components/BarcodeScannerModal';
+import SupabaseSettingsModal from './components/SupabaseSettingsModal';
+
+import { 
+  getStoredSupabaseConfig, 
+  isSupabaseConfigured, 
+  fetchCollectionFromSupabase, 
+  syncCollectionToSupabase, 
+  setupSupabaseRealtimeSubscriptions,
+  processPendingSupabaseMutations
+} from './lib/supabase';
 
 import { 
   MaterialStockItem, 
@@ -201,6 +212,10 @@ export default function App() {
   const [serverAddress, setServerAddress] = useState<string>(() => getDefaultServerAddress());
   const [showServerSettingsModal, setShowServerSettingsModal] = useState<boolean>(false);
   const [tempServerAddress, setTempServerAddress] = useState<string>('');
+
+  // Supabase PostgreSQL Realtime state
+  const [showSupabaseSettingsModal, setShowSupabaseSettingsModal] = useState<boolean>(false);
+  const [supabaseStatus, setSupabaseStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected');
 
   // User Authentication / Registration states
   const [currentUser, setCurrentUser] = useState<string>(() => {
@@ -673,7 +688,69 @@ export default function App() {
     };
   }, [currentUser, isLoggedIn, serverAddress]);
 
-  // Sync state helpers (supports both WebSocket and HTTP POST REST dual broadcast)
+  // Supabase PostgreSQL Realtime Subscription & Initial Fetch Engine
+  useEffect(() => {
+    let channel: any = null;
+
+    if (isSupabaseConfigured()) {
+      // 1. Fetch initial state from Supabase Cloud
+      const loadSupabaseData = async () => {
+        const collections = ['stocks', 'receiving', 'returns', 'recycling', 'issuances', 'deliveries', 'envLogs', 'forkliftChecks', 'registries', 'registeredUsers', 'chatMessages'];
+        for (const col of collections) {
+          const items = await fetchCollectionFromSupabase(col);
+          if (Array.isArray(items) && items.length > 0) {
+            if (col === 'stocks') setStocks(items);
+            else if (col === 'receiving') setReceiving(items);
+            else if (col === 'returns') setReturns(items);
+            else if (col === 'recycling') setRecycling(items);
+            else if (col === 'issuances') setIssuances(items);
+            else if (col === 'deliveries') setDeliveries(items);
+            else if (col === 'envLogs') setEnvLogs(items);
+            else if (col === 'forkliftChecks') setForkliftChecks(items);
+            else if (col === 'registries') setRegistries(items);
+            else if (col === 'registeredUsers') setRegisteredUsers(items);
+            else if (col === 'chatMessages') setChatMessages(items);
+          }
+        }
+      };
+      loadSupabaseData();
+
+      // 2. Setup Realtime subscription
+      channel = setupSupabaseRealtimeSubscriptions(
+        async (col) => {
+          const updatedItems = await fetchCollectionFromSupabase(col);
+          if (Array.isArray(updatedItems)) {
+            if (col === 'stocks') setStocks(updatedItems);
+            else if (col === 'receiving') setReceiving(updatedItems);
+            else if (col === 'returns') setReturns(updatedItems);
+            else if (col === 'recycling') setRecycling(updatedItems);
+            else if (col === 'issuances') setIssuances(updatedItems);
+            else if (col === 'deliveries') setDeliveries(updatedItems);
+            else if (col === 'envLogs') setEnvLogs(updatedItems);
+            else if (col === 'forkliftChecks') setForkliftChecks(updatedItems);
+            else if (col === 'registries') setRegistries(updatedItems);
+            else if (col === 'registeredUsers') setRegisteredUsers(updatedItems);
+          }
+        },
+        (msg) => {
+          setChatMessages(prev => [...prev, msg]);
+        },
+        (status) => {
+          setSupabaseStatus(status);
+        }
+      );
+    } else {
+      setSupabaseStatus('disconnected');
+    }
+
+    return () => {
+      if (channel && typeof channel.unsubscribe === 'function') {
+        channel.unsubscribe();
+      }
+    };
+  }, []);
+
+  // Sync state helpers (supports Supabase PostgreSQL, WebSocket, and HTTP POST REST)
   const syncCollection = (collection: string, data: any[]) => {
     // Save to local cache
     try {
@@ -683,7 +760,14 @@ export default function App() {
     // Mark as pending before network request
     markPendingSync(collection, data);
 
-    // 1. Send via WebSocket if active
+    // 1. Direct Supabase Cloud PostgreSQL Sync
+    if (isSupabaseConfigured()) {
+      syncCollectionToSupabase(collection, data).then((ok) => {
+        if (ok) clearPendingSync(collection);
+      });
+    }
+
+    // 2. Send via WebSocket if active
     if (wsOpen(socket)) {
       try {
         socket!.send(JSON.stringify({
@@ -696,7 +780,7 @@ export default function App() {
       }
     }
     
-    // 2. Dual-send via HTTP POST REST to guarantee server disk persistence & update
+    // 3. Dual-send via HTTP POST REST to guarantee server disk persistence & update
     let targetAddr = serverAddress.trim() || getDefaultServerAddress();
     const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
     const isHttps = isSecureServerHost(cleanHost, targetAddr);
@@ -2023,166 +2107,28 @@ export default function App() {
             <h1 className="font-bold text-base sm:text-lg text-slate-800 tracking-tight">{getPageTitle()}</h1>
           </div>
           
-          <div className="flex items-center gap-3 text-xs font-semibold">
-            {/* Real-time Connection status indicator with live Date & Time */}
+          <div className="flex items-center gap-2.5 text-xs font-semibold">
+            {/* Supabase PostgreSQL Cloud Sync Badge Button */}
             <button
               type="button"
-              onClick={() => {
-                setTempServerAddress(sanitizeServerHost(serverAddress) || getDefaultServerAddress());
-                setShowServerSettingsModal(true);
-              }}
-              title="Click to configure WMS Central Server IP / Connection settings"
-              className="cursor-pointer hover:opacity-90 transition flex flex-col items-end gap-1"
-              id="btn-server-settings-trigger"
+              onClick={() => setShowSupabaseSettingsModal(true)}
+              className="flex items-center gap-2 bg-slate-900 border border-slate-700 hover:border-emerald-500 text-slate-200 hover:text-white px-3 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
+              title="Configure Supabase PostgreSQL Database & Cloud Sync"
             >
-              {connectionStatus === 'connected' ? (
-                <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-1.5 rounded-lg text-xs font-bold shadow-xs">
-                  <Wifi className="h-3.5 w-3.5 text-emerald-600 animate-pulse shrink-0" />
-                  <span>REAL-TIME CONNECTED</span>
-                </div>
-              ) : connectionStatus === 'connecting' ? (
-                <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-200 text-amber-700 px-3 py-1.5 rounded-lg text-xs font-bold shadow-xs">
-                  <Loader2 className="h-3.5 w-3.5 text-amber-600 animate-spin shrink-0" />
-                  <span>CONNECTING TO SERVER...</span>
-                </div>
-              ) : (
-                <div className="flex items-center gap-1.5 bg-rose-50 border border-rose-200 text-rose-700 px-3 py-1.5 rounded-lg text-xs font-bold shadow-xs">
-                  <WifiOff className="h-3.5 w-3.5 text-rose-600 shrink-0" />
-                  <span>DISCONNECTED • SET SERVER IP</span>
-                </div>
-              )}
-              <div className="flex items-center gap-1.5 text-[11px] font-mono font-semibold text-slate-500 uppercase tracking-tight pr-0.5">
-                <Clock className="h-3 w-3 text-slate-400" />
-                <span>
-                  {currentTime.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' }).toUpperCase()} • {currentTime.toLocaleTimeString('en-US', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                </span>
-              </div>
+              <Database className="h-4 w-4 text-emerald-400 shrink-0" />
+              <span className="text-[11px] font-mono tracking-wider uppercase text-emerald-400">SUPABASE</span>
+              <span className={`w-2 h-2 rounded-full ${supabaseStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : supabaseStatus === 'connecting' ? 'bg-amber-400 animate-bounce' : 'bg-slate-500'}`} />
             </button>
-          </div>
-        </header>
 
-        {/* WMS CENTRAL SERVER SETTINGS MODAL */}
-        {showServerSettingsModal && (
-          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 uppercase">
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-lg w-full shadow-2xl space-y-4 text-left relative max-h-[90vh] overflow-y-auto">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                <div className="flex items-center gap-2">
-                  <Wifi className="h-5 w-5 text-indigo-400" />
-                  <h3 className="text-sm font-bold text-white tracking-tight font-mono">WMS CENTRAL SERVER & MULTI-PC SYNC</h3>
-                </div>
-                <button 
-                  type="button"
-                  onClick={() => setShowServerSettingsModal(false)}
-                  className="text-slate-400 hover:text-white text-xs font-bold font-mono px-2 py-1 rounded cursor-pointer"
-                >
-                  ✕ CLOSE
-                </button>
-              </div>
-
-              {/* Instant Share Link Banner */}
-              <div className="bg-gradient-to-r from-indigo-950/90 to-purple-950/90 border border-indigo-500/40 rounded-xl p-3.5 space-y-2 normal-case">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-bold text-indigo-200 uppercase tracking-wider font-mono flex items-center gap-1.5">
-                    <Sparkles className="h-3.5 w-3.5 text-amber-400" />
-                    1-CLICK LINK FOR OTHER PCs:
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-300 font-medium">
-                  Click below to copy your app link. Send or paste this link on any second PC, laptop, or phone to sync live with this database!
-                </p>
-                <div className="flex flex-col sm:flex-row gap-2 pt-1 items-center">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const shareUrl = window.location.href;
-                      navigator.clipboard.writeText(shareUrl);
-                      setLinkCopied(true);
-                      setTimeout(() => setLinkCopied(false), 3000);
-                    }}
-                    className={`flex-1 w-full flex items-center justify-center gap-2 font-bold py-2.5 px-4 rounded-xl text-xs font-mono transition cursor-pointer ${
-                      linkCopied 
-                        ? 'bg-emerald-600 text-white' 
-                        : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/40'
-                    }`}
-                  >
-                    {linkCopied ? (
-                      <>
-                        <Check className="h-4 w-4 text-white" />
-                        <span>✅ LINK COPIED TO CLIPBOARD!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="h-4 w-4 text-indigo-200" />
-                        <span>📋 COPY CONNECTION LINK FOR OTHER PCs</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              {/* QR Code & Mobile Scanner Section */}
-              <div className="flex flex-col sm:flex-row items-center gap-4 bg-slate-950 border border-slate-800 p-3.5 rounded-xl normal-case">
-                <div className="bg-white p-2 rounded-lg shrink-0 shadow-md">
-                  <QRCodeSVG value={window.location.href} size={110} level="M" />
-                </div>
-                <div className="space-y-1 text-left flex-1">
-                  <span className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider font-mono block">
-                    📱 SCAN QR CODE WITH OTHER DEVICE:
-                  </span>
-                  <p className="text-[11px] text-slate-300 font-medium">
-                    Scan with a tablet, phone, or handheld scanner camera to open and connect instantly.
-                  </p>
-                  <p className="text-[10px] text-slate-400 font-mono select-all break-all pt-1">
-                    {window.location.href}
-                  </p>
-                </div>
-              </div>
-
-              <div className="space-y-2 pt-1">
-                <label className="text-[10px] font-bold text-slate-300 font-mono block">
-                  MANUAL CENTRAL SERVER IP / HOSTNAME:
-                </label>
-                <input 
-                  id="wms-server-ip-input"
-                  type="text" 
-                  value={tempServerAddress} 
-                  onChange={(e) => setTempServerAddress(e.target.value)}
-                  placeholder="e.g. localhost:3000 or 192.168.1.100:3000"
-                  style={{ color: '#ffffff' }}
-                  className="w-full bg-slate-950 border border-slate-800 text-white !text-white text-xs p-3 rounded-xl font-mono focus:border-indigo-500 focus:outline-none font-bold"
-                />
-              </div>
-
-              <div className="flex gap-2 pt-2">
-                <button 
-                  type="button"
-                  onClick={() => {
-                    const val = tempServerAddress.trim() || 'localhost:3000';
-                    setServerAddress(val);
-                    localStorage.setItem('juwei_wms_server_address', val);
-                    setShowServerSettingsModal(false);
-                  }}
-                  className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs font-mono transition uppercase cursor-pointer"
-                >
-                  SAVE & CONNECT
-                </button>
-                <button 
-                  type="button"
-                  onClick={() => {
-                    const defaultAddr = window.location.host || 'localhost:3000';
-                    setServerAddress(defaultAddr);
-                    localStorage.setItem('juwei_wms_server_address', defaultAddr);
-                    setTempServerAddress(defaultAddr);
-                    setShowServerSettingsModal(false);
-                  }}
-                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-4 rounded-xl text-xs font-mono transition uppercase cursor-pointer"
-                >
-                  RESET DEFAULT
-                </button>
-              </div>
+            {/* Live Date & Time Display */}
+            <div className="hidden sm:flex items-center gap-1.5 text-[11px] font-mono font-semibold text-slate-500 uppercase tracking-tight bg-slate-50 px-2.5 h-8 rounded-lg border border-slate-200/80 shrink-0">
+              <Clock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+              <span>
+                {currentTime.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' }).toUpperCase()} • {currentTime.toLocaleTimeString('en-US', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </span>
             </div>
           </div>
-        )}
+        </header>
 
         {/* VIEW ONLY MODE warning banner */}
         {currentPermission === 'VIEW_ONLY' && (
@@ -2485,6 +2431,27 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Supabase PostgreSQL Database & Realtime Settings Modal */}
+      <SupabaseSettingsModal
+        isOpen={showSupabaseSettingsModal}
+        onClose={() => setShowSupabaseSettingsModal(false)}
+        connectionStatus={supabaseStatus}
+        onForceSync={() => {
+          const collections = ['stocks', 'receiving', 'returns', 'recycling', 'issuances', 'deliveries', 'envLogs', 'forkliftChecks', 'registries', 'registeredUsers'];
+          collections.forEach(col => {
+            const cached = localStorage.getItem(`juwei_wms_cache_${col}`);
+            if (cached) {
+              try {
+                const parsed = JSON.parse(cached);
+                if (Array.isArray(parsed)) {
+                  syncCollectionToSupabase(col, parsed);
+                }
+              } catch (e) {}
+            }
+          });
+        }}
+      />
     </div>
   );
 }

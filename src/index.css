@@ -10,14 +10,14 @@
   body {
     font-family: var(--font-sans);
     text-transform: uppercase;
-    @apply bg-blue-50 text-slate-900 antialiased;
+    @apply bg-slate-100 text-slate-900 antialiased;
   }
 
-  /* Force 100% high-contrast readable text in all form inputs, selects, and textareas */
+  /* Force 100% high-contrast readable text in all form inputs, selects, and textareas with flat design */
   input:not([type="checkbox"]):not([type="radio"]), select, textarea {
     color: #0f172a !important;
     background-color: #ffffff !important;
-    border-color: #93c5fd !important;
+    border-color: #cbd5e1 !important;
   }
 
   .dark-input,
@@ -30,8 +30,8 @@
   #wms-server-ip-input-login,
   .wms-server-ip-bar {
     color: #ffffff !important;
-    background-color: #172554 !important;
-    border-color: #2563eb !important;
+    background-color: #0f172a !important;
+    border-color: #334155 !important;
   }
 
   input, select, textarea, button, th, td, label, p, span, h1, h2, h3, h4, h5, h6, div {
@@ -43,10 +43,10 @@
     color: #64748b !important;
   }
 
-  /* High contrast table text rules */
+  /* Flat high-contrast table styling */
   th {
-    color: #1e3a8a !important;
-    font-weight: 800 !important;
+    color: #1e293b !important;
+    font-weight: 700 !important;
   }
 
   td {

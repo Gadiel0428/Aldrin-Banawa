@@ -8,6 +8,7 @@ import http from "http";
 import path from "path";
 import fs from "fs";
 import { WebSocketServer, WebSocket } from "ws";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
 // Load initial mock data to seed the server-authoritative state
 import { 
@@ -26,6 +27,20 @@ async function startServer() {
   const server = http.createServer(app);
   const PORT = 3000;
 
+  // Initialize Supabase Server Client if environment variables exist
+  const supabaseUrl = process.env.VITE_SUPABASE_URL || "";
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
+  let supabaseServer: SupabaseClient | null = null;
+
+  if (supabaseUrl && supabaseKey) {
+    try {
+      supabaseServer = createClient(supabaseUrl, supabaseKey);
+      console.log("JUWEI WMS: Connected to Supabase PostgreSQL database at", supabaseUrl);
+    } catch (err) {
+      console.warn("JUWEI WMS: Failed to initialize Supabase server client:", err);
+    }
+  }
+
   const defaultSuperAdmin = { 
     username: 'ALDRIN BANAWA', 
     role: 'SUPER ADMINISTRATOR', 
@@ -34,7 +49,7 @@ async function startServer() {
     pin: '0423' 
   };
 
-  // Server-authoritative in-memory state
+  // Server-authoritative state
   const state = {
     stocks: [...INITIAL_STOCK],
     receiving: [...INITIAL_RECEIVING],
@@ -61,13 +76,13 @@ async function startServer() {
     {
       id: "sys-init",
       sender: "System",
-      text: "JUWEI WAREHOUSE MANAGEMENT SYSTEM ISO 9001:2015 Real-time Database Initialized.",
+      text: "JUWEI WAREHOUSE MANAGEMENT SYSTEM ISO 9001:2015 Real-time Database Initialized with Supabase Cloud.",
       timestamp: new Date().toISOString(),
       isSystem: true,
     }
   ];
 
-  // Disk Persistence File
+  // Disk Persistence File (Fallback)
   const DATA_FILE = path.join(process.cwd(), "data-store.json");
 
   function loadStateFromDisk() {
@@ -105,6 +120,36 @@ async function startServer() {
   // Load existing persisted data on startup
   loadStateFromDisk();
 
+  // Helper to persist collection to Supabase asynchronously
+  async function persistToSupabase(collection: string, data: any[]) {
+    if (!supabaseServer) return;
+    try {
+      const tableMap: Record<string, string> = {
+        stocks: 'stocks',
+        receiving: 'receiving',
+        returns: 'returns',
+        recycling: 'recycling',
+        issuances: 'issuances',
+        deliveries: 'deliveries',
+        envLogs: 'env_logs',
+        forkliftChecks: 'forklift_checks',
+        registries: 'registries',
+        registeredUsers: 'registered_users',
+        chatMessages: 'chat_messages'
+      };
+
+      const tableName = tableMap[collection];
+      if (!tableName) return;
+
+      if (Array.isArray(data) && data.length > 0) {
+        // Simple upsert array
+        await supabaseServer.from(tableName).upsert(data, { ignoreDuplicates: false });
+      }
+    } catch (err) {
+      console.warn(`Supabase server persist failed for ${collection}:`, err);
+    }
+  }
+
   // Middleware for JSON parsing and CORS
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true }));
@@ -133,10 +178,21 @@ async function startServer() {
     res.json({ status: "ok", clientsCount: activeConnections.size, timestamp: new Date().toISOString() });
   });
 
+  // Route to inspect Supabase integration status and credentials
+  app.get("/api/supabase-config", (req, res) => {
+    res.json({
+      configured: Boolean(supabaseServer),
+      url: supabaseUrl || null,
+      hasAnonKey: Boolean(process.env.VITE_SUPABASE_ANON_KEY),
+      hasServiceRoleKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY)
+    });
+  });
+
   // API full state sync endpoint for HTTP clients / fallback
   app.get("/api/sync", (req, res) => {
     res.json({
       status: "ok",
+      supabaseConnected: Boolean(supabaseServer),
       data: {
         ...state,
         chatMessages
@@ -153,12 +209,14 @@ async function startServer() {
         chatMessages.length = 0;
         chatMessages.push(...data);
         saveStateToDisk();
+        persistToSupabase("chatMessages", chatMessages);
         broadcast({ type: "chat_broadcast_all", messages: chatMessages });
         return res.json({ success: true, collection });
       }
       if (collection && collection in state) {
         (state as any)[collection] = data;
         saveStateToDisk();
+        persistToSupabase(collection, data);
         
         // Broadcast change to all connected WebSockets
         broadcast({
@@ -192,6 +250,7 @@ async function startServer() {
       chatMessages.push(newMsg);
       if (chatMessages.length > 100) chatMessages.shift();
       saveStateToDisk();
+      persistToSupabase("chatMessages", [newMsg]);
 
       broadcast({
         type: "chat_broadcast",
@@ -288,6 +347,7 @@ async function startServer() {
             if (collection in state) {
               (state as any)[collection] = data;
               saveStateToDisk();
+              persistToSupabase(collection, data);
               
               // Broadcast the updated collection to all other clients
               broadcast({
@@ -310,6 +370,7 @@ async function startServer() {
             chatMessages.push(newMsg);
             if (chatMessages.length > 100) chatMessages.shift();
             saveStateToDisk();
+            persistToSupabase("chatMessages", [newMsg]);
             
             broadcast({
               type: "chat_broadcast",
@@ -329,6 +390,7 @@ async function startServer() {
             chatMessages.push(newMsg);
             if (chatMessages.length > 100) chatMessages.shift();
             saveStateToDisk();
+            persistToSupabase("chatMessages", [newMsg]);
             
             broadcast({
               type: "chat_broadcast",
