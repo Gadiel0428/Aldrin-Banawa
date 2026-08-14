@@ -34,6 +34,7 @@ interface IssuanceModuleProps {
   onDeleteIssuance?: (id: string) => void;
   isSuperAdmin?: boolean;
   registries?: MasterRegistryItem[];
+  currentUser?: string;
 }
 
 export default function IssuanceModule({
@@ -44,7 +45,8 @@ export default function IssuanceModule({
   onEditIssuance,
   onDeleteIssuance,
   isSuperAdmin = false,
-  registries = []
+  registries = [],
+  currentUser = ''
 }: IssuanceModuleProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -61,8 +63,15 @@ export default function IssuanceModule({
   const [selectedLotNumber, setSelectedLotNumber] = useState('');
   const [quantityRequested, setQuantityRequested] = useState(0);
   const [quantityIssued, setQuantityIssued] = useState(0);
-  const [issuedBy, setIssuedBy] = useState('Aldrin Warehouse Staff');
+  const [issuedBy, setIssuedBy] = useState(currentUser || 'Warehouse Staff');
   const [receivedBy, setReceivedBy] = useState('');
+
+  // Derived states for stocks and FIFO checks
+  const approvedStocks = stocks.filter(item => item.status === 'APPROVED' && item.quantity > 0);
+  const uniquePartCodes = Array.from(new Set(approvedStocks.map(item => item.partCode)));
+
+  const [availableLots, setAvailableLots] = useState<MaterialStockItem[]>([]);
+  const [fifoAlert, setFifoAlert] = useState<string | null>(null);
 
   // Handle scanned barcode / QR code result
   const handleScanResult = (scannedCode: string) => {
@@ -89,16 +98,6 @@ export default function IssuanceModule({
       setShowForm(true);
     }
   };
-
-  // Derived states for FIFO checks
-  const [availableLots, setAvailableLots] = useState<MaterialStockItem[]>([]);
-  const [fifoAlert, setFifoAlert] = useState<string | null>(null);
-
-  // Filter approved stock items to select from
-  const approvedStocks = stocks.filter(item => item.status === 'APPROVED' && item.quantity > 0);
-  
-  // Unique list of part codes
-  const uniquePartCodes = Array.from(new Set(approvedStocks.map(item => item.partCode)));
 
   // Update available lots when part code changes
   useEffect(() => {

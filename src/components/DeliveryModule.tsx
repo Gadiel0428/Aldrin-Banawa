@@ -36,6 +36,7 @@ interface DeliveryModuleProps {
   isSuperAdmin?: boolean;
   stocks?: MaterialStockItem[];
   registries?: MasterRegistryItem[];
+  currentUser?: string;
 }
 
 export default function DeliveryModule({
@@ -48,7 +49,8 @@ export default function DeliveryModule({
   onDeleteDelivery,
   isSuperAdmin = false,
   stocks = [],
-  registries = []
+  registries = [],
+  currentUser = ''
 }: DeliveryModuleProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [editingDelivery, setEditingDelivery] = useState<DeliveryRecord | null>(null);
@@ -67,7 +69,7 @@ export default function DeliveryModule({
 
   // Forklift form states
   const [showForkliftForm, setShowForkliftForm] = useState(false);
-  const [operator, setOperator] = useState('');
+  const [operator, setOperator] = useState(currentUser || '');
   const [forkliftId, setForkliftId] = useState('FL-TOYOTA-02');
   const [brakesOk, setBrakesOk] = useState(true);
   const [lightsOk, setLightsOk] = useState(true);

@@ -96,7 +96,7 @@ export default function EnvironmentalModule({
   const [cleanlinessOk, setCleanlinessOk] = useState(true); // Aisles clear
   const [ventilationOk, setVentilationOk] = useState(true); // Stack height correct
   const [pestFree, setPestFree] = useState(true); // QR codes visible
-  const [recordedBy, setRecordedBy] = useState('M. Gomez');
+  const [recordedBy, setRecordedBy] = useState(currentUser || 'Warehouse Staff');
 
   // Filter registered location items (type === 'LOCATION')
   const locationRegistries = registries.filter(r => r.type === 'LOCATION');

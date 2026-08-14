@@ -45,7 +45,9 @@ import {
   Copy,
   Check,
   X,
-  Database
+  Database,
+  Phone,
+  Smartphone
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import AccountQRBadgeModal from './components/AccountQRBadgeModal';
@@ -61,7 +63,8 @@ import {
   fetchCollectionFromSupabase, 
   syncCollectionToSupabase, 
   setupSupabaseRealtimeSubscriptions,
-  processPendingSupabaseMutations
+  processPendingSupabaseMutations,
+  deleteAccountFromSupabase
 } from './lib/supabase';
 
 import { 
@@ -74,7 +77,8 @@ import {
   DeliveryRecord, 
   EnvironmentalLog,
   ForkliftChecklist,
-  MasterRegistryItem
+  MasterRegistryItem,
+  RegisteredAccount
 } from './types';
 
 import { 
@@ -95,7 +99,7 @@ import RecyclingModule from './components/RecyclingModule';
 import IssuanceModule from './components/IssuanceModule';
 import DeliveryModule from './components/DeliveryModule';
 import EnvironmentalModule from './components/EnvironmentalModule';
-import RegisteredAccountsModule, { RegisteredAccount } from './components/RegisteredAccountsModule';
+import RegisteredAccountsModule from './components/RegisteredAccountsModule';
 import MasterRegistryModule, { DEFAULT_MASTER_REGISTRIES } from './components/MasterRegistryModule';
 
 const DEFAULT_ONLINE_CLOUD_HOST = 'ais-dev-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app';
@@ -218,34 +222,20 @@ export default function App() {
   const [showSupabaseSettingsModal, setShowSupabaseSettingsModal] = useState<boolean>(false);
   const [supabaseStatus, setSupabaseStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected');
 
-  // User Authentication / Registration states
-  const [currentUser, setCurrentUser] = useState<string>(() => {
-    return localStorage.getItem('juwei_wms_currentUser') || '';
-  });
-  const [currentRole, setCurrentRole] = useState<string>(() => {
-    return localStorage.getItem('juwei_wms_currentRole') || '';
-  });
-  const [currentEmployeeId, setCurrentEmployeeId] = useState<string>(() => {
-    let empId = localStorage.getItem('juwei_wms_currentEmployeeId') || '';
-    if (empId && !empId.startsWith('JPMP-')) {
-      empId = 'JPMP-' + empId.replace(/^EMP-/, '');
-      localStorage.setItem('juwei_wms_currentEmployeeId', empId);
-    }
-    return empId;
-  });
-  const [currentPermission, setCurrentPermission] = useState<string>(() => {
-    const cached = localStorage.getItem('juwei_wms_currentPermission');
-    if (cached) return cached;
-    const empId = localStorage.getItem('juwei_wms_currentEmployeeId') || '';
-    if (empId) {
-      return empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS';
-    }
-    return 'LIMITED_ACCESS';
-  });
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
-    return localStorage.getItem('juwei_wms_isLoggedIn') === 'true';
-  });
+  // User Authentication / Registration states - Always show Login Gateway on startup
+  const [currentUser, setCurrentUser] = useState<string>('');
+  const [currentRole, setCurrentRole] = useState<string>('');
+  const [currentEmployeeId, setCurrentEmployeeId] = useState<string>('');
+  const [currentPermission, setCurrentPermission] = useState<string>('LIMITED_ACCESS');
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
   const [authTab, setAuthTab] = useState<'login' | 'register'>('login');
+
+  useEffect(() => {
+    // Clear any previous persistent login state so every fresh app startup always presents the Login Gateway first
+    try {
+      localStorage.removeItem('juwei_wms_isLoggedIn');
+    } catch (e) {}
+  }, []);
   
   // Direct employee ID and PIN login form states
   const [loginEmployeeId, setLoginEmployeeId] = useState<string>('');
@@ -257,39 +247,125 @@ export default function App() {
   const [qrBadgeAccount, setQrBadgeAccount] = useState<RegisteredAccount | null>(null);
   
   // PIN code security flow states
-  const [pinPromptUser, setPinPromptUser] = useState<{username: string; role: string; employeeId: string; permission?: string; pin?: string} | null>(null);
+  const [pinPromptUser, setPinPromptUser] = useState<RegisteredAccount | null>(null);
   const [pinInput, setPinInput] = useState<string>('');
   const [pinError, setPinError] = useState<string>('');
-  const [newlyRegisteredUser, setNewlyRegisteredUser] = useState<{username: string; role: string; employeeId: string; permission?: string; pin: string} | null>(null);
+  const [newlyRegisteredUser, setNewlyRegisteredUser] = useState<RegisteredAccount | null>(null);
   const [showNewlyRegisteredPin, setShowNewlyRegisteredPin] = useState<boolean>(false);
   const [confirmActionApp, setConfirmActionApp] = useState<ConfirmActionConfig | null>(null);
   
-  const superAdminAccount = { username: 'ALDRIN BANAWA', role: 'SUPER ADMINISTRATOR', employeeId: 'JPMP-002', permission: 'FULL_ACCESS', pin: '0423' };
+  const superAdminAccount: RegisteredAccount = { 
+    username: 'ALDRIN BANAWA', 
+    role: 'SUPER ADMINISTRATOR', 
+    employeeId: 'JPMP-002', 
+    phoneNumber: '+63 917 000 0002',
+    permission: 'FULL_ACCESS', 
+    pin: '0423' 
+  };
 
-  const [registeredUsers, setRegisteredUsers] = useState<{username: string; role: string; employeeId: string; permission?: string; pin?: string}[]>(() => {
-    const cached = localStorage.getItem('juwei_wms_registeredUsers');
-    if (cached) {
-      try {
-        const list = JSON.parse(cached);
-        if (Array.isArray(list) && list.length > 0) {
-          const updatedList = list.map(u => {
-            if (u.employeeId === 'JPMP-002' || u.username === 'SUPER ADMIN' || u.username === 'ALDRIN BANAWA') {
-              return superAdminAccount;
-            }
-            return u;
-          });
-          if (!updatedList.some(u => u.employeeId === 'JPMP-002')) {
-            updatedList.unshift(superAdminAccount);
-          }
-          localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(updatedList));
-          return updatedList;
+  const getDeletedUserIds = (): Set<string> => {
+    try {
+      const raw = localStorage.getItem('juwei_wms_deletedAccounts');
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) {
+          return new Set(arr.map((id: string) => String(id).toUpperCase()));
         }
-      } catch (e) {
-        // Fallback
       }
+    } catch (e) {}
+    return new Set<string>();
+  };
+
+  const markUserAsDeleted = (employeeId: string) => {
+    try {
+      const cleanId = employeeId.trim().toUpperCase();
+      if (cleanId === 'JPMP-002' || cleanId.endsWith('-002') || cleanId.includes('002')) return;
+      const targetUser = registeredUsers.find(u => u.employeeId.toUpperCase() === cleanId);
+      if (targetUser && (targetUser.username.toUpperCase().includes('ALDRIN BANAWA') || targetUser.username.toUpperCase() === 'SUPER ADMIN')) {
+        return;
+      }
+      const set = getDeletedUserIds();
+      set.add(cleanId);
+      localStorage.setItem('juwei_wms_deletedAccounts', JSON.stringify(Array.from(set)));
+    } catch (e) {}
+  };
+
+  const unmarkUserAsDeleted = (employeeId: string) => {
+    try {
+      const cleanId = employeeId.trim().toUpperCase();
+      const set = getDeletedUserIds();
+      if (set.has(cleanId)) {
+        set.delete(cleanId);
+        localStorage.setItem('juwei_wms_deletedAccounts', JSON.stringify(Array.from(set)));
+      }
+    } catch (e) {}
+  };
+
+  const sanitizeAndMergeUsers = (incomingList: any[]): RegisteredAccount[] => {
+    const deletedSet = getDeletedUserIds();
+    const userMap = new Map<string, RegisteredAccount>();
+    userMap.set('JPMP-002', superAdminAccount);
+
+    // 1. Process local cached accounts first so local additions/pins are never lost
+    try {
+      const cached = localStorage.getItem('juwei_wms_registeredUsers');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) {
+          parsed.forEach((u: any) => {
+            if (!u || !u.employeeId) return;
+            const empId = u.employeeId.toUpperCase().startsWith('JPMP-') 
+              ? u.employeeId.toUpperCase() 
+              : `JPMP-${u.employeeId.toUpperCase().replace(/^EMP-/, '')}`;
+            if (empId === 'JPMP-002' || (u.username && (u.username.toUpperCase() === 'SUPER ADMIN' || u.username.toUpperCase() === 'ALDRIN BANAWA'))) {
+              userMap.set('JPMP-002', superAdminAccount);
+            } else if (!deletedSet.has(empId)) {
+              userMap.set(empId, {
+                username: (u.username || 'OPERATOR').toUpperCase(),
+                role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
+                employeeId: empId,
+                phoneNumber: u.phoneNumber || u.phone_number || '',
+                permission: u.permission || 'LIMITED_ACCESS',
+                pin: u.pin || '1234'
+              });
+            }
+          });
+        }
+      }
+    } catch (e) {}
+
+    // 2. Merge incoming server/Supabase users (excluding explicitly deleted accounts)
+    if (Array.isArray(incomingList) && incomingList.length > 0) {
+      incomingList.forEach((u: any) => {
+        if (!u || !u.employeeId) return;
+        const empId = u.employeeId.toUpperCase().startsWith('JPMP-') 
+          ? u.employeeId.toUpperCase() 
+          : `JPMP-${u.employeeId.toUpperCase().replace(/^EMP-/, '')}`;
+        if (empId === 'JPMP-002' || (u.username && (u.username.toUpperCase() === 'SUPER ADMIN' || u.username.toUpperCase() === 'ALDRIN BANAWA'))) {
+          userMap.set('JPMP-002', superAdminAccount);
+        } else if (!deletedSet.has(empId)) {
+          const existing = userMap.get(empId);
+          userMap.set(empId, {
+            username: (u.username || existing?.username || 'OPERATOR').toUpperCase(),
+            role: (u.role || existing?.role || 'WAREHOUSE CLERK').toUpperCase(),
+            employeeId: empId,
+            phoneNumber: u.phoneNumber || u.phone_number || existing?.phoneNumber || '',
+            permission: u.permission || existing?.permission || 'LIMITED_ACCESS',
+            pin: u.pin || existing?.pin || '1234'
+          });
+        }
+      });
     }
-    localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify([superAdminAccount]));
-    return [superAdminAccount];
+
+    const result = Array.from(userMap.values());
+    try {
+      localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(result));
+    } catch (e) {}
+    return result;
+  };
+
+  const [registeredUsers, setRegisteredUsers] = useState<RegisteredAccount[]>(() => {
+    return sanitizeAndMergeUsers([]);
   });
 
   // Live real-time system clock
@@ -327,10 +403,11 @@ export default function App() {
 
   const resetAccountsToDefaults = () => {
     const defaultAccounts = [
-      { username: 'SUPER ADMIN', role: 'SUPER ADMINISTRATOR', employeeId: 'JPMP-002', permission: 'FULL_ACCESS', pin: '0002' }
+      superAdminAccount
     ];
     setRegisteredUsers(defaultAccounts);
     localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(defaultAccounts));
+    syncCollection('registeredUsers', defaultAccounts);
     // Also log out any active session if we reset the accounts
     handleLogout();
   };
@@ -408,38 +485,8 @@ export default function App() {
       }
       
       if (Array.isArray(serverUsers)) {
-        const sanitized = serverUsers.map((u: any) => 
-          (u.employeeId === 'JPMP-002' || u.username === 'SUPER ADMIN' || u.username === 'ALDRIN BANAWA') ? superAdminAccount : u
-        );
-        if (!sanitized.some((u: any) => u.employeeId === 'JPMP-002')) sanitized.unshift(superAdminAccount);
-
-        // Merge local accounts from localStorage if user registered locally
-        const cachedLocalUsers = localStorage.getItem('juwei_wms_registeredUsers');
-        let finalUsers = sanitized;
-        if (cachedLocalUsers) {
-          try {
-            const parsedLocal = JSON.parse(cachedLocalUsers);
-            if (Array.isArray(parsedLocal)) {
-              let hasNewLocal = false;
-              const merged = [...sanitized];
-              parsedLocal.forEach((localU: any) => {
-                if (localU && localU.employeeId && !merged.some(m => m.employeeId.toUpperCase() === localU.employeeId.toUpperCase())) {
-                  merged.push(localU);
-                  hasNewLocal = true;
-                }
-              });
-              if (hasNewLocal) {
-                finalUsers = merged;
-                syncCollection('registeredUsers', finalUsers);
-              }
-            }
-          } catch (e) {
-            // Ignore parse errors
-          }
-        }
-
+        const finalUsers = sanitizeAndMergeUsers(serverUsers);
         setRegisteredUsers(finalUsers);
-        localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(finalUsers));
       }
       if (msgs && Array.isArray(msgs)) setChatMessages(msgs);
       if (activeUsersList && Array.isArray(activeUsersList)) setActiveUsers(activeUsersList);
@@ -609,14 +656,22 @@ export default function App() {
                 case 'forkliftChecks': setForkliftChecks(data); break;
                 case 'registries': setRegistries(data); break;
                 case 'registeredUsers': {
-                  const sanitized = (data || []).map((u: any) => 
-                    (u.employeeId === 'JPMP-002' || u.username === 'SUPER ADMIN' || u.username === 'ALDRIN BANAWA') ? superAdminAccount : u
-                  );
-                  if (!sanitized.some((u: any) => u.employeeId === 'JPMP-002')) sanitized.unshift(superAdminAccount);
-                  setRegisteredUsers(sanitized);
-                  localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(sanitized));
+                  const merged = sanitizeAndMergeUsers(data || []);
+                  setRegisteredUsers(merged);
                   break;
                 }
+              }
+              break;
+            }
+            case 'account_deleted': {
+              const empId = (payload.employeeId || '').toUpperCase();
+              if (empId && empId !== 'JPMP-002') {
+                markUserAsDeleted(empId);
+                setRegisteredUsers(prev => {
+                  const next = prev.filter(u => u.employeeId.toUpperCase() !== empId);
+                  localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(next));
+                  return next;
+                });
               }
               break;
             }
@@ -728,7 +783,10 @@ export default function App() {
             else if (col === 'envLogs') setEnvLogs(items);
             else if (col === 'forkliftChecks') setForkliftChecks(items);
             else if (col === 'registries') setRegistries(items);
-            else if (col === 'registeredUsers' && items.length > 0) setRegisteredUsers(items);
+            else if (col === 'registeredUsers') {
+              const merged = sanitizeAndMergeUsers(items);
+              setRegisteredUsers(merged);
+            }
             else if (col === 'chatMessages') setChatMessages(items);
           }
         }
@@ -759,7 +817,10 @@ export default function App() {
             else if (col === 'envLogs') setEnvLogs(updatedItems);
             else if (col === 'forkliftChecks') setForkliftChecks(updatedItems);
             else if (col === 'registries') setRegistries(updatedItems);
-            else if (col === 'registeredUsers' && updatedItems.length > 0) setRegisteredUsers(updatedItems);
+            else if (col === 'registeredUsers') {
+              const merged = sanitizeAndMergeUsers(updatedItems);
+              setRegisteredUsers(merged);
+            }
           }
         },
         (msg) => {
@@ -876,7 +937,7 @@ export default function App() {
     });
   };
 
-  const handleRegister = (username: string, role: string, employeeId: string, permission?: string) => {
+  const handleRegister = (username: string, role: string, employeeId: string, permission?: string, phoneNumber?: string): RegisteredAccount | null => {
     const cleanUsername = username.trim().toUpperCase();
     let cleanEmployeeId = employeeId.trim().toUpperCase();
     if (cleanEmployeeId && !cleanEmployeeId.startsWith('JPMP-')) {
@@ -887,7 +948,7 @@ export default function App() {
     const cleanRole = role.toUpperCase();
     if (!cleanUsername || !role || !cleanEmployeeId) {
       alert("ALL FIELDS ARE REQUIRED.");
-      return false;
+      return null;
     }
     const exists = registeredUsers.some(
       u => u.employeeId.toUpperCase() === cleanEmployeeId || 
@@ -895,7 +956,7 @@ export default function App() {
     );
     if (exists) {
       alert("AN OPERATOR WITH THIS NAME OR REGISTER ID ALREADY EXISTS.");
-      return false;
+      return null;
     }
 
     // Generate unique 4-digit PIN
@@ -914,32 +975,92 @@ export default function App() {
     }
 
     const cleanPermission = permission || (cleanEmployeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS');
-    const newUser = { 
+    const newUser: RegisteredAccount = { 
       username: cleanUsername, 
       role: cleanRole, 
       employeeId: cleanEmployeeId, 
+      phoneNumber: phoneNumber ? phoneNumber.trim() : '',
       permission: cleanPermission, 
       pin: uniquePin 
     };
-    const nextUsers = [...registeredUsers, newUser];
+
+    // Remove from deleted tracking if re-registered
+    unmarkUserAsDeleted(cleanEmployeeId);
+
+    const nextUsers = [...registeredUsers.filter(u => u.employeeId.toUpperCase() !== cleanEmployeeId), newUser];
     setRegisteredUsers(nextUsers);
     localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(nextUsers));
     syncCollection('registeredUsers', nextUsers);
     
     // Set state to trigger the secure PIN confirmation overlay
     setNewlyRegisteredUser(newUser);
-    return true;
+    return newUser;
   };
 
   const handleRemoveUser = (employeeId: string) => {
-    const nextUsers = registeredUsers.filter(u => u.employeeId !== employeeId);
+    const cleanId = employeeId.trim().toUpperCase();
+    const targetUser = registeredUsers.find(u => u.employeeId.toUpperCase() === cleanId);
+    const isAldrin = cleanId === 'JPMP-002' || cleanId.endsWith('-002') || (targetUser && (
+      targetUser.username.toUpperCase().includes('ALDRIN BANAWA') ||
+      targetUser.username.toUpperCase() === 'SUPER ADMIN'
+    ));
+
+    if (isAldrin) {
+      alert('PROTECTED ROOT ACCOUNT: ALDRIN BANAWA (JPMP-002) CANNOT BE DELETED.');
+      return;
+    }
+
+    // 1. Mark in permanent deleted accounts blacklist
+    markUserAsDeleted(cleanId);
+
+    // 2. Update local state and cache
+    const nextUsers = registeredUsers.filter(u => u.employeeId.toUpperCase() !== cleanId);
     setRegisteredUsers(nextUsers);
     localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(nextUsers));
+
+    // 3. Purge from cloud PostgreSQL (Supabase) immediately
+    deleteAccountFromSupabase(cleanId).catch(() => {});
+
+    // 4. Send deletion request to server endpoint to purge memory, disk, and Supabase
+    fetch('/api/accounts/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ employeeId: cleanId })
+    }).catch(() => {});
+
+    // 5. Broadcast deletion over WebSocket
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      try {
+        socket.send(JSON.stringify({
+          type: 'delete_account',
+          employeeId: cleanId
+        }));
+      } catch (e) {
+        console.warn('WS send delete error:', e);
+      }
+    }
+
+    // 6. Sync updated collection
     syncCollection('registeredUsers', nextUsers);
   };
 
   const handleUpdateAccount = (oldEmpId: string, updated: RegisteredAccount) => {
-    const nextUsers = registeredUsers.map(u => u.employeeId === oldEmpId ? updated : u);
+    const cleanOldId = oldEmpId.toUpperCase();
+    const nextUsers = registeredUsers.map(u => {
+      if (u.employeeId.toUpperCase() === cleanOldId) {
+        return {
+          ...u,
+          ...updated,
+          employeeId: cleanOldId === 'JPMP-002' ? 'JPMP-002' : updated.employeeId.toUpperCase(),
+          username: updated.username.toUpperCase(),
+          role: updated.role.toUpperCase(),
+          phoneNumber: updated.phoneNumber !== undefined ? updated.phoneNumber : (u.phoneNumber || ''),
+          permission: updated.permission || u.permission || 'LIMITED_ACCESS',
+          pin: updated.pin || u.pin || '1234'
+        };
+      }
+      return u;
+    });
     setRegisteredUsers(nextUsers);
     localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(nextUsers));
     syncCollection('registeredUsers', nextUsers);
@@ -1031,11 +1152,6 @@ export default function App() {
     setCurrentEmployeeId(cleanEmployeeId);
     setCurrentPermission(cleanPermission);
     setIsLoggedIn(true);
-    localStorage.setItem('juwei_wms_currentUser', cleanUsername);
-    localStorage.setItem('juwei_wms_currentRole', cleanRole);
-    localStorage.setItem('juwei_wms_currentEmployeeId', cleanEmployeeId);
-    localStorage.setItem('juwei_wms_currentPermission', cleanPermission);
-    localStorage.setItem('juwei_wms_isLoggedIn', 'true');
     
     // Broadcast dispatch note about login
     setTimeout(() => {
@@ -1049,13 +1165,11 @@ export default function App() {
     setCurrentUser('');
     setCurrentRole('');
     setCurrentEmployeeId('');
-    setCurrentPermission('FULL_ACCESS');
+    setCurrentPermission('LIMITED_ACCESS');
     setIsLoggedIn(false);
-    localStorage.removeItem('juwei_wms_currentUser');
-    localStorage.removeItem('juwei_wms_currentRole');
-    localStorage.removeItem('juwei_wms_currentEmployeeId');
-    localStorage.removeItem('juwei_wms_currentPermission');
-    localStorage.removeItem('juwei_wms_isLoggedIn');
+    try {
+      localStorage.removeItem('juwei_wms_isLoggedIn');
+    } catch (e) {}
   };
 
   const sendSystemActivity = (text: string) => {
@@ -1096,10 +1210,6 @@ export default function App() {
       }).catch(() => {});
     }
   };
-
-  function wsOpen(s: WebSocket | null): boolean {
-    return !!s && s.readyState === WebSocket.OPEN;
-  }
 
   // State mutators with automatic procedural linking
   const handleAddReceiving = (record: ReceivingRecord) => {
@@ -1678,6 +1788,15 @@ export default function App() {
                   <span className="text-[10px] text-slate-500 font-bold font-mono">EMPLOYEE ID:</span>
                   <span className="text-xs font-bold text-indigo-400 font-mono">{newlyRegisteredUser.employeeId}</span>
                 </div>
+                {newlyRegisteredUser.phoneNumber && (
+                  <div className="flex justify-between items-center border-b border-slate-800/60 pb-2">
+                    <span className="text-[10px] text-slate-500 font-bold font-mono">VERIFIED MOBILE:</span>
+                    <span className="text-xs font-bold text-emerald-400 font-mono flex items-center gap-1">
+                      <Phone className="h-3 w-3 text-emerald-500" />
+                      {newlyRegisteredUser.phoneNumber}
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between items-center">
                   <span className="text-[10px] text-slate-500 font-bold font-mono">ASSIGNED ROLE:</span>
                   <span className="text-xs font-bold text-slate-200">{newlyRegisteredUser.role}</span>
@@ -1893,12 +2012,28 @@ export default function App() {
               </form>
             </div>
 
-          <div className="pt-4 border-t border-slate-800 text-center">
+          <div className="pt-4 border-t border-slate-800 flex flex-col items-center gap-2 text-center">
             <p className="text-[9px] text-slate-300 uppercase tracking-widest font-mono font-bold">
               SECURE LOG-IN SESSION • JUWEI PLASTIC MOULDING WMS
             </p>
+            <button
+              type="button"
+              onClick={() => setShowDesktopInstallModal(true)}
+              className="text-[10px] text-indigo-300 hover:text-white bg-slate-800/80 hover:bg-slate-800 border border-slate-700/80 px-3 py-1 rounded-lg transition flex items-center gap-1.5 font-mono uppercase font-bold cursor-pointer"
+            >
+              <Monitor className="h-3 w-3 text-indigo-400" />
+              <span>Install Desktop App (.exe / PWA)</span>
+            </button>
           </div>
         </div>
+
+        {/* Desktop Application Installer Modal */}
+        {showDesktopInstallModal && (
+          <DesktopInstallModal
+            isOpen={showDesktopInstallModal}
+            onClose={() => setShowDesktopInstallModal(false)}
+          />
+        )}
 
         {/* Gateway QR Code Scanner Modal */}
         {showLoginQrScanner && (
@@ -2277,6 +2412,7 @@ export default function App() {
               onEditIssuance={handleEditIssuance}
               onDeleteIssuance={handleDeleteIssuance}
               registries={registries}
+              currentUser={currentUser}
               isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
             />
           )}
@@ -2292,6 +2428,7 @@ export default function App() {
               onDeleteDelivery={handleDeleteDelivery}
               stocks={stocks}
               registries={registries}
+              currentUser={currentUser}
               isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
             />
           )}

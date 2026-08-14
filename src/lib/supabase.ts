@@ -532,11 +532,12 @@ export async function fetchCollectionFromSupabase(collection: string): Promise<a
       registeredUsers: {
         table: 'registered_users',
         mapper: (r) => ({
-          username: r.username,
-          role: r.role,
-          employeeId: r.employee_id,
-          permission: r.permission,
-          pin: '1234'
+          username: r.username || 'OPERATOR',
+          role: r.role || 'WAREHOUSE CLERK',
+          employeeId: (r.employee_id || r.employeeId || '').toUpperCase(),
+          phoneNumber: r.phone_number || r.phoneNumber || '',
+          permission: r.permission || 'LIMITED_ACCESS',
+          pin: r.pin || r.pin_hash || '1234'
         })
       },
       chatMessages: {
@@ -621,7 +622,9 @@ export async function syncCollectionToSupabase(collection: string, items: any[])
           employee_id: u.employeeId,
           username: u.username,
           role: u.role,
+          phone_number: u.phoneNumber || '',
           permission: u.permission || 'LIMITED_ACCESS',
+          pin: u.pin || '1234',
           updated_at: new Date().toISOString()
         }));
         break;
@@ -649,10 +652,47 @@ export async function syncCollectionToSupabase(collection: string, items: any[])
       return false;
     }
 
+    // If syncing registeredUsers, ensure deleted accounts are purged from Supabase table
+    if (collection === 'registeredUsers') {
+      try {
+        const activeEmpIds = mappedRows.map((r: any) => r.employee_id).filter(Boolean);
+        if (activeEmpIds.length > 0) {
+          const inListStr = `(${activeEmpIds.map((id: string) => `"${id}"`).join(',')})`;
+          await supabase.from('registered_users').delete().not('employee_id', 'in', inListStr);
+        }
+      } catch (delErr) {
+        console.warn('Supabase cleanup deleted users failed:', delErr);
+      }
+    }
+
     return true;
   } catch (err) {
     console.warn(`Supabase sync exception for ${collection}:`, err);
     savePendingMutation(collection, items);
+    return false;
+  }
+}
+
+// Dedicated helper to immediately delete an account from Supabase database
+export async function deleteAccountFromSupabase(employeeId: string): Promise<boolean> {
+  const supabase = getSupabase();
+  if (!supabase) return false;
+  try {
+    const cleanId = employeeId.trim().toUpperCase();
+    if (cleanId === 'JPMP-002' || cleanId.endsWith('-002') || cleanId.includes('002')) return false; // Prevent deleting super admin
+    const { error } = await supabase
+      .from('registered_users')
+      .delete()
+      .eq('employee_id', cleanId)
+      .not('employee_id', 'eq', 'JPMP-002')
+      .not('username', 'ilike', '%ALDRIN BANAWA%');
+    if (error) {
+      console.warn(`Supabase delete account error for ${cleanId}:`, error.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn(`Supabase delete account exception for ${employeeId}:`, err);
     return false;
   }
 }

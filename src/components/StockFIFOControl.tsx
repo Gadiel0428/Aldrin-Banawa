@@ -87,7 +87,7 @@ export default function StockFIFOControl({
   const [newResinRisk, setNewResinRisk] = useState(false);
   const [newCustomer, setNewCustomer] = useState('');
 
-  const systemDateStr = '2026-07-19'; // Static simulation date
+  const systemDateStr = new Date().toISOString().split('T')[0];
 
   // Submit manual stock addition
   const handleAddStockSubmit = (e: React.FormEvent) => {

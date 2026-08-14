@@ -13,9 +13,10 @@ import {
   CreditCard,
   Sparkles,
   Eye,
-  EyeOff
+  EyeOff,
+  Phone
 } from 'lucide-react';
-import { RegisteredAccount } from './RegisteredAccountsModule';
+import { RegisteredAccount } from '../types';
 
 interface AccountQRBadgeModalProps {
   account: RegisteredAccount;
@@ -159,6 +160,7 @@ export default function AccountQRBadgeModal({
             <div class="user-info">
               <div class="emp-name">${account.username}</div>
               <div class="emp-id">ID: ${account.employeeId}</div>
+              ${account.phoneNumber ? `<div style="font-size: 10px; color: #4ade80; margin-top: 2px; font-family: monospace;">MOBILE: ${account.phoneNumber}</div>` : ''}
             </div>
 
             <div class="footer">
@@ -239,6 +241,11 @@ export default function AccountQRBadgeModal({
               <div className="text-[11px] font-mono font-bold text-blue-200">
                 EMPLOYEE ID: {account.employeeId}
               </div>
+              {account.phoneNumber && (
+                <div className="text-[10px] font-mono font-semibold text-emerald-400 flex items-center justify-center gap-1">
+                  <Phone className="h-3 w-3" /> {account.phoneNumber}
+                </div>
+              )}
               <div className="text-[10px] font-semibold text-blue-300 uppercase">
                 {account.role}
               </div>

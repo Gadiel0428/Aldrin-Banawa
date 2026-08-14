@@ -186,6 +186,15 @@ export interface ForkliftChecklist {
   remarks?: string;
 }
 
+export interface RegisteredAccount {
+  username: string;
+  role: string;
+  employeeId: string;
+  phoneNumber?: string;
+  permission?: string;
+  pin?: string;
+}
+
 export type RegistryType = 'LOCATION' | 'CATEGORY' | 'CUSTOMER' | 'SUPPLIER' | 'BARCODE_PRESET';
 
 export interface MasterRegistryItem {

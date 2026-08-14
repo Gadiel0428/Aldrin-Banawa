@@ -210,6 +210,7 @@ CREATE TABLE IF NOT EXISTS public.registered_users (
     employee_id TEXT PRIMARY KEY,
     username TEXT NOT NULL,
     role TEXT NOT NULL,
+    phone_number TEXT,
     permission TEXT NOT NULL DEFAULT 'LIMITED_ACCESS',
     pin_hash TEXT,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
