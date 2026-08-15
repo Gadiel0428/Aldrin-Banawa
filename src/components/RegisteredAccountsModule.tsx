@@ -58,6 +58,10 @@ export default function RegisteredAccountsModule({
   const [confirmAction, setConfirmAction] = useState<ConfirmActionConfig | null>(null);
   const [showPins, setShowPins] = useState<{ [key: string]: boolean }>({});
 
+  // Quick inline phone edit state
+  const [editingPhoneEmpId, setEditingPhoneEmpId] = useState<string | null>(null);
+  const [editingPhoneValue, setEditingPhoneValue] = useState<string>('');
+
   // New Account Registration Form & OTP state
   const [regStep, setRegStep] = useState<'DETAILS' | 'OTP'>('DETAILS');
   const [newUsername, setNewUsername] = useState('');
@@ -372,10 +376,34 @@ export default function RegisteredAccountsModule({
     }
   };
 
+  const handleStartEditPhone = (acc: RegisteredAccount) => {
+    setEditingPhoneEmpId(acc.employeeId);
+    setEditingPhoneValue(acc.phoneNumber || '');
+  };
+
+  const handleSaveQuickPhone = (acc: RegisteredAccount) => {
+    const formatted = formatPhoneNumber(editingPhoneValue.trim());
+    onUpdateAccount(acc.employeeId, {
+      ...acc,
+      phoneNumber: formatted
+    });
+    setEditingPhoneEmpId(null);
+    setEditingPhoneValue('');
+  };
+
+  const handleCancelQuickPhone = () => {
+    setEditingPhoneEmpId(null);
+    setEditingPhoneValue('');
+  };
+
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingAccount) return;
-    onUpdateAccount(editingAccount.employeeId, editingAccount);
+    const formatted = formatPhoneNumber(editingAccount.phoneNumber || '');
+    onUpdateAccount(editingAccount.employeeId, {
+      ...editingAccount,
+      phoneNumber: formatted
+    });
     setEditingAccount(null);
   };
 
@@ -446,8 +474,9 @@ export default function RegisteredAccountsModule({
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="bg-slate-50 text-slate-500 uppercase font-mono text-[10px] tracking-wider border-b border-slate-200">
-                <th className="p-4 font-bold">Operator & Contact</th>
+                <th className="p-4 font-bold">Operator Name</th>
                 <th className="p-4 font-bold">Employee ID</th>
+                <th className="p-4 font-bold">Phone Number</th>
                 <th className="p-4 font-bold">Operational Role</th>
                 <th className="p-4 font-bold">Permission Level</th>
                 <th className="p-4 font-bold">4-Digit Security PIN</th>
@@ -479,18 +508,8 @@ export default function RegisteredAccountsModule({
                                 🔒 PROTECTED
                               </span>
                             )}
-                          </div>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            {acc.phoneNumber ? (
-                              <span className="inline-flex items-center gap-1 text-[10px] text-slate-500 font-mono font-medium">
-                                <Phone className="h-2.5 w-2.5 text-emerald-600" />
-                                {acc.phoneNumber}
-                              </span>
-                            ) : (
-                              <span className="text-[10px] text-slate-400 font-mono italic">No phone registered</span>
-                            )}
                             {isSelf && (
-                              <span className="inline-block bg-indigo-100 text-indigo-700 text-[8px] px-1 py-0.2 rounded font-mono font-bold uppercase">
+                              <span className="inline-block bg-indigo-100 text-indigo-700 text-[8px] px-1.5 py-0.5 rounded font-mono font-bold uppercase">
                                 You
                               </span>
                             )}
@@ -501,6 +520,79 @@ export default function RegisteredAccountsModule({
 
                     <td className="p-4 font-mono font-bold text-indigo-600">
                       {acc.employeeId}
+                    </td>
+
+                    <td className="p-4 font-mono">
+                      {editingPhoneEmpId === acc.employeeId ? (
+                        <div className="flex items-center gap-1.5 animate-in fade-in duration-150">
+                          <div className="relative">
+                            <input
+                              type="tel"
+                              autoFocus
+                              placeholder="0917 123 4567"
+                              value={editingPhoneValue}
+                              onChange={e => setEditingPhoneValue(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleSaveQuickPhone(acc);
+                                } else if (e.key === 'Escape') {
+                                  handleCancelQuickPhone();
+                                }
+                              }}
+                              className="w-38 pl-6 pr-2 py-1 bg-white border-2 border-indigo-500 rounded-lg text-xs font-mono font-bold text-slate-900 focus:outline-none shadow-xs"
+                            />
+                            <Phone className="absolute left-1.5 top-1/2 -translate-y-1/2 h-3 w-3 text-indigo-500 pointer-events-none" />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleSaveQuickPhone(acc)}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white p-1 rounded-md text-xs transition cursor-pointer shadow-xs"
+                            title="Save Phone Number"
+                          >
+                            <Check className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleCancelQuickPhone}
+                            className="bg-slate-200 hover:bg-slate-300 text-slate-700 p-1 rounded-md text-xs transition cursor-pointer"
+                            title="Cancel"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 group">
+                          {acc.phoneNumber ? (
+                            <span 
+                              onClick={() => isSuperAdmin && handleStartEditPhone(acc)}
+                              className={`inline-flex items-center gap-1.5 text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-lg ${isSuperAdmin ? 'hover:border-indigo-400 hover:bg-indigo-50/50 cursor-pointer transition' : ''}`}
+                              title={isSuperAdmin ? "Click to edit phone number" : undefined}
+                            >
+                              <Phone className="h-3 w-3 text-emerald-600" />
+                              {acc.phoneNumber}
+                            </span>
+                          ) : (
+                            <span 
+                              onClick={() => isSuperAdmin && handleStartEditPhone(acc)}
+                              className={`text-[11px] text-slate-400 italic ${isSuperAdmin ? 'hover:text-indigo-600 hover:underline cursor-pointer' : ''}`}
+                              title={isSuperAdmin ? "Click to add phone number" : undefined}
+                            >
+                              + Add phone number
+                            </span>
+                          )}
+                          {isSuperAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => handleStartEditPhone(acc)}
+                              className="opacity-0 group-hover:opacity-100 hover:opacity-100 p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition cursor-pointer"
+                              title="Edit Phone Number"
+                            >
+                              <Edit className="h-3 w-3" />
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </td>
 
                     <td className="p-4 font-semibold text-slate-700 uppercase">
@@ -602,7 +694,7 @@ export default function RegisteredAccountsModule({
 
               {filteredAccounts.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="p-8 text-center text-slate-400 font-semibold">
+                  <td colSpan={8} className="p-8 text-center text-slate-400 font-semibold">
                     No operator accounts found matching "{searchQuery}".
                   </td>
                 </tr>

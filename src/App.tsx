@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   LayoutDashboard, 
   ArrowLeftRight, 
@@ -61,6 +61,7 @@ import {
   saveStoredSupabaseConfig,
   isSupabaseConfigured, 
   fetchCollectionFromSupabase, 
+  fetchFullSupabaseSnapshot,
   syncCollectionToSupabase, 
   setupSupabaseRealtimeSubscriptions,
   processPendingSupabaseMutations,
@@ -174,39 +175,105 @@ export default function App() {
   const [view, setView] = useState<string>('dashboard');
   const [showDesktopInstallModal, setShowDesktopInstallModal] = useState<boolean>(false);
 
-  // Core state arrays - initialize immediately with default data so the app is instantly functional
-  const [stocks, setStocks] = useState<MaterialStockItem[]>(INITIAL_STOCK);
-  const [receiving, setReceiving] = useState<ReceivingRecord[]>(INITIAL_RECEIVING);
-  const [returns, setReturns] = useState<ReturnRecord[]>(INITIAL_RETURNS);
-  const [recycling, setRecycling] = useState<RecyclingRecord[]>(INITIAL_RECYCLING);
-  const [issuances, setIssuances] = useState<IssuanceRecord[]>(INITIAL_ISSUANCE);
-  const [deliveries, setDeliveries] = useState<DeliveryRecord[]>(INITIAL_DELIVERIES);
-  const [envLogs, setEnvLogs] = useState<EnvironmentalLog[]>(INITIAL_ENV_LOGS);
-  const [forkliftChecks, setForkliftChecks] = useState<ForkliftChecklist[]>(INITIAL_FORKLIFT_CHECKS);
-  const [registries, setRegistries] = useState<MasterRegistryItem[]>(() => {
-    const isReset = localStorage.getItem('juwei_wms_reset_zero_v2');
-    if (!isReset) {
-      localStorage.setItem('juwei_wms_reset_zero_v2', 'true');
-      localStorage.setItem('juwei_wms_master_registries', JSON.stringify([]));
-      return [];
-    }
-    const cached = localStorage.getItem('juwei_wms_master_registries');
-    if (cached) {
-      try {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed)) {
-          return parsed;
-        }
-      } catch (e) {
-        // Fallback
+  // Optimistic local mutation timestamp tracker to prevent in-flight clobbering / race conditions
+  const lastMutationTimes = useRef<{ [col: string]: number }>({});
+
+  // Core state arrays - initialize from local storage cache for instant, zero-flicker UI
+  const [stocks, setStocks] = useState<MaterialStockItem[]>(() => {
+    try {
+      const c = localStorage.getItem('juwei_wms_cache_stocks');
+      if (c) {
+        const p = JSON.parse(c);
+        if (Array.isArray(p)) return p;
       }
-    }
-    localStorage.setItem('juwei_wms_master_registries', JSON.stringify([]));
+    } catch (e) {}
+    return [];
+  });
+  const [receiving, setReceiving] = useState<ReceivingRecord[]>(() => {
+    try {
+      const c = localStorage.getItem('juwei_wms_cache_receiving');
+      if (c) {
+        const p = JSON.parse(c);
+        if (Array.isArray(p)) return p;
+      }
+    } catch (e) {}
+    return [];
+  });
+  const [returns, setReturns] = useState<ReturnRecord[]>(() => {
+    try {
+      const c = localStorage.getItem('juwei_wms_cache_returns');
+      if (c) {
+        const p = JSON.parse(c);
+        if (Array.isArray(p)) return p;
+      }
+    } catch (e) {}
+    return [];
+  });
+  const [recycling, setRecycling] = useState<RecyclingRecord[]>(() => {
+    try {
+      const c = localStorage.getItem('juwei_wms_cache_recycling');
+      if (c) {
+        const p = JSON.parse(c);
+        if (Array.isArray(p)) return p;
+      }
+    } catch (e) {}
+    return [];
+  });
+  const [issuances, setIssuances] = useState<IssuanceRecord[]>(() => {
+    try {
+      const c = localStorage.getItem('juwei_wms_cache_issuances');
+      if (c) {
+        const p = JSON.parse(c);
+        if (Array.isArray(p)) return p;
+      }
+    } catch (e) {}
+    return [];
+  });
+  const [deliveries, setDeliveries] = useState<DeliveryRecord[]>(() => {
+    try {
+      const c = localStorage.getItem('juwei_wms_cache_deliveries');
+      if (c) {
+        const p = JSON.parse(c);
+        if (Array.isArray(p)) return p;
+      }
+    } catch (e) {}
+    return [];
+  });
+  const [envLogs, setEnvLogs] = useState<EnvironmentalLog[]>(() => {
+    try {
+      const c = localStorage.getItem('juwei_wms_cache_envLogs');
+      if (c) {
+        const p = JSON.parse(c);
+        if (Array.isArray(p)) return p;
+      }
+    } catch (e) {}
+    return [];
+  });
+  const [forkliftChecks, setForkliftChecks] = useState<ForkliftChecklist[]>(() => {
+    try {
+      const c = localStorage.getItem('juwei_wms_cache_forkliftChecks');
+      if (c) {
+        const p = JSON.parse(c);
+        if (Array.isArray(p)) return p;
+      }
+    } catch (e) {}
+    return [];
+  });
+  const [registries, setRegistries] = useState<MasterRegistryItem[]>(() => {
+    try {
+      const c = localStorage.getItem('juwei_wms_cache_registries') || localStorage.getItem('juwei_wms_master_registries');
+      if (c) {
+        const p = JSON.parse(c);
+        if (Array.isArray(p)) return p;
+      }
+    } catch (e) {}
     return [];
   });
 
   useEffect(() => {
-    localStorage.setItem('juwei_wms_master_registries', JSON.stringify(registries));
+    try {
+      localStorage.setItem('juwei_wms_master_registries', JSON.stringify(registries));
+    } catch (e) {}
   }, [registries]);
 
   // Real-time states
@@ -221,6 +288,7 @@ export default function App() {
   // Supabase PostgreSQL Realtime state
   const [showSupabaseSettingsModal, setShowSupabaseSettingsModal] = useState<boolean>(false);
   const [supabaseStatus, setSupabaseStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected');
+  const [supabaseRefreshTrigger, setSupabaseRefreshTrigger] = useState<number>(0);
 
   // User Authentication / Registration states - Always show Login Gateway on startup
   const [currentUser, setCurrentUser] = useState<string>('');
@@ -258,7 +326,7 @@ export default function App() {
     username: 'ALDRIN BANAWA', 
     role: 'SUPER ADMINISTRATOR', 
     employeeId: 'JPMP-002', 
-    phoneNumber: '+63 917 000 0002',
+    phoneNumber: '+639669858846',
     permission: 'FULL_ACCESS', 
     pin: '0423' 
   };
@@ -390,15 +458,31 @@ export default function App() {
     setEnvLogs([]);
     setForkliftChecks([]);
     setRegistries([]);
-    localStorage.removeItem('juwei_wms_master_registries');
-    syncCollection('stocks', []);
-    syncCollection('receiving', []);
-    syncCollection('returns', []);
-    syncCollection('recycling', []);
-    syncCollection('issuances', []);
-    syncCollection('deliveries', []);
-    syncCollection('envLogs', []);
-    syncCollection('forkliftChecks', []);
+
+    // Clear local storage cache
+    const collectionsToClear = [
+      'stocks', 'receiving', 'returns', 'recycling', 'issuances', 
+      'deliveries', 'envLogs', 'forkliftChecks', 'registries'
+    ];
+    collectionsToClear.forEach(col => {
+      try {
+        localStorage.removeItem(`juwei_wms_cache_${col}`);
+      } catch (e) {}
+    });
+    try {
+      localStorage.removeItem('juwei_wms_master_registries');
+    } catch (e) {}
+
+    // Call server reset endpoint
+    fetch('/api/reset-database', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    }).catch(() => {});
+
+    // Sync clean empty collections across peers and Supabase
+    collectionsToClear.forEach(col => {
+      syncCollection(col, []);
+    });
   };
 
   const resetAccountsToDefaults = () => {
@@ -410,6 +494,18 @@ export default function App() {
     syncCollection('registeredUsers', defaultAccounts);
     // Also log out any active session if we reset the accounts
     handleLogout();
+  };
+
+  // Helper to determine if incoming remote array should safely override local array without clobbering in-flight mutations
+  const shouldApplyRemoteData = (colName: string, remoteArr: any[], currentArr: any[]): boolean => {
+    if (!Array.isArray(remoteArr)) return false;
+    const lastMutation = lastMutationTimes.current[colName] || 0;
+    const elapsed = Date.now() - lastMutation;
+    // If a local mutation was made within the last 3.5s and remote array has fewer items than local state, protect local state
+    if (elapsed < 3500 && remoteArr.length < currentArr.length) {
+      return false;
+    }
+    return true;
   };
 
   // Connect to fullstack WebSocket & HTTP Real-Time Server with automatic failover
@@ -424,65 +520,15 @@ export default function App() {
       if (!dataPayload) return;
       const { stocks, receiving, returns, recycling, issuances, deliveries, envLogs, forkliftChecks, registries, registeredUsers: serverUsers, chatMessages: msgs } = dataPayload;
 
-      if (Array.isArray(stocks)) {
-        if (stocks.length > 0) {
-          setStocks(stocks);
-        } else if (stocks.length === 0 && INITIAL_STOCK.length > 0) {
-          syncCollection('stocks', INITIAL_STOCK);
-        }
-      }
-
-      if (Array.isArray(receiving)) {
-        if (receiving.length > 0) setReceiving(receiving);
-        else if (INITIAL_RECEIVING.length > 0) syncCollection('receiving', INITIAL_RECEIVING);
-      }
-
-      if (Array.isArray(returns)) {
-        if (returns.length > 0) setReturns(returns);
-        else if (INITIAL_RETURNS.length > 0) syncCollection('returns', INITIAL_RETURNS);
-      }
-
-      if (Array.isArray(recycling)) {
-        if (recycling.length > 0) setRecycling(recycling);
-        else if (INITIAL_RECYCLING.length > 0) syncCollection('recycling', INITIAL_RECYCLING);
-      }
-
-      if (Array.isArray(issuances)) {
-        if (issuances.length > 0) setIssuances(issuances);
-        else if (INITIAL_ISSUANCE.length > 0) syncCollection('issuances', INITIAL_ISSUANCE);
-      }
-
-      if (Array.isArray(deliveries)) {
-        if (deliveries.length > 0) setDeliveries(deliveries);
-        else if (INITIAL_DELIVERIES.length > 0) syncCollection('deliveries', INITIAL_DELIVERIES);
-      }
-
-      if (Array.isArray(envLogs)) {
-        if (envLogs.length > 0) setEnvLogs(envLogs);
-        else if (INITIAL_ENV_LOGS.length > 0) syncCollection('envLogs', INITIAL_ENV_LOGS);
-      }
-
-      if (Array.isArray(forkliftChecks)) {
-        if (forkliftChecks.length > 0) setForkliftChecks(forkliftChecks);
-        else if (INITIAL_FORKLIFT_CHECKS.length > 0) syncCollection('forkliftChecks', INITIAL_FORKLIFT_CHECKS);
-      }
-
-      if (Array.isArray(registries)) {
-        if (registries.length > 0) {
-          setRegistries(registries);
-        } else {
-          const cachedReg = localStorage.getItem('juwei_wms_master_registries');
-          if (cachedReg) {
-            try {
-              const parsed = JSON.parse(cachedReg);
-              if (Array.isArray(parsed) && parsed.length > 0) {
-                setRegistries(parsed);
-                syncCollection('registries', parsed);
-              }
-            } catch (e) {}
-          }
-        }
-      }
+      if (Array.isArray(stocks)) setStocks(prev => shouldApplyRemoteData('stocks', stocks, prev) ? stocks : prev);
+      if (Array.isArray(receiving)) setReceiving(prev => shouldApplyRemoteData('receiving', receiving, prev) ? receiving : prev);
+      if (Array.isArray(returns)) setReturns(prev => shouldApplyRemoteData('returns', returns, prev) ? returns : prev);
+      if (Array.isArray(recycling)) setRecycling(prev => shouldApplyRemoteData('recycling', recycling, prev) ? recycling : prev);
+      if (Array.isArray(issuances)) setIssuances(prev => shouldApplyRemoteData('issuances', issuances, prev) ? issuances : prev);
+      if (Array.isArray(deliveries)) setDeliveries(prev => shouldApplyRemoteData('deliveries', deliveries, prev) ? deliveries : prev);
+      if (Array.isArray(envLogs)) setEnvLogs(prev => shouldApplyRemoteData('envLogs', envLogs, prev) ? envLogs : prev);
+      if (Array.isArray(forkliftChecks)) setForkliftChecks(prev => shouldApplyRemoteData('forkliftChecks', forkliftChecks, prev) ? forkliftChecks : prev);
+      if (Array.isArray(registries)) setRegistries(prev => shouldApplyRemoteData('registries', registries, prev) ? registries : prev);
       
       if (Array.isArray(serverUsers)) {
         const finalUsers = sanitizeAndMergeUsers(serverUsers);
@@ -646,15 +692,15 @@ export default function App() {
             case 'collection_updated': {
               const { collection, data } = payload;
               switch (collection) {
-                case 'stocks': setStocks(data); break;
-                case 'receiving': setReceiving(data); break;
-                case 'returns': setReturns(data); break;
-                case 'recycling': setRecycling(data); break;
-                case 'issuances': setIssuances(data); break;
-                case 'deliveries': setDeliveries(data); break;
-                case 'envLogs': setEnvLogs(data); break;
-                case 'forkliftChecks': setForkliftChecks(data); break;
-                case 'registries': setRegistries(data); break;
+                case 'stocks': setStocks(prev => shouldApplyRemoteData('stocks', data, prev) ? data : prev); break;
+                case 'receiving': setReceiving(prev => shouldApplyRemoteData('receiving', data, prev) ? data : prev); break;
+                case 'returns': setReturns(prev => shouldApplyRemoteData('returns', data, prev) ? data : prev); break;
+                case 'recycling': setRecycling(prev => shouldApplyRemoteData('recycling', data, prev) ? data : prev); break;
+                case 'issuances': setIssuances(prev => shouldApplyRemoteData('issuances', data, prev) ? data : prev); break;
+                case 'deliveries': setDeliveries(prev => shouldApplyRemoteData('deliveries', data, prev) ? data : prev); break;
+                case 'envLogs': setEnvLogs(prev => shouldApplyRemoteData('envLogs', data, prev) ? data : prev); break;
+                case 'forkliftChecks': setForkliftChecks(prev => shouldApplyRemoteData('forkliftChecks', data, prev) ? data : prev); break;
+                case 'registries': setRegistries(prev => shouldApplyRemoteData('registries', data, prev) ? data : prev); break;
                 case 'registeredUsers': {
                   const merged = sanitizeAndMergeUsers(data || []);
                   setRegisteredUsers(merged);
@@ -687,12 +733,7 @@ export default function App() {
               if (payload.url && payload.anonKey) {
                 saveStoredSupabaseConfig({ url: payload.url, anonKey: payload.anonKey });
                 setSupabaseStatus('connecting');
-                fetchCollectionFromSupabase('stocks').then((items) => {
-                  if (Array.isArray(items)) {
-                    setSupabaseStatus('connected');
-                    setStocks(items);
-                  }
-                });
+                setSupabaseRefreshTrigger(prev => prev + 1);
               }
               break;
             }
@@ -739,12 +780,15 @@ export default function App() {
 
     connectWebSocket();
 
-    // Continuous HTTP background polling every 3 seconds
+    // Gentle background HTTP poll fallback (15s if connected, 5s if disconnected)
     httpPollInterval = setInterval(() => {
       if (isMounted) {
-        runSyncCheck();
+        // Only run HTTP polling if offline/disconnected or as a relaxed background heartbeat
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          runSyncCheck();
+        }
       }
-    }, 3000);
+    }, 8000);
 
     return () => {
       isMounted = false;
@@ -755,68 +799,100 @@ export default function App() {
       window.removeEventListener('focus', handleOnlineOrFocus);
       document.removeEventListener('visibilitychange', handleOnlineOrFocus);
     };
-  }, [currentUser, isLoggedIn, serverAddress]);
+  }, [serverAddress]);
 
-  // Supabase PostgreSQL Realtime Subscription, Auto-Config & Continuous Cloud Sync Engine
+  // Keep WebSocket presence username in sync without tearing down WS connection
+  useEffect(() => {
+    if (wsOpen(socket) && currentUser) {
+      try {
+        socket!.send(JSON.stringify({
+          type: 'join',
+          username: currentUser
+        }));
+      } catch (e) {}
+    }
+  }, [currentUser, socket]);
+
+  // Supabase PostgreSQL Realtime Subscription, Auto-Config & Cloud Sync Engine
   useEffect(() => {
     let channel: any = null;
-    let supabasePollInterval: any = null;
     let isMounted = true;
+    let pollInterval: any = null;
+
+    const loadAllSupabaseData = async () => {
+      if (!isMounted) return;
+      if (!isSupabaseConfigured()) {
+        setSupabaseStatus('disconnected');
+        return;
+      }
+
+      const snapshot = await fetchFullSupabaseSnapshot();
+      if (!isMounted || !snapshot) return;
+
+      let hasSuccess = false;
+      const { 
+        stocks: s, 
+        receiving: rc, 
+        returns: rt, 
+        recycling: cy, 
+        issuances: is, 
+        deliveries: d, 
+        envLogs: e, 
+        forkliftChecks: f, 
+        registries: reg, 
+        registeredUsers: ru, 
+        chatMessages: cm 
+      } = snapshot;
+
+      if (Array.isArray(s)) { hasSuccess = true; setStocks(prev => shouldApplyRemoteData('stocks', s, prev) ? s : prev); }
+      if (Array.isArray(rc)) { hasSuccess = true; setReceiving(prev => shouldApplyRemoteData('receiving', rc, prev) ? rc : prev); }
+      if (Array.isArray(rt)) { hasSuccess = true; setReturns(prev => shouldApplyRemoteData('returns', rt, prev) ? rt : prev); }
+      if (Array.isArray(cy)) { hasSuccess = true; setRecycling(prev => shouldApplyRemoteData('recycling', cy, prev) ? cy : prev); }
+      if (Array.isArray(is)) { hasSuccess = true; setIssuances(prev => shouldApplyRemoteData('issuances', is, prev) ? is : prev); }
+      if (Array.isArray(d)) { hasSuccess = true; setDeliveries(prev => shouldApplyRemoteData('deliveries', d, prev) ? d : prev); }
+      if (Array.isArray(e)) { hasSuccess = true; setEnvLogs(prev => shouldApplyRemoteData('envLogs', e, prev) ? e : prev); }
+      if (Array.isArray(f)) { hasSuccess = true; setForkliftChecks(prev => shouldApplyRemoteData('forkliftChecks', f, prev) ? f : prev); }
+      if (Array.isArray(reg)) { hasSuccess = true; setRegistries(prev => shouldApplyRemoteData('registries', reg, prev) ? reg : prev); }
+      if (Array.isArray(ru) && ru.length > 0) {
+        hasSuccess = true;
+        const merged = sanitizeAndMergeUsers(ru);
+        setRegisteredUsers(merged);
+      }
+      if (Array.isArray(cm) && cm.length > 0) {
+        hasSuccess = true;
+        setChatMessages(cm);
+      }
+
+      if (isMounted) {
+        if (hasSuccess) {
+          setSupabaseStatus('connected');
+        } else if (!isSupabaseConfigured()) {
+          setSupabaseStatus('disconnected');
+        }
+      }
+    };
 
     const startSupabaseSync = () => {
       if (!isMounted) return;
 
-      const loadSupabaseData = async () => {
-        let hasSuccess = false;
-        const collections = ['stocks', 'receiving', 'returns', 'recycling', 'issuances', 'deliveries', 'envLogs', 'forkliftChecks', 'registries', 'registeredUsers', 'chatMessages'];
-        for (const col of collections) {
-          if (!isMounted) break;
-          const items = await fetchCollectionFromSupabase(col);
-          if (Array.isArray(items)) {
-            hasSuccess = true;
-            if (col === 'stocks') setStocks(items);
-            else if (col === 'receiving') setReceiving(items);
-            else if (col === 'returns') setReturns(items);
-            else if (col === 'recycling') setRecycling(items);
-            else if (col === 'issuances') setIssuances(items);
-            else if (col === 'deliveries') setDeliveries(items);
-            else if (col === 'envLogs') setEnvLogs(items);
-            else if (col === 'forkliftChecks') setForkliftChecks(items);
-            else if (col === 'registries') setRegistries(items);
-            else if (col === 'registeredUsers') {
-              const merged = sanitizeAndMergeUsers(items);
-              setRegisteredUsers(merged);
-            }
-            else if (col === 'chatMessages') setChatMessages(items);
-          }
-        }
-        if (isMounted) {
-          if (hasSuccess) {
-            setSupabaseStatus('connected');
-          } else if (!isSupabaseConfigured()) {
-            setSupabaseStatus('disconnected');
-          }
-        }
-      };
+      loadAllSupabaseData();
 
-      loadSupabaseData();
-
-      // Setup Realtime subscription
+      // Setup Realtime subscription for PostgreSQL events
       channel = setupSupabaseRealtimeSubscriptions(
         async (col) => {
           if (!isMounted) return;
           const updatedItems = await fetchCollectionFromSupabase(col);
           if (Array.isArray(updatedItems)) {
             setSupabaseStatus('connected');
-            if (col === 'stocks') setStocks(updatedItems);
-            else if (col === 'receiving') setReceiving(updatedItems);
-            else if (col === 'returns') setReturns(updatedItems);
-            else if (col === 'recycling') setRecycling(updatedItems);
-            else if (col === 'issuances') setIssuances(updatedItems);
-            else if (col === 'deliveries') setDeliveries(updatedItems);
-            else if (col === 'envLogs') setEnvLogs(updatedItems);
-            else if (col === 'forkliftChecks') setForkliftChecks(updatedItems);
-            else if (col === 'registries') setRegistries(updatedItems);
+            if (col === 'stocks') setStocks(prev => shouldApplyRemoteData('stocks', updatedItems, prev) ? updatedItems : prev);
+            else if (col === 'receiving') setReceiving(prev => shouldApplyRemoteData('receiving', updatedItems, prev) ? updatedItems : prev);
+            else if (col === 'returns') setReturns(prev => shouldApplyRemoteData('returns', updatedItems, prev) ? updatedItems : prev);
+            else if (col === 'recycling') setRecycling(prev => shouldApplyRemoteData('recycling', updatedItems, prev) ? updatedItems : prev);
+            else if (col === 'issuances') setIssuances(prev => shouldApplyRemoteData('issuances', updatedItems, prev) ? updatedItems : prev);
+            else if (col === 'deliveries') setDeliveries(prev => shouldApplyRemoteData('deliveries', updatedItems, prev) ? updatedItems : prev);
+            else if (col === 'envLogs') setEnvLogs(prev => shouldApplyRemoteData('envLogs', updatedItems, prev) ? updatedItems : prev);
+            else if (col === 'forkliftChecks') setForkliftChecks(prev => shouldApplyRemoteData('forkliftChecks', updatedItems, prev) ? updatedItems : prev);
+            else if (col === 'registries') setRegistries(prev => shouldApplyRemoteData('registries', updatedItems, prev) ? updatedItems : prev);
             else if (col === 'registeredUsers') {
               const merged = sanitizeAndMergeUsers(updatedItems);
               setRegisteredUsers(merged);
@@ -832,52 +908,65 @@ export default function App() {
         },
         (status) => {
           if (isMounted) {
-            if (status === 'connected') {
-              setSupabaseStatus('connected');
-            }
+            setSupabaseStatus(status);
           }
         }
       );
 
-      // 5-second continuous cloud poll backup to guarantee multi-PC sync even behind strict firewalls
-      supabasePollInterval = setInterval(() => {
+      // Periodic cloud refresh (every 10s) to keep multi-PC data synchronized
+      if (pollInterval) clearInterval(pollInterval);
+      pollInterval = setInterval(() => {
         if (isMounted && isSupabaseConfigured()) {
-          loadSupabaseData();
+          loadAllSupabaseData();
         }
-      }, 5000);
+      }, 10000);
     };
 
-    // Check if server has shared Supabase config first
-    fetch('/api/supabase-config')
-      .then(res => res.json())
-      .then(cfg => {
-        if (cfg && cfg.configured && cfg.url && cfg.anonKey) {
-          const current = getStoredSupabaseConfig();
-          if (!current.url || !current.anonKey) {
-            saveStoredSupabaseConfig({ url: cfg.url, anonKey: cfg.anonKey });
+    // Auto-discover shared Supabase config from server
+    let targetAddr = serverAddress.trim() || getDefaultServerAddress();
+    const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
+    const isHttps = isSecureServerHost(cleanHost, targetAddr);
+    const httpProto = isHttps ? 'https:' : 'http:';
+
+    const checkConfig = async () => {
+      try {
+        let res = await fetch('/api/supabase-config');
+        if (!res.ok) {
+          res = await fetch(`${httpProto}//${cleanHost}/api/supabase-config`);
+        }
+        if (res.ok) {
+          const cfg = await res.json();
+          if (cfg && cfg.configured && cfg.url && cfg.anonKey) {
+            const current = getStoredSupabaseConfig();
+            if (current.url !== cfg.url || current.anonKey !== cfg.anonKey) {
+              saveStoredSupabaseConfig({ url: cfg.url, anonKey: cfg.anonKey });
+            }
           }
         }
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (isSupabaseConfigured()) {
-          startSupabaseSync();
-        } else {
-          setSupabaseStatus('disconnected');
-        }
-      });
+      } catch (e) {}
+
+      if (isSupabaseConfigured()) {
+        startSupabaseSync();
+      } else {
+        if (isMounted) setSupabaseStatus('disconnected');
+      }
+    };
+
+    checkConfig();
 
     return () => {
       isMounted = false;
+      if (pollInterval) clearInterval(pollInterval);
       if (channel && typeof channel.unsubscribe === 'function') {
         channel.unsubscribe();
       }
-      if (supabasePollInterval) clearInterval(supabasePollInterval);
     };
-  }, []);
+  }, [supabaseRefreshTrigger, serverAddress]);
 
   // Sync state helpers (supports Supabase PostgreSQL, WebSocket, and HTTP POST REST)
   const syncCollection = (collection: string, data: any[]) => {
+    lastMutationTimes.current[collection] = Date.now();
+
     // Save to local cache
     try {
       localStorage.setItem(`juwei_wms_cache_${collection}`, JSON.stringify(data));
@@ -1225,6 +1314,7 @@ export default function App() {
       id: `STK-${Date.now().toString().slice(-4)}`,
       partCode: record.partCode,
       description: record.itemDescription,
+      modelName: record.modelName,
       type: record.partCode.startsWith('RM') ? 'RAW' : 
             record.partCode.startsWith('PM') ? 'PACKAGING' : 
             record.partCode.startsWith('WP') ? 'WIP' : 
@@ -2644,8 +2734,8 @@ export default function App() {
         connectionStatus={supabaseStatus}
         onForceSync={() => {
           const collections = ['stocks', 'receiving', 'returns', 'recycling', 'issuances', 'deliveries', 'envLogs', 'forkliftChecks', 'registries', 'registeredUsers'];
-          collections.forEach(async (col) => {
-            const cached = localStorage.getItem(`juwei_wms_cache_${col}`);
+          Promise.all(collections.map(async (col) => {
+            const cached = localStorage.getItem(`juwei_wms_cache_${col}`) || (col === 'registeredUsers' ? localStorage.getItem('juwei_wms_registeredUsers') : null);
             if (cached) {
               try {
                 const parsed = JSON.parse(cached);
@@ -2654,13 +2744,8 @@ export default function App() {
                 }
               } catch (e) {}
             }
-          });
-
-          fetchCollectionFromSupabase('stocks').then((items) => {
-            if (Array.isArray(items)) {
-              setSupabaseStatus('connected');
-              setStocks(items);
-            }
+          })).then(() => {
+            setSupabaseRefreshTrigger(prev => prev + 1);
           });
         }}
       />

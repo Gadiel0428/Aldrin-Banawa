@@ -85,7 +85,7 @@ export default function DeliveryModule({
   const [salesInvoice, setSalesInvoice] = useState('');
   const [wayBill, setWayBill] = useState('');
 
-  const todayStr = '2026-07-19';
+  const todayStr = new Date().toISOString().split('T')[0];
 
   const isForkliftPrechecked = forkliftChecks.some(check => check.date === todayStr);
 

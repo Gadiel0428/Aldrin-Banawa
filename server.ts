@@ -57,6 +57,7 @@ async function startServer() {
     username: 'ALDRIN BANAWA', 
     role: 'SUPER ADMINISTRATOR', 
     employeeId: 'JPMP-002', 
+    phoneNumber: '+639669858846',
     permission: 'FULL_ACCESS', 
     pin: '0423' 
   };
@@ -120,6 +121,61 @@ async function startServer() {
     }
   }
 
+  async function loadStateFromSupabase() {
+    if (!supabaseServer) return;
+    try {
+      const tableMap: Record<string, string> = {
+        stocks: 'stocks',
+        receiving: 'receiving',
+        returns: 'returns',
+        recycling: 'recycling',
+        issuances: 'issuances',
+        deliveries: 'deliveries',
+        envLogs: 'env_logs',
+        forkliftChecks: 'forklift_checks',
+        registries: 'registries',
+        registeredUsers: 'registered_users',
+        chatMessages: 'chat_messages'
+      };
+
+      for (const [col, table] of Object.entries(tableMap)) {
+        const { data, error } = await supabaseServer.from(table).select('*');
+        if (!error && Array.isArray(data) && data.length > 0) {
+          if (col === 'chatMessages') {
+            chatMessages.length = 0;
+            chatMessages.push(...data.map((m: any) => ({
+              id: m.id,
+              sender: m.sender,
+              text: m.text,
+              timestamp: m.timestamp,
+              isSystem: Boolean(m.is_system)
+            })));
+          } else if (col === 'registeredUsers') {
+            const parsedUsers = data.map((u: any) => ({
+              employeeId: (u.employee_id || u.employeeId || '').toUpperCase(),
+              username: u.username || 'OPERATOR',
+              role: u.role || 'WAREHOUSE CLERK',
+              phoneNumber: u.phone_number || u.phoneNumber || '',
+              permission: u.permission || 'LIMITED_ACCESS',
+              pin: u.pin || u.pin_hash || '1234'
+            }));
+            // Ensure super admin is preserved
+            if (!parsedUsers.some(u => u.employeeId === 'JPMP-002')) {
+              parsedUsers.unshift(defaultSuperAdmin);
+            }
+            state.registeredUsers = parsedUsers;
+          } else if (col in state) {
+            (state as any)[col] = data;
+          }
+        }
+      }
+      console.log("JUWEI WMS: Hydrated live state from Supabase Cloud PostgreSQL.");
+      saveStateToDisk();
+    } catch (err) {
+      console.warn("JUWEI WMS: Could not hydrate state from Supabase:", err);
+    }
+  }
+
   function saveStateToDisk() {
     try {
       const payload = JSON.stringify({ state, chatMessages }, null, 2);
@@ -131,6 +187,9 @@ async function startServer() {
 
   // Load existing persisted data on startup
   loadStateFromDisk();
+  if (supabaseServer) {
+    loadStateFromSupabase();
+  }
 
   // Helper to persist collection to Supabase asynchronously
   async function persistToSupabase(collection: string, data: any[]) {
@@ -153,28 +212,42 @@ async function startServer() {
       const tableName = tableMap[collection];
       if (!tableName) return;
 
-      if (Array.isArray(data) && data.length > 0) {
-        let payload = data;
+      if (!Array.isArray(data) || data.length === 0) {
         if (collection === 'registeredUsers') {
-          payload = data.map((u: any) => ({
-            employee_id: u.employeeId || u.employee_id,
-            username: u.username,
-            role: u.role,
-            permission: u.permission || 'LIMITED_ACCESS',
-            pin: u.pin || '1234',
-            updated_at: new Date().toISOString()
-          }));
-          // Simple upsert array
-          await supabaseServer.from(tableName).upsert(payload, { ignoreDuplicates: false });
-          // Purge any deleted accounts from database
-          const activeIds = payload.map((u: any) => u.employee_id).filter(Boolean);
+          await supabaseServer.from('registered_users').delete().neq('employee_id', 'JPMP-002');
+        } else if (collection === 'chatMessages') {
+          await supabaseServer.from('chat_messages').delete().neq('id', '___NEVER___');
+        } else {
+          await supabaseServer.from(tableName).delete().neq('id', '___NEVER___');
+        }
+        return;
+      }
+
+      let payload = data;
+      if (collection === 'registeredUsers') {
+        payload = data.map((u: any) => ({
+          employee_id: u.employeeId || u.employee_id,
+          username: u.username,
+          role: u.role,
+          permission: u.permission || 'LIMITED_ACCESS',
+          pin: u.pin || '1234',
+          phone_number: u.phoneNumber || u.phone_number || '',
+          updated_at: new Date().toISOString()
+        }));
+        await supabaseServer.from(tableName).upsert(payload, { ignoreDuplicates: false });
+        const activeIds = payload.map((u: any) => u.employee_id).filter(Boolean);
+        if (activeIds.length > 0) {
+          const inListStr = `(${activeIds.map((id: string) => `"${id}"`).join(',')})`;
+          await supabaseServer.from(tableName).delete().not('employee_id', 'in', inListStr);
+        }
+      } else {
+        await supabaseServer.from(tableName).upsert(payload, { ignoreDuplicates: false });
+        if (collection !== 'chatMessages') {
+          const activeIds = payload.map((u: any) => u.id).filter(Boolean);
           if (activeIds.length > 0) {
             const inListStr = `(${activeIds.map((id: string) => `"${id}"`).join(',')})`;
-            await supabaseServer.from(tableName).delete().not('employee_id', 'in', inListStr);
+            await supabaseServer.from(tableName).delete().not('id', 'in', inListStr);
           }
-        } else {
-          // Simple upsert array
-          await supabaseServer.from(tableName).upsert(payload, { ignoreDuplicates: false });
         }
       }
     } catch (err) {
@@ -246,6 +319,16 @@ async function startServer() {
       try {
         supabaseServer = createClient(cleanUrl, cleanKey);
         console.log("JUWEI WMS: Re-initialized Supabase server client with URL:", cleanUrl);
+        loadStateFromSupabase().then(() => {
+          broadcast({
+            type: "full_sync",
+            data: {
+              ...state,
+              chatMessages
+            },
+            activeUsers: getActiveUsersList()
+          });
+        });
       } catch (err) {
         console.warn("JUWEI WMS: Error creating Supabase client:", err);
       }
@@ -314,6 +397,45 @@ async function startServer() {
       res.status(400).json({ error: "Invalid collection" });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Endpoint to reset all encoded database collections to clean empty state
+  app.post("/api/reset-database", async (req, res) => {
+    try {
+      state.stocks = [];
+      state.receiving = [];
+      state.returns = [];
+      state.recycling = [];
+      state.issuances = [];
+      state.deliveries = [];
+      state.envLogs = [];
+      state.forkliftChecks = [];
+      state.registries = [];
+
+      saveStateToDisk();
+
+      if (supabaseServer) {
+        const collections = ['stocks', 'receiving', 'returns', 'recycling', 'issuances', 'deliveries', 'env_logs', 'forklift_checks', 'registries'];
+        for (const table of collections) {
+          try {
+            await supabaseServer.from(table).delete().neq('id', '___NEVER___');
+          } catch (e) {}
+        }
+      }
+
+      broadcast({
+        type: "init",
+        data: {
+          ...state,
+          chatMessages
+        },
+        activeUsers: getActiveUsersList()
+      });
+
+      return res.json({ success: true, message: "All encoded data successfully reset" });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
     }
   });
 

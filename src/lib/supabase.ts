@@ -54,16 +54,25 @@ export function saveStoredSupabaseConfig(config: SupabaseConfig) {
 
   if (cleanUrl) localStorage.setItem(STORAGE_KEY_URL, cleanUrl);
   if (cleanKey) localStorage.setItem(STORAGE_KEY_KEY, cleanKey);
-  // Reset client instance on config change
+  
+  // Reset client instance on config change so next getSupabase() re-initializes
+  if (activeRealtimeChannel && typeof activeRealtimeChannel.unsubscribe === 'function') {
+    try {
+      activeRealtimeChannel.unsubscribe();
+    } catch (e) {}
+  }
+  activeRealtimeChannel = null;
   supabaseClientInstance = null;
 }
 
 let supabaseClientInstance: SupabaseClient | null = null;
+let activeRealtimeChannel: RealtimeChannel | null = null;
 
 export function isSupabaseConfigured(): boolean {
   const config = getStoredSupabaseConfig();
+  if (!config.url || !config.anonKey) return false;
   const isPlaceholder = config.url.toLowerCase().includes('your-project-id') || config.anonKey.toLowerCase().includes('eyjhbgcioijiuzi1niisinr5cci6ikpxvcj9');
-  return Boolean(config.url && config.anonKey && config.url.includes('supabase.co') && !isPlaceholder);
+  return Boolean((config.url.includes('supabase.co') || config.url.startsWith('http')) && !isPlaceholder);
 }
 
 export function getSupabase(): SupabaseClient | null {
@@ -643,7 +652,21 @@ export async function syncCollectionToSupabase(collection: string, items: any[])
         return false;
     }
 
-    if (mappedRows.length === 0) return true;
+    if (mappedRows.length === 0) {
+      try {
+        if (collection === 'registeredUsers') {
+          // Keep super admin
+          await supabase.from('registered_users').delete().neq('employee_id', 'JPMP-002');
+        } else if (collection === 'chatMessages') {
+          await supabase.from('chat_messages').delete().neq('id', '___NEVER___');
+        } else {
+          await supabase.from(tableName).delete().neq('id', '___NEVER___');
+        }
+      } catch (clearErr) {
+        console.warn(`Supabase clear table failed for ${collection}:`, clearErr);
+      }
+      return true;
+    }
 
     const { error } = await supabase.from(tableName).upsert(mappedRows);
     if (error) {
@@ -652,17 +675,23 @@ export async function syncCollectionToSupabase(collection: string, items: any[])
       return false;
     }
 
-    // If syncing registeredUsers, ensure deleted accounts are purged from Supabase table
-    if (collection === 'registeredUsers') {
-      try {
+    // Purge records that were removed from this collection
+    try {
+      if (collection === 'registeredUsers') {
         const activeEmpIds = mappedRows.map((r: any) => r.employee_id).filter(Boolean);
         if (activeEmpIds.length > 0) {
           const inListStr = `(${activeEmpIds.map((id: string) => `"${id}"`).join(',')})`;
           await supabase.from('registered_users').delete().not('employee_id', 'in', inListStr);
         }
-      } catch (delErr) {
-        console.warn('Supabase cleanup deleted users failed:', delErr);
+      } else if (collection !== 'chatMessages') {
+        const activeIds = mappedRows.map((r: any) => r.id).filter(Boolean);
+        if (activeIds.length > 0) {
+          const inListStr = `(${activeIds.map((id: string) => `"${id}"`).join(',')})`;
+          await supabase.from(tableName).delete().not('id', 'in', inListStr);
+        }
       }
+    } catch (delErr) {
+      console.warn(`Supabase cleanup removed items failed for ${collection}:`, delErr);
     }
 
     return true;
@@ -729,7 +758,46 @@ export async function processPendingSupabaseMutations() {
   } catch (e) {}
 }
 
-// Realtime Channel Subscription
+// Batch Snapshot Fetcher for all 10 collections
+export async function fetchFullSupabaseSnapshot(): Promise<{
+  stocks?: MaterialStockItem[];
+  receiving?: ReceivingRecord[];
+  returns?: ReturnRecord[];
+  recycling?: RecyclingRecord[];
+  issuances?: IssuanceRecord[];
+  deliveries?: DeliveryRecord[];
+  envLogs?: EnvironmentalLog[];
+  forkliftChecks?: ForkliftChecklist[];
+  registries?: MasterRegistryItem[];
+  registeredUsers?: any[];
+  chatMessages?: any[];
+} | null> {
+  const supabase = getSupabase();
+  if (!supabase) return null;
+
+  try {
+    const collections = ['stocks', 'receiving', 'returns', 'recycling', 'issuances', 'deliveries', 'envLogs', 'forkliftChecks', 'registries', 'registeredUsers', 'chatMessages'];
+    const results = await Promise.all(collections.map(col => fetchCollectionFromSupabase(col)));
+    
+    const snapshot: any = {};
+    let hasData = false;
+
+    collections.forEach((col, idx) => {
+      const data = results[idx];
+      if (Array.isArray(data)) {
+        snapshot[col] = data;
+        if (data.length > 0) hasData = true;
+      }
+    });
+
+    return hasData ? snapshot : snapshot;
+  } catch (err) {
+    console.warn('fetchFullSupabaseSnapshot exception:', err);
+    return null;
+  }
+}
+
+// Realtime Channel Subscription with explicit multi-table listeners & auto-reconnect
 export function setupSupabaseRealtimeSubscriptions(
   onCollectionChange: (collection: string) => void,
   onChatMessage: (msg: any) => void,
@@ -741,51 +809,88 @@ export function setupSupabaseRealtimeSubscriptions(
     return null;
   }
 
+  // Clean up any existing active subscription channel
+  if (activeRealtimeChannel && typeof activeRealtimeChannel.unsubscribe === 'function') {
+    try {
+      activeRealtimeChannel.unsubscribe();
+    } catch (e) {}
+  }
+
   onStatusChange('connecting');
 
-  const channel = supabase.channel('juwei-wms-supabase-realtime')
-    .on(
+  const channelName = `juwei-wms-realtime-${Date.now()}`;
+  let channel = supabase.channel(channelName);
+
+  const tableList: { table: string; collection: string }[] = [
+    { table: 'stocks', collection: 'stocks' },
+    { table: 'receiving', collection: 'receiving' },
+    { table: 'returns', collection: 'returns' },
+    { table: 'recycling', collection: 'recycling' },
+    { table: 'issuances', collection: 'issuances' },
+    { table: 'deliveries', collection: 'deliveries' },
+    { table: 'env_logs', collection: 'envLogs' },
+    { table: 'forklift_checks', collection: 'forkliftChecks' },
+    { table: 'registries', collection: 'registries' },
+    { table: 'registered_users', collection: 'registeredUsers' },
+    { table: 'chat_messages', collection: 'chatMessages' }
+  ];
+
+  // Subscribe to each table explicitly for 100% reliable PostgreSQL Change Broadcasts
+  tableList.forEach(({ table, collection }) => {
+    channel = channel.on(
       'postgres_changes',
-      { event: '*', schema: 'public' },
+      { event: '*', schema: 'public', table },
       (payload) => {
-        const tableToCollectionMap: Record<string, string> = {
-          stocks: 'stocks',
-          receiving: 'receiving',
-          returns: 'returns',
-          recycling: 'recycling',
-          issuances: 'issuances',
-          deliveries: 'deliveries',
-          env_logs: 'envLogs',
-          forklift_checks: 'forkliftChecks',
-          registries: 'registries',
-          registered_users: 'registeredUsers',
-          chat_messages: 'chatMessages'
-        };
-
-        const collection = tableToCollectionMap[payload.table];
-        if (collection) {
-          if (collection === 'chatMessages' && payload.new) {
-            const newRow = payload.new as any;
-            onChatMessage({
-              id: newRow.id,
-              sender: newRow.sender,
-              text: newRow.text,
-              timestamp: newRow.timestamp,
-              isSystem: Boolean(newRow.is_system)
-            });
-          }
-          onCollectionChange(collection);
+        if (collection === 'chatMessages' && payload.new) {
+          const newRow = payload.new as any;
+          onChatMessage({
+            id: newRow.id,
+            sender: newRow.sender,
+            text: newRow.text,
+            timestamp: newRow.timestamp,
+            isSystem: Boolean(newRow.is_system)
+          });
         }
+        onCollectionChange(collection);
       }
-    )
-    .subscribe((status) => {
-      if (status === 'SUBSCRIBED') {
-        onStatusChange('connected');
-        processPendingSupabaseMutations();
-      } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
-        onStatusChange('disconnected');
-      }
-    });
+    );
+  });
 
+  // Also subscribe to schema wildcard as additional safety net
+  channel = channel.on(
+    'postgres_changes',
+    { event: '*', schema: 'public' },
+    (payload) => {
+      const tableToCollectionMap: Record<string, string> = {
+        stocks: 'stocks',
+        receiving: 'receiving',
+        returns: 'returns',
+        recycling: 'recycling',
+        issuances: 'issuances',
+        deliveries: 'deliveries',
+        env_logs: 'envLogs',
+        forklift_checks: 'forkliftChecks',
+        registries: 'registries',
+        registered_users: 'registeredUsers',
+        chat_messages: 'chatMessages'
+      };
+      const col = tableToCollectionMap[payload.table];
+      if (col) {
+        onCollectionChange(col);
+      }
+    }
+  );
+
+  channel.subscribe((status, err) => {
+    if (status === 'SUBSCRIBED') {
+      onStatusChange('connected');
+      processPendingSupabaseMutations();
+    } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+      console.warn('Supabase Realtime channel status:', status, err);
+      onStatusChange('disconnected');
+    }
+  });
+
+  activeRealtimeChannel = channel;
   return channel;
 }
