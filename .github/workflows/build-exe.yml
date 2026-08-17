@@ -65,7 +65,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist:exe
 
-      - name: Publish EXE to GitHub Releases
+      - name: Publish EXE to GitHub Releases and Generate Download Summary
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -90,6 +90,7 @@ jobs:
 
           if (-not $files -or $files.Count -eq 0) {
             Write-Warning "No .exe binaries found in release folders."
+            "## ⚠️ Build Warning`nNo .exe executable files were found to publish." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
             exit 0
           }
 
@@ -108,9 +109,54 @@ jobs:
           gh release delete $tag --yes --cleanup-tag 2>$null
           
           # Create fresh release and upload files directly (bypasses Actions artifact quota)
-          gh release create $tag $files --title "JUWEI WMS Desktop $tag" --notes "Production Windows EXE Installer and Standalone Binary built from commit ${{ github.sha }}."
+          gh release create $tag $files --title "JUWEI WMS Desktop $tag" --notes "Official Production Windows EXE Installer and Standalone Binary."
           
-          Write-Host "Successfully published Windows EXE to GitHub Releases!"
+          $repo = "${{ github.repository }}"
+          $releaseUrl = "https://github.com/$repo/releases/tag/$tag"
+          
+          Write-Host "Successfully published Windows EXE to GitHub Releases at $releaseUrl"
+
+          # Write rich download summary to GitHub Actions summary page
+          $summary = @"
+          # 🎉 JUWEI WMS Windows EXE Ready for Download!
+
+          ### 📦 [Click Here to Open GitHub Release & Download EXE]($releaseUrl)
+
+          | Binary File | Direct Download Link | Size |
+          | :--- | :--- | :--- |
+          "@
+
+          foreach ($f in $files) {
+            $fileName = [System.IO.Path]::GetFileName($f)
+            $fileSizeMB = [math]::Round(((Get-Item $f).Length / 1MB), 2)
+            $downloadUrl = "https://github.com/$repo/releases/download/$tag/$([System.Uri]::EscapeDataString($fileName))"
+            $summary += "`n          | **$fileName** | [⬇️ **Download $fileName**]($downloadUrl) | $fileSizeMB MB |"
+          }
+
+          $summary += @"
+
+          ---
+          ### 🚀 Installation Instructions:
+          1. Click any **Download Link** above (or visit the [Releases Page]($releaseUrl)).
+          2. Run the downloaded **`.exe`** file on any Windows 10 / 11 computer.
+          3. Enjoy **JUWEI WMS Desktop** with full real-time database sync and zero Google icons.
+          "@
+
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload Artifacts to Actions Summary (Backup)
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: JUWEI-WMS-Desktop-Windows-EXE
+          retention-days: 1
+          compression-level: 9
+          if-no-files-found: warn
+          path: |
+            ${{ steps.locate.outputs.dir }}/release/*.exe
+            release/*.exe
+            ${{ steps.locate.outputs.dir }}/dist/*.exe
+            dist/*.exe
 
 
 
