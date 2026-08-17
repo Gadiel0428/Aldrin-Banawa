@@ -142,8 +142,8 @@ export default function DashboardOverview({
     ...receiving.map(r => ({
       id: `rec-${r.id}`,
       type: 'RECEIVING',
-      title: `Received ${r.quantity} ${r.unit.toUpperCase()} of ${r.itemDescription}`,
-      meta: `Lot: ${r.lotNumber} | Arrival Classification: ${r.supplierOrDept || 'N/A'} (${r.source === 'INTERNAL' || r.source === 'WIP/BOM/FG(Internal)' ? 'INTERNAL' : 'EXTERNAL'})${r.vendorSupplier ? ' [' + r.vendorSupplier + ']' : ''}`,
+      title: `Received ${r.quantity} ${(r.unit || 'PCS').toUpperCase()} of ${r.itemDescription || 'Item'}`,
+      meta: `Lot: ${r.lotNumber || 'N/A'} | Arrival Classification: ${r.supplierOrDept || 'N/A'} (${r.source === 'INTERNAL' || r.source === 'WIP/BOM/FG(Internal)' ? 'INTERNAL' : 'EXTERNAL'})${r.vendorSupplier ? ' [' + r.vendorSupplier + ']' : ''}`,
       date: r.date,
       badgeColor: 'bg-emerald-50 text-emerald-700 border-emerald-200'
     })),

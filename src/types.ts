@@ -212,8 +212,8 @@ export interface MasterRegistryItem {
   location?: string;
 }
 
-export function getCustomerForPart(partCode: string, description?: string): string {
-  const code = partCode.toUpperCase();
+export function getCustomerForPart(partCode?: string, description?: string): string {
+  const code = (partCode || '').toUpperCase();
   const desc = (description || '').toUpperCase();
   
   if (code.includes('NISSAN') || desc.includes('NISSAN')) return 'NISSAN Motors';

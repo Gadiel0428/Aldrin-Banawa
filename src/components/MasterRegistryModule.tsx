@@ -163,11 +163,12 @@ export default function MasterRegistryModule({
 
   // Filtered registries
   const filtered = registries.filter(item => {
+    const query = (searchQuery || '').trim().toLowerCase();
     const matchesType = selectedType === 'ALL' || item.type === selectedType;
     const matchesSearch = 
-      item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (item.code && item.code.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      (item.description && item.description.toLowerCase().includes(searchQuery.toLowerCase()));
+      (item.name || '').toLowerCase().includes(query) ||
+      (item.code && item.code.toLowerCase().includes(query)) ||
+      (item.description && item.description.toLowerCase().includes(query));
     return matchesType && matchesSearch;
   });
 

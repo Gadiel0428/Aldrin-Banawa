@@ -163,11 +163,12 @@ export default function DeliveryModule({
     setWayBill('');
   };
 
+  const q = (searchQuery || '').trim().toLowerCase();
   const filteredDeliveries = deliveries.filter(d => 
-    d.pickingListNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    d.poNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    d.modelName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    d.partCode.toLowerCase().includes(searchQuery.toLowerCase())
+    (d.pickingListNumber || '').toLowerCase().includes(q) ||
+    (d.poNumber || '').toLowerCase().includes(q) ||
+    (d.modelName || '').toLowerCase().includes(q) ||
+    (d.partCode || '').toLowerCase().includes(q)
   );
 
   return (

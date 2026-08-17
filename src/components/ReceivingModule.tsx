@@ -91,13 +91,13 @@ export default function ReceivingModule({
 
     // Search in stocks or master registries
     const matchedStock = stocks.find(
-      s => s.partCode.toLowerCase() === cleanCode.toLowerCase() || 
-           s.lotNumber.toLowerCase() === cleanCode.toLowerCase()
+      s => (s.partCode || '').toLowerCase() === cleanCode.toLowerCase() || 
+           (s.lotNumber || '').toLowerCase() === cleanCode.toLowerCase()
     );
     const matchedRegistry = registries.find(
-      r => r.code.toLowerCase() === cleanCode.toLowerCase() ||
-           r.name.toLowerCase() === cleanCode.toLowerCase() ||
-           r.id.toLowerCase() === cleanCode.toLowerCase()
+      r => (r.code || '').toLowerCase() === cleanCode.toLowerCase() ||
+           (r.name || '').toLowerCase() === cleanCode.toLowerCase() ||
+           (r.id || '').toLowerCase() === cleanCode.toLowerCase()
     );
 
     if (activeTab === 'external-internal') {
@@ -178,14 +178,15 @@ export default function ReceivingModule({
   const [remarks, setRemarks] = useState('');
 
   // Category helpers
-  const isConsumableCategory = supplierOrDept.toUpperCase().includes('CONSUMABLE');
-  const isOfficeSuppliesCategory = supplierOrDept.toUpperCase().includes('OFFICE');
-  const isIndirectBomCategory = supplierOrDept.toUpperCase().includes('INDIRECT') && !isConsumableCategory && !isOfficeSuppliesCategory;
-  const isDirectBomCategory = supplierOrDept.toUpperCase().includes('DIRECT BOM') && !isIndirectBomCategory && !isConsumableCategory && !isOfficeSuppliesCategory;
-  const isRawCategory = (supplierOrDept.toUpperCase().includes('RAW') || supplierOrDept.toUpperCase().includes('RESIN')) && !isIndirectBomCategory && !isDirectBomCategory && !isConsumableCategory && !isOfficeSuppliesCategory;
-  const isPackagingCategory = supplierOrDept.toUpperCase().includes('PACKAGING');
-  const isFgCategory = supplierOrDept.toUpperCase().includes('FG') || supplierOrDept.toUpperCase().includes('FINISHED GOOD');
-  const isWipCategory = supplierOrDept.toUpperCase().includes('WIP') || supplierOrDept.toUpperCase().includes('WORK IN PROGRESS') || supplierOrDept.toUpperCase().includes('SUB-PART') || isFgCategory;
+  const deptUpper = (supplierOrDept || '').toUpperCase();
+  const isConsumableCategory = deptUpper.includes('CONSUMABLE');
+  const isOfficeSuppliesCategory = deptUpper.includes('OFFICE');
+  const isIndirectBomCategory = deptUpper.includes('INDIRECT') && !isConsumableCategory && !isOfficeSuppliesCategory;
+  const isDirectBomCategory = deptUpper.includes('DIRECT BOM') && !isIndirectBomCategory && !isConsumableCategory && !isOfficeSuppliesCategory;
+  const isRawCategory = (deptUpper.includes('RAW') || deptUpper.includes('RESIN')) && !isIndirectBomCategory && !isDirectBomCategory && !isConsumableCategory && !isOfficeSuppliesCategory;
+  const isPackagingCategory = deptUpper.includes('PACKAGING');
+  const isFgCategory = deptUpper.includes('FG') || deptUpper.includes('FINISHED GOOD');
+  const isWipCategory = deptUpper.includes('WIP') || deptUpper.includes('WORK IN PROGRESS') || deptUpper.includes('SUB-PART') || isFgCategory;
   
   // States for BOM
   const [bomItems, setBomItems] = useState<{ partCode: string; description: string; quantityRequired: number; unit: string }[]>([]);
@@ -418,12 +419,12 @@ export default function ReceivingModule({
 
   // Filter logs
   const filteredReceiving = receiving.filter(r => {
-    const query = searchQuery.toLowerCase();
+    const query = (searchQuery || '').trim().toLowerCase();
     const matchesSearch = 
-      r.itemDescription.toLowerCase().includes(query) ||
-      r.partCode.toLowerCase().includes(query) ||
-      r.supplierOrDept.toLowerCase().includes(query) ||
-      r.source.toLowerCase().includes(query) ||
+      (r.itemDescription || '').toLowerCase().includes(query) ||
+      (r.partCode || '').toLowerCase().includes(query) ||
+      (r.supplierOrDept || '').toLowerCase().includes(query) ||
+      (r.source || '').toLowerCase().includes(query) ||
       (r.vendorSupplier && r.vendorSupplier.toLowerCase().includes(query)) ||
       (r.poNumber && r.poNumber.toLowerCase().includes(query)) ||
       (r.drNumber && r.drNumber.toLowerCase().includes(query)) ||
@@ -438,19 +439,21 @@ export default function ReceivingModule({
   });
 
   const filteredReturns = returns.filter(r => {
-    const query = searchQuery.toLowerCase();
+    const query = (searchQuery || '').trim().toLowerCase();
     const matchesSearch = 
-      r.materialDescription.toLowerCase().includes(query) ||
-      r.partCode.toLowerCase().includes(query) ||
-      r.department.toLowerCase().includes(query) ||
-      r.returnSlipFormNumber.toLowerCase().includes(query) ||
+      (r.materialDescription || '').toLowerCase().includes(query) ||
+      (r.partCode || '').toLowerCase().includes(query) ||
+      (r.department || '').toLowerCase().includes(query) ||
+      (r.returnSlipFormNumber || '').toLowerCase().includes(query) ||
       (r.category && r.category.toLowerCase().includes(query));
 
     if (!matchesSearch) return false;
 
     if (classificationFilter === 'ALL') return true;
     if (r.category) {
-      return r.category.toUpperCase().includes(classificationFilter.toUpperCase()) || classificationFilter.toUpperCase().includes(r.category.toUpperCase());
+      const catUpper = (r.category || '').toUpperCase();
+      const filterUpper = (classificationFilter || '').toUpperCase();
+      return catUpper.includes(filterUpper) || filterUpper.includes(catUpper);
     }
     return true;
   });
@@ -1046,7 +1049,7 @@ export default function ReceivingModule({
                             <span className="text-slate-400 text-xs">-</span>
                           )}
                         </td>
-                        <td className="p-4 text-right font-mono font-bold text-slate-800">{r.quantity.toLocaleString()} {r.unit.toUpperCase()}</td>
+                        <td className="p-4 text-right font-mono font-bold text-slate-800">{r.quantity.toLocaleString()} {(r.unit || 'PCS').toUpperCase()}</td>
                         <td className="p-4">
                           <span className="flex items-center gap-1.5 font-semibold text-slate-700">
                             <span className={`h-3 w-3 rounded-full border border-slate-200 shadow-sm ${
@@ -1450,7 +1453,7 @@ export default function ReceivingModule({
                         <div className="text-slate-500 text-[11px]">{r.materialDescription}</div>
                         <div className="text-[10px] text-slate-400 mt-1">Lot: {r.lotNumber}</div>
                       </td>
-                      <td className="p-4 text-right font-mono font-bold text-slate-800">{r.quantity.toLocaleString()} {r.unit.toUpperCase()}</td>
+                      <td className="p-4 text-right font-mono font-bold text-slate-800">{r.quantity.toLocaleString()} {(r.unit || 'PCS').toUpperCase()}</td>
                       <td className="p-4">
                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                           r.condition === 'Good' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :

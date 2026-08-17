@@ -101,9 +101,9 @@ export default function EnvironmentalModule({
   // Filter registered location items (type === 'LOCATION')
   const locationRegistries = registries.filter(r => r.type === 'LOCATION');
   const filteredLocations = locationRegistries.filter(loc => {
-    const q = locationSearchQuery.toLowerCase();
-    const matchesQuery = loc.name.toLowerCase().includes(q) || 
-                         loc.code.toLowerCase().includes(q) || 
+    const q = (locationSearchQuery || '').trim().toLowerCase();
+    const matchesQuery = (loc.name || '').toLowerCase().includes(q) || 
+                         (loc.code || '').toLowerCase().includes(q) || 
                          (loc.description && loc.description.toLowerCase().includes(q));
     const matchesStatus = locationStatusFilter === 'ALL' || loc.status === locationStatusFilter;
     return matchesQuery && matchesStatus;

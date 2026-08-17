@@ -78,8 +78,8 @@ export default function PrintablePickingListModal({
   const receivedBy = isDeliveryMode ? 'Carrier Logistics / Customer' : (targetIssuance?.receivedBy || 'Department Supervisor');
   const lotNumber = isDeliveryMode ? 'LOT-2026-FIFO' : (targetIssuance?.lotNumber || 'N/A');
 
-  const matchedStock = stocks.find(s => s.partCode.toLowerCase() === partCode.toLowerCase());
-  const matchedRegistry = registries.find(r => r.code?.toLowerCase() === partCode.toLowerCase());
+  const matchedStock = stocks.find(s => (s.partCode || '').toLowerCase() === (partCode || '').toLowerCase());
+  const matchedRegistry = registries.find(r => (r.code || '').toLowerCase() === (partCode || '').toLowerCase());
   const binLocation = matchedStock?.location || matchedRegistry?.location || 'Zone A - Rack 02 - Bin B14';
   const uom = matchedRegistry?.unit || 'PCS';
 

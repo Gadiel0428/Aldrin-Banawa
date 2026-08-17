@@ -1,6 +1,6 @@
 // JUWEI WMS Service Worker
-const CACHE_NAME = 'juwei-wms-v1';
-const urlsToCache = ['/', '/index.html', '/manifest.json'];
+const CACHE_NAME = 'juwei-wms-v2';
+const urlsToCache = ['/', '/index.html', '/manifest.json', '/favicon.svg', '/pwa-192.png', '/pwa-512.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

@@ -595,7 +595,7 @@ export default function StockFIFOControl({
                       )}
                     </td>
                     <td className="p-4 text-right font-mono font-bold text-slate-900">
-                      <div>{item.quantity.toLocaleString()} {item.unit.toUpperCase()}</div>
+                      <div>{item.quantity.toLocaleString()} {(item.unit || 'PCS').toUpperCase()}</div>
                       {typeof item.reorderMin === 'number' && item.reorderMin > 0 && item.quantity <= item.reorderMin && (
                         <span className="inline-block bg-rose-100 text-rose-800 text-[9px] font-bold px-1.5 py-0.5 rounded border border-rose-200 mt-1 font-sans">
                           ⚠️ LOW STOCK (Min: {item.reorderMin})
@@ -955,7 +955,7 @@ export default function StockFIFOControl({
 
       {/* Item Transaction History Modal */}
       {historyStockItem && (() => {
-        const pCode = historyStockItem.partCode.trim().toLowerCase();
+        const pCode = (historyStockItem.partCode || '').trim().toLowerCase();
         const lNum = (historyStockItem.lotNumber || '').trim().toLowerCase();
 
         // Matching Receivings

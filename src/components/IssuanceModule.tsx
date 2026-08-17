@@ -79,9 +79,9 @@ export default function IssuanceModule({
     if (!cleanCode) return;
 
     // Search stocks for matching part code or lot number
-    const matchedPart = stocks.find(s => s.partCode.toLowerCase() === cleanCode.toLowerCase());
-    const matchedLot = stocks.find(s => s.lotNumber.toLowerCase() === cleanCode.toLowerCase());
-    const matchedUniqueCode = uniquePartCodes.find(c => c.toLowerCase() === cleanCode.toLowerCase());
+    const matchedPart = stocks.find(s => (s.partCode || '').toLowerCase() === cleanCode.toLowerCase());
+    const matchedLot = stocks.find(s => (s.lotNumber || '').toLowerCase() === cleanCode.toLowerCase());
+    const matchedUniqueCode = uniquePartCodes.find(c => (c || '').toLowerCase() === cleanCode.toLowerCase());
 
     if (matchedPart) {
       setSelectedPartCode(matchedPart.partCode);
@@ -194,11 +194,12 @@ export default function IssuanceModule({
     setShowForm(false);
   };
 
+  const q = (searchQuery || '').trim().toLowerCase();
   const filteredIssuances = issuances.filter(iss => 
-    iss.requisitionNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    iss.partCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    iss.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    iss.department.toLowerCase().includes(searchQuery.toLowerCase())
+    (iss.requisitionNumber || '').toLowerCase().includes(q) ||
+    (iss.partCode || '').toLowerCase().includes(q) ||
+    (iss.description || '').toLowerCase().includes(q) ||
+    (iss.department || '').toLowerCase().includes(q)
   );
 
   return (

@@ -71,10 +71,11 @@ export default function RecyclingModule({
     setShowForm(false);
   };
 
+  const q = (searchQuery || '').trim().toLowerCase();
   const filteredLogs = recycling.filter(log => 
-    log.logSheetNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    log.itemType.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    log.disposition.toLowerCase().includes(searchQuery.toLowerCase())
+    (log.logSheetNumber || '').toLowerCase().includes(q) ||
+    (log.itemType || '').toLowerCase().includes(q) ||
+    (log.disposition || '').toLowerCase().includes(q)
   );
 
   // Simple stats
@@ -369,7 +370,7 @@ export default function RecyclingModule({
                         log.disposition === 'For Re-sorting' ? 'bg-amber-100 text-amber-800 border border-amber-200' :
                         'bg-emerald-100 text-emerald-800 border border-emerald-200'
                       }`}>
-                        {log.disposition.toUpperCase()}
+                        {(log.disposition || 'RE-USED').toUpperCase()}
                       </span>
                     </td>
                     <td className="p-4">

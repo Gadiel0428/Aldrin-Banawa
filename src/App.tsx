@@ -110,7 +110,7 @@ export function sanitizeServerHost(raw: string): string {
   let cleaned = raw.trim();
   cleaned = cleaned.replace(/^https?:\/\//i, '');
   cleaned = cleaned.replace(/^wss?:\/\//i, '');
-  cleaned = cleaned.split('/')[0].trim().toLowerCase();
+  cleaned = (cleaned.split('/')[0] || '').trim().toLowerCase();
   return cleaned;
 }
 
@@ -303,6 +303,21 @@ export default function App() {
     try {
       localStorage.removeItem('juwei_wms_isLoggedIn');
     } catch (e) {}
+
+    // Enforce custom JUWEI WMS branding and remove any Google default favicon
+    try {
+      document.title = 'JUWEI WAREHOUSE MANAGEMENT SYSTEM';
+      const svgIcon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%231e1b4b"/><polygon points="32,10 52,21 32,32 12,21" fill="%23818cf8"/><polygon points="12,21 32,32 32,53 12,42" fill="%234338ca"/><polygon points="32,32 52,21 52,42 32,53" fill="%23312e81"/><circle cx="32" cy="21" r="5" fill="%2310b981"/></svg>';
+      const dataUrl = 'data:image/svg+xml;utf8,' + svgIcon;
+      const links = document.querySelectorAll("link[rel*='icon']");
+      links.forEach(el => el.parentNode?.removeChild(el));
+
+      const newLink = document.createElement('link');
+      newLink.type = 'image/svg+xml';
+      newLink.rel = 'icon';
+      newLink.href = dataUrl;
+      document.head.appendChild(newLink);
+    } catch (e) {}
   }, []);
   
   // Direct employee ID and PIN login form states
@@ -346,10 +361,10 @@ export default function App() {
 
   const markUserAsDeleted = (employeeId: string) => {
     try {
-      const cleanId = employeeId.trim().toUpperCase();
-      if (cleanId === 'JPMP-002' || cleanId.endsWith('-002') || cleanId.includes('002')) return;
-      const targetUser = registeredUsers.find(u => u.employeeId.toUpperCase() === cleanId);
-      if (targetUser && (targetUser.username.toUpperCase().includes('ALDRIN BANAWA') || targetUser.username.toUpperCase() === 'SUPER ADMIN')) {
+      const cleanId = (employeeId || '').trim().toUpperCase();
+      if (!cleanId || cleanId === 'JPMP-002' || cleanId.endsWith('-002') || cleanId.includes('002')) return;
+      const targetUser = registeredUsers.find(u => (u.employeeId || '').toUpperCase() === cleanId);
+      if (targetUser && (((targetUser.username || '').toUpperCase().includes('ALDRIN BANAWA')) || (targetUser.username || '').toUpperCase() === 'SUPER ADMIN')) {
         return;
       }
       const set = getDeletedUserIds();
@@ -360,7 +375,8 @@ export default function App() {
 
   const unmarkUserAsDeleted = (employeeId: string) => {
     try {
-      const cleanId = employeeId.trim().toUpperCase();
+      const cleanId = (employeeId || '').trim().toUpperCase();
+      if (!cleanId) return;
       const set = getDeletedUserIds();
       if (set.has(cleanId)) {
         set.delete(cleanId);
@@ -382,10 +398,12 @@ export default function App() {
         if (Array.isArray(parsed)) {
           parsed.forEach((u: any) => {
             if (!u || !u.employeeId) return;
-            const empId = u.employeeId.toUpperCase().startsWith('JPMP-') 
-              ? u.employeeId.toUpperCase() 
-              : `JPMP-${u.employeeId.toUpperCase().replace(/^EMP-/, '')}`;
-            if (empId === 'JPMP-002' || (u.username && (u.username.toUpperCase() === 'SUPER ADMIN' || u.username.toUpperCase() === 'ALDRIN BANAWA'))) {
+            const rawEmpId = String(u.employeeId || '').toUpperCase();
+            const empId = rawEmpId.startsWith('JPMP-') 
+              ? rawEmpId 
+              : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
+            const usernameUpper = (u.username || '').toUpperCase();
+            if (empId === 'JPMP-002' || (usernameUpper === 'SUPER ADMIN' || usernameUpper === 'ALDRIN BANAWA')) {
               userMap.set('JPMP-002', superAdminAccount);
             } else if (!deletedSet.has(empId)) {
               userMap.set(empId, {
@@ -406,10 +424,12 @@ export default function App() {
     if (Array.isArray(incomingList) && incomingList.length > 0) {
       incomingList.forEach((u: any) => {
         if (!u || !u.employeeId) return;
-        const empId = u.employeeId.toUpperCase().startsWith('JPMP-') 
-          ? u.employeeId.toUpperCase() 
-          : `JPMP-${u.employeeId.toUpperCase().replace(/^EMP-/, '')}`;
-        if (empId === 'JPMP-002' || (u.username && (u.username.toUpperCase() === 'SUPER ADMIN' || u.username.toUpperCase() === 'ALDRIN BANAWA'))) {
+        const rawEmpId = String(u.employeeId || '').toUpperCase();
+        const empId = rawEmpId.startsWith('JPMP-') 
+          ? rawEmpId 
+          : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
+        const usernameUpper = (u.username || '').toUpperCase();
+        if (empId === 'JPMP-002' || (usernameUpper === 'SUPER ADMIN' || usernameUpper === 'ALDRIN BANAWA')) {
           userMap.set('JPMP-002', superAdminAccount);
         } else if (!deletedSet.has(empId)) {
           const existing = userMap.get(empId);
@@ -1027,21 +1047,21 @@ export default function App() {
   };
 
   const handleRegister = (username: string, role: string, employeeId: string, permission?: string, phoneNumber?: string): RegisteredAccount | null => {
-    const cleanUsername = username.trim().toUpperCase();
-    let cleanEmployeeId = employeeId.trim().toUpperCase();
+    const cleanUsername = (username || '').trim().toUpperCase();
+    let cleanEmployeeId = (employeeId || '').trim().toUpperCase();
     if (cleanEmployeeId && !cleanEmployeeId.startsWith('JPMP-')) {
       // Strip any leading EMP- if they typed EMP-XXXX
       const strippedId = cleanEmployeeId.replace(/^EMP-/, '');
       cleanEmployeeId = `JPMP-${strippedId}`;
     }
-    const cleanRole = role.toUpperCase();
-    if (!cleanUsername || !role || !cleanEmployeeId) {
+    const cleanRole = (role || '').toUpperCase();
+    if (!cleanUsername || !cleanRole || !cleanEmployeeId) {
       alert("ALL FIELDS ARE REQUIRED.");
       return null;
     }
     const exists = registeredUsers.some(
-      u => u.employeeId.toUpperCase() === cleanEmployeeId || 
-           u.username.toUpperCase() === cleanUsername
+      u => (u.employeeId || '').toUpperCase() === cleanEmployeeId || 
+           (u.username || '').toUpperCase() === cleanUsername
     );
     if (exists) {
       alert("AN OPERATOR WITH THIS NAME OR REGISTER ID ALREADY EXISTS.");
@@ -1076,7 +1096,7 @@ export default function App() {
     // Remove from deleted tracking if re-registered
     unmarkUserAsDeleted(cleanEmployeeId);
 
-    const nextUsers = [...registeredUsers.filter(u => u.employeeId.toUpperCase() !== cleanEmployeeId), newUser];
+    const nextUsers = [...registeredUsers.filter(u => (u.employeeId || '').toUpperCase() !== cleanEmployeeId), newUser];
     setRegisteredUsers(nextUsers);
     localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(nextUsers));
     syncCollection('registeredUsers', nextUsers);
@@ -1087,11 +1107,12 @@ export default function App() {
   };
 
   const handleRemoveUser = (employeeId: string) => {
-    const cleanId = employeeId.trim().toUpperCase();
-    const targetUser = registeredUsers.find(u => u.employeeId.toUpperCase() === cleanId);
+    const cleanId = (employeeId || '').trim().toUpperCase();
+    if (!cleanId) return;
+    const targetUser = registeredUsers.find(u => (u.employeeId || '').toUpperCase() === cleanId);
     const isAldrin = cleanId === 'JPMP-002' || cleanId.endsWith('-002') || (targetUser && (
-      targetUser.username.toUpperCase().includes('ALDRIN BANAWA') ||
-      targetUser.username.toUpperCase() === 'SUPER ADMIN'
+      (targetUser.username || '').toUpperCase().includes('ALDRIN BANAWA') ||
+      (targetUser.username || '').toUpperCase() === 'SUPER ADMIN'
     ));
 
     if (isAldrin) {
@@ -1103,7 +1124,7 @@ export default function App() {
     markUserAsDeleted(cleanId);
 
     // 2. Update local state and cache
-    const nextUsers = registeredUsers.filter(u => u.employeeId.toUpperCase() !== cleanId);
+    const nextUsers = registeredUsers.filter(u => (u.employeeId || '').toUpperCase() !== cleanId);
     setRegisteredUsers(nextUsers);
     localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(nextUsers));
 
@@ -1134,15 +1155,15 @@ export default function App() {
   };
 
   const handleUpdateAccount = (oldEmpId: string, updated: RegisteredAccount) => {
-    const cleanOldId = oldEmpId.toUpperCase();
+    const cleanOldId = (oldEmpId || '').toUpperCase();
     const nextUsers = registeredUsers.map(u => {
-      if (u.employeeId.toUpperCase() === cleanOldId) {
+      if ((u.employeeId || '').toUpperCase() === cleanOldId) {
         return {
           ...u,
           ...updated,
-          employeeId: cleanOldId === 'JPMP-002' ? 'JPMP-002' : updated.employeeId.toUpperCase(),
-          username: updated.username.toUpperCase(),
-          role: updated.role.toUpperCase(),
+          employeeId: cleanOldId === 'JPMP-002' ? 'JPMP-002' : (updated.employeeId || '').toUpperCase(),
+          username: (updated.username || '').toUpperCase(),
+          role: (updated.role || '').toUpperCase(),
           phoneNumber: updated.phoneNumber !== undefined ? updated.phoneNumber : (u.phoneNumber || ''),
           permission: updated.permission || u.permission || 'LIMITED_ACCESS',
           pin: updated.pin || u.pin || '1234'
@@ -1159,13 +1180,13 @@ export default function App() {
     e.preventDefault();
     setLoginError('');
 
-    let searchId = loginEmployeeId.trim().toUpperCase();
+    let searchId = (loginEmployeeId || '').trim().toUpperCase();
     if (searchId && !searchId.startsWith('JPMP-')) {
       searchId = 'JPMP-' + searchId;
     }
 
     const foundUser = registeredUsers.find(
-      (u) => u.employeeId.toUpperCase() === searchId && u.pin === loginPin.trim()
+      (u) => (u.employeeId || '').toUpperCase() === searchId && u.pin === (loginPin || '').trim()
     );
 
     if (foundUser) {
@@ -1209,12 +1230,12 @@ export default function App() {
 
     // Match operator account in registeredUsers
     const foundUser = registeredUsers.find(
-      (u) => u.employeeId.toUpperCase() === searchEmpId || u.username.toUpperCase() === searchEmpId
+      (u) => (u.employeeId || '').toUpperCase() === searchEmpId || (u.username || '').toUpperCase() === searchEmpId
     );
 
     if (foundUser) {
       if (searchPin && foundUser.pin && foundUser.pin !== searchPin) {
-        setLoginError(`INCORRECT PIN CODE FOR OPERATOR ${foundUser.username} (${foundUser.employeeId}).`);
+        setLoginError(`INCORRECT PIN CODE FOR OPERATOR ${foundUser.username || ''} (${foundUser.employeeId || ''}).`);
         return;
       }
       setShowLoginQrScanner(false);
@@ -1232,9 +1253,9 @@ export default function App() {
   };
 
   const handleLogin = (user: {username: string; role: string; employeeId: string; permission?: string}) => {
-    const cleanUsername = user.username.toUpperCase();
-    const cleanRole = user.role.toUpperCase();
-    const cleanEmployeeId = user.employeeId.toUpperCase();
+    const cleanUsername = (user.username || 'OPERATOR').toUpperCase();
+    const cleanRole = (user.role || 'WAREHOUSE CLERK').toUpperCase();
+    const cleanEmployeeId = (user.employeeId || '').toUpperCase();
     const cleanPermission = user.permission || (cleanEmployeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS');
     setCurrentUser(cleanUsername);
     setCurrentRole(cleanRole);
@@ -1363,10 +1384,10 @@ export default function App() {
     syncCollection('stocks', nextStocks);
 
     if (isInternal && record.bom && record.bom.length > 0 && record.autoDeductBom) {
-      const deductedSummary = record.bom.map(b => `${b.quantityRequired} ${b.unit.toUpperCase()} of ${b.partCode}`).join(', ');
+      const deductedSummary = record.bom.map(b => `${b.quantityRequired} ${(b.unit || 'PCS').toUpperCase()} of ${b.partCode}`).join(', ');
       sendSystemActivity(`${currentUser} registered internal WIP/FG ${record.partCode} (Lot: ${record.lotNumber}) and auto-deducted BOM components: ${deductedSummary}`);
     } else {
-      sendSystemActivity(`${currentUser} received ${record.quantity} ${record.unit.toUpperCase()} of ${record.partCode} (Lot: ${record.lotNumber}).`);
+      sendSystemActivity(`${currentUser} received ${record.quantity} ${(record.unit || 'PCS').toUpperCase()} of ${record.partCode} (Lot: ${record.lotNumber}).`);
     }
   };
 
@@ -1414,7 +1435,7 @@ export default function App() {
     else if (catUpper.includes('CONSUMABLE') || catUpper.includes('OFFICE')) derivedStockType = 'CONSUMABLE';
     else if (catUpper.includes('WIP') || catUpper.includes('SUB-PART')) derivedStockType = 'WIP';
     else if (catUpper.includes('FG') || catUpper.includes('FINISHED')) derivedStockType = 'FG';
-    else if (record.partCode.startsWith('RM')) derivedStockType = 'RAW';
+    else if ((record.partCode || '').startsWith('RM')) derivedStockType = 'RAW';
 
     const newStockItem: MaterialStockItem = {
       id: `STK-${Date.now().toString().slice(-4)}`,

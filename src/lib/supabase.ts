@@ -70,8 +70,8 @@ let activeRealtimeChannel: RealtimeChannel | null = null;
 
 export function isSupabaseConfigured(): boolean {
   const config = getStoredSupabaseConfig();
-  if (!config.url || !config.anonKey) return false;
-  const isPlaceholder = config.url.toLowerCase().includes('your-project-id') || config.anonKey.toLowerCase().includes('eyjhbgcioijiuzi1niisinr5cci6ikpxvcj9');
+  if (!config || !config.url || !config.anonKey) return false;
+  const isPlaceholder = (config.url || '').toLowerCase().includes('your-project-id') || (config.anonKey || '').toLowerCase().includes('eyjhbgcioijiuzi1niisinr5cci6ikpxvcj9');
   return Boolean((config.url.includes('supabase.co') || config.url.startsWith('http')) && !isPlaceholder);
 }
 
@@ -79,10 +79,10 @@ export function getSupabase(): SupabaseClient | null {
   if (supabaseClientInstance) return supabaseClientInstance;
 
   const config = getStoredSupabaseConfig();
-  if (!config.url || !config.anonKey) return null;
+  if (!config || !config.url || !config.anonKey) return null;
 
   // Don't instantiate if URL contains placeholder domain
-  if (config.url.toLowerCase().includes('your-project-id')) return null;
+  if ((config.url || '').toLowerCase().includes('your-project-id')) return null;
 
   try {
     supabaseClientInstance = createClient(config.url, config.anonKey, {

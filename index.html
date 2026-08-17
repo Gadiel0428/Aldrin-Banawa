@@ -7,8 +7,31 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="JUWEI WMS Desktop" />
-    <link rel="manifest" href="./manifest.json" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/pwa-512.png" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" href="/pwa-192.png" />
+    <link rel="manifest" href="/manifest.json" />
     <title>JUWEI WAREHOUSE MANAGEMENT SYSTEM</title>
+    <script>
+      (function() {
+        try {
+          var svgIcon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%231e1b4b"/><polygon points="32,10 52,21 32,32 12,21" fill="%23818cf8"/><polygon points="12,21 32,32 32,53 12,42" fill="%234338ca"/><polygon points="32,32 52,21 52,42 32,53" fill="%23312e81"/><circle cx="32" cy="21" r="5" fill="%2310b981"/></svg>';
+          var dataUrl = 'data:image/svg+xml;utf8,' + svgIcon;
+          
+          // Remove any default / external favicons
+          var links = document.querySelectorAll("link[rel*='icon']");
+          links.forEach(function(el) { el.parentNode.removeChild(el); });
+          
+          var link = document.createElement('link');
+          link.type = 'image/svg+xml';
+          link.rel = 'icon';
+          link.href = dataUrl;
+          document.getElementsByTagName('head')[0].appendChild(link);
+        } catch(e) {}
+      })();
+    </script>
   </head>
   <body class="bg-slate-900 text-slate-100 antialiased selection:bg-indigo-500 selection:text-white">
     <div id="root"></div>
