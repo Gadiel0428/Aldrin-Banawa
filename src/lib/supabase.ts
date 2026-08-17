@@ -540,14 +540,18 @@ export async function fetchCollectionFromSupabase(collection: string): Promise<a
       registries: { table: 'registries', mapper: mapRowToRegistry },
       registeredUsers: {
         table: 'registered_users',
-        mapper: (r) => ({
-          username: r.username || 'OPERATOR',
-          role: r.role || 'WAREHOUSE CLERK',
-          employeeId: (r.employee_id || r.employeeId || '').toUpperCase(),
-          phoneNumber: r.phone_number || r.phoneNumber || '',
-          permission: r.permission || 'LIMITED_ACCESS',
-          pin: r.pin || r.pin_hash || '1234'
-        })
+        mapper: (r) => {
+          const empId = (r.employee_id || r.employeeId || '').toUpperCase();
+          const cleanPin = r.pin ? String(r.pin).trim() : (r.pin_hash ? String(r.pin_hash).trim() : (empId === 'JPMP-002' ? '0423' : '1234'));
+          return {
+            username: r.username || 'OPERATOR',
+            role: r.role || 'WAREHOUSE CLERK',
+            employeeId: empId,
+            phoneNumber: r.phone_number || r.phoneNumber || '',
+            permission: r.permission || 'LIMITED_ACCESS',
+            pin: cleanPin
+          };
+        }
       },
       chatMessages: {
         table: 'chat_messages',
@@ -627,15 +631,19 @@ export async function syncCollectionToSupabase(collection: string, items: any[])
         break;
       case 'registeredUsers':
         tableName = 'registered_users';
-        mappedRows = items.map((u) => ({
-          employee_id: u.employeeId,
-          username: u.username,
-          role: u.role,
-          phone_number: u.phoneNumber || '',
-          permission: u.permission || 'LIMITED_ACCESS',
-          pin: u.pin || '1234',
-          updated_at: new Date().toISOString()
-        }));
+        mappedRows = items.map((u) => {
+          const empId = (u.employeeId || u.employee_id || '').toUpperCase();
+          const cleanPin = u.pin ? String(u.pin).trim() : (empId === 'JPMP-002' ? '0423' : '1234');
+          return {
+            employee_id: empId,
+            username: u.username,
+            role: u.role,
+            phone_number: u.phoneNumber || u.phone_number || '',
+            permission: u.permission || 'LIMITED_ACCESS',
+            pin: cleanPin,
+            updated_at: new Date().toISOString()
+          };
+        });
         break;
       case 'chatMessages':
         tableName = 'chat_messages';

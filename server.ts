@@ -151,15 +151,19 @@ async function startServer() {
               isSystem: Boolean(m.is_system)
             })));
           } else if (col === 'registeredUsers') {
-            const parsedUsers = data.map((u: any) => ({
-              employeeId: (u.employee_id || u.employeeId || '').toUpperCase(),
-              username: u.username || 'OPERATOR',
-              role: u.role || 'WAREHOUSE CLERK',
-              phoneNumber: u.phone_number || u.phoneNumber || '',
-              permission: u.permission || 'LIMITED_ACCESS',
-              pin: u.pin || u.pin_hash || '1234'
-            }));
-            // Ensure super admin is preserved
+            const parsedUsers = data.map((u: any) => {
+              const empId = (u.employee_id || u.employeeId || '').toUpperCase();
+              const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (empId === 'JPMP-002' ? '0423' : '1234'));
+              return {
+                employeeId: empId,
+                username: u.username || 'OPERATOR',
+                role: u.role || 'WAREHOUSE CLERK',
+                phoneNumber: u.phone_number || u.phoneNumber || '',
+                permission: u.permission || 'LIMITED_ACCESS',
+                pin: cleanPin
+              };
+            });
+            // Ensure super admin is preserved with their PIN
             if (!parsedUsers.some(u => u.employeeId === 'JPMP-002')) {
               parsedUsers.unshift(defaultSuperAdmin);
             }
@@ -225,15 +229,19 @@ async function startServer() {
 
       let payload = data;
       if (collection === 'registeredUsers') {
-        payload = data.map((u: any) => ({
-          employee_id: u.employeeId || u.employee_id,
-          username: u.username,
-          role: u.role,
-          permission: u.permission || 'LIMITED_ACCESS',
-          pin: u.pin || '1234',
-          phone_number: u.phoneNumber || u.phone_number || '',
-          updated_at: new Date().toISOString()
-        }));
+        payload = data.map((u: any) => {
+          const empId = (u.employeeId || u.employee_id || '').toUpperCase();
+          const cleanPin = u.pin ? String(u.pin).trim() : (empId === 'JPMP-002' ? '0423' : '1234');
+          return {
+            employee_id: empId,
+            username: u.username,
+            role: u.role,
+            permission: u.permission || 'LIMITED_ACCESS',
+            pin: cleanPin,
+            phone_number: u.phoneNumber || u.phone_number || '',
+            updated_at: new Date().toISOString()
+          };
+        });
         await supabaseServer.from(tableName).upsert(payload, { ignoreDuplicates: false });
         const activeIds = payload.map((u: any) => u.employee_id).filter(Boolean);
         if (activeIds.length > 0) {
@@ -400,7 +408,7 @@ async function startServer() {
     }
   });
 
-  // Endpoint to reset all encoded database collections to clean empty state
+  // Endpoint to reset all encoded database collections and accounts to clean brand-new state (except Super Admin)
   app.post("/api/reset-database", async (req, res) => {
     try {
       state.stocks = [];
@@ -412,16 +420,37 @@ async function startServer() {
       state.envLogs = [];
       state.forkliftChecks = [];
       state.registries = [];
+      state.registeredUsers = [{ ...defaultSuperAdmin }];
+
+      chatMessages.length = 0;
+      chatMessages.push({
+        id: "sys-init",
+        sender: "System",
+        text: "JUWEI WAREHOUSE MANAGEMENT SYSTEM ISO 9001:2015 Real-time Database Initialized.",
+        timestamp: new Date().toISOString(),
+        isSystem: true,
+      });
 
       saveStateToDisk();
 
       if (supabaseServer) {
-        const collections = ['stocks', 'receiving', 'returns', 'recycling', 'issuances', 'deliveries', 'env_logs', 'forklift_checks', 'registries'];
+        const collections = ['stocks', 'receiving', 'returns', 'recycling', 'issuances', 'deliveries', 'env_logs', 'forklift_checks', 'registries', 'chat_messages'];
         for (const table of collections) {
           try {
             await supabaseServer.from(table).delete().neq('id', '___NEVER___');
           } catch (e) {}
         }
+        try {
+          await supabaseServer.from('registered_users').delete().neq('employee_id', 'JPMP-002');
+          await supabaseServer.from('registered_users').upsert([{
+            employee_id: 'JPMP-002',
+            username: 'ALDRIN BANAWA',
+            role: 'SUPER ADMINISTRATOR',
+            permission: 'FULL_ACCESS',
+            pin_hash: '0423',
+            updated_at: new Date().toISOString()
+          }]);
+        } catch (e) {}
       }
 
       broadcast({
@@ -433,7 +462,13 @@ async function startServer() {
         activeUsers: getActiveUsersList()
       });
 
-      return res.json({ success: true, message: "All encoded data successfully reset" });
+      broadcast({
+        type: "collection_updated",
+        collection: "registeredUsers",
+        data: state.registeredUsers
+      });
+
+      return res.json({ success: true, message: "All encoded data and operator accounts successfully reset. Super Admin account preserved." });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }

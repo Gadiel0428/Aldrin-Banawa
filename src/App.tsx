@@ -388,7 +388,7 @@ export default function App() {
   const sanitizeAndMergeUsers = (incomingList: any[]): RegisteredAccount[] => {
     const deletedSet = getDeletedUserIds();
     const userMap = new Map<string, RegisteredAccount>();
-    userMap.set('JPMP-002', superAdminAccount);
+    userMap.set('JPMP-002', { ...superAdminAccount });
 
     // 1. Process local cached accounts first so local additions/pins are never lost
     try {
@@ -403,8 +403,16 @@ export default function App() {
               ? rawEmpId 
               : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
             const usernameUpper = (u.username || '').toUpperCase();
+            const cleanPin = u.pin ? String(u.pin).trim() : '';
+
             if (empId === 'JPMP-002' || (usernameUpper === 'SUPER ADMIN' || usernameUpper === 'ALDRIN BANAWA')) {
-              userMap.set('JPMP-002', superAdminAccount);
+              const current = userMap.get('JPMP-002') || superAdminAccount;
+              userMap.set('JPMP-002', {
+                ...current,
+                username: u.username ? String(u.username).toUpperCase() : current.username,
+                phoneNumber: u.phoneNumber || u.phone_number || current.phoneNumber,
+                pin: cleanPin || current.pin || '0423'
+              });
             } else if (!deletedSet.has(empId)) {
               userMap.set(empId, {
                 username: (u.username || 'OPERATOR').toUpperCase(),
@@ -412,7 +420,7 @@ export default function App() {
                 employeeId: empId,
                 phoneNumber: u.phoneNumber || u.phone_number || '',
                 permission: u.permission || 'LIMITED_ACCESS',
-                pin: u.pin || '1234'
+                pin: cleanPin || '1234'
               });
             }
           });
@@ -429,8 +437,17 @@ export default function App() {
           ? rawEmpId 
           : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
         const usernameUpper = (u.username || '').toUpperCase();
+        const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : '');
+
         if (empId === 'JPMP-002' || (usernameUpper === 'SUPER ADMIN' || usernameUpper === 'ALDRIN BANAWA')) {
-          userMap.set('JPMP-002', superAdminAccount);
+          const current = userMap.get('JPMP-002') || superAdminAccount;
+          userMap.set('JPMP-002', {
+            ...current,
+            username: u.username ? String(u.username).toUpperCase() : current.username,
+            phoneNumber: u.phoneNumber || u.phone_number || current.phoneNumber,
+            // Preserve the registered PIN from server or cloud database; do not reset
+            pin: cleanPin || current.pin || '0423'
+          });
         } else if (!deletedSet.has(empId)) {
           const existing = userMap.get(empId);
           userMap.set(empId, {
@@ -439,7 +456,8 @@ export default function App() {
             employeeId: empId,
             phoneNumber: u.phoneNumber || u.phone_number || existing?.phoneNumber || '',
             permission: u.permission || existing?.permission || 'LIMITED_ACCESS',
-            pin: u.pin || existing?.pin || '1234'
+            // Preserve registered PIN: cloud/server PIN if present, else existing cached PIN
+            pin: cleanPin || existing?.pin || '1234'
           });
         }
       });
@@ -510,8 +528,15 @@ export default function App() {
       superAdminAccount
     ];
     setRegisteredUsers(defaultAccounts);
-    localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(defaultAccounts));
+    try {
+      localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(defaultAccounts));
+      localStorage.removeItem('juwei_wms_deleted_accounts');
+    } catch (e) {}
     syncCollection('registeredUsers', defaultAccounts);
+    fetch('/api/reset-database', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    }).catch(() => {});
     // Also log out any active session if we reset the accounts
     handleLogout();
   };
@@ -1046,7 +1071,14 @@ export default function App() {
     });
   };
 
-  const handleRegister = (username: string, role: string, employeeId: string, permission?: string, phoneNumber?: string): RegisteredAccount | null => {
+  const handleRegister = (
+    username: string, 
+    role: string, 
+    employeeId: string, 
+    permission?: string, 
+    phoneNumber?: string,
+    customPin?: string
+  ): RegisteredAccount | null => {
     const cleanUsername = (username || '').trim().toUpperCase();
     let cleanEmployeeId = (employeeId || '').trim().toUpperCase();
     if (cleanEmployeeId && !cleanEmployeeId.startsWith('JPMP-')) {
@@ -1068,19 +1100,24 @@ export default function App() {
       return null;
     }
 
-    // Generate unique 4-digit PIN
-    let uniquePin = '';
-    let attempts = 0;
-    while (attempts < 100) {
-      const pinCandidate = Math.floor(1000 + Math.random() * 9000).toString();
-      if (!registeredUsers.some(u => u.pin === pinCandidate)) {
-        uniquePin = pinCandidate;
-        break;
+    // Determine 4-digit PIN (custom or unique generated)
+    let finalPin = '';
+    const cleanProvidedPin = customPin ? customPin.replace(/\D/g, '').slice(0, 4) : '';
+    if (cleanProvidedPin.length === 4) {
+      finalPin = cleanProvidedPin;
+    } else {
+      let attempts = 0;
+      while (attempts < 100) {
+        const pinCandidate = Math.floor(1000 + Math.random() * 9000).toString();
+        if (!registeredUsers.some(u => u.pin === pinCandidate)) {
+          finalPin = pinCandidate;
+          break;
+        }
+        attempts++;
       }
-      attempts++;
-    }
-    if (!uniquePin) {
-      uniquePin = Math.floor(1000 + Math.random() * 9000).toString();
+      if (!finalPin) {
+        finalPin = Math.floor(1000 + Math.random() * 9000).toString();
+      }
     }
 
     const cleanPermission = permission || (cleanEmployeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS');
@@ -1090,7 +1127,7 @@ export default function App() {
       employeeId: cleanEmployeeId, 
       phoneNumber: phoneNumber ? phoneNumber.trim() : '',
       permission: cleanPermission, 
-      pin: uniquePin 
+      pin: finalPin 
     };
 
     // Remove from deleted tracking if re-registered
@@ -1223,7 +1260,7 @@ export default function App() {
         const inputPhone = rawInput.replace(/\D/g, '');
 
         const idMatches = uEmpId === searchId || uEmpId === rawInput.toUpperCase() || uUsername === rawInput.toUpperCase() || (inputPhone.length >= 10 && uPhone === inputPhone);
-        const pinMatches = u.pin === enteredPin;
+        const pinMatches = Boolean(u.pin && u.pin.trim() === enteredPin);
 
         return idMatches && pinMatches;
       }
@@ -1276,8 +1313,8 @@ export default function App() {
     );
 
     if (foundUser) {
-      if (searchPin && foundUser.pin && foundUser.pin !== searchPin) {
-        setLoginError(`INCORRECT PIN CODE FOR OPERATOR ${foundUser.username || ''} (${foundUser.employeeId || ''}).`);
+      if (!searchPin || (foundUser.pin && foundUser.pin.trim() !== searchPin)) {
+        setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR ${foundUser.username || ''} (${foundUser.employeeId || ''}). ONLY REGISTERED PIN IS AUTHORIZED.`);
         return;
       }
       setShowLoginQrScanner(false);
@@ -2384,15 +2421,17 @@ export default function App() {
               <FolderPlus className="h-4 w-4" /> Master Data Register
             </button>
 
-            <button 
-              onClick={() => setView('accounts')}
-              className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                view === 'accounts' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
-              }`}
-              id="nav-registered-accounts"
-            >
-              <Users className="h-4 w-4" /> JPMP Accounts
-            </button>
+            {(currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002' || (currentUser || '').toUpperCase().includes('ALDRIN') || (currentRole || '').toUpperCase().includes('SUPER')) && (
+              <button 
+                onClick={() => setView('accounts')}
+                className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
+                  view === 'accounts' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
+                }`}
+                id="nav-registered-accounts"
+              >
+                <Users className="h-4 w-4" /> JPMP Accounts
+              </button>
+            )}
           </nav>
         </div>
 
@@ -2510,6 +2549,8 @@ export default function App() {
               chatMessages={chatMessages}
               currentUser={currentUser}
               sendChatMessage={sendChatMessage}
+              registeredUsers={registeredUsers}
+              isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
             />
           )}
 
@@ -2619,7 +2660,7 @@ export default function App() {
             />
           )}
 
-          {view === 'accounts' && (
+          {view === 'accounts' && (currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002' || (currentUser || '').toUpperCase().includes('ALDRIN') || (currentRole || '').toUpperCase().includes('SUPER')) && (
             <RegisteredAccountsModule 
               accounts={registeredUsers}
               onAddAccount={handleRegister}
@@ -2627,7 +2668,7 @@ export default function App() {
               onRemoveAccount={handleRemoveUser}
               currentUser={currentUser}
               currentEmployeeId={currentEmployeeId}
-              isSuperAdmin={currentPermission === 'FULL_ACCESS'}
+              isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
             />
           )}
         </div>

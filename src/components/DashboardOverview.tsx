@@ -39,6 +39,7 @@ import {
   ForkliftChecklist,
   IssuanceRecord,
   DeliveryRecord,
+  RegisteredAccount,
   getCustomerForPart
 } from '../types';
 
@@ -56,6 +57,8 @@ interface DashboardOverviewProps {
   chatMessages: any[];
   currentUser: string;
   sendChatMessage: (text: string) => void;
+  registeredUsers?: RegisteredAccount[];
+  isSuperAdmin?: boolean;
 }
 
 export default function DashboardOverview({
@@ -70,7 +73,9 @@ export default function DashboardOverview({
   activeUsers,
   chatMessages,
   currentUser,
-  sendChatMessage
+  sendChatMessage,
+  registeredUsers = [],
+  isSuperAdmin = false
 }: DashboardOverviewProps) {
   
   const [activeTab, setActiveTab] = useState<'transactions' | 'chat'>('transactions');
@@ -139,31 +144,31 @@ export default function DashboardOverview({
 
   // Recent transactions timeline combining receiving, issuance, and delivery logs
   const timelineEvents = [
-    ...receiving.map(r => ({
-      id: `rec-${r.id}`,
+    ...receiving.map((r, idx) => ({
+      id: r.id ? `rec-${r.id}` : `rec-${r.partCode || 'item'}-${r.date || 'nodate'}-${idx}`,
       type: 'RECEIVING',
       title: `Received ${r.quantity} ${(r.unit || 'PCS').toUpperCase()} of ${r.itemDescription || 'Item'}`,
       meta: `Lot: ${r.lotNumber || 'N/A'} | Arrival Classification: ${r.supplierOrDept || 'N/A'} (${r.source === 'INTERNAL' || r.source === 'WIP/BOM/FG(Internal)' ? 'INTERNAL' : 'EXTERNAL'})${r.vendorSupplier ? ' [' + r.vendorSupplier + ']' : ''}`,
       date: r.date,
       badgeColor: 'bg-emerald-50 text-emerald-700 border-emerald-200'
     })),
-    ...issuances.map(i => ({
-      id: `iss-${i.id}`,
+    ...issuances.map((i, idx) => ({
+      id: i.id ? `iss-${i.id}` : `iss-${i.partCode || 'item'}-${i.date || 'nodate'}-${idx}`,
       type: 'ISSUANCE',
       title: `Issued ${i.quantityIssued} to ${i.department}`,
       meta: `Part: ${i.partCode} | Req: ${i.requisitionNumber}`,
       date: i.date,
       badgeColor: 'bg-blue-50 text-blue-700 border-blue-200'
     })),
-    ...deliveries.map(d => ({
-      id: `del-${d.id}`,
+    ...deliveries.map((d, idx) => ({
+      id: d.id ? `del-${d.id}` : `del-${d.gatePassNumber || 'gp'}-${d.date || 'nodate'}-${idx}`,
       type: 'DELIVERY',
       title: `Dispatched ${d.quantity} units (${d.modelName})`,
       meta: `Gate Pass: ${d.gatePassNumber} | Status: ${d.status}`,
       date: d.date,
       badgeColor: 'bg-purple-50 text-purple-700 border-purple-200'
     }))
-  ].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+  ].sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 5);
 
   // Group unique SKUs (partCode) by customer for Dashboard view
   const skusByCustomer = Object.entries(
@@ -399,7 +404,7 @@ export default function DashboardOverview({
             <span className="text-[10px] uppercase font-bold text-slate-400 mr-1">Active Lines:</span>
             {topActiveSkus.map((sku, idx) => (
               <div 
-                key={sku.partCode}
+                key={`top-active-sku-badge-${sku.partCode || 'sku'}-${idx}`}
                 className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-lg text-slate-700 font-mono text-[11px]"
               >
                 <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: skuLineColors[idx % skuLineColors.length] }} />
@@ -431,7 +436,7 @@ export default function DashboardOverview({
                 />
                 {topActiveSkus.map((sku, idx) => (
                   <Line
-                    key={sku.partCode}
+                    key={`stock-trend-line-${sku.partCode || 'sku'}-${idx}`}
                     type="monotone"
                     dataKey={sku.partCode}
                     name={`${sku.partCode} - ${sku.description}`}
@@ -550,8 +555,8 @@ export default function DashboardOverview({
           <p className="text-[11px] text-slate-500 pb-1.5 border-b border-slate-100">Material stock below minimum limit</p>
 
           <div className="pt-1.5 space-y-1">
-            {lowStockSkus.slice(0, 2).map((item) => (
-              <div key={item.partCode} className="flex justify-between items-center text-[10px] bg-rose-50/80 px-1.5 py-0.5 rounded font-mono border border-rose-100">
+            {lowStockSkus.slice(0, 2).map((item, idx) => (
+              <div key={`low-stock-kpi-item-${item.partCode || 'item'}-${idx}`} className="flex justify-between items-center text-[10px] bg-rose-50/80 px-1.5 py-0.5 rounded font-mono border border-rose-100">
                 <span className="font-bold text-rose-900 truncate max-w-[80px]">{item.partCode}</span>
                 <span className="text-rose-700 font-bold">{item.currentQty}/{item.reorderMin} {item.unit}</span>
               </div>
@@ -654,7 +659,7 @@ export default function DashboardOverview({
             {activeTab === 'transactions' ? (
               <div className="divide-y divide-slate-100 min-h-[340px]">
                 {timelineEvents.map((event, idx) => (
-                  <div key={event.id} className="py-3 flex gap-4 items-start first:pt-0 last:pb-0">
+                  <div key={event.id ? `${event.id}-${idx}` : `timeline-event-${idx}`} className="py-3 flex gap-4 items-start first:pt-0 last:pb-0">
                     <span className={`text-[10px] font-bold px-2 py-1 rounded-full border shrink-0 ${event.badgeColor} font-mono w-24 text-center uppercase`}>
                       {event.type}
                     </span>
@@ -678,7 +683,7 @@ export default function DashboardOverview({
                   <span className="font-semibold text-emerald-800 shrink-0">Online Staff:</span>
                   <div className="flex items-center gap-1.5 flex-nowrap">
                     {activeUsers.map((user, idx) => (
-                      <span key={idx} className="bg-white border border-emerald-200 text-emerald-700 px-2 py-0.5 rounded-full font-medium shadow-sm flex items-center gap-1 shrink-0">
+                      <span key={`active-user-${user || 'user'}-${idx}`} className="bg-white border border-emerald-200 text-emerald-700 px-2 py-0.5 rounded-full font-medium shadow-sm flex items-center gap-1 shrink-0">
                         <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
                         {user} {user === currentUser ? '(You)' : ''}
                       </span>
@@ -692,7 +697,7 @@ export default function DashboardOverview({
                 {/* Chat Message Logs */}
                 <div className="flex-1 bg-slate-50 border border-slate-200 rounded-xl p-4 overflow-y-auto max-h-[220px] min-h-[160px] space-y-2.5">
                   {chatMessages.map((msg, idx) => (
-                    <div key={msg.id || idx} className={`text-xs ${msg.isSystem ? 'text-slate-500 italic py-1 border-l-2 border-slate-200 pl-2' : ''}`}>
+                    <div key={msg.id ? `chat-msg-${msg.id}` : `chat-msg-${idx}-${msg.timestamp || ''}`} className={`text-xs ${msg.isSystem ? 'text-slate-500 italic py-1 border-l-2 border-slate-200 pl-2' : ''}`}>
                       {!msg.isSystem && (
                         <div className="flex items-baseline gap-1.5 mb-0.5">
                           <span className={`font-bold ${msg.sender === currentUser ? 'text-indigo-600' : 'text-slate-700'}`}>
@@ -795,11 +800,11 @@ export default function DashboardOverview({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-            {lowStockSkus.map(item => {
+            {lowStockSkus.map((item, idx) => {
               const pct = item.reorderMin > 0 ? Math.min(100, Math.round((item.currentQty / item.reorderMin) * 100)) : 0;
               return (
                 <div 
-                  key={item.partCode} 
+                  key={`low-stock-detail-card-${item.partCode || 'item'}-${idx}`} 
                   className="p-3.5 rounded-xl border border-rose-200/90 bg-rose-50/40 hover:bg-rose-50/80 transition shadow-2xs space-y-2.5 relative overflow-hidden"
                 >
                   <div className="flex justify-between items-start gap-2">
@@ -891,13 +896,13 @@ export default function DashboardOverview({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {nearExpiryItems.map(item => {
+            {nearExpiryItems.map((item, idx) => {
               const diffTime = new Date(item.expirationDate!).getTime() - new Date(todayStr).getTime();
               const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
               const isExpired = diffDays <= 0;
               return (
                 <div 
-                  key={item.id} 
+                  key={item.id ? `near-expiry-item-${item.id}` : `near-expiry-${item.partCode || 'item'}-${item.lotNumber || ''}-${idx}`} 
                   className={`p-3 rounded-xl border flex justify-between items-center ${
                     isExpired ? 'bg-rose-50/80 border-rose-200' : 'bg-slate-50/80 border-slate-200'
                   }`}
@@ -930,6 +935,89 @@ export default function DashboardOverview({
         </div>
 
       </div>
+
+      {/* Super Admin Only: Registered JPMP Accounts Directory */}
+      {isSuperAdmin && (
+        <div className="bg-white border border-indigo-200 rounded-xl p-6 shadow-sm space-y-4" id="super-admin-accounts-card">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-100 pb-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-lg bg-indigo-100 text-indigo-700">
+                  <Users className="h-5 w-5" />
+                </div>
+                <h3 className="font-bold text-base text-slate-800">JPMP Registered Operator Accounts</h3>
+                <span className="text-[10px] uppercase font-bold tracking-wider text-indigo-700 bg-indigo-50 border border-indigo-200 px-2.5 py-0.5 rounded-full shadow-2xs">
+                  Super Admin View ({registeredUsers.length} Accounts)
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                Authorized system personnel directory and security permissions. Only visible to Super Administrators.
+              </p>
+            </div>
+            <button 
+              onClick={() => setView('accounts')}
+              className="text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-1.5 rounded-lg transition flex items-center gap-1 shrink-0 cursor-pointer shadow-xs"
+            >
+              Manage JPMP Accounts &rarr;
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            {registeredUsers.map((acc, idx) => {
+              const isSuper = (acc.employeeId || '').toUpperCase() === 'JPMP-002' || (acc.role || '').toUpperCase().includes('SUPER') || acc.permission === 'FULL_ACCESS';
+              return (
+                <div 
+                  key={acc.employeeId ? `dashboard-acc-${acc.employeeId}-${idx}` : `dashboard-acc-${idx}`}
+                  className={`p-3.5 rounded-xl border transition shadow-2xs space-y-2 relative overflow-hidden ${
+                    isSuper ? 'bg-indigo-50/50 border-indigo-200 hover:bg-indigo-50/80' : 'bg-slate-50/60 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="flex justify-between items-start gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-xs font-bold text-slate-800 truncate">{acc.username}</span>
+                        {isSuper && (
+                          <span className="text-[9px] bg-indigo-600 text-white font-bold px-1.5 py-0.2 rounded font-mono uppercase">
+                            SUPER ADMIN
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[10px] font-mono font-bold text-indigo-600 block mt-0.5">
+                        {acc.employeeId}
+                      </span>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 font-mono ${
+                      acc.permission === 'FULL_ACCESS' 
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                        : 'bg-amber-50 text-amber-700 border-amber-200'
+                    }`}>
+                      {acc.permission === 'FULL_ACCESS' ? 'FULL' : 'LIMITED'}
+                    </span>
+                  </div>
+
+                  <div className="pt-1 text-[11px] text-slate-600 space-y-1 border-t border-slate-200/60">
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Designation:</span>
+                      <span className="font-medium text-slate-700 truncate max-w-[140px]">{acc.role || 'Operator'}</span>
+                    </div>
+                    {acc.phoneNumber && (
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Contact:</span>
+                        <span className="font-mono text-slate-700">{acc.phoneNumber}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {registeredUsers.length === 0 && (
+              <div className="col-span-full p-6 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                No registered JPMP accounts loaded.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Warehouse Procedures Quick-Guide Panel */}
       <div className="p-6 bg-slate-900 text-white rounded-xl shadow-md relative overflow-hidden" id="quick-sop-panel">
