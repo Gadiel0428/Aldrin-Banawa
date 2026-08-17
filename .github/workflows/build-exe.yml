@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: write
-  actions: write
 
 jobs:
   build-windows:
@@ -26,6 +25,7 @@ jobs:
 
       - name: Locate project directory
         id: locate
+        shell: bash
         run: |
           node -e "
             const fs = require('fs');
@@ -65,36 +65,53 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist:exe
 
-      - name: Upload Installer Artifact (Actions)
-        uses: actions/upload-artifact@v4
-        continue-on-error: true
-        with:
-          name: JUWEI-WMS-Desktop-Installer
-          retention-days: 1
-          compression-level: 9
-          if-no-files-found: warn
-          path: |
-            ${{ steps.locate.outputs.dir }}/release/*.exe
-            release/*.exe
-
-      - name: Publish to GitHub Releases
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
-        continue-on-error: true
+      - name: Publish EXE to GitHub Releases
+        shell: pwsh
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: latest-build
-          name: JUWEI WMS Desktop Latest Release
-          body: |
-            Automated production build of JUWEI Warehouse Management System Desktop (.exe).
-            - Built on: ${{ github.event.head_commit.timestamp || 'Latest commit' }}
-            - Commit: ${{ github.sha }}
-          draft: false
-          prerelease: false
-          files: |
-            ${{ steps.locate.outputs.dir }}/release/*.exe
-            release/*.exe
+        run: |
+          $dir = "${{ steps.locate.outputs.dir }}"
+          $searchPaths = @(
+            "$dir/release/*.exe",
+            "release/*.exe",
+            "$dir/dist/*.exe",
+            "dist/*.exe"
+          )
+          
+          $files = @()
+          foreach ($p in $searchPaths) {
+            $matched = Get-ChildItem -Path $p -ErrorAction SilentlyContinue
+            if ($matched) {
+              $files += $matched.FullName
+            }
+          }
+          $files = $files | Select-Object -Unique
+
+          if (-not $files -or $files.Count -eq 0) {
+            Write-Warning "No .exe binaries found in release folders."
+            exit 0
+          }
+
+          Write-Host "Found executable files:"
+          $files | ForEach-Object { Write-Host " - $_" }
+
+          $tag = if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}") {
+            "${{ github.ref_name }}"
+          } else {
+            "v1.0.${{ github.run_number }}"
+          }
+
+          Write-Host "Creating GitHub Release with tag: $tag"
+          
+          # Delete existing release with this tag if it exists to avoid conflicts
+          gh release delete $tag --yes --cleanup-tag 2>$null
+          
+          # Create fresh release and upload files directly (bypasses Actions artifact quota)
+          gh release create $tag $files --title "JUWEI WMS Desktop $tag" --notes "Production Windows EXE Installer and Standalone Binary built from commit ${{ github.sha }}."
+          
+          Write-Host "Successfully published Windows EXE to GitHub Releases!"
+
 
 
 
