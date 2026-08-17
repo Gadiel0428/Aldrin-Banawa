@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Monitor, Download, X, ShieldCheck, Sparkles, Terminal, CheckCircle2, Cpu, FileCode2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { Monitor, Download, X, ShieldCheck, Cpu, FileCode2 } from 'lucide-react';
 
 interface DesktopInstallModalProps {
   isOpen: boolean;
@@ -7,42 +7,12 @@ interface DesktopInstallModalProps {
 }
 
 export default function DesktopInstallModal({ isOpen, onClose }: DesktopInstallModalProps) {
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  const [installedPWA, setInstalledPWA] = useState(false);
   const [copiedCmd, setCopiedCmd] = useState(false);
-
-  useEffect(() => {
-    const handleBeforeInstall = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-    };
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
-
-    if (window.matchMedia('(display-mode: standalone)').matches) {
-      setInstalledPWA(true);
-    }
-
-    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
-  }, []);
 
   if (!isOpen) return null;
 
   const getAppUrl = () => {
     return window.location.href;
-  };
-
-  const handlePWAInstall = async () => {
-    if (deferredPrompt) {
-      deferredPrompt.prompt();
-      const { outcome } = await deferredPrompt.userChoice;
-      if (outcome === 'accepted') {
-        setInstalledPWA(true);
-      }
-      setDeferredPrompt(null);
-    } else {
-      alert('To install JUWEI WMS as a native Windows app: Look at your browser address bar on the top right for the "Install App" icon (a computer monitor with a down arrow), or open Chrome/Edge Menu (⋮) -> Save & Share -> Install JUWEI WMS Desktop.');
-    }
   };
 
   // 1. Download 1-Click Windows BAT Installer (Works 100% on any Windows PC without PowerShell ExecutionPolicy restrictions)
@@ -449,54 +419,6 @@ $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     URL.revokeObjectURL(url);
   };
 
-  // 3. Download VBScript shortcut creator
-  const downloadVbsShortcut = () => {
-    const currentUrl = getAppUrl();
-    const vbsContent = `' JUWEI WMS Desktop Shortcut Creator
-Set WshShell = CreateObject("WScript.Shell")
-strDesktop = WshShell.SpecialFolders("Desktop")
-Set oLink = WshShell.CreateShortcut(strDesktop & "\\JUWEI WMS Desktop.lnk")
-
-Set fso = CreateObject("Scripting.FileSystemObject")
-edgePath = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
-edgePath64 = "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"
-chromePath = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
-chromePath86 = "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe"
-
-If fso.FileExists(edgePath) Then
-    oLink.TargetPath = edgePath
-    oLink.Arguments = "--app=""" & "${currentUrl}" & """ --window-size=1440,920 --title=""JUWEI WMS Desktop"""
-ElseIf fso.FileExists(edgePath64) Then
-    oLink.TargetPath = edgePath64
-    oLink.Arguments = "--app=""" & "${currentUrl}" & """ --window-size=1440,920 --title=""JUWEI WMS Desktop"""
-ElseIf fso.FileExists(chromePath) Then
-    oLink.TargetPath = chromePath
-    oLink.Arguments = "--app=""" & "${currentUrl}" & """ --window-size=1440,920 --title=""JUWEI WMS Desktop"""
-ElseIf fso.FileExists(chromePath86) Then
-    oLink.TargetPath = chromePath86
-    oLink.Arguments = "--app=""" & "${currentUrl}" & """ --window-size=1440,920 --title=""JUWEI WMS Desktop"""
-Else
-    oLink.TargetPath = "${currentUrl}"
-End If
-
-oLink.WindowStyle = 1
-oLink.Description = "JUWEI Warehouse Management System Desktop Application"
-oLink.Save
-
-MsgBox "JUWEI WMS Desktop Shortcut successfully created on your Windows Desktop!", 64, "JUWEI WMS Desktop"
-`;
-
-    const blob = new Blob([vbsContent], { type: 'text/vbscript' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'Create-JUWEI-WMS-Shortcut.vbs';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
   const copyPowerShellBypassCommand = () => {
     const cmd = `powershell -ExecutionPolicy Bypass -File .\\Build-JUWEI-WMS-EXE.ps1`;
     navigator.clipboard.writeText(cmd);
@@ -591,53 +513,6 @@ MsgBox "JUWEI WMS Desktop Shortcut successfully created on your Windows Desktop!
                 {copiedCmd ? 'Copied!' : 'Copy PS Command'}
               </button>
             </div>
-          </div>
-
-          {/* OPTION 3: Native Windows PWA Application */}
-          <div className="p-4 bg-blue-950 border border-blue-700 rounded-xl space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-white font-bold text-sm">
-                <Sparkles className="h-4 w-4 text-blue-300" /> Option 3: Install Browser Native App (PWA)
-              </div>
-              {installedPWA ? (
-                <span className="px-2 py-0.5 bg-emerald-800 text-emerald-100 border border-emerald-600 rounded text-[10px] font-bold flex items-center gap-1">
-                  <CheckCircle2 className="h-3 w-3" /> Installed
-                </span>
-              ) : (
-                <span className="px-2 py-0.5 bg-blue-800 text-blue-100 border border-blue-600 rounded text-[10px] font-mono font-bold">
-                  DIRECT BROWSER
-                </span>
-              )}
-            </div>
-
-            <p className="text-blue-100 leading-relaxed text-[11px]">
-              Installs JUWEI WMS directly into your Windows Start Menu, Taskbar, and Desktop as an official signed Windows app window via Edge or Chrome.
-            </p>
-
-            <button
-              onClick={handlePWAInstall}
-              className="w-full py-2.5 px-4 bg-blue-700 hover:bg-blue-600 text-white font-bold rounded-xl flex items-center justify-center gap-2 text-xs transition cursor-pointer"
-            >
-              <Monitor className="h-4 w-4" /> Install via Browser (PWA)
-            </button>
-          </div>
-
-          {/* OPTION 4: Desktop Shortcut Creator (.vbs) */}
-          <div className="p-3.5 bg-blue-950 border border-blue-700 rounded-xl space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-white font-bold text-xs">
-                <Terminal className="h-3.5 w-3.5 text-blue-300" /> Option 4: 1-Click Desktop Shortcut Creator (.vbs)
-              </div>
-            </div>
-            <p className="text-blue-200 text-[11px] leading-relaxed">
-              Creates a clean <strong>JUWEI WMS Desktop</strong> standalone window shortcut directly on your Windows Desktop.
-            </p>
-            <button
-              onClick={downloadVbsShortcut}
-              className="w-full py-2 px-3 bg-blue-800 hover:bg-blue-700 text-white border border-blue-600 font-bold rounded-xl flex items-center justify-center gap-2 text-xs transition cursor-pointer"
-            >
-              <Download className="h-3.5 w-3.5 text-blue-300" /> Download Create-JUWEI-WMS-Shortcut.vbs
-            </button>
           </div>
 
         </div>
