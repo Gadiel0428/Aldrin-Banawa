@@ -1156,21 +1156,47 @@ export default function App() {
 
   const handleUpdateAccount = (oldEmpId: string, updated: RegisteredAccount) => {
     const cleanOldId = (oldEmpId || '').toUpperCase();
+    let cleanNewId = (updated.employeeId || '').trim().toUpperCase();
+    if (cleanNewId && !cleanNewId.startsWith('JPMP-')) {
+      const strippedId = cleanNewId.replace(/^EMP-/, '');
+      cleanNewId = `JPMP-${strippedId}`;
+    }
+    if (cleanOldId === 'JPMP-002') {
+      cleanNewId = 'JPMP-002';
+    }
+
+    // Check if new ID is already taken by another account
+    if (cleanNewId !== cleanOldId && registeredUsers.some(u => (u.employeeId || '').toUpperCase() === cleanNewId)) {
+      alert(`An operator account with ID "${cleanNewId}" already exists.`);
+      return;
+    }
+
     const nextUsers = registeredUsers.map(u => {
       if ((u.employeeId || '').toUpperCase() === cleanOldId) {
         return {
           ...u,
           ...updated,
-          employeeId: cleanOldId === 'JPMP-002' ? 'JPMP-002' : (updated.employeeId || '').toUpperCase(),
+          employeeId: cleanNewId,
           username: (updated.username || '').toUpperCase(),
           role: (updated.role || '').toUpperCase(),
           phoneNumber: updated.phoneNumber !== undefined ? updated.phoneNumber : (u.phoneNumber || ''),
           permission: updated.permission || u.permission || 'LIMITED_ACCESS',
-          pin: updated.pin || u.pin || '1234'
+          pin: (updated.pin || u.pin || '1234').slice(0, 4)
         };
       }
       return u;
     });
+
+    if (cleanNewId !== cleanOldId) {
+      unmarkUserAsDeleted(cleanNewId);
+      deleteAccountFromSupabase(cleanOldId).catch(() => {});
+      fetch('/api/accounts/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ employeeId: cleanOldId })
+      }).catch(() => {});
+    }
+
     setRegisteredUsers(nextUsers);
     localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(nextUsers));
     syncCollection('registeredUsers', nextUsers);
@@ -1180,13 +1206,27 @@ export default function App() {
     e.preventDefault();
     setLoginError('');
 
-    let searchId = (loginEmployeeId || '').trim().toUpperCase();
+    const rawInput = (loginEmployeeId || '').trim();
+    let searchId = rawInput.toUpperCase();
     if (searchId && !searchId.startsWith('JPMP-')) {
-      searchId = 'JPMP-' + searchId;
+      searchId = 'JPMP-' + searchId.replace(/^EMP-/, '');
     }
 
+    const enteredPin = (loginPin || '').trim();
+
+    // Match by employeeId, raw employeeId, username, or phone number
     const foundUser = registeredUsers.find(
-      (u) => (u.employeeId || '').toUpperCase() === searchId && u.pin === (loginPin || '').trim()
+      (u) => {
+        const uEmpId = (u.employeeId || '').toUpperCase();
+        const uUsername = (u.username || '').toUpperCase();
+        const uPhone = (u.phoneNumber || '').replace(/\D/g, '');
+        const inputPhone = rawInput.replace(/\D/g, '');
+
+        const idMatches = uEmpId === searchId || uEmpId === rawInput.toUpperCase() || uUsername === rawInput.toUpperCase() || (inputPhone.length >= 10 && uPhone === inputPhone);
+        const pinMatches = u.pin === enteredPin;
+
+        return idMatches && pinMatches;
+      }
     );
 
     if (foundUser) {
@@ -1220,7 +1260,7 @@ export default function App() {
     }
 
     if (searchEmpId && !searchEmpId.startsWith('JPMP-')) {
-      searchEmpId = 'JPMP-' + searchEmpId;
+      searchEmpId = 'JPMP-' + searchEmpId.replace(/^EMP-/, '');
     }
 
     if (!searchEmpId) {
@@ -1230,7 +1270,9 @@ export default function App() {
 
     // Match operator account in registeredUsers
     const foundUser = registeredUsers.find(
-      (u) => (u.employeeId || '').toUpperCase() === searchEmpId || (u.username || '').toUpperCase() === searchEmpId
+      (u) => (u.employeeId || '').toUpperCase() === searchEmpId || 
+             (u.username || '').toUpperCase() === searchEmpId ||
+             (u.employeeId || '').toUpperCase() === searchEmpId.replace(/^JPMP-/, '')
     );
 
     if (foundUser) {

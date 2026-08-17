@@ -54,6 +54,7 @@ export default function RegisteredAccountsModule({
   const [searchQuery, setSearchQuery] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingAccount, setEditingAccount] = useState<RegisteredAccount | null>(null);
+  const [originalEmployeeId, setOriginalEmployeeId] = useState<string>('');
   const [selectedQrAccount, setSelectedQrAccount] = useState<RegisteredAccount | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmActionConfig | null>(null);
   const [showPins, setShowPins] = useState<{ [key: string]: boolean }>({});
@@ -399,12 +400,30 @@ export default function RegisteredAccountsModule({
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingAccount) return;
+
+    let cleanEmpId = (editingAccount.employeeId || '').trim().toUpperCase();
+    if (cleanEmpId && !cleanEmpId.startsWith('JPMP-')) {
+      cleanEmpId = `JPMP-${cleanEmpId.replace(/^EMP-/, '')}`;
+    }
+
+    const cleanPin = (editingAccount.pin || '1234').replace(/\D/g, '').slice(0, 4);
+    if (cleanPin.length < 4) {
+      alert('Security PIN must be exactly 4 digits.');
+      return;
+    }
+
     const formatted = formatPhoneNumber(editingAccount.phoneNumber || '');
-    onUpdateAccount(editingAccount.employeeId, {
+    const oldId = originalEmployeeId || editingAccount.employeeId;
+
+    onUpdateAccount(oldId, {
       ...editingAccount,
-      phoneNumber: formatted
+      employeeId: cleanEmpId,
+      phoneNumber: formatted,
+      pin: cleanPin
     });
+
     setEditingAccount(null);
+    setOriginalEmployeeId('');
   };
 
   return (
@@ -658,7 +677,10 @@ export default function RegisteredAccountsModule({
                             onChange={(e) => {
                               const val = e.target.value;
                               if (val === 'QR_BADGE') setSelectedQrAccount(acc);
-                              else if (val === 'EDIT') setEditingAccount({ ...acc });
+                              else if (val === 'EDIT') {
+                                setEditingAccount({ ...acc });
+                                setOriginalEmployeeId(acc.employeeId);
+                              }
                               else if (val === 'DELETE') {
                                 if (isSuperAdminAcc) {
                                   alert("ALDRIN BANAWA (JPMP-002) is the primary Super Administrator account and cannot be deleted.");
