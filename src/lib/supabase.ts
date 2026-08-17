@@ -636,11 +636,12 @@ export async function syncCollectionToSupabase(collection: string, items: any[])
           const cleanPin = u.pin ? String(u.pin).trim() : (empId === 'JPMP-002' ? '0423' : '1234');
           return {
             employee_id: empId,
-            username: u.username,
-            role: u.role,
+            username: (u.username || 'OPERATOR').toUpperCase(),
+            role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
             phone_number: u.phoneNumber || u.phone_number || '',
             permission: u.permission || 'LIMITED_ACCESS',
             pin: cleanPin,
+            pin_hash: cleanPin,
             updated_at: new Date().toISOString()
           };
         });

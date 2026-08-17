@@ -1,6 +1,15 @@
 {
   "short_name": "JUWEI WMS",
-  "name": "JUWEI Warehouse Management System Desktop",
+  "name": "JUWEI Warehouse Management System",
+  "id": "com.juwei.wms",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#020617",
+  "theme_color": "#4f46e5",
+  "description": "JUWEI WMS Mobile & Desktop Industrial Warehouse Management System for Inventory, Receiving, Stock FIFO, and Logistics Control",
+  "categories": ["business", "productivity", "utilities"],
   "icons": [
     {
       "src": "/favicon.svg",
@@ -21,10 +30,24 @@
       "purpose": "any maskable"
     }
   ],
-  "start_url": "/",
-  "background_color": "#0f172a",
-  "theme_color": "#4f46e5",
-  "display": "standalone",
-  "orientation": "any",
-  "description": "JUWEI Warehouse Management System Desktop Application for Inventory & Logistics Control"
+  "shortcuts": [
+    {
+      "name": "Stock & FIFO",
+      "short_name": "Stock",
+      "url": "/?view=stock",
+      "icons": [{ "src": "/pwa-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Material Receiving",
+      "short_name": "Receiving",
+      "url": "/?view=receiving",
+      "icons": [{ "src": "/pwa-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Material Issuance",
+      "short_name": "Issuance",
+      "url": "/?view=issuance",
+      "icons": [{ "src": "/pwa-192.png", "sizes": "192x192" }]
+    }
+  ]
 }

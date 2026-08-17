@@ -12,7 +12,12 @@ export default function DesktopInstallModal({ isOpen, onClose }: DesktopInstallM
   if (!isOpen) return null;
 
   const getAppUrl = () => {
-    return window.location.href;
+    if (typeof window !== 'undefined' && window.location && window.location.host) {
+      const cleanHost = window.location.host;
+      const proto = window.location.protocol === 'https:' ? 'https:' : 'http:';
+      return `${proto}//${cleanHost}/`;
+    }
+    return 'https://ais-dev-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app/';
   };
 
   // 1. Download 1-Click Windows BAT Installer (Works 100% on any Windows PC without PowerShell ExecutionPolicy restrictions)

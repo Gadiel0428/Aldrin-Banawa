@@ -52,6 +52,7 @@ import {
 import { QRCodeSVG } from 'qrcode.react';
 import AccountQRBadgeModal from './components/AccountQRBadgeModal';
 import DesktopInstallModal from './components/DesktopInstallModal';
+import MobileAppDownloadModal from './components/MobileAppDownloadModal';
 import { ConfirmModal, ConfirmActionConfig } from './components/ConfirmModal';
 import BarcodeScannerModal from './components/BarcodeScannerModal';
 import SupabaseSettingsModal from './components/SupabaseSettingsModal';
@@ -129,6 +130,14 @@ function getDefaultServerAddress(): string {
   if (typeof window !== 'undefined' && window.location && window.location.host) {
     const cleanHost = sanitizeServerHost(window.location.host);
     if (cleanHost) {
+      const cached = localStorage.getItem('juwei_wms_server_address');
+      if (cached) {
+        const cleanCached = sanitizeServerHost(cached);
+        // Only prioritize cached if it is valid and not an obsolete localhost cache when the window is on a remote host
+        if (cleanCached && !(cleanCached.includes('localhost') && !cleanHost.includes('localhost'))) {
+          return cleanCached;
+        }
+      }
       return cleanHost;
     }
   }
@@ -174,6 +183,7 @@ function clearPendingSync(collection: string) {
 export default function App() {
   const [view, setView] = useState<string>('dashboard');
   const [showDesktopInstallModal, setShowDesktopInstallModal] = useState<boolean>(false);
+  const [showMobileInstallModal, setShowMobileInstallModal] = useState<boolean>(false);
 
   // Optimistic local mutation timestamp tracker to prevent in-flight clobbering / race conditions
   const lastMutationTimes = useRef<{ [col: string]: number }>({});
@@ -270,8 +280,42 @@ export default function App() {
     return [];
   });
 
+  // Automatically keep local storage offline caches synchronized whenever active state updates
+  useEffect(() => {
+    try { localStorage.setItem('juwei_wms_cache_stocks', JSON.stringify(stocks)); } catch (e) {}
+  }, [stocks]);
+
+  useEffect(() => {
+    try { localStorage.setItem('juwei_wms_cache_receiving', JSON.stringify(receiving)); } catch (e) {}
+  }, [receiving]);
+
+  useEffect(() => {
+    try { localStorage.setItem('juwei_wms_cache_returns', JSON.stringify(returns)); } catch (e) {}
+  }, [returns]);
+
+  useEffect(() => {
+    try { localStorage.setItem('juwei_wms_cache_recycling', JSON.stringify(recycling)); } catch (e) {}
+  }, [recycling]);
+
+  useEffect(() => {
+    try { localStorage.setItem('juwei_wms_cache_issuances', JSON.stringify(issuances)); } catch (e) {}
+  }, [issuances]);
+
+  useEffect(() => {
+    try { localStorage.setItem('juwei_wms_cache_deliveries', JSON.stringify(deliveries)); } catch (e) {}
+  }, [deliveries]);
+
+  useEffect(() => {
+    try { localStorage.setItem('juwei_wms_cache_envLogs', JSON.stringify(envLogs)); } catch (e) {}
+  }, [envLogs]);
+
+  useEffect(() => {
+    try { localStorage.setItem('juwei_wms_cache_forkliftChecks', JSON.stringify(forkliftChecks)); } catch (e) {}
+  }, [forkliftChecks]);
+
   useEffect(() => {
     try {
+      localStorage.setItem('juwei_wms_cache_registries', JSON.stringify(registries));
       localStorage.setItem('juwei_wms_master_registries', JSON.stringify(registries));
     } catch (e) {}
   }, [registries]);
@@ -281,6 +325,7 @@ export default function App() {
   const [activeUsers, setActiveUsers] = useState<string[]>([]);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+  const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
   const [serverAddress, setServerAddress] = useState<string>(() => getDefaultServerAddress());
   const [showServerSettingsModal, setShowServerSettingsModal] = useState<boolean>(false);
   const [tempServerAddress, setTempServerAddress] = useState<string>('');
@@ -385,54 +430,29 @@ export default function App() {
     } catch (e) {}
   };
 
-  const sanitizeAndMergeUsers = (incomingList: any[]): RegisteredAccount[] => {
-    const deletedSet = getDeletedUserIds();
+  const sanitizeUsersList = (incomingList?: any[]): RegisteredAccount[] => {
     const userMap = new Map<string, RegisteredAccount>();
     userMap.set('JPMP-002', { ...superAdminAccount });
 
-    // 1. Process local cached accounts first so local additions/pins are never lost
-    try {
-      const cached = localStorage.getItem('juwei_wms_registeredUsers');
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed)) {
-          parsed.forEach((u: any) => {
-            if (!u || !u.employeeId) return;
-            const rawEmpId = String(u.employeeId || '').toUpperCase();
-            const empId = rawEmpId.startsWith('JPMP-') 
-              ? rawEmpId 
-              : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
-            const usernameUpper = (u.username || '').toUpperCase();
-            const cleanPin = u.pin ? String(u.pin).trim() : '';
-
-            if (empId === 'JPMP-002' || (usernameUpper === 'SUPER ADMIN' || usernameUpper === 'ALDRIN BANAWA')) {
-              const current = userMap.get('JPMP-002') || superAdminAccount;
-              userMap.set('JPMP-002', {
-                ...current,
-                username: u.username ? String(u.username).toUpperCase() : current.username,
-                phoneNumber: u.phoneNumber || u.phone_number || current.phoneNumber,
-                pin: cleanPin || current.pin || '0423'
-              });
-            } else if (!deletedSet.has(empId)) {
-              userMap.set(empId, {
-                username: (u.username || 'OPERATOR').toUpperCase(),
-                role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
-                employeeId: empId,
-                phoneNumber: u.phoneNumber || u.phone_number || '',
-                permission: u.permission || 'LIMITED_ACCESS',
-                pin: cleanPin || '1234'
-              });
-            }
-          });
-        }
-      }
-    } catch (e) {}
-
-    // 2. Merge incoming server/Supabase users (excluding explicitly deleted accounts)
+    let sourceList: any[] = [];
     if (Array.isArray(incomingList) && incomingList.length > 0) {
-      incomingList.forEach((u: any) => {
-        if (!u || !u.employeeId) return;
-        const rawEmpId = String(u.employeeId || '').toUpperCase();
+      // Remote incoming data from Super Admin / Cloud server is authoritative
+      sourceList = incomingList;
+    } else {
+      // Fallback to local cache only when offline or booting without remote data
+      try {
+        const cached = localStorage.getItem('juwei_wms_registeredUsers');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed)) sourceList = parsed;
+        }
+      } catch (e) {}
+    }
+
+    if (Array.isArray(sourceList)) {
+      sourceList.forEach((u: any) => {
+        if (!u || (!u.employeeId && !u.employee_id)) return;
+        const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase();
         const empId = rawEmpId.startsWith('JPMP-') 
           ? rawEmpId 
           : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
@@ -445,19 +465,16 @@ export default function App() {
             ...current,
             username: u.username ? String(u.username).toUpperCase() : current.username,
             phoneNumber: u.phoneNumber || u.phone_number || current.phoneNumber,
-            // Preserve the registered PIN from server or cloud database; do not reset
             pin: cleanPin || current.pin || '0423'
           });
-        } else if (!deletedSet.has(empId)) {
-          const existing = userMap.get(empId);
+        } else {
           userMap.set(empId, {
-            username: (u.username || existing?.username || 'OPERATOR').toUpperCase(),
-            role: (u.role || existing?.role || 'WAREHOUSE CLERK').toUpperCase(),
+            username: (u.username || 'OPERATOR').toUpperCase(),
+            role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
             employeeId: empId,
-            phoneNumber: u.phoneNumber || u.phone_number || existing?.phoneNumber || '',
-            permission: u.permission || existing?.permission || 'LIMITED_ACCESS',
-            // Preserve registered PIN: cloud/server PIN if present, else existing cached PIN
-            pin: cleanPin || existing?.pin || '1234'
+            phoneNumber: u.phoneNumber || u.phone_number || '',
+            permission: u.permission || 'LIMITED_ACCESS',
+            pin: cleanPin || '1234'
           });
         }
       });
@@ -471,8 +488,43 @@ export default function App() {
   };
 
   const [registeredUsers, setRegisteredUsers] = useState<RegisteredAccount[]>(() => {
-    return sanitizeAndMergeUsers([]);
+    return sanitizeUsersList();
   });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(registeredUsers));
+    } catch (e) {}
+  }, [registeredUsers]);
+
+  // Keep active logged-in user's role, permissions, and status in sync with live registered accounts directory
+  useEffect(() => {
+    if (!isLoggedIn || !currentEmployeeId) return;
+    const cleanId = currentEmployeeId.toUpperCase();
+    const currentRecord = registeredUsers.find(u => (u.employeeId || '').toUpperCase() === cleanId);
+    
+    if (!currentRecord) {
+      // Account was deleted by Super Administrator
+      if (cleanId !== 'JPMP-002') {
+        alert(`SECURITY NOTIFICATION: Your operator account (${cleanId}) has been removed or revoked by the Super Administrator.`);
+        handleLogout();
+      }
+    } else {
+      // Update role / permissions if modified by Super Admin
+      if (currentRecord.permission && currentRecord.permission !== currentPermission) {
+        setCurrentPermission(currentRecord.permission);
+        localStorage.setItem('juwei_wms_userPermission', currentRecord.permission);
+      }
+      if (currentRecord.role && currentRecord.role !== currentRole) {
+        setCurrentRole(currentRecord.role);
+        localStorage.setItem('juwei_wms_userRole', currentRecord.role);
+      }
+      if (currentRecord.username && currentRecord.username !== currentUser) {
+        setCurrentUser(currentRecord.username);
+        localStorage.setItem('juwei_wms_currentUser', currentRecord.username);
+      }
+    }
+  }, [registeredUsers, isLoggedIn, currentEmployeeId, currentPermission, currentRole, currentUser]);
 
   // Live real-time system clock
   const [currentTime, setCurrentTime] = useState<Date>(new Date());
@@ -544,13 +596,105 @@ export default function App() {
   // Helper to determine if incoming remote array should safely override local array without clobbering in-flight mutations
   const shouldApplyRemoteData = (colName: string, remoteArr: any[], currentArr: any[]): boolean => {
     if (!Array.isArray(remoteArr)) return false;
+    // If local state is empty or uninitialized and remote has items, always accept remote items
+    if ((!currentArr || currentArr.length === 0) && remoteArr.length > 0) {
+      return true;
+    }
     const lastMutation = lastMutationTimes.current[colName] || 0;
     const elapsed = Date.now() - lastMutation;
-    // If a local mutation was made within the last 3.5s and remote array has fewer items than local state, protect local state
-    if (elapsed < 3500 && remoteArr.length < currentArr.length) {
+    // If a local mutation was made recently (within last 3 seconds) and the remote array is smaller than the local array, protect local state from being clobbered
+    if (elapsed < 3000 && remoteArr.length < (currentArr?.length || 0)) {
       return false;
     }
     return true;
+  };
+
+  // Manual Full-Sync across WebSocket, REST & Supabase
+  const handleManualSync = async () => {
+    setIsManualSyncing(true);
+    try {
+      let targetAddr = serverAddress.trim() || getDefaultServerAddress();
+      const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
+      const isHttps = isSecureServerHost(cleanHost, targetAddr);
+      const httpProto = isHttps ? 'https:' : 'http:';
+
+      try {
+        const res = await fetch('/api/sync', { cache: 'no-store', headers: { 'Accept': 'application/json' } });
+        if (res.ok) {
+          const json = await res.json();
+          if (json.data) {
+            const { stocks: s, receiving: rc, returns: rt, recycling: cy, issuances: is, deliveries: d, envLogs: e, forkliftChecks: f, registries: reg, registeredUsers: ru, chatMessages: cm } = json.data;
+            if (Array.isArray(s)) setStocks(s);
+            if (Array.isArray(rc)) setReceiving(rc);
+            if (Array.isArray(rt)) setReturns(rt);
+            if (Array.isArray(cy)) setRecycling(cy);
+            if (Array.isArray(is)) setIssuances(is);
+            if (Array.isArray(d)) setDeliveries(d);
+            if (Array.isArray(e)) setEnvLogs(e);
+            if (Array.isArray(f)) setForkliftChecks(f);
+            if (Array.isArray(reg)) setRegistries(reg);
+            if (Array.isArray(ru)) setRegisteredUsers(sanitizeUsersList(ru));
+            if (Array.isArray(cm)) setChatMessages(cm);
+            setConnectionStatus('connected');
+          }
+        }
+      } catch (err) {
+        try {
+          const resFallback = await fetch(`${httpProto}//${cleanHost}/api/sync`, { cache: 'no-store', headers: { 'Accept': 'application/json' } });
+          if (resFallback.ok) {
+            const json = await resFallback.json();
+            if (json.data) {
+              const { stocks: s, receiving: rc, returns: rt, recycling: cy, issuances: is, deliveries: d, envLogs: e, forkliftChecks: f, registries: reg, registeredUsers: ru, chatMessages: cm } = json.data;
+              if (Array.isArray(s)) setStocks(s);
+              if (Array.isArray(rc)) setReceiving(rc);
+              if (Array.isArray(rt)) setReturns(rt);
+              if (Array.isArray(cy)) setRecycling(cy);
+              if (Array.isArray(is)) setIssuances(is);
+              if (Array.isArray(d)) setDeliveries(d);
+              if (Array.isArray(e)) setEnvLogs(e);
+              if (Array.isArray(f)) setForkliftChecks(f);
+              if (Array.isArray(reg)) setRegistries(reg);
+              if (Array.isArray(ru)) setRegisteredUsers(sanitizeUsersList(ru));
+              if (Array.isArray(cm)) setChatMessages(cm);
+              setConnectionStatus('connected');
+            }
+          }
+        } catch (e2) {}
+      }
+
+      if (isSupabaseConfigured()) {
+        const snap = await fetchFullSupabaseSnapshot();
+        if (snap) {
+          if (Array.isArray(snap.stocks)) setStocks(snap.stocks);
+          if (Array.isArray(snap.receiving)) setReceiving(snap.receiving);
+          if (Array.isArray(snap.returns)) setReturns(snap.returns);
+          if (Array.isArray(snap.recycling)) setRecycling(snap.recycling);
+          if (Array.isArray(snap.issuances)) setIssuances(snap.issuances);
+          if (Array.isArray(snap.deliveries)) setDeliveries(snap.deliveries);
+          if (Array.isArray(snap.envLogs)) setEnvLogs(snap.envLogs);
+          if (Array.isArray(snap.forkliftChecks)) setForkliftChecks(snap.forkliftChecks);
+          if (Array.isArray(snap.registries)) setRegistries(snap.registries);
+          if (Array.isArray(snap.registeredUsers) && snap.registeredUsers.length > 0) {
+            setRegisteredUsers(sanitizeUsersList(snap.registeredUsers));
+          }
+          if (Array.isArray(snap.chatMessages) && snap.chatMessages.length > 0) {
+            setChatMessages(snap.chatMessages);
+          }
+          setSupabaseStatus('connected');
+        }
+      }
+
+      if (wsOpen(socket)) {
+        try {
+          socket!.send(JSON.stringify({ type: 'ping' }));
+          socket!.send(JSON.stringify({ type: 'join', username: currentUser || 'JUWEI OPERATOR' }));
+        } catch (e) {}
+      }
+    } catch (err) {
+      console.warn('Manual sync failure:', err);
+    } finally {
+      setTimeout(() => setIsManualSyncing(false), 500);
+    }
   };
 
   // Connect to fullstack WebSocket & HTTP Real-Time Server with automatic failover
@@ -558,8 +702,11 @@ export default function App() {
     let ws: WebSocket | null = null;
     let reconnectTimeout: any = null;
     let httpPollInterval: any = null;
+    let pingInterval: any = null;
     let isMounted = true;
     let hasConnectedOnce = false;
+    let retryDelay = 1000;
+    let missedPongs = 0;
 
     const applyStatePayload = (dataPayload: any, activeUsersList?: string[]) => {
       if (!dataPayload) return;
@@ -576,7 +723,7 @@ export default function App() {
       if (Array.isArray(registries)) setRegistries(prev => shouldApplyRemoteData('registries', registries, prev) ? registries : prev);
       
       if (Array.isArray(serverUsers)) {
-        const finalUsers = sanitizeAndMergeUsers(serverUsers);
+        const finalUsers = sanitizeUsersList(serverUsers);
         setRegisteredUsers(finalUsers);
       }
       if (msgs && Array.isArray(msgs)) setChatMessages(msgs);
@@ -585,7 +732,7 @@ export default function App() {
 
     const tryFetchSync = async (url: string): Promise<boolean> => {
       try {
-        const res = await fetch(url, { method: 'GET', headers: { 'Accept': 'application/json' } });
+        const res = await fetch(url, { method: 'GET', cache: 'no-store', headers: { 'Accept': 'application/json' } });
         if (res.ok) {
           const json = await res.json();
           if (isMounted) {
@@ -684,18 +831,23 @@ export default function App() {
       const wsProto = isHttps ? 'wss:' : 'ws:';
       const socketUrl = `${wsProto}//${cleanHost}/ws`;
 
-      let pingInterval: any = null;
-      
+      if (pingInterval) clearInterval(pingInterval);
+
       try {
         ws = new WebSocket(socketUrl);
       } catch (err) {
-        reconnectTimeout = setTimeout(connectWebSocket, 5000);
+        reconnectTimeout = setTimeout(() => {
+          retryDelay = Math.min(retryDelay * 1.5, 6000);
+          connectWebSocket();
+        }, retryDelay);
         return;
       }
 
       ws.onopen = () => {
         if (!isMounted) return;
         hasConnectedOnce = true;
+        missedPongs = 0;
+        retryDelay = 1000;
         setConnectionStatus('connected');
         setSocket(ws);
         
@@ -710,26 +862,37 @@ export default function App() {
           }
         }
 
+        // Periodic ping heartbeat to keep connection alive and detect half-open sockets
         pingInterval = setInterval(() => {
           if (ws && ws.readyState === WebSocket.OPEN) {
             try {
+              missedPongs++;
+              if (missedPongs >= 3) {
+                console.warn('Missed WebSocket pongs, reconnecting...');
+                try { ws.close(); } catch (e) {}
+                return;
+              }
               ws.send(JSON.stringify({ type: 'ping' }));
             } catch (e) {
               console.warn('WS ping error:', e);
             }
           }
-        }, 15000);
+        }, 8000);
       };
 
       ws.onmessage = (event) => {
         if (!isMounted) return;
         try {
           const payload = JSON.parse(event.data);
-          if (payload.type === 'pong') return;
+          if (payload.type === 'pong') {
+            missedPongs = 0;
+            return;
+          }
 
           switch (payload.type) {
             case 'init': {
               hasConnectedOnce = true;
+              missedPongs = 0;
               setConnectionStatus('connected');
               applyStatePayload(payload.data, payload.activeUsers);
               break;
@@ -747,8 +910,8 @@ export default function App() {
                 case 'forkliftChecks': setForkliftChecks(prev => shouldApplyRemoteData('forkliftChecks', data, prev) ? data : prev); break;
                 case 'registries': setRegistries(prev => shouldApplyRemoteData('registries', data, prev) ? data : prev); break;
                 case 'registeredUsers': {
-                  const merged = sanitizeAndMergeUsers(data || []);
-                  setRegisteredUsers(merged);
+                  const sanitized = sanitizeUsersList(data || []);
+                  setRegisteredUsers(sanitized);
                   break;
                 }
               }
@@ -798,7 +961,10 @@ export default function App() {
         if (pingInterval) clearInterval(pingInterval);
         setSocket(null);
         runSyncCheck();
-        reconnectTimeout = setTimeout(connectWebSocket, 5000);
+        reconnectTimeout = setTimeout(() => {
+          retryDelay = Math.min(retryDelay * 1.5, 6000);
+          connectWebSocket();
+        }, retryDelay);
       };
     };
 
@@ -825,21 +991,21 @@ export default function App() {
 
     connectWebSocket();
 
-    // Gentle background HTTP poll fallback (15s if connected, 5s if disconnected)
+    // Gentle background HTTP poll fallback (10s if connected, 5s if disconnected)
     httpPollInterval = setInterval(() => {
       if (isMounted) {
-        // Only run HTTP polling if offline/disconnected or as a relaxed background heartbeat
         if (!ws || ws.readyState !== WebSocket.OPEN) {
           runSyncCheck();
         }
       }
-    }, 8000);
+    }, 7000);
 
     return () => {
       isMounted = false;
       if (ws) ws.close();
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (httpPollInterval) clearInterval(httpPollInterval);
+      if (pingInterval) clearInterval(pingInterval);
       window.removeEventListener('online', handleOnlineOrFocus);
       window.removeEventListener('focus', handleOnlineOrFocus);
       document.removeEventListener('visibilitychange', handleOnlineOrFocus);
@@ -900,8 +1066,8 @@ export default function App() {
       if (Array.isArray(reg)) { hasSuccess = true; setRegistries(prev => shouldApplyRemoteData('registries', reg, prev) ? reg : prev); }
       if (Array.isArray(ru) && ru.length > 0) {
         hasSuccess = true;
-        const merged = sanitizeAndMergeUsers(ru);
-        setRegisteredUsers(merged);
+        const sanitized = sanitizeUsersList(ru);
+        setRegisteredUsers(sanitized);
       }
       if (Array.isArray(cm) && cm.length > 0) {
         hasSuccess = true;
@@ -939,8 +1105,8 @@ export default function App() {
             else if (col === 'forkliftChecks') setForkliftChecks(prev => shouldApplyRemoteData('forkliftChecks', updatedItems, prev) ? updatedItems : prev);
             else if (col === 'registries') setRegistries(prev => shouldApplyRemoteData('registries', updatedItems, prev) ? updatedItems : prev);
             else if (col === 'registeredUsers') {
-              const merged = sanitizeAndMergeUsers(updatedItems);
-              setRegisteredUsers(merged);
+              const sanitized = sanitizeUsersList(updatedItems);
+              setRegisteredUsers(sanitized);
             }
           }
         },
@@ -2206,16 +2372,35 @@ export default function App() {
             <p className="text-[9px] text-slate-300 uppercase tracking-widest font-mono font-bold">
               SECURE LOG-IN SESSION • JUWEI PLASTIC MOULDING WMS
             </p>
-            <button
-              type="button"
-              onClick={() => setShowDesktopInstallModal(true)}
-              className="text-[10px] text-indigo-300 hover:text-white bg-slate-800/80 hover:bg-slate-800 border border-slate-700/80 px-3 py-1 rounded-lg transition flex items-center gap-1.5 font-mono uppercase font-bold cursor-pointer"
-            >
-              <Monitor className="h-3 w-3 text-indigo-400" />
-              <span>Install Desktop App (.exe / PWA)</span>
-            </button>
+            <div className="flex items-center gap-2 flex-wrap justify-center">
+              <button
+                type="button"
+                onClick={() => setShowMobileInstallModal(true)}
+                className="text-[10px] text-emerald-300 hover:text-white bg-emerald-950/60 hover:bg-emerald-900/80 border border-emerald-500/40 px-3 py-1 rounded-lg transition flex items-center gap-1.5 font-mono uppercase font-bold cursor-pointer shadow-xs"
+              >
+                <Smartphone className="h-3 w-3 text-emerald-400" />
+                <span>Mobile APK / App</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowDesktopInstallModal(true)}
+                className="text-[10px] text-indigo-300 hover:text-white bg-slate-800/80 hover:bg-slate-800 border border-slate-700/80 px-3 py-1 rounded-lg transition flex items-center gap-1.5 font-mono uppercase font-bold cursor-pointer"
+              >
+                <Monitor className="h-3 w-3 text-indigo-400" />
+                <span>Desktop App (.exe)</span>
+              </button>
+            </div>
           </div>
         </div>
+
+        {/* Mobile APK / App Installer Modal */}
+        {showMobileInstallModal && (
+          <MobileAppDownloadModal
+            isOpen={showMobileInstallModal}
+            onClose={() => setShowMobileInstallModal(false)}
+            serverAddress={serverAddress}
+          />
+        )}
 
         {/* Desktop Application Installer Modal */}
         {showDesktopInstallModal && (
@@ -2499,21 +2684,64 @@ export default function App() {
             <h1 className="font-bold text-base sm:text-lg text-slate-800 tracking-tight">{getPageTitle()}</h1>
           </div>
           
-          <div className="flex items-center gap-2.5 text-xs font-semibold">
+          <div className="flex items-center gap-2 text-xs font-semibold">
+            {/* Quick Force Sync Button */}
+            <button
+              type="button"
+              onClick={handleManualSync}
+              disabled={isManualSyncing}
+              className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0 disabled:opacity-50"
+              title="Force Instant Sync across All Workstations"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 text-slate-600 ${isManualSyncing ? 'animate-spin text-blue-600' : ''}`} />
+              <span className="text-[11px] font-mono tracking-wider uppercase hidden md:inline">
+                {isManualSyncing ? 'SYNCING...' : 'SYNC NOW'}
+              </span>
+            </button>
+
+            {/* Real-Time WebSocket / Server Node Connection Badge Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setTempServerAddress(serverAddress);
+                setShowServerSettingsModal(true);
+              }}
+              className="flex items-center gap-2 bg-slate-900 border border-slate-700 hover:border-indigo-500 text-slate-200 hover:text-white px-2.5 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
+              title="Real-Time Network Sync Status & Server Node Settings"
+            >
+              <Wifi className={`h-3.5 w-3.5 ${connectionStatus === 'connected' ? 'text-emerald-400' : connectionStatus === 'connecting' ? 'text-amber-400 animate-pulse' : 'text-rose-400'} shrink-0`} />
+              <span className="text-[11px] font-mono tracking-wider uppercase hidden sm:inline">REAL-TIME</span>
+              <span className={`w-2 h-2 rounded-full ${
+                connectionStatus === 'connected' ? 'bg-emerald-400 animate-pulse' :
+                connectionStatus === 'connecting' ? 'bg-amber-400 animate-ping' : 'bg-rose-500'
+              }`} />
+            </button>
+
             {/* Supabase PostgreSQL Cloud Sync Badge Button */}
             <button
               type="button"
               onClick={() => setShowSupabaseSettingsModal(true)}
-              className="flex items-center gap-2 bg-slate-900 border border-slate-700 hover:border-emerald-500 text-slate-200 hover:text-white px-3 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
+              className="flex items-center gap-2 bg-slate-900 border border-slate-700 hover:border-emerald-500 text-slate-200 hover:text-white px-2.5 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
               title="Configure Supabase PostgreSQL Database & Cloud Sync"
             >
-              <Database className="h-4 w-4 text-emerald-400 shrink-0" />
-              <span className="text-[11px] font-mono tracking-wider uppercase text-emerald-400">SUPABASE</span>
+              <Database className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+              <span className="text-[11px] font-mono tracking-wider uppercase hidden sm:inline text-emerald-400">SUPABASE</span>
               <span className={`w-2 h-2 rounded-full ${supabaseStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : supabaseStatus === 'connecting' ? 'bg-amber-400 animate-bounce' : 'bg-slate-500'}`} />
             </button>
 
+            {/* Mobile APK / App Install Hub Button */}
+            <button
+              type="button"
+              onClick={() => setShowMobileInstallModal(true)}
+              className="flex items-center gap-1.5 bg-emerald-950/80 border border-emerald-500/40 hover:border-emerald-400 text-emerald-300 hover:text-white px-2.5 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
+              title="Download Android APK / Install Mobile Web App"
+            >
+              <Smartphone className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+              <span className="text-[11px] font-mono tracking-wider uppercase text-emerald-300">MOBILE APK</span>
+            </button>
+
             {/* Live Date & Time Display */}
-            <div className="hidden sm:flex items-center gap-1.5 text-[11px] font-mono font-semibold text-slate-500 uppercase tracking-tight bg-slate-50 px-2.5 h-8 rounded-lg border border-slate-200/80 shrink-0">
+            <div className="hidden lg:flex items-center gap-1.5 text-[11px] font-mono font-semibold text-slate-500 uppercase tracking-tight bg-slate-50 px-2.5 h-8 rounded-lg border border-slate-200/80 shrink-0">
               <Clock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
               <span>
                 {currentTime.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' }).toUpperCase()} • {currentTime.toLocaleTimeString('en-US', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
@@ -2812,7 +3040,19 @@ export default function App() {
             </div>
 
             {/* Action Buttons */}
-            <div className="pt-1 flex gap-2">
+            <div className="pt-1 flex flex-col gap-2">
+              <button 
+                type="button"
+                onClick={async () => {
+                  await handleManualSync();
+                }}
+                disabled={isManualSyncing}
+                className="w-full bg-slate-800 hover:bg-slate-700 text-sky-400 font-bold py-2.5 px-4 rounded-xl text-xs font-mono transition uppercase cursor-pointer border border-sky-500/30 flex items-center justify-center gap-2"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${isManualSyncing ? 'animate-spin text-sky-400' : ''}`} />
+                <span>{isManualSyncing ? 'Synchronizing Data...' : 'Force Cloud & Node Re-Sync'}</span>
+              </button>
+
               <button 
                 type="button"
                 onClick={() => {
@@ -2829,6 +3069,23 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Mobile APK / App Installer Modal */}
+      {showMobileInstallModal && (
+        <MobileAppDownloadModal
+          isOpen={showMobileInstallModal}
+          onClose={() => setShowMobileInstallModal(false)}
+          serverAddress={serverAddress}
+        />
+      )}
+
+      {/* Desktop Application Installer Modal */}
+      {showDesktopInstallModal && (
+        <DesktopInstallModal
+          isOpen={showDesktopInstallModal}
+          onClose={() => setShowDesktopInstallModal(false)}
+        />
       )}
 
       {/* Supabase PostgreSQL Database & Realtime Settings Modal */}

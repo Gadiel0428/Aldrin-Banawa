@@ -234,10 +234,11 @@ async function startServer() {
           const cleanPin = u.pin ? String(u.pin).trim() : (empId === 'JPMP-002' ? '0423' : '1234');
           return {
             employee_id: empId,
-            username: u.username,
-            role: u.role,
+            username: (u.username || 'OPERATOR').toUpperCase(),
+            role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
             permission: u.permission || 'LIMITED_ACCESS',
             pin: cleanPin,
+            pin_hash: cleanPin,
             phone_number: u.phoneNumber || u.phone_number || '',
             updated_at: new Date().toISOString()
           };
@@ -355,6 +356,9 @@ async function startServer() {
 
   // API full state sync endpoint for HTTP clients / fallback
   app.get("/api/sync", (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
     res.json({
       status: "ok",
       supabaseConnected: Boolean(supabaseServer),
@@ -368,6 +372,7 @@ async function startServer() {
 
   // API endpoint for version check and auto-update prompts
   app.get("/api/version", (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     res.json({
       version: "1.0.0",
       productName: "JUWEI WMS Desktop System",
@@ -378,6 +383,7 @@ async function startServer() {
 
   // API update collection endpoint for HTTP clients / fallback
   app.post("/api/sync", (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     try {
       const { collection, data } = req.body;
       if (collection === "chatMessages" && Array.isArray(data)) {
@@ -664,15 +670,61 @@ async function startServer() {
     const rawMsg = JSON.stringify(msg);
     for (const client of wss.clients) {
       if (client.readyState === WebSocket.OPEN && client !== excludeSocket) {
-        client.send(rawMsg);
+        try {
+          client.send(rawMsg);
+        } catch (sendErr) {
+          console.warn("WebSocket client send error:", sendErr);
+        }
       }
     }
   }
 
-  wss.on("connection", (ws) => {
+  // Periodic heartbeat to sweep dead / half-open WebSocket connections
+  const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach((client: any) => {
+      if (client.isAlive === false) {
+        activeConnections.delete(client);
+        return client.terminate();
+      }
+      client.isAlive = false;
+      try {
+        client.ping();
+      } catch (e) {}
+    });
+  }, 25000);
+
+  wss.on("close", () => {
+    clearInterval(heartbeatInterval);
+  });
+
+  wss.on("connection", (ws: any) => {
+    ws.isAlive = true;
     console.log("New WebSocket client connected");
 
-    ws.on("message", (messageData) => {
+    ws.on("pong", () => {
+      ws.isAlive = true;
+    });
+
+    // IMMEDIATELY send full system state upon connection so the newly installed client or secondary PC has instant data & user accounts for login
+    try {
+      ws.send(JSON.stringify({
+        type: "init",
+        data: {
+          ...state,
+          chatMessages
+        },
+        activeUsers: getActiveUsersList()
+      }));
+    } catch (err) {
+      console.warn("Error sending initial WS state:", err);
+    }
+
+    ws.on("error", (err: any) => {
+      console.warn("WebSocket client error:", err?.message || err);
+    });
+
+    ws.on("message", (messageData: any) => {
+      ws.isAlive = true;
       try {
         const payload = JSON.parse(messageData.toString());
 
@@ -686,7 +738,7 @@ async function startServer() {
             const username = payload.username || "Anonymous Officer";
             activeConnections.set(ws, username);
             
-            // Send initial complete state to the newly connected client
+            // Re-send initial complete state and updated active users list
             ws.send(JSON.stringify({
               type: "init",
               data: {
