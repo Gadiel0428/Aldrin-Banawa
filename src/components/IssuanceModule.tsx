@@ -749,14 +749,7 @@ export default function IssuanceModule({
         onClose={() => setShowScannerModal(false)}
         onScanResult={handleScanResult}
         title="Issuance Material Barcode Scanner"
-        subtitle="Use handheld barcode scanner, enter barcode manually, or select registered barcode preset"
-        sampleCodes={
-          registries.filter(r => r.type === 'BARCODE_PRESET' && r.status === 'ACTIVE').length > 0
-            ? registries
-                .filter(r => r.type === 'BARCODE_PRESET' && r.status === 'ACTIVE')
-                .map(r => ({ code: r.code || r.id, label: r.name }))
-            : undefined
-        }
+        subtitle="Use handheld barcode scanner or enter barcode manually"
       />
 
       {/* Printable Requisition & Picking List Modal */}

@@ -327,8 +327,6 @@ export default function App() {
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
   const [serverAddress, setServerAddress] = useState<string>(() => getDefaultServerAddress());
-  const [showServerSettingsModal, setShowServerSettingsModal] = useState<boolean>(false);
-  const [tempServerAddress, setTempServerAddress] = useState<string>('');
 
   // Supabase PostgreSQL Realtime state
   const [showSupabaseSettingsModal, setShowSupabaseSettingsModal] = useState<boolean>(false);
@@ -598,17 +596,199 @@ export default function App() {
     handleLogout();
   };
 
+  // Normalizer helper for records coming from any source (REST, WebSocket, Supabase, Cache)
+  const normalizeRecords = (colName: string, items: any[]): any[] => {
+    if (!Array.isArray(items)) return [];
+    return items.map((r: any) => {
+      if (!r || typeof r !== 'object') return r;
+      switch (colName) {
+        case 'stocks':
+          return {
+            id: r.id || `STK-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            partCode: r.partCode || r.part_code || '',
+            description: r.description || '',
+            type: r.type || 'RAW',
+            location: r.location || 'Zone A',
+            quantity: Number(r.quantity) || 0,
+            unit: r.unit || 'PCS',
+            lotNumber: r.lotNumber || r.lot_number || '',
+            modelName: r.modelName || r.model_name,
+            color: r.color,
+            receivedDate: r.receivedDate || r.received_date || new Date().toISOString().split('T')[0],
+            expirationDate: r.expirationDate || r.expiration_date,
+            fifoColor: r.fifoColor || r.fifo_color || 'Dark Green',
+            status: r.status || 'APPROVED',
+            resinSackRisk: Boolean(r.resinSackRisk || r.resin_sack_risk),
+            shelfLifeDays: r.shelfLifeDays || r.shelf_life_days ? Number(r.shelfLifeDays || r.shelf_life_days) : undefined,
+            customer: r.customer,
+            reorderMin: r.reorderMin || r.reorder_min ? Number(r.reorderMin || r.reorder_min) : undefined,
+            remarks: r.remarks,
+            bom: r.bom || []
+          };
+        case 'receiving':
+          return {
+            id: r.id || `RCV-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            date: r.date || new Date().toISOString().split('T')[0],
+            receivedDate: r.receivedDate || r.received_date || r.date,
+            location: r.location,
+            vendorSupplier: r.vendorSupplier || r.vendor_supplier,
+            reorderMin: r.reorderMin || r.reorder_min ? Number(r.reorderMin || r.reorder_min) : undefined,
+            remarks: r.remarks,
+            source: r.source || 'Resin(External)',
+            itemDescription: r.itemDescription || r.item_description || '',
+            partCode: r.partCode || r.part_code || '',
+            modelName: r.modelName || r.model_name,
+            color: r.color,
+            quantity: Number(r.quantity) || 0,
+            unit: r.unit || 'PCS',
+            lotNumber: r.lotNumber || r.lot_number || '',
+            physicalCondition: r.physicalCondition || r.physical_condition || {},
+            rrNumber: r.rrNumber || r.rr_number,
+            poNumber: r.poNumber || r.po_number,
+            drNumber: r.drNumber || r.dr_number,
+            siNumber: r.siNumber || r.si_number,
+            wayBill: r.wayBill || r.way_bill,
+            transferFormNumber: r.transferFormNumber || r.transfer_form_number,
+            supplierOrDept: r.supplierOrDept || r.supplier_or_dept || 'Internal',
+            iqcStatus: r.iqcStatus || r.iqc_status || 'PENDING_IQC',
+            status: r.status || 'DRAFT',
+            fifoColorCode: r.fifoColorCode || r.fifo_color_code || 'Dark Green',
+            bom: r.bom || [],
+            autoDeductBom: Boolean(r.autoDeductBom || r.auto_deduct_bom),
+            customer: r.customer
+          };
+        case 'returns':
+          return {
+            id: r.id || `RET-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            date: r.date || new Date().toISOString().split('T')[0],
+            category: r.category,
+            materialDescription: r.materialDescription || r.material_description || '',
+            partCode: r.partCode || r.part_code || '',
+            quantity: Number(r.quantity) || 0,
+            unit: r.unit || 'PCS',
+            lotNumber: r.lotNumber || r.lot_number || '',
+            department: r.department || 'Production',
+            reason: r.reason || 'Excess Material',
+            condition: r.condition || 'Good',
+            iqcEvaluation: r.iqcEvaluation || r.iqc_evaluation || 'PENDING_IQC',
+            status: r.status || 'PENDING',
+            returnSlipFormNumber: r.returnSlipFormNumber || r.return_slip_form_number || ''
+          };
+        case 'recycling':
+          return {
+            id: r.id || `CYC-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            date: r.date || new Date().toISOString().split('T')[0],
+            itemType: r.itemType || r.item_type || 'Carton Box',
+            quantity: Number(r.quantity) || 0,
+            condition: r.condition || 'Reusable',
+            reuseCycleCount: Number(r.reuseCycleCount || r.reuse_cycle_count) || 1,
+            disposition: r.disposition || 'Re-used',
+            logSheetNumber: r.logSheetNumber || r.log_sheet_number || ''
+          };
+        case 'issuances':
+          return {
+            id: r.id || `ISS-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            date: r.date || new Date().toISOString().split('T')[0],
+            requisitionNumber: r.requisitionNumber || r.requisition_number || '',
+            department: r.department || 'Assembly',
+            partCode: r.partCode || r.part_code || '',
+            description: r.description || '',
+            quantityRequested: Number(r.quantityRequested || r.quantity_requested) || 0,
+            quantityIssued: Number(r.quantityIssued || r.quantity_issued) || 0,
+            lotNumber: r.lotNumber || r.lot_number || '',
+            fifoVerified: Boolean(r.fifoVerified || r.fifo_verified),
+            issuedBy: r.issuedBy || r.issued_by || 'Storekeeper',
+            receivedBy: r.receivedBy || r.received_by || 'Line Operator'
+          };
+        case 'deliveries':
+          return {
+            id: r.id || `DEL-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            date: r.date || new Date().toISOString().split('T')[0],
+            pickingListNumber: r.pickingListNumber || r.picking_list_number || '',
+            poNumber: r.poNumber || r.po_number || '',
+            modelName: r.modelName || r.model_name || '',
+            partCode: r.partCode || r.part_code || '',
+            quantity: Number(r.quantity) || 0,
+            packagingConditionOk: Boolean(r.packagingConditionOk ?? r.packaging_condition_ok ?? true),
+            fifoVerified: Boolean(r.fifoVerified ?? r.fifo_verified ?? false),
+            forkliftChecklistSigned: Boolean(r.forkliftChecklistSigned ?? r.forklift_checklist_signed ?? false),
+            gatePassNumber: r.gatePassNumber || r.gate_pass_number || '',
+            drNumber: r.drNumber || r.dr_number,
+            salesInvoice: r.salesInvoice || r.sales_invoice,
+            wayBill: r.wayBill || r.way_bill,
+            status: r.status || 'PREPARING',
+            preparedBy: r.preparedBy || r.preparedBy || 'Dispatch Supervisor',
+            loadedBy: r.loadedBy || r.loaded_by
+          };
+        case 'envLogs':
+          return {
+            id: r.id || `ENV-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            timestamp: r.timestamp || new Date().toISOString(),
+            zone: r.zone || 'Raw Material Storage Zone',
+            occupiedSlots: Number(r.occupiedSlots || r.occupied_slots) || 0,
+            totalSlots: Number(r.totalSlots || r.total_slots) || 150,
+            cleanlinessOk: Boolean(r.cleanlinessOk ?? r.cleanliness_ok ?? true),
+            ventilationOk: Boolean(r.ventilationOk ?? r.ventilation_ok ?? true),
+            pestFree: Boolean(r.pestFree ?? r.pest_free ?? true),
+            recordedBy: r.recordedBy || r.recorded_by || 'Inspector'
+          };
+        case 'forkliftChecks':
+          return {
+            id: r.id || `FLK-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            date: r.date || new Date().toISOString().split('T')[0],
+            operator: r.operator || 'Operator',
+            forkliftId: r.forkliftId || r.forklift_id || 'FL-01',
+            brakesOk: Boolean(r.brakesOk ?? r.brakes_ok ?? true),
+            lightsOk: Boolean(r.lightsOk ?? r.lights_ok ?? true),
+            hydraulicOk: Boolean(r.hydraulicOk ?? r.hydraulic_ok ?? true),
+            steeringOk: Boolean(r.steeringOk ?? r.steering_ok ?? true),
+            tiresOk: Boolean(r.tiresOk ?? r.tires_ok ?? true),
+            batteryFluidOk: Boolean(r.batteryFluidOk ?? r.battery_fluid_ok ?? true),
+            remarks: r.remarks
+          };
+        case 'registries':
+          return {
+            id: r.id || `REG-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            type: r.type || 'PART_CODE',
+            code: r.code || '',
+            name: r.name || '',
+            description: r.description,
+            status: r.status || 'ACTIVE',
+            dateRegistered: r.dateRegistered || r.date_registered || new Date().toISOString().split('T')[0],
+            presetSource: r.presetSource || r.preset_source,
+            category: r.category,
+            vendorSupplier: r.vendorSupplier || r.vendor_supplier,
+            unit: r.unit,
+            location: r.location
+          };
+        default:
+          return r;
+      }
+    });
+  };
+
   // Helper to determine if incoming remote array should safely override local array without clobbering in-flight mutations
   const shouldApplyRemoteData = (colName: string, remoteArr: any[], currentArr: any[]): boolean => {
     if (!Array.isArray(remoteArr)) return false;
+
+    // CRITICAL: If remote array is empty, but local state already has records,
+    // DO NOT wipe the local records! Wiping populated local data with an empty remote snapshot causes disappearing data.
+    if (remoteArr.length === 0 && currentArr && currentArr.length > 0) {
+      setTimeout(() => {
+        syncCollection(colName, currentArr);
+      }, 500);
+      return false;
+    }
+
     // If local state is empty or uninitialized and remote has items, always accept remote items
     if ((!currentArr || currentArr.length === 0) && remoteArr.length > 0) {
       return true;
     }
+
     const lastMutation = lastMutationTimes.current[colName] || 0;
     const elapsed = Date.now() - lastMutation;
-    // If a local mutation was made recently (within last 3 seconds) and the remote array is smaller than the local array, protect local state from being clobbered
-    if (elapsed < 3000 && remoteArr.length < (currentArr?.length || 0)) {
+    // If a local mutation was made recently (within last 4 seconds) and the remote array is smaller than the local array, protect local state
+    if (elapsed < 4000 && remoteArr.length < (currentArr?.length || 0)) {
       return false;
     }
     return true;
@@ -629,17 +809,17 @@ export default function App() {
           const json = await res.json();
           if (json.data) {
             const { stocks: s, receiving: rc, returns: rt, recycling: cy, issuances: is, deliveries: d, envLogs: e, forkliftChecks: f, registries: reg, registeredUsers: ru, chatMessages: cm } = json.data;
-            if (Array.isArray(s)) setStocks(s);
-            if (Array.isArray(rc)) setReceiving(rc);
-            if (Array.isArray(rt)) setReturns(rt);
-            if (Array.isArray(cy)) setRecycling(cy);
-            if (Array.isArray(is)) setIssuances(is);
-            if (Array.isArray(d)) setDeliveries(d);
-            if (Array.isArray(e)) setEnvLogs(e);
-            if (Array.isArray(f)) setForkliftChecks(f);
-            if (Array.isArray(reg)) setRegistries(reg);
-            if (Array.isArray(ru)) setRegisteredUsers(sanitizeUsersList(ru));
-            if (Array.isArray(cm)) setChatMessages(cm);
+            if (Array.isArray(s) && s.length > 0) setStocks(normalizeRecords('stocks', s));
+            if (Array.isArray(rc) && rc.length > 0) setReceiving(normalizeRecords('receiving', rc));
+            if (Array.isArray(rt) && rt.length > 0) setReturns(normalizeRecords('returns', rt));
+            if (Array.isArray(cy) && cy.length > 0) setRecycling(normalizeRecords('recycling', cy));
+            if (Array.isArray(is) && is.length > 0) setIssuances(normalizeRecords('issuances', is));
+            if (Array.isArray(d) && d.length > 0) setDeliveries(normalizeRecords('deliveries', d));
+            if (Array.isArray(e) && e.length > 0) setEnvLogs(normalizeRecords('envLogs', e));
+            if (Array.isArray(f) && f.length > 0) setForkliftChecks(normalizeRecords('forkliftChecks', f));
+            if (Array.isArray(reg) && reg.length > 0) setRegistries(normalizeRecords('registries', reg));
+            if (Array.isArray(ru) && ru.length > 0) setRegisteredUsers(sanitizeUsersList(ru));
+            if (Array.isArray(cm) && cm.length > 0) setChatMessages(cm);
             setConnectionStatus('connected');
           }
         }
@@ -650,17 +830,17 @@ export default function App() {
             const json = await resFallback.json();
             if (json.data) {
               const { stocks: s, receiving: rc, returns: rt, recycling: cy, issuances: is, deliveries: d, envLogs: e, forkliftChecks: f, registries: reg, registeredUsers: ru, chatMessages: cm } = json.data;
-              if (Array.isArray(s)) setStocks(s);
-              if (Array.isArray(rc)) setReceiving(rc);
-              if (Array.isArray(rt)) setReturns(rt);
-              if (Array.isArray(cy)) setRecycling(cy);
-              if (Array.isArray(is)) setIssuances(is);
-              if (Array.isArray(d)) setDeliveries(d);
-              if (Array.isArray(e)) setEnvLogs(e);
-              if (Array.isArray(f)) setForkliftChecks(f);
-              if (Array.isArray(reg)) setRegistries(reg);
-              if (Array.isArray(ru)) setRegisteredUsers(sanitizeUsersList(ru));
-              if (Array.isArray(cm)) setChatMessages(cm);
+              if (Array.isArray(s) && s.length > 0) setStocks(normalizeRecords('stocks', s));
+              if (Array.isArray(rc) && rc.length > 0) setReceiving(normalizeRecords('receiving', rc));
+              if (Array.isArray(rt) && rt.length > 0) setReturns(normalizeRecords('returns', rt));
+              if (Array.isArray(cy) && cy.length > 0) setRecycling(normalizeRecords('recycling', cy));
+              if (Array.isArray(is) && is.length > 0) setIssuances(normalizeRecords('issuances', is));
+              if (Array.isArray(d) && d.length > 0) setDeliveries(normalizeRecords('deliveries', d));
+              if (Array.isArray(e) && e.length > 0) setEnvLogs(normalizeRecords('envLogs', e));
+              if (Array.isArray(f) && f.length > 0) setForkliftChecks(normalizeRecords('forkliftChecks', f));
+              if (Array.isArray(reg) && reg.length > 0) setRegistries(normalizeRecords('registries', reg));
+              if (Array.isArray(ru) && ru.length > 0) setRegisteredUsers(sanitizeUsersList(ru));
+              if (Array.isArray(cm) && cm.length > 0) setChatMessages(cm);
               setConnectionStatus('connected');
             }
           }
@@ -670,15 +850,15 @@ export default function App() {
       if (isSupabaseConfigured()) {
         const snap = await fetchFullSupabaseSnapshot();
         if (snap) {
-          if (Array.isArray(snap.stocks)) setStocks(snap.stocks);
-          if (Array.isArray(snap.receiving)) setReceiving(snap.receiving);
-          if (Array.isArray(snap.returns)) setReturns(snap.returns);
-          if (Array.isArray(snap.recycling)) setRecycling(snap.recycling);
-          if (Array.isArray(snap.issuances)) setIssuances(snap.issuances);
-          if (Array.isArray(snap.deliveries)) setDeliveries(snap.deliveries);
-          if (Array.isArray(snap.envLogs)) setEnvLogs(snap.envLogs);
-          if (Array.isArray(snap.forkliftChecks)) setForkliftChecks(snap.forkliftChecks);
-          if (Array.isArray(snap.registries)) setRegistries(snap.registries);
+          if (Array.isArray(snap.stocks) && snap.stocks.length > 0) setStocks(normalizeRecords('stocks', snap.stocks));
+          if (Array.isArray(snap.receiving) && snap.receiving.length > 0) setReceiving(normalizeRecords('receiving', snap.receiving));
+          if (Array.isArray(snap.returns) && snap.returns.length > 0) setReturns(normalizeRecords('returns', snap.returns));
+          if (Array.isArray(snap.recycling) && snap.recycling.length > 0) setRecycling(normalizeRecords('recycling', snap.recycling));
+          if (Array.isArray(snap.issuances) && snap.issuances.length > 0) setIssuances(normalizeRecords('issuances', snap.issuances));
+          if (Array.isArray(snap.deliveries) && snap.deliveries.length > 0) setDeliveries(normalizeRecords('deliveries', snap.deliveries));
+          if (Array.isArray(snap.envLogs) && snap.envLogs.length > 0) setEnvLogs(normalizeRecords('envLogs', snap.envLogs));
+          if (Array.isArray(snap.forkliftChecks) && snap.forkliftChecks.length > 0) setForkliftChecks(normalizeRecords('forkliftChecks', snap.forkliftChecks));
+          if (Array.isArray(snap.registries) && snap.registries.length > 0) setRegistries(normalizeRecords('registries', snap.registries));
           if (Array.isArray(snap.registeredUsers) && snap.registeredUsers.length > 0) {
             setRegisteredUsers(sanitizeUsersList(snap.registeredUsers));
           }
@@ -717,15 +897,42 @@ export default function App() {
       if (!dataPayload) return;
       const { stocks, receiving, returns, recycling, issuances, deliveries, envLogs, forkliftChecks, registries, registeredUsers: serverUsers, chatMessages: msgs } = dataPayload;
 
-      if (Array.isArray(stocks)) setStocks(prev => shouldApplyRemoteData('stocks', stocks, prev) ? stocks : prev);
-      if (Array.isArray(receiving)) setReceiving(prev => shouldApplyRemoteData('receiving', receiving, prev) ? receiving : prev);
-      if (Array.isArray(returns)) setReturns(prev => shouldApplyRemoteData('returns', returns, prev) ? returns : prev);
-      if (Array.isArray(recycling)) setRecycling(prev => shouldApplyRemoteData('recycling', recycling, prev) ? recycling : prev);
-      if (Array.isArray(issuances)) setIssuances(prev => shouldApplyRemoteData('issuances', issuances, prev) ? issuances : prev);
-      if (Array.isArray(deliveries)) setDeliveries(prev => shouldApplyRemoteData('deliveries', deliveries, prev) ? deliveries : prev);
-      if (Array.isArray(envLogs)) setEnvLogs(prev => shouldApplyRemoteData('envLogs', envLogs, prev) ? envLogs : prev);
-      if (Array.isArray(forkliftChecks)) setForkliftChecks(prev => shouldApplyRemoteData('forkliftChecks', forkliftChecks, prev) ? forkliftChecks : prev);
-      if (Array.isArray(registries)) setRegistries(prev => shouldApplyRemoteData('registries', registries, prev) ? registries : prev);
+      if (Array.isArray(stocks)) {
+        const norm = normalizeRecords('stocks', stocks);
+        setStocks(prev => shouldApplyRemoteData('stocks', norm, prev) ? norm : prev);
+      }
+      if (Array.isArray(receiving)) {
+        const norm = normalizeRecords('receiving', receiving);
+        setReceiving(prev => shouldApplyRemoteData('receiving', norm, prev) ? norm : prev);
+      }
+      if (Array.isArray(returns)) {
+        const norm = normalizeRecords('returns', returns);
+        setReturns(prev => shouldApplyRemoteData('returns', norm, prev) ? norm : prev);
+      }
+      if (Array.isArray(recycling)) {
+        const norm = normalizeRecords('recycling', recycling);
+        setRecycling(prev => shouldApplyRemoteData('recycling', norm, prev) ? norm : prev);
+      }
+      if (Array.isArray(issuances)) {
+        const norm = normalizeRecords('issuances', issuances);
+        setIssuances(prev => shouldApplyRemoteData('issuances', norm, prev) ? norm : prev);
+      }
+      if (Array.isArray(deliveries)) {
+        const norm = normalizeRecords('deliveries', deliveries);
+        setDeliveries(prev => shouldApplyRemoteData('deliveries', norm, prev) ? norm : prev);
+      }
+      if (Array.isArray(envLogs)) {
+        const norm = normalizeRecords('envLogs', envLogs);
+        setEnvLogs(prev => shouldApplyRemoteData('envLogs', norm, prev) ? norm : prev);
+      }
+      if (Array.isArray(forkliftChecks)) {
+        const norm = normalizeRecords('forkliftChecks', forkliftChecks);
+        setForkliftChecks(prev => shouldApplyRemoteData('forkliftChecks', norm, prev) ? norm : prev);
+      }
+      if (Array.isArray(registries)) {
+        const norm = normalizeRecords('registries', registries);
+        setRegistries(prev => shouldApplyRemoteData('registries', norm, prev) ? norm : prev);
+      }
       
       if (Array.isArray(serverUsers)) {
         const finalUsers = sanitizeUsersList(serverUsers);
@@ -904,20 +1111,23 @@ export default function App() {
             }
             case 'collection_updated': {
               const { collection, data } = payload;
-              switch (collection) {
-                case 'stocks': setStocks(prev => shouldApplyRemoteData('stocks', data, prev) ? data : prev); break;
-                case 'receiving': setReceiving(prev => shouldApplyRemoteData('receiving', data, prev) ? data : prev); break;
-                case 'returns': setReturns(prev => shouldApplyRemoteData('returns', data, prev) ? data : prev); break;
-                case 'recycling': setRecycling(prev => shouldApplyRemoteData('recycling', data, prev) ? data : prev); break;
-                case 'issuances': setIssuances(prev => shouldApplyRemoteData('issuances', data, prev) ? data : prev); break;
-                case 'deliveries': setDeliveries(prev => shouldApplyRemoteData('deliveries', data, prev) ? data : prev); break;
-                case 'envLogs': setEnvLogs(prev => shouldApplyRemoteData('envLogs', data, prev) ? data : prev); break;
-                case 'forkliftChecks': setForkliftChecks(prev => shouldApplyRemoteData('forkliftChecks', data, prev) ? data : prev); break;
-                case 'registries': setRegistries(prev => shouldApplyRemoteData('registries', data, prev) ? data : prev); break;
-                case 'registeredUsers': {
-                  const sanitized = sanitizeUsersList(data || []);
-                  setRegisteredUsers(sanitized);
-                  break;
+              if (Array.isArray(data)) {
+                const norm = normalizeRecords(collection, data);
+                switch (collection) {
+                  case 'stocks': setStocks(prev => shouldApplyRemoteData('stocks', norm, prev) ? norm : prev); break;
+                  case 'receiving': setReceiving(prev => shouldApplyRemoteData('receiving', norm, prev) ? norm : prev); break;
+                  case 'returns': setReturns(prev => shouldApplyRemoteData('returns', norm, prev) ? norm : prev); break;
+                  case 'recycling': setRecycling(prev => shouldApplyRemoteData('recycling', norm, prev) ? norm : prev); break;
+                  case 'issuances': setIssuances(prev => shouldApplyRemoteData('issuances', norm, prev) ? norm : prev); break;
+                  case 'deliveries': setDeliveries(prev => shouldApplyRemoteData('deliveries', norm, prev) ? norm : prev); break;
+                  case 'envLogs': setEnvLogs(prev => shouldApplyRemoteData('envLogs', norm, prev) ? norm : prev); break;
+                  case 'forkliftChecks': setForkliftChecks(prev => shouldApplyRemoteData('forkliftChecks', norm, prev) ? norm : prev); break;
+                  case 'registries': setRegistries(prev => shouldApplyRemoteData('registries', norm, prev) ? norm : prev); break;
+                  case 'registeredUsers': {
+                    const sanitized = sanitizeUsersList(data);
+                    setRegisteredUsers(sanitized);
+                    break;
+                  }
                 }
               }
               break;
@@ -1060,15 +1270,51 @@ export default function App() {
         chatMessages: cm 
       } = snapshot;
 
-      if (Array.isArray(s)) { hasSuccess = true; setStocks(prev => shouldApplyRemoteData('stocks', s, prev) ? s : prev); }
-      if (Array.isArray(rc)) { hasSuccess = true; setReceiving(prev => shouldApplyRemoteData('receiving', rc, prev) ? rc : prev); }
-      if (Array.isArray(rt)) { hasSuccess = true; setReturns(prev => shouldApplyRemoteData('returns', rt, prev) ? rt : prev); }
-      if (Array.isArray(cy)) { hasSuccess = true; setRecycling(prev => shouldApplyRemoteData('recycling', cy, prev) ? cy : prev); }
-      if (Array.isArray(is)) { hasSuccess = true; setIssuances(prev => shouldApplyRemoteData('issuances', is, prev) ? is : prev); }
-      if (Array.isArray(d)) { hasSuccess = true; setDeliveries(prev => shouldApplyRemoteData('deliveries', d, prev) ? d : prev); }
-      if (Array.isArray(e)) { hasSuccess = true; setEnvLogs(prev => shouldApplyRemoteData('envLogs', e, prev) ? e : prev); }
-      if (Array.isArray(f)) { hasSuccess = true; setForkliftChecks(prev => shouldApplyRemoteData('forkliftChecks', f, prev) ? f : prev); }
-      if (Array.isArray(reg)) { hasSuccess = true; setRegistries(prev => shouldApplyRemoteData('registries', reg, prev) ? reg : prev); }
+      if (Array.isArray(s) && s.length > 0) { 
+        hasSuccess = true; 
+        const norm = normalizeRecords('stocks', s);
+        setStocks(prev => shouldApplyRemoteData('stocks', norm, prev) ? norm : prev); 
+      }
+      if (Array.isArray(rc) && rc.length > 0) { 
+        hasSuccess = true; 
+        const norm = normalizeRecords('receiving', rc);
+        setReceiving(prev => shouldApplyRemoteData('receiving', norm, prev) ? norm : prev); 
+      }
+      if (Array.isArray(rt) && rt.length > 0) { 
+        hasSuccess = true; 
+        const norm = normalizeRecords('returns', rt);
+        setReturns(prev => shouldApplyRemoteData('returns', norm, prev) ? norm : prev); 
+      }
+      if (Array.isArray(cy) && cy.length > 0) { 
+        hasSuccess = true; 
+        const norm = normalizeRecords('recycling', cy);
+        setRecycling(prev => shouldApplyRemoteData('recycling', norm, prev) ? norm : prev); 
+      }
+      if (Array.isArray(is) && is.length > 0) { 
+        hasSuccess = true; 
+        const norm = normalizeRecords('issuances', is);
+        setIssuances(prev => shouldApplyRemoteData('issuances', norm, prev) ? norm : prev); 
+      }
+      if (Array.isArray(d) && d.length > 0) { 
+        hasSuccess = true; 
+        const norm = normalizeRecords('deliveries', d);
+        setDeliveries(prev => shouldApplyRemoteData('deliveries', norm, prev) ? norm : prev); 
+      }
+      if (Array.isArray(e) && e.length > 0) { 
+        hasSuccess = true; 
+        const norm = normalizeRecords('envLogs', e);
+        setEnvLogs(prev => shouldApplyRemoteData('envLogs', norm, prev) ? norm : prev); 
+      }
+      if (Array.isArray(f) && f.length > 0) { 
+        hasSuccess = true; 
+        const norm = normalizeRecords('forkliftChecks', f);
+        setForkliftChecks(prev => shouldApplyRemoteData('forkliftChecks', norm, prev) ? norm : prev); 
+      }
+      if (Array.isArray(reg) && reg.length > 0) { 
+        hasSuccess = true; 
+        const norm = normalizeRecords('registries', reg);
+        setRegistries(prev => shouldApplyRemoteData('registries', norm, prev) ? norm : prev); 
+      }
       if (Array.isArray(ru) && ru.length > 0) {
         hasSuccess = true;
         const sanitized = sanitizeUsersList(ru);
@@ -1100,15 +1346,16 @@ export default function App() {
           const updatedItems = await fetchCollectionFromSupabase(col);
           if (Array.isArray(updatedItems)) {
             setSupabaseStatus('connected');
-            if (col === 'stocks') setStocks(prev => shouldApplyRemoteData('stocks', updatedItems, prev) ? updatedItems : prev);
-            else if (col === 'receiving') setReceiving(prev => shouldApplyRemoteData('receiving', updatedItems, prev) ? updatedItems : prev);
-            else if (col === 'returns') setReturns(prev => shouldApplyRemoteData('returns', updatedItems, prev) ? updatedItems : prev);
-            else if (col === 'recycling') setRecycling(prev => shouldApplyRemoteData('recycling', updatedItems, prev) ? updatedItems : prev);
-            else if (col === 'issuances') setIssuances(prev => shouldApplyRemoteData('issuances', updatedItems, prev) ? updatedItems : prev);
-            else if (col === 'deliveries') setDeliveries(prev => shouldApplyRemoteData('deliveries', updatedItems, prev) ? updatedItems : prev);
-            else if (col === 'envLogs') setEnvLogs(prev => shouldApplyRemoteData('envLogs', updatedItems, prev) ? updatedItems : prev);
-            else if (col === 'forkliftChecks') setForkliftChecks(prev => shouldApplyRemoteData('forkliftChecks', updatedItems, prev) ? updatedItems : prev);
-            else if (col === 'registries') setRegistries(prev => shouldApplyRemoteData('registries', updatedItems, prev) ? updatedItems : prev);
+            const norm = normalizeRecords(col, updatedItems);
+            if (col === 'stocks') setStocks(prev => shouldApplyRemoteData('stocks', norm, prev) ? norm : prev);
+            else if (col === 'receiving') setReceiving(prev => shouldApplyRemoteData('receiving', norm, prev) ? norm : prev);
+            else if (col === 'returns') setReturns(prev => shouldApplyRemoteData('returns', norm, prev) ? norm : prev);
+            else if (col === 'recycling') setRecycling(prev => shouldApplyRemoteData('recycling', norm, prev) ? norm : prev);
+            else if (col === 'issuances') setIssuances(prev => shouldApplyRemoteData('issuances', norm, prev) ? norm : prev);
+            else if (col === 'deliveries') setDeliveries(prev => shouldApplyRemoteData('deliveries', norm, prev) ? norm : prev);
+            else if (col === 'envLogs') setEnvLogs(prev => shouldApplyRemoteData('envLogs', norm, prev) ? norm : prev);
+            else if (col === 'forkliftChecks') setForkliftChecks(prev => shouldApplyRemoteData('forkliftChecks', norm, prev) ? norm : prev);
+            else if (col === 'registries') setRegistries(prev => shouldApplyRemoteData('registries', norm, prev) ? norm : prev);
             else if (col === 'registeredUsers') {
               const sanitized = sanitizeUsersList(updatedItems);
               setRegisteredUsers(sanitized);
@@ -2264,27 +2511,21 @@ export default function App() {
           {/* Accent Glow */}
           <div className="absolute top-0 left-1/4 w-1/2 h-1 bg-gradient-to-r from-transparent via-indigo-500 to-transparent animate-pulse" />
           
-          {/* Central Server Connection Status Bar */}
-          <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex items-center justify-center gap-2 font-mono text-xs">
+          {/* Supabase Cloud Database Status Bar */}
+          <button
+            type="button"
+            onClick={() => setShowSupabaseSettingsModal(true)}
+            className="w-full bg-slate-950 border border-slate-800 hover:border-emerald-500/50 rounded-xl p-3 flex items-center justify-between font-mono text-xs transition cursor-pointer"
+            title="Click to configure or view Supabase PostgreSQL Cloud Database status"
+          >
             <div className="flex items-center gap-2.5">
-              {connectionStatus === 'connected' ? (
-                <>
-                  <Wifi className="h-4 w-4 text-emerald-400 shrink-0 animate-pulse" />
-                  <span className="text-xs text-emerald-400 font-bold uppercase tracking-wider">REAL-TIME CONNECTED</span>
-                </>
-              ) : connectionStatus === 'connecting' ? (
-                <>
-                  <Loader2 className="h-4 w-4 text-amber-400 animate-spin shrink-0" />
-                  <span className="text-xs text-amber-300 font-bold uppercase tracking-wider">CONNECTING TO SERVER...</span>
-                </>
-              ) : (
-                <>
-                  <WifiOff className="h-4 w-4 text-rose-400 shrink-0" />
-                  <span className="text-xs text-rose-300 font-bold uppercase tracking-wider">DISCONNECTED</span>
-                </>
-              )}
+              <Database className={`h-4 w-4 ${isSupabaseConfigured() ? 'text-emerald-400' : 'text-amber-400'} shrink-0`} />
+              <span className={`text-xs font-bold uppercase tracking-wider ${isSupabaseConfigured() ? 'text-emerald-400' : 'text-amber-300'}`}>
+                {isSupabaseConfigured() ? 'SUPABASE CLOUD CONNECTED' : 'SUPABASE CLOUD READY'}
+              </span>
             </div>
-          </div>
+            <span className="text-[10px] text-slate-400 uppercase font-mono">PostgreSQL</span>
+          </button>
 
           <div className="flex flex-col items-center text-center">
             <span className="inline-block bg-indigo-500/20 text-indigo-200 font-bold text-[10px] tracking-wider uppercase px-2.5 py-1 rounded-full mb-1 border border-indigo-400/40 font-mono shadow-xs">
@@ -2447,12 +2688,6 @@ export default function App() {
             onClose={() => setShowLoginQrScanner(false)}
             title="Juwei WMS Gateway QR Login Scanner"
             subtitle="Scan operator badge QR code or upload pass image containing Username & PIN"
-            sampleCodes={registeredUsers.map(u => ({
-              code: JSON.stringify({ type: 'JPMP_WMS_LOGIN_PASS', employeeId: u.employeeId, username: u.username, pin: u.pin || '1234' }),
-              label: `${u.username} (${u.employeeId})`,
-              name: `${u.username} [${u.employeeId}]`,
-              description: `PIN: ${u.pin || '1234'} • ${u.role}`
-            }))}
             onScanResult={handleQrLoginScan}
           />
         )}
@@ -2721,28 +2956,10 @@ export default function App() {
               onClick={handleManualSync}
               disabled={isManualSyncing}
               className="flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-700 w-8 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0 disabled:opacity-50"
-              title={isManualSyncing ? "Syncing data across all workstations..." : "Force Instant Sync across All Workstations"}
+              title={isManualSyncing ? "Syncing data across all workstations..." : "Force Instant Sync with Supabase Cloud Database"}
               aria-label="Force Instant Sync"
             >
               <RefreshCw className={`h-4 w-4 text-slate-600 ${isManualSyncing ? 'animate-spin text-blue-600' : ''}`} />
-            </button>
-
-            {/* Real-Time WebSocket / Server Node Connection Badge Button */}
-            <button
-              type="button"
-              onClick={() => {
-                setTempServerAddress(serverAddress);
-                setShowServerSettingsModal(true);
-              }}
-              className="flex items-center justify-center gap-1.5 bg-slate-900 border border-slate-700 hover:border-indigo-500 text-slate-200 hover:text-white px-2.5 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
-              title={`Real-Time Network Sync: ${connectionStatus.toUpperCase()} (Click to configure Server Node)`}
-              aria-label="Real-Time Network Sync Status"
-            >
-              <Wifi className={`h-3.5 w-3.5 ${connectionStatus === 'connected' ? 'text-emerald-400' : connectionStatus === 'connecting' ? 'text-amber-400 animate-pulse' : 'text-rose-400'} shrink-0`} />
-              <span className={`w-2 h-2 rounded-full ${
-                connectionStatus === 'connected' ? 'bg-emerald-400 animate-pulse' :
-                connectionStatus === 'connecting' ? 'bg-amber-400 animate-ping' : 'bg-rose-500'
-              }`} />
             </button>
 
             {/* Supabase PostgreSQL Cloud Sync Badge Button */}
@@ -2941,163 +3158,6 @@ export default function App() {
 
       {/* Global Application Confirmation Modal with YES / NO options */}
       <ConfirmModal config={confirmActionApp} onClose={() => setConfirmActionApp(null)} />
-
-      {/* Global WMS Central Server & Real-time IP Config Modal */}
-      {showServerSettingsModal && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 max-w-md w-full shadow-2xl space-y-4 text-left relative">
-            {/* Minimal Header */}
-            <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
-                  <Wifi className="h-4 w-4" />
-                </div>
-                <div>
-                  <h3 className="text-xs font-bold text-white tracking-wider font-mono uppercase">Multi-PC Real-Time Sync</h3>
-                  <p className="text-[10px] text-slate-400 font-mono">Central Server Network Node</p>
-                </div>
-              </div>
-              <button 
-                type="button"
-                onClick={() => setShowServerSettingsModal(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            {/* Connection Status Pill */}
-            <div className={`px-3 py-2 rounded-xl border text-xs font-mono flex items-center justify-between ${
-              connectionStatus === 'connected'
-                ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-400'
-                : connectionStatus === 'connecting'
-                ? 'bg-amber-950/40 border-amber-500/30 text-amber-300'
-                : 'bg-rose-950/40 border-rose-500/30 text-rose-400'
-            }`}>
-              <div className="flex items-center gap-2">
-                <span className={`h-2 w-2 rounded-full ${
-                  connectionStatus === 'connected' ? 'bg-emerald-400 animate-pulse' :
-                  connectionStatus === 'connecting' ? 'bg-amber-400 animate-ping' : 'bg-rose-500'
-                }`} />
-                <span className="font-bold text-[11px] uppercase tracking-wider">
-                  {connectionStatus === 'connected' ? 'Real-Time Connected' : connectionStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
-                </span>
-              </div>
-              <span className="text-[10px] text-slate-400 font-mono font-medium">Node Port 3000</span>
-            </div>
-
-            {/* Compact Quick Sync & QR Card */}
-            {(() => {
-              const activeHost = sanitizeServerHost(serverAddress) || getDefaultServerAddress();
-              const shareUrl = isSecureServerHost(activeHost, serverAddress) ? `https://${activeHost}` : `http://${activeHost}`;
-              return (
-                <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-3 flex items-center gap-3">
-                  <div className="bg-white p-1.5 rounded-lg shrink-0">
-                    <QRCodeSVG value={shareUrl} size={72} level="M" />
-                  </div>
-                  <div className="flex-1 space-y-1.5 min-w-0">
-                    <div>
-                      <span className="text-[10px] font-bold text-slate-300 uppercase tracking-wider font-mono block">
-                        Sync Workstations
-                      </span>
-                      <p className="text-[10px] text-slate-400 truncate font-mono">
-                        Scan QR code or copy URL to pair
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(shareUrl);
-                        setLinkCopied(true);
-                        setTimeout(() => setLinkCopied(false), 2500);
-                      }}
-                      className={`w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg text-[11px] font-mono font-bold transition cursor-pointer ${
-                        linkCopied
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/30'
-                      }`}
-                    >
-                      {linkCopied ? (
-                        <>
-                          <Check className="h-3.5 w-3.5 text-white" />
-                          <span>Copied to Clipboard!</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="h-3.5 w-3.5 text-indigo-300" />
-                          <span>Copy Connection Link</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* Minimal Server Host Input */}
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-400 font-mono uppercase tracking-wider block">
-                Server Address / Hostname
-              </label>
-              <input 
-                id="wms-server-ip-input-global"
-                type="text" 
-                value={tempServerAddress} 
-                onChange={(e) => setTempServerAddress(e.target.value)}
-                placeholder="e.g. 192.168.1.100:3000"
-                className="w-full bg-slate-950 border border-slate-800 text-sky-400 text-xs p-2.5 rounded-xl font-mono focus:border-indigo-500 focus:outline-none font-bold"
-              />
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setTempServerAddress(getDefaultServerAddress())}
-                  className="text-[9px] bg-slate-800/80 hover:bg-slate-800 text-slate-300 px-2 py-1 rounded-md font-mono font-bold transition cursor-pointer"
-                >
-                  Reset Default
-                </button>
-                {window.location.host && (
-                  <button
-                    type="button"
-                    onClick={() => setTempServerAddress(window.location.host)}
-                    className="text-[9px] bg-slate-800/80 hover:bg-slate-800 text-sky-300 px-2 py-1 rounded-md font-mono font-bold transition cursor-pointer"
-                  >
-                    Use Current Host
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="pt-1 flex flex-col gap-2">
-              <button 
-                type="button"
-                onClick={async () => {
-                  await handleManualSync();
-                }}
-                disabled={isManualSyncing}
-                className="w-full bg-slate-800 hover:bg-slate-700 text-sky-400 font-bold py-2.5 px-4 rounded-xl text-xs font-mono transition uppercase cursor-pointer border border-sky-500/30 flex items-center justify-center gap-2"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${isManualSyncing ? 'animate-spin text-sky-400' : ''}`} />
-                <span>{isManualSyncing ? 'Synchronizing Data...' : 'Force Cloud & Node Re-Sync'}</span>
-              </button>
-
-              <button 
-                type="button"
-                onClick={() => {
-                  const val = sanitizeServerHost(tempServerAddress) || getDefaultServerAddress();
-                  setServerAddress(val);
-                  localStorage.setItem('juwei_wms_server_address', val);
-                  setTempServerAddress(val);
-                  setShowServerSettingsModal(false);
-                }}
-                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs font-mono transition uppercase cursor-pointer shadow-lg shadow-indigo-900/30"
-              >
-                Save & Connect
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Mobile APK / App Installer Modal */}
       {showMobileInstallModal && (

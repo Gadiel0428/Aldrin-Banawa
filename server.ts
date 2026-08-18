@@ -144,57 +144,426 @@ async function startServer() {
     }
   }
 
+  // DB Column Mappers for server-side Supabase persistence
+  function mapStockToRow(s: any) {
+    return {
+      id: s.id,
+      part_code: s.partCode || s.part_code || '',
+      description: s.description || '',
+      type: s.type || 'RAW',
+      location: s.location || 'Zone A',
+      quantity: Number(s.quantity) || 0,
+      unit: s.unit || 'PCS',
+      lot_number: s.lotNumber || s.lot_number || '',
+      model_name: s.modelName || s.model_name || null,
+      color: s.color || null,
+      received_date: s.receivedDate || s.received_date || new Date().toISOString().split('T')[0],
+      expiration_date: s.expirationDate || s.expiration_date || null,
+      fifo_color: s.fifoColor || s.fifo_color || 'Dark Green',
+      status: s.status || 'APPROVED',
+      resin_sack_risk: Boolean(s.resinSackRisk || s.resin_sack_risk),
+      shelf_life_days: s.shelfLifeDays || s.shelf_life_days || null,
+      customer: s.customer || null,
+      reorder_min: Number(s.reorderMin || s.reorder_min) || 0,
+      remarks: s.remarks || null,
+      bom: s.bom || [],
+      updated_at: new Date().toISOString()
+    };
+  }
+
+  function mapRowToStock(row: any) {
+    return {
+      id: row.id,
+      partCode: row.part_code || row.partCode || '',
+      description: row.description || '',
+      type: row.type || 'RAW',
+      location: row.location || 'Zone A',
+      quantity: Number(row.quantity) || 0,
+      unit: row.unit || 'PCS',
+      lotNumber: row.lot_number || row.lotNumber || '',
+      modelName: row.model_name || row.modelName,
+      color: row.color,
+      receivedDate: row.received_date || row.receivedDate || new Date().toISOString().split('T')[0],
+      expirationDate: row.expiration_date || row.expirationDate,
+      fifoColor: row.fifo_color || row.fifoColor || 'Dark Green',
+      status: row.status || 'APPROVED',
+      resinSackRisk: Boolean(row.resin_sack_risk || row.resinSackRisk),
+      shelfLifeDays: row.shelf_life_days ? Number(row.shelf_life_days) : undefined,
+      customer: row.customer,
+      reorderMin: row.reorder_min ? Number(row.reorder_min) : undefined,
+      remarks: row.remarks,
+      bom: row.bom || []
+    };
+  }
+
+  function mapReceivingToRow(r: any) {
+    return {
+      id: r.id,
+      date: r.date,
+      received_date: r.receivedDate || r.received_date || r.date,
+      location: r.location || null,
+      vendor_supplier: r.vendorSupplier || r.vendor_supplier || null,
+      reorder_min: Number(r.reorderMin || r.reorder_min) || 0,
+      remarks: r.remarks || null,
+      source: r.source || 'Resin(External)',
+      item_description: r.itemDescription || r.item_description || '',
+      part_code: r.partCode || r.part_code || '',
+      model_name: r.modelName || r.model_name || null,
+      color: r.color || null,
+      quantity: Number(r.quantity) || 0,
+      unit: r.unit || 'PCS',
+      lot_number: r.lotNumber || r.lot_number || '',
+      physical_condition: r.physicalCondition || r.physical_condition || {},
+      rr_number: r.rrNumber || r.rr_number || null,
+      po_number: r.poNumber || r.po_number || null,
+      dr_number: r.drNumber || r.dr_number || null,
+      si_number: r.siNumber || r.si_number || null,
+      way_bill: r.wayBill || r.way_bill || null,
+      transfer_form_number: r.transferFormNumber || r.transfer_form_number || null,
+      supplier_or_dept: r.supplierOrDept || r.supplier_or_dept || 'Internal',
+      iqc_status: r.iqcStatus || r.iqc_status || 'PENDING_IQC',
+      status: r.status || 'DRAFT',
+      fifo_color_code: r.fifoColorCode || r.fifo_color_code || 'Dark Green',
+      bom: r.bom || [],
+      auto_deduct_bom: Boolean(r.autoDeductBom || r.auto_deduct_bom),
+      customer: r.customer || null,
+      updated_at: new Date().toISOString()
+    };
+  }
+
+  function mapRowToReceiving(row: any) {
+    return {
+      id: row.id,
+      date: row.date || new Date().toISOString().split('T')[0],
+      receivedDate: row.received_date || row.receivedDate || row.date,
+      location: row.location,
+      vendorSupplier: row.vendor_supplier || row.vendorSupplier,
+      reorderMin: row.reorder_min ? Number(row.reorder_min) : undefined,
+      remarks: row.remarks,
+      source: row.source || 'Resin(External)',
+      itemDescription: row.item_description || row.itemDescription || '',
+      partCode: row.part_code || row.partCode || '',
+      modelName: row.model_name || row.modelName,
+      color: row.color,
+      quantity: Number(row.quantity) || 0,
+      unit: row.unit || 'PCS',
+      lotNumber: row.lot_number || row.lotNumber || '',
+      physicalCondition: row.physical_condition || row.physicalCondition || {},
+      rrNumber: row.rr_number || row.rrNumber,
+      poNumber: row.po_number || row.poNumber,
+      drNumber: row.dr_number || row.drNumber,
+      siNumber: row.si_number || row.siNumber,
+      wayBill: row.way_bill || row.wayBill,
+      transferFormNumber: row.transfer_form_number || row.transferFormNumber,
+      supplierOrDept: row.supplier_or_dept || row.supplierOrDept || 'Internal',
+      iqcStatus: row.iqc_status || row.iqcStatus || 'PENDING_IQC',
+      status: row.status || 'DRAFT',
+      fifoColorCode: row.fifo_color_code || row.fifoColorCode || 'Dark Green',
+      bom: row.bom || [],
+      autoDeductBom: Boolean(row.auto_deduct_bom || row.autoDeductBom),
+      customer: row.customer
+    };
+  }
+
+  function mapReturnToRow(r: any) {
+    return {
+      id: r.id,
+      date: r.date,
+      category: r.category || null,
+      material_description: r.materialDescription || r.material_description || '',
+      part_code: r.partCode || r.part_code || '',
+      quantity: Number(r.quantity) || 0,
+      unit: r.unit || 'PCS',
+      lot_number: r.lotNumber || r.lot_number || '',
+      department: r.department || 'Production',
+      reason: r.reason || 'Excess Material',
+      condition: r.condition || 'Good',
+      iqc_evaluation: r.iqcEvaluation || r.iqc_evaluation || 'PENDING_IQC',
+      status: r.status || 'PENDING',
+      return_slip_form_number: r.returnSlipFormNumber || r.return_slip_form_number || '',
+      updated_at: new Date().toISOString()
+    };
+  }
+
+  function mapRowToReturn(row: any) {
+    return {
+      id: row.id,
+      date: row.date || new Date().toISOString().split('T')[0],
+      category: row.category,
+      materialDescription: row.material_description || row.materialDescription || '',
+      partCode: row.part_code || row.partCode || '',
+      quantity: Number(row.quantity) || 0,
+      unit: row.unit || 'PCS',
+      lotNumber: row.lot_number || row.lotNumber || '',
+      department: row.department || 'Production',
+      reason: row.reason || 'Excess Material',
+      condition: row.condition || 'Good',
+      iqcEvaluation: row.iqc_evaluation || row.iqcEvaluation || 'PENDING_IQC',
+      status: row.status || 'PENDING',
+      returnSlipFormNumber: row.return_slip_form_number || row.returnSlipFormNumber || ''
+    };
+  }
+
+  function mapRecyclingToRow(r: any) {
+    return {
+      id: r.id,
+      date: r.date,
+      item_type: r.itemType || r.item_type || 'Carton Box',
+      quantity: Number(r.quantity) || 0,
+      condition: r.condition || 'Reusable',
+      reuse_cycle_count: Number(r.reuseCycleCount || r.reuse_cycle_count) || 1,
+      disposition: r.disposition || 'Re-used',
+      log_sheet_number: r.logSheetNumber || r.log_sheet_number || '',
+      updated_at: new Date().toISOString()
+    };
+  }
+
+  function mapRowToRecycling(row: any) {
+    return {
+      id: row.id,
+      date: row.date,
+      itemType: row.item_type || row.itemType || 'Carton Box',
+      quantity: Number(row.quantity) || 0,
+      condition: row.condition || 'Reusable',
+      reuseCycleCount: Number(row.reuse_cycle_count || row.reuseCycleCount) || 1,
+      disposition: row.disposition || 'Re-used',
+      logSheetNumber: row.log_sheet_number || row.logSheetNumber || ''
+    };
+  }
+
+  function mapIssuanceToRow(r: any) {
+    return {
+      id: r.id,
+      date: r.date,
+      requisition_number: r.requisitionNumber || r.requisition_number || '',
+      department: r.department || 'Assembly',
+      part_code: r.partCode || r.part_code || '',
+      description: r.description || '',
+      quantity_requested: Number(r.quantityRequested || r.quantity_requested) || 0,
+      quantity_issued: Number(r.quantityIssued || r.quantity_issued) || 0,
+      lot_number: r.lotNumber || r.lot_number || '',
+      fifo_verified: Boolean(r.fifoVerified || r.fifo_verified),
+      issued_by: r.issuedBy || r.issued_by || 'Storekeeper',
+      received_by: r.receivedBy || r.received_by || 'Line Operator',
+      updated_at: new Date().toISOString()
+    };
+  }
+
+  function mapRowToIssuance(row: any) {
+    return {
+      id: row.id,
+      date: row.date,
+      requisitionNumber: row.requisition_number || row.requisitionNumber || '',
+      department: row.department || 'Assembly',
+      partCode: row.part_code || row.partCode || '',
+      description: row.description || '',
+      quantityRequested: Number(row.quantity_requested || row.quantityRequested) || 0,
+      quantityIssued: Number(row.quantity_issued || row.quantityIssued) || 0,
+      lotNumber: row.lot_number || row.lotNumber || '',
+      fifoVerified: Boolean(row.fifo_verified || row.fifoVerified),
+      issuedBy: row.issued_by || row.issuedBy || 'Storekeeper',
+      receivedBy: row.received_by || row.receivedBy || 'Line Operator'
+    };
+  }
+
+  function mapDeliveryToRow(d: any) {
+    return {
+      id: d.id,
+      date: d.date,
+      picking_list_number: d.pickingListNumber || d.picking_list_number || '',
+      po_number: d.poNumber || d.po_number || '',
+      model_name: d.modelName || d.model_name || '',
+      part_code: d.partCode || d.part_code || '',
+      quantity: Number(d.quantity) || 0,
+      packaging_condition_ok: Boolean(d.packagingConditionOk ?? d.packaging_condition_ok ?? true),
+      fifo_verified: Boolean(d.fifoVerified ?? d.fifo_verified ?? false),
+      forklift_checklist_signed: Boolean(d.forkliftChecklistSigned ?? d.forklift_checklist_signed ?? false),
+      gate_pass_number: d.gatePassNumber || d.gate_pass_number || '',
+      dr_number: d.drNumber || d.dr_number || null,
+      sales_invoice: d.salesInvoice || d.sales_invoice || null,
+      way_bill: d.wayBill || d.way_bill || null,
+      status: d.status || 'PREPARING',
+      prepared_by: d.preparedBy || d.prepared_by || 'Dispatch Supervisor',
+      loaded_by: d.loadedBy || d.loaded_by || null,
+      updated_at: new Date().toISOString()
+    };
+  }
+
+  function mapRowToDelivery(row: any) {
+    return {
+      id: row.id,
+      date: row.date,
+      pickingListNumber: row.picking_list_number || row.pickingListNumber || '',
+      poNumber: row.po_number || row.poNumber || '',
+      modelName: row.model_name || row.modelName || '',
+      partCode: row.part_code || row.partCode || '',
+      quantity: Number(row.quantity) || 0,
+      packagingConditionOk: Boolean(row.packaging_condition_ok ?? true),
+      fifoVerified: Boolean(row.fifo_verified ?? false),
+      forkliftChecklistSigned: Boolean(row.forklift_checklist_signed ?? false),
+      gatePassNumber: row.gate_pass_number || row.gatePassNumber || '',
+      drNumber: row.dr_number || row.drNumber,
+      salesInvoice: row.sales_invoice || row.salesInvoice,
+      wayBill: row.way_bill || row.wayBill,
+      status: row.status || 'PREPARING',
+      preparedBy: row.prepared_by || row.preparedBy || 'Dispatch Supervisor',
+      loadedBy: row.loaded_by || row.loadedBy
+    };
+  }
+
+  function mapEnvLogToRow(e: any) {
+    return {
+      id: e.id,
+      timestamp: e.timestamp,
+      zone: e.zone,
+      occupied_slots: Number(e.occupiedSlots || e.occupied_slots) || 0,
+      total_slots: Number(e.totalSlots || e.total_slots) || 150,
+      cleanliness_ok: Boolean(e.cleanlinessOk ?? e.cleanliness_ok ?? true),
+      ventilation_ok: Boolean(e.ventilationOk ?? e.ventilation_ok ?? true),
+      pest_free: Boolean(e.pestFree ?? e.pest_free ?? true),
+      recorded_by: e.recordedBy || e.recorded_by || 'Inspector',
+      updated_at: new Date().toISOString()
+    };
+  }
+
+  function mapRowToEnvLog(row: any) {
+    return {
+      id: row.id,
+      timestamp: row.timestamp,
+      zone: row.zone,
+      occupiedSlots: Number(row.occupied_slots || row.occupiedSlots) || 0,
+      totalSlots: Number(row.total_slots || row.totalSlots) || 150,
+      cleanlinessOk: Boolean(row.cleanliness_ok ?? true),
+      ventilationOk: Boolean(row.ventilation_ok ?? true),
+      pestFree: Boolean(row.pest_free ?? true),
+      recordedBy: row.recorded_by || row.recordedBy || 'Inspector'
+    };
+  }
+
+  function mapForkliftToRow(f: any) {
+    return {
+      id: f.id,
+      date: f.date,
+      operator: f.operator,
+      forklift_id: f.forkliftId || f.forklift_id || 'FL-01',
+      brakes_ok: Boolean(f.brakesOk ?? f.brakes_ok ?? true),
+      lights_ok: Boolean(f.lightsOk ?? f.lights_ok ?? true),
+      hydraulic_ok: Boolean(f.hydraulicOk ?? f.hydraulic_ok ?? true),
+      steering_ok: Boolean(f.steeringOk ?? f.steering_ok ?? true),
+      tires_ok: Boolean(f.tiresOk ?? f.tires_ok ?? true),
+      battery_fluid_ok: Boolean(f.batteryFluidOk ?? f.battery_fluid_ok ?? true),
+      remarks: f.remarks || null,
+      updated_at: new Date().toISOString()
+    };
+  }
+
+  function mapRowToForklift(row: any) {
+    return {
+      id: row.id,
+      date: row.date,
+      operator: row.operator,
+      forkliftId: row.forklift_id || row.forkliftId || 'FL-01',
+      brakesOk: Boolean(row.brakes_ok ?? true),
+      lightsOk: Boolean(row.lights_ok ?? true),
+      hydraulicOk: Boolean(row.hydraulic_ok ?? true),
+      steeringOk: Boolean(row.steering_ok ?? true),
+      tiresOk: Boolean(row.tires_ok ?? true),
+      batteryFluidOk: Boolean(row.battery_fluid_ok ?? true),
+      remarks: row.remarks
+    };
+  }
+
+  function mapRegistryToRow(reg: any) {
+    return {
+      id: reg.id,
+      type: reg.type,
+      code: reg.code,
+      name: reg.name,
+      description: reg.description || null,
+      status: reg.status || 'ACTIVE',
+      date_registered: reg.dateRegistered || reg.date_registered || new Date().toISOString().split('T')[0],
+      preset_source: reg.presetSource || reg.preset_source || null,
+      category: reg.category || null,
+      vendor_supplier: reg.vendorSupplier || reg.vendor_supplier || null,
+      unit: reg.unit || null,
+      location: reg.location || null,
+      updated_at: new Date().toISOString()
+    };
+  }
+
+  function mapRowToRegistry(row: any) {
+    return {
+      id: row.id,
+      type: row.type,
+      code: row.code,
+      name: row.name,
+      description: row.description,
+      status: row.status || 'ACTIVE',
+      dateRegistered: row.date_registered || row.dateRegistered || new Date().toISOString().split('T')[0],
+      presetSource: row.preset_source || row.presetSource,
+      category: row.category,
+      vendorSupplier: row.vendor_supplier || row.vendorSupplier,
+      unit: row.unit,
+      location: row.location
+    };
+  }
+
   async function loadStateFromSupabase() {
     if (!supabaseServer) return;
     try {
-      const tableMap: Record<string, string> = {
-        stocks: 'stocks',
-        receiving: 'receiving',
-        returns: 'returns',
-        recycling: 'recycling',
-        issuances: 'issuances',
-        deliveries: 'deliveries',
-        envLogs: 'env_logs',
-        forkliftChecks: 'forklift_checks',
-        registries: 'registries',
-        registeredUsers: 'registered_users',
-        chatMessages: 'chat_messages'
+      const tableMap: Record<string, { table: string; mapper: (r: any) => any }> = {
+        stocks: { table: 'stocks', mapper: mapRowToStock },
+        receiving: { table: 'receiving', mapper: mapRowToReceiving },
+        returns: { table: 'returns', mapper: mapRowToReturn },
+        recycling: { table: 'recycling', mapper: mapRowToRecycling },
+        issuances: { table: 'issuances', mapper: mapRowToIssuance },
+        deliveries: { table: 'deliveries', mapper: mapRowToDelivery },
+        envLogs: { table: 'env_logs', mapper: mapRowToEnvLog },
+        forkliftChecks: { table: 'forklift_checks', mapper: mapRowToForklift },
+        registries: { table: 'registries', mapper: mapRowToRegistry },
+        registeredUsers: {
+          table: 'registered_users',
+          mapper: (u: any): ServerUser => {
+            const empId = (u.employee_id || u.employeeId || '').toUpperCase();
+            const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (empId === 'JPMP-002' ? '0423' : '1234'));
+            return {
+              employeeId: empId,
+              username: u.username || 'OPERATOR',
+              role: u.role || 'WAREHOUSE CLERK',
+              phoneNumber: u.phone_number || u.phoneNumber || '',
+              permission: u.permission || 'LIMITED_ACCESS',
+              pin: cleanPin,
+              status: u.status || 'ACTIVE',
+              lastActive: u.last_active || u.lastActive || undefined
+            };
+          }
+        },
+        chatMessages: {
+          table: 'chat_messages',
+          mapper: (m: any) => ({
+            id: m.id,
+            sender: m.sender,
+            text: m.text,
+            timestamp: m.timestamp,
+            isSystem: Boolean(m.is_system)
+          })
+        }
       };
 
-      for (const [col, table] of Object.entries(tableMap)) {
-        const { data, error } = await supabaseServer.from(table).select('*');
+      for (const [col, config] of Object.entries(tableMap)) {
+        const { data, error } = await supabaseServer.from(config.table).select('*');
         if (!error && Array.isArray(data) && data.length > 0) {
           if (col === 'chatMessages') {
             chatMessages.length = 0;
-            chatMessages.push(...data.map((m: any) => ({
-              id: m.id,
-              sender: m.sender,
-              text: m.text,
-              timestamp: m.timestamp,
-              isSystem: Boolean(m.is_system)
-            })));
+            chatMessages.push(...data.map(config.mapper));
           } else if (col === 'registeredUsers') {
-            const parsedUsers: ServerUser[] = data.map((u: any): ServerUser => {
-              const empId = (u.employee_id || u.employeeId || '').toUpperCase();
-              const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (empId === 'JPMP-002' ? '0423' : '1234'));
-              return {
-                employeeId: empId,
-                username: u.username || 'OPERATOR',
-                role: u.role || 'WAREHOUSE CLERK',
-                phoneNumber: u.phone_number || u.phoneNumber || '',
-                permission: u.permission || 'LIMITED_ACCESS',
-                pin: cleanPin,
-                status: u.status || 'ACTIVE',
-                lastActive: u.last_active || u.lastActive || undefined
-              };
-            });
-            // Ensure super admin is preserved with their PIN
-            if (!parsedUsers.some(u => u.employeeId === 'JPMP-002')) {
+            const parsedUsers = data.map(config.mapper);
+            if (!parsedUsers.some((u: any) => u.employeeId === 'JPMP-002')) {
               parsedUsers.unshift(defaultSuperAdmin);
             }
             state.registeredUsers = parsedUsers;
           } else if (col in state) {
-            (state as any)[col] = data;
+            (state as any)[col] = data.map(config.mapper);
           }
         }
       }
@@ -220,26 +589,54 @@ async function startServer() {
     loadStateFromSupabase();
   }
 
-  // Helper to persist collection to Supabase asynchronously
+  // Helper to persist collection to Supabase asynchronously with PostgreSQL column mapping
   async function persistToSupabase(collection: string, data: any[]) {
     if (!supabaseServer) return;
     try {
-      const tableMap: Record<string, string> = {
-        stocks: 'stocks',
-        receiving: 'receiving',
-        returns: 'returns',
-        recycling: 'recycling',
-        issuances: 'issuances',
-        deliveries: 'deliveries',
-        envLogs: 'env_logs',
-        forkliftChecks: 'forklift_checks',
-        registries: 'registries',
-        registeredUsers: 'registered_users',
-        chatMessages: 'chat_messages'
+      const tableMap: Record<string, { table: string; mapper: (r: any) => any }> = {
+        stocks: { table: 'stocks', mapper: mapStockToRow },
+        receiving: { table: 'receiving', mapper: mapReceivingToRow },
+        returns: { table: 'returns', mapper: mapReturnToRow },
+        recycling: { table: 'recycling', mapper: mapRecyclingToRow },
+        issuances: { table: 'issuances', mapper: mapIssuanceToRow },
+        deliveries: { table: 'deliveries', mapper: mapDeliveryToRow },
+        envLogs: { table: 'env_logs', mapper: mapEnvLogToRow },
+        forkliftChecks: { table: 'forklift_checks', mapper: mapForkliftToRow },
+        registries: { table: 'registries', mapper: mapRegistryToRow },
+        registeredUsers: {
+          table: 'registered_users',
+          mapper: (u: any) => {
+            const empId = (u.employeeId || u.employee_id || '').toUpperCase();
+            const cleanPin = u.pin ? String(u.pin).trim() : (empId === 'JPMP-002' ? '0423' : '1234');
+            return {
+              employee_id: empId,
+              username: (u.username || 'OPERATOR').toUpperCase(),
+              role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
+              permission: u.permission || 'LIMITED_ACCESS',
+              pin: cleanPin,
+              pin_hash: cleanPin,
+              phone_number: u.phoneNumber || u.phone_number || '',
+              status: u.status || 'ACTIVE',
+              last_active: u.lastActive || null,
+              updated_at: new Date().toISOString()
+            };
+          }
+        },
+        chatMessages: {
+          table: 'chat_messages',
+          mapper: (m: any) => ({
+            id: m.id,
+            sender: m.sender,
+            text: m.text,
+            timestamp: m.timestamp,
+            is_system: Boolean(m.isSystem || m.is_system),
+            created_at: new Date().toISOString()
+          })
+        }
       };
 
-      const tableName = tableMap[collection];
-      if (!tableName) return;
+      const target = tableMap[collection];
+      if (!target) return;
 
       if (!Array.isArray(data) || data.length === 0) {
         if (collection === 'registeredUsers') {
@@ -247,43 +644,25 @@ async function startServer() {
         } else if (collection === 'chatMessages') {
           await supabaseServer.from('chat_messages').delete().neq('id', '___NEVER___');
         } else {
-          await supabaseServer.from(tableName).delete().neq('id', '___NEVER___');
+          await supabaseServer.from(target.table).delete().neq('id', '___NEVER___');
         }
         return;
       }
 
-      let payload = data;
+      const mappedRows = data.map(target.mapper);
+      await supabaseServer.from(target.table).upsert(mappedRows, { ignoreDuplicates: false });
+
       if (collection === 'registeredUsers') {
-        payload = data.map((u: any) => {
-          const empId = (u.employeeId || u.employee_id || '').toUpperCase();
-          const cleanPin = u.pin ? String(u.pin).trim() : (empId === 'JPMP-002' ? '0423' : '1234');
-          return {
-            employee_id: empId,
-            username: (u.username || 'OPERATOR').toUpperCase(),
-            role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
-            permission: u.permission || 'LIMITED_ACCESS',
-            pin: cleanPin,
-            pin_hash: cleanPin,
-            phone_number: u.phoneNumber || u.phone_number || '',
-            status: u.status || 'ACTIVE',
-            last_active: u.lastActive || null,
-            updated_at: new Date().toISOString()
-          };
-        });
-        await supabaseServer.from(tableName).upsert(payload, { ignoreDuplicates: false });
-        const activeIds = payload.map((u: any) => u.employee_id).filter(Boolean);
+        const activeIds = mappedRows.map((u: any) => u.employee_id).filter(Boolean);
         if (activeIds.length > 0) {
           const inListStr = `(${activeIds.map((id: string) => `"${id}"`).join(',')})`;
-          await supabaseServer.from(tableName).delete().not('employee_id', 'in', inListStr);
+          await supabaseServer.from(target.table).delete().not('employee_id', 'in', inListStr);
         }
-      } else {
-        await supabaseServer.from(tableName).upsert(payload, { ignoreDuplicates: false });
-        if (collection !== 'chatMessages') {
-          const activeIds = payload.map((u: any) => u.id).filter(Boolean);
-          if (activeIds.length > 0) {
-            const inListStr = `(${activeIds.map((id: string) => `"${id}"`).join(',')})`;
-            await supabaseServer.from(tableName).delete().not('id', 'in', inListStr);
-          }
+      } else if (collection !== 'chatMessages') {
+        const activeIds = mappedRows.map((u: any) => u.id).filter(Boolean);
+        if (activeIds.length > 0) {
+          const inListStr = `(${activeIds.map((id: string) => `"${id}"`).join(',')})`;
+          await supabaseServer.from(target.table).delete().not('id', 'in', inListStr);
         }
       }
     } catch (err) {

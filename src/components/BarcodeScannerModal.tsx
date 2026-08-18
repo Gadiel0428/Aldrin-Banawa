@@ -24,7 +24,6 @@ interface BarcodeScannerModalProps {
   onScanResult: (code: string) => void;
   title?: string;
   subtitle?: string;
-  sampleCodes?: { code: string; label: string; name?: string; description?: string }[];
 }
 
 export default function BarcodeScannerModal({
@@ -32,13 +31,7 @@ export default function BarcodeScannerModal({
   onClose,
   onScanResult,
   title = "WMS Barcode Scanner",
-  subtitle = "Scan material tag or lot label using USB / Bluetooth handheld barcode scanner",
-  sampleCodes = [
-    { code: 'RM-RE-089', label: 'Polystyrene Resin', name: 'Polystyrene Resin', description: 'Raw plastic resin grade ABS/PS' },
-    { code: 'PM-CB-012', label: 'Carton Boxes', name: 'Carton Boxes', description: 'Double wall packaging boxes' },
-    { code: 'CHEM-SOL-05', label: 'Cleaning Solvent', name: 'Cleaning Solvent', description: 'Industrial grade degreaser' },
-    { code: 'LOT-2605-A', label: 'Lot 2605-A', name: 'Lot 2605-A', description: 'Batch control lot barcode tag' }
-  ]
+  subtitle = "Scan material tag or lot label using USB / Bluetooth handheld barcode scanner"
 }: BarcodeScannerModalProps) {
   const [activeTab, setActiveTab] = useState<'scanner' | 'upload'>('scanner');
   const [scannedCode, setScannedCode] = useState<string | null>(null);
@@ -305,34 +298,6 @@ export default function BarcodeScannerModal({
                   </div>
                 </div>
               </form>
-
-              {/* Sample / Test Presets */}
-              {sampleCodes && sampleCodes.length > 0 && (
-                <div className="space-y-2 pt-2 border-t border-slate-800/80">
-                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-                    <span>Quick Test Presets (Click to Simulate Scan):</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    {sampleCodes.map((sample, idx) => (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={() => handleSuccessfulScan(sample.code)}
-                        className="text-left p-2.5 bg-slate-950 hover:bg-indigo-950/50 border border-slate-800 hover:border-indigo-500/50 rounded-xl transition group cursor-pointer flex flex-col justify-between gap-1"
-                      >
-                        <div className="text-xs font-bold text-indigo-300 group-hover:text-indigo-200 truncate">
-                          {sample.label || sample.name || sample.code}
-                        </div>
-                        {sample.description && (
-                          <div className="text-[10px] text-slate-500 truncate">
-                            {sample.description}
-                          </div>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
           )}
 

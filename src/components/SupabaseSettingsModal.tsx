@@ -339,6 +339,8 @@ CREATE TABLE IF NOT EXISTS public.registered_users (
   permission TEXT NOT NULL DEFAULT 'LIMITED_ACCESS', 
   pin TEXT DEFAULT '1234', 
   pin_hash TEXT, 
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  last_active TEXT,
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -359,6 +361,8 @@ ALTER TABLE public.receiving ADD COLUMN IF NOT EXISTS customer TEXT;
 ALTER TABLE public.registered_users ADD COLUMN IF NOT EXISTS phone_number TEXT;
 ALTER TABLE public.registered_users ADD COLUMN IF NOT EXISTS pin TEXT DEFAULT '1234';
 ALTER TABLE public.registered_users ADD COLUMN IF NOT EXISTS permission TEXT DEFAULT 'LIMITED_ACCESS';
+ALTER TABLE public.registered_users ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ACTIVE';
+ALTER TABLE public.registered_users ADD COLUMN IF NOT EXISTS last_active TEXT;
 
 -- 3. Row Level Security & Open Access Policies
 ALTER TABLE public.stocks ENABLE ROW LEVEL SECURITY;

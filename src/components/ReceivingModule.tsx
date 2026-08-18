@@ -1941,19 +1941,7 @@ export default function ReceivingModule({
         onClose={() => setShowScannerModal(false)}
         onScanResult={handleScanResult}
         title="Receiving Material Barcode Scanner"
-        subtitle="Use handheld barcode scanner, enter barcode manually, or select registered barcode preset"
-        sampleCodes={
-          registries.filter(r => r.type === 'BARCODE_PRESET' && r.status === 'ACTIVE').length > 0
-            ? registries
-                .filter(r => r.type === 'BARCODE_PRESET' && r.status === 'ACTIVE')
-                .map(r => ({ 
-                  code: r.code || r.id, 
-                  label: r.name,
-                  name: r.name,
-                  description: r.description || r.name
-                }))
-            : undefined
-        }
+        subtitle="Use handheld barcode scanner or enter barcode manually"
       />
       {/* Yes / No Action Confirmation Modal */}
       {confirmAction && (
