@@ -193,6 +193,8 @@ export interface RegisteredAccount {
   phoneNumber?: string;
   permission?: string;
   pin?: string;
+  status?: 'ACTIVE' | 'PENDING' | 'INACTIVE';
+  lastActive?: string;
 }
 
 export type RegistryType = 'LOCATION' | 'CATEGORY' | 'CUSTOMER' | 'SUPPLIER' | 'BARCODE_PRESET';

@@ -53,17 +53,40 @@ async function startServer() {
     }
   }
 
-  const defaultSuperAdmin = { 
+  interface ServerUser {
+    username: string;
+    role: string;
+    employeeId: string;
+    phoneNumber?: string;
+    permission?: string;
+    pin: string;
+    status?: string;
+    lastActive?: string;
+  }
+
+  const defaultSuperAdmin: ServerUser = { 
     username: 'ALDRIN BANAWA', 
     role: 'SUPER ADMINISTRATOR', 
     employeeId: 'JPMP-002', 
     phoneNumber: '+639669858846',
     permission: 'FULL_ACCESS', 
-    pin: '0423' 
+    pin: '0423',
+    status: 'ACTIVE'
   };
 
   // Server-authoritative state
-  const state = {
+  const state: {
+    stocks: any[];
+    receiving: any[];
+    returns: any[];
+    recycling: any[];
+    issuances: any[];
+    deliveries: any[];
+    envLogs: any[];
+    forkliftChecks: any[];
+    registries: any[];
+    registeredUsers: ServerUser[];
+  } = {
     stocks: [...INITIAL_STOCK],
     receiving: [...INITIAL_RECEIVING],
     returns: [...INITIAL_RETURNS],
@@ -151,7 +174,7 @@ async function startServer() {
               isSystem: Boolean(m.is_system)
             })));
           } else if (col === 'registeredUsers') {
-            const parsedUsers = data.map((u: any) => {
+            const parsedUsers: ServerUser[] = data.map((u: any): ServerUser => {
               const empId = (u.employee_id || u.employeeId || '').toUpperCase();
               const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (empId === 'JPMP-002' ? '0423' : '1234'));
               return {
@@ -160,7 +183,9 @@ async function startServer() {
                 role: u.role || 'WAREHOUSE CLERK',
                 phoneNumber: u.phone_number || u.phoneNumber || '',
                 permission: u.permission || 'LIMITED_ACCESS',
-                pin: cleanPin
+                pin: cleanPin,
+                status: u.status || 'ACTIVE',
+                lastActive: u.last_active || u.lastActive || undefined
               };
             });
             // Ensure super admin is preserved with their PIN
@@ -240,6 +265,8 @@ async function startServer() {
             pin: cleanPin,
             pin_hash: cleanPin,
             phone_number: u.phoneNumber || u.phone_number || '',
+            status: u.status || 'ACTIVE',
+            last_active: u.lastActive || null,
             updated_at: new Date().toISOString()
           };
         });

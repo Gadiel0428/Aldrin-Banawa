@@ -549,7 +549,9 @@ export async function fetchCollectionFromSupabase(collection: string): Promise<a
             employeeId: empId,
             phoneNumber: r.phone_number || r.phoneNumber || '',
             permission: r.permission || 'LIMITED_ACCESS',
-            pin: cleanPin
+            pin: cleanPin,
+            status: r.status || 'ACTIVE',
+            lastActive: r.last_active || r.lastActive || undefined
           };
         }
       },
@@ -642,6 +644,8 @@ export async function syncCollectionToSupabase(collection: string, items: any[])
             permission: u.permission || 'LIMITED_ACCESS',
             pin: cleanPin,
             pin_hash: cleanPin,
+            status: u.status || 'ACTIVE',
+            last_active: u.lastActive || null,
             updated_at: new Date().toISOString()
           };
         });

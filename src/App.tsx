@@ -388,7 +388,8 @@ export default function App() {
     employeeId: 'JPMP-002', 
     phoneNumber: '+639669858846',
     permission: 'FULL_ACCESS', 
-    pin: '0423' 
+    pin: '0423',
+    status: 'ACTIVE'
   };
 
   const getDeletedUserIds = (): Set<string> => {
@@ -465,7 +466,9 @@ export default function App() {
             ...current,
             username: u.username ? String(u.username).toUpperCase() : current.username,
             phoneNumber: u.phoneNumber || u.phone_number || current.phoneNumber,
-            pin: cleanPin || current.pin || '0423'
+            pin: cleanPin || current.pin || '0423',
+            status: u.status || 'ACTIVE',
+            lastActive: u.lastActive || u.last_active || current.lastActive || undefined
           });
         } else {
           userMap.set(empId, {
@@ -474,7 +477,9 @@ export default function App() {
             employeeId: empId,
             phoneNumber: u.phoneNumber || u.phone_number || '',
             permission: u.permission || 'LIMITED_ACCESS',
-            pin: cleanPin || '1234'
+            pin: cleanPin || '1234',
+            status: u.status || 'ACTIVE',
+            lastActive: u.lastActive || u.last_active || undefined
           });
         }
       });
@@ -1243,7 +1248,8 @@ export default function App() {
     employeeId: string, 
     permission?: string, 
     phoneNumber?: string,
-    customPin?: string
+    customPin?: string,
+    status?: 'ACTIVE' | 'PENDING' | 'INACTIVE'
   ): RegisteredAccount | null => {
     const cleanUsername = (username || '').trim().toUpperCase();
     let cleanEmployeeId = (employeeId || '').trim().toUpperCase();
@@ -1293,7 +1299,8 @@ export default function App() {
       employeeId: cleanEmployeeId, 
       phoneNumber: phoneNumber ? phoneNumber.trim() : '',
       permission: cleanPermission, 
-      pin: finalPin 
+      pin: finalPin,
+      status: status || 'ACTIVE'
     };
 
     // Remove from deleted tracking if re-registered
@@ -1384,7 +1391,9 @@ export default function App() {
           role: (updated.role || '').toUpperCase(),
           phoneNumber: updated.phoneNumber !== undefined ? updated.phoneNumber : (u.phoneNumber || ''),
           permission: updated.permission || u.permission || 'LIMITED_ACCESS',
-          pin: (updated.pin || u.pin || '1234').slice(0, 4)
+          pin: (updated.pin || u.pin || '1234').slice(0, 4),
+          status: updated.status || u.status || 'ACTIVE',
+          lastActive: updated.lastActive !== undefined ? updated.lastActive : u.lastActive
         };
       }
       return u;
@@ -1497,16 +1506,37 @@ export default function App() {
     }
   };
 
-  const handleLogin = (user: {username: string; role: string; employeeId: string; permission?: string}) => {
+  const handleLogin = (user: {username: string; role: string; employeeId: string; permission?: string; status?: string; lastActive?: string}) => {
     const cleanUsername = (user.username || 'OPERATOR').toUpperCase();
     const cleanRole = (user.role || 'WAREHOUSE CLERK').toUpperCase();
     const cleanEmployeeId = (user.employeeId || '').toUpperCase();
     const cleanPermission = user.permission || (cleanEmployeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS');
+    const nowIso = new Date().toISOString();
+
     setCurrentUser(cleanUsername);
     setCurrentRole(cleanRole);
     setCurrentEmployeeId(cleanEmployeeId);
     setCurrentPermission(cleanPermission);
     setIsLoggedIn(true);
+
+    // Update lastActive timestamp on the operator's account & sync across terminals
+    setRegisteredUsers(prev => {
+      const updated = prev.map(u => {
+        if ((u.employeeId || '').toUpperCase() === cleanEmployeeId) {
+          return {
+            ...u,
+            lastActive: nowIso,
+            status: u.status === 'PENDING' ? 'ACTIVE' : (u.status || 'ACTIVE')
+          };
+        }
+        return u;
+      });
+      try {
+        localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(updated));
+      } catch (e) {}
+      syncCollection('registeredUsers', updated);
+      return updated;
+    });
     
     // Broadcast dispatch note about login
     setTimeout(() => {
@@ -2690,13 +2720,11 @@ export default function App() {
               type="button"
               onClick={handleManualSync}
               disabled={isManualSyncing}
-              className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0 disabled:opacity-50"
-              title="Force Instant Sync across All Workstations"
+              className="flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-700 w-8 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0 disabled:opacity-50"
+              title={isManualSyncing ? "Syncing data across all workstations..." : "Force Instant Sync across All Workstations"}
+              aria-label="Force Instant Sync"
             >
-              <RefreshCw className={`h-3.5 w-3.5 text-slate-600 ${isManualSyncing ? 'animate-spin text-blue-600' : ''}`} />
-              <span className="text-[11px] font-mono tracking-wider uppercase hidden md:inline">
-                {isManualSyncing ? 'SYNCING...' : 'SYNC NOW'}
-              </span>
+              <RefreshCw className={`h-4 w-4 text-slate-600 ${isManualSyncing ? 'animate-spin text-blue-600' : ''}`} />
             </button>
 
             {/* Real-Time WebSocket / Server Node Connection Badge Button */}
@@ -2706,11 +2734,11 @@ export default function App() {
                 setTempServerAddress(serverAddress);
                 setShowServerSettingsModal(true);
               }}
-              className="flex items-center gap-2 bg-slate-900 border border-slate-700 hover:border-indigo-500 text-slate-200 hover:text-white px-2.5 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
-              title="Real-Time Network Sync Status & Server Node Settings"
+              className="flex items-center justify-center gap-1.5 bg-slate-900 border border-slate-700 hover:border-indigo-500 text-slate-200 hover:text-white px-2.5 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
+              title={`Real-Time Network Sync: ${connectionStatus.toUpperCase()} (Click to configure Server Node)`}
+              aria-label="Real-Time Network Sync Status"
             >
               <Wifi className={`h-3.5 w-3.5 ${connectionStatus === 'connected' ? 'text-emerald-400' : connectionStatus === 'connecting' ? 'text-amber-400 animate-pulse' : 'text-rose-400'} shrink-0`} />
-              <span className="text-[11px] font-mono tracking-wider uppercase hidden sm:inline">REAL-TIME</span>
               <span className={`w-2 h-2 rounded-full ${
                 connectionStatus === 'connected' ? 'bg-emerald-400 animate-pulse' :
                 connectionStatus === 'connecting' ? 'bg-amber-400 animate-ping' : 'bg-rose-500'
@@ -2721,11 +2749,11 @@ export default function App() {
             <button
               type="button"
               onClick={() => setShowSupabaseSettingsModal(true)}
-              className="flex items-center gap-2 bg-slate-900 border border-slate-700 hover:border-emerald-500 text-slate-200 hover:text-white px-2.5 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
-              title="Configure Supabase PostgreSQL Database & Cloud Sync"
+              className="flex items-center justify-center gap-1.5 bg-slate-900 border border-slate-700 hover:border-emerald-500 text-slate-200 hover:text-white px-2.5 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
+              title={`Supabase PostgreSQL Sync: ${supabaseStatus.toUpperCase()} (Click to configure Cloud Database)`}
+              aria-label="Supabase Cloud Database Settings"
             >
               <Database className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-              <span className="text-[11px] font-mono tracking-wider uppercase hidden sm:inline text-emerald-400">SUPABASE</span>
               <span className={`w-2 h-2 rounded-full ${supabaseStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : supabaseStatus === 'connecting' ? 'bg-amber-400 animate-bounce' : 'bg-slate-500'}`} />
             </button>
 
@@ -2733,11 +2761,11 @@ export default function App() {
             <button
               type="button"
               onClick={() => setShowMobileInstallModal(true)}
-              className="flex items-center gap-1.5 bg-emerald-950/80 border border-emerald-500/40 hover:border-emerald-400 text-emerald-300 hover:text-white px-2.5 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
+              className="flex items-center justify-center bg-emerald-950/80 border border-emerald-500/40 hover:border-emerald-400 text-emerald-300 hover:text-white w-8 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
               title="Download Android APK / Install Mobile Web App"
+              aria-label="Download Android APK / Mobile App"
             >
-              <Smartphone className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-              <span className="text-[11px] font-mono tracking-wider uppercase text-emerald-300">MOBILE APK</span>
+              <Smartphone className="h-4 w-4 text-emerald-400 shrink-0" />
             </button>
 
             {/* Live Date & Time Display */}

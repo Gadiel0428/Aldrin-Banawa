@@ -965,6 +965,7 @@ export default function DashboardOverview({
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
             {registeredUsers.map((acc, idx) => {
               const isSuper = (acc.employeeId || '').toUpperCase() === 'JPMP-002' || (acc.role || '').toUpperCase().includes('SUPER') || acc.permission === 'FULL_ACCESS';
+              const currentStatus = acc.status || 'ACTIVE';
               return (
                 <div 
                   key={acc.employeeId ? `dashboard-acc-${acc.employeeId}-${idx}` : `dashboard-acc-${idx}`}
@@ -981,6 +982,16 @@ export default function DashboardOverview({
                             SUPER ADMIN
                           </span>
                         )}
+                        <span className={`inline-flex items-center gap-1 text-[8px] font-mono font-bold px-1.5 py-0.2 rounded-full uppercase border ${
+                          currentStatus === 'ACTIVE' 
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                            : currentStatus === 'PENDING' 
+                            ? 'bg-slate-100 text-slate-600 border-slate-300' 
+                            : 'bg-rose-50 text-rose-700 border-rose-200'
+                        }`}>
+                          <span className={`h-1 w-1 rounded-full ${currentStatus === 'ACTIVE' ? 'bg-emerald-500 animate-pulse' : currentStatus === 'PENDING' ? 'bg-slate-400' : 'bg-rose-500'}`} />
+                          {currentStatus}
+                        </span>
                       </div>
                       <span className="text-[10px] font-mono font-bold text-indigo-600 block mt-0.5">
                         {acc.employeeId}
