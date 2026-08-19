@@ -639,32 +639,12 @@ async function startServer() {
       if (!target) return;
 
       if (!Array.isArray(data) || data.length === 0) {
-        if (collection === 'registeredUsers') {
-          await supabaseServer.from('registered_users').delete().neq('employee_id', 'JPMP-002');
-        } else if (collection === 'chatMessages') {
-          await supabaseServer.from('chat_messages').delete().neq('id', '___NEVER___');
-        } else {
-          await supabaseServer.from(target.table).delete().neq('id', '___NEVER___');
-        }
+        // Never automatically wipe table contents when receiving an empty array
         return;
       }
 
       const mappedRows = data.map(target.mapper);
       await supabaseServer.from(target.table).upsert(mappedRows, { ignoreDuplicates: false });
-
-      if (collection === 'registeredUsers') {
-        const activeIds = mappedRows.map((u: any) => u.employee_id).filter(Boolean);
-        if (activeIds.length > 0) {
-          const inListStr = `(${activeIds.map((id: string) => `"${id}"`).join(',')})`;
-          await supabaseServer.from(target.table).delete().not('employee_id', 'in', inListStr);
-        }
-      } else if (collection !== 'chatMessages') {
-        const activeIds = mappedRows.map((u: any) => u.id).filter(Boolean);
-        if (activeIds.length > 0) {
-          const inListStr = `(${activeIds.map((id: string) => `"${id}"`).join(',')})`;
-          await supabaseServer.from(target.table).delete().not('id', 'in', inListStr);
-        }
-      }
     } catch (err) {
       console.warn(`Supabase server persist failed for ${collection}:`, err);
     }
@@ -800,19 +780,55 @@ async function startServer() {
         broadcast({ type: "chat_broadcast_all", messages: chatMessages });
         return res.json({ success: true, collection });
       }
-      if (collection && collection in state) {
-        (state as any)[collection] = data;
+
+      if (collection === "registeredUsers" && Array.isArray(data)) {
+        const userMap = new Map<string, any>();
+        userMap.set("JPMP-002", { ...defaultSuperAdmin });
+        (state.registeredUsers || []).forEach((u: any) => {
+          const empId = (u.employeeId || u.employee_id || '').toUpperCase();
+          if (empId) userMap.set(empId, u);
+        });
+        data.forEach((u: any) => {
+          const empId = (u.employeeId || u.employee_id || '').toUpperCase();
+          if (empId) {
+            const existing = userMap.get(empId) || {};
+            userMap.set(empId, { ...existing, ...u });
+          }
+        });
+        state.registeredUsers = Array.from(userMap.values());
         saveStateToDisk();
-        persistToSupabase(collection, data);
+        persistToSupabase("registeredUsers", state.registeredUsers);
+        broadcast({
+          type: "collection_updated",
+          collection: "registeredUsers",
+          data: state.registeredUsers
+        });
+        return res.json({ success: true, collection: "registeredUsers", updatedCount: state.registeredUsers.length });
+      }
+
+      if (collection && collection in state && Array.isArray(data)) {
+        if (data.length === 0 && (state as any)[collection]?.length > 0) {
+          return res.json({ success: true, collection, updatedCount: (state as any)[collection].length });
+        }
+        const itemMap = new Map<string, any>();
+        ((state as any)[collection] || []).forEach((item: any) => {
+          if (item && item.id) itemMap.set(item.id, item);
+        });
+        data.forEach((item: any) => {
+          if (item && item.id) itemMap.set(item.id, item);
+        });
+        (state as any)[collection] = Array.from(itemMap.values());
+        saveStateToDisk();
+        persistToSupabase(collection, (state as any)[collection]);
         
         // Broadcast change to all connected WebSockets
         broadcast({
           type: "collection_updated",
           collection,
-          data
+          data: (state as any)[collection]
         });
 
-        return res.json({ success: true, collection, updatedCount: Array.isArray(data) ? data.length : 1 });
+        return res.json({ success: true, collection, updatedCount: (state as any)[collection].length });
       }
       res.status(400).json({ error: "Invalid collection" });
     } catch (err: any) {
@@ -929,6 +945,55 @@ async function startServer() {
       });
 
       return res.json({ success: true, employeeId: cleanId });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Explicit endpoint to permanently delete a collection record across server, disk, and Supabase
+  app.post("/api/records/delete", async (req, res) => {
+    try {
+      const { collection, id } = req.body;
+      if (!collection || !id) return res.status(400).json({ error: "Collection and ID required" });
+      
+      if (collection in state) {
+        (state as any)[collection] = ((state as any)[collection] || []).filter((item: any) => item.id !== id);
+        saveStateToDisk();
+
+        if (supabaseServer) {
+          const tableMap: Record<string, string> = {
+            stocks: 'stocks',
+            receiving: 'receiving',
+            returns: 'returns',
+            recycling: 'recycling',
+            issuances: 'issuances',
+            deliveries: 'deliveries',
+            envLogs: 'env_logs',
+            forkliftChecks: 'forklift_checks',
+            registries: 'registries'
+          };
+          const table = tableMap[collection] || collection;
+          try {
+            await supabaseServer.from(table).delete().eq('id', id);
+          } catch (sErr) {
+            console.warn("Supabase record deletion error:", sErr);
+          }
+        }
+
+        broadcast({
+          type: "record_deleted",
+          collection,
+          id
+        });
+        broadcast({
+          type: "collection_updated",
+          collection,
+          data: (state as any)[collection]
+        });
+
+        return res.json({ success: true, collection, id });
+      }
+      return res.status(400).json({ error: "Invalid collection" });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
@@ -1176,16 +1241,49 @@ async function startServer() {
 
           case "update_collection": {
             const { collection, data } = payload;
-            if (collection in state) {
-              (state as any)[collection] = data;
+            if (collection === "registeredUsers" && Array.isArray(data)) {
+              const userMap = new Map<string, any>();
+              userMap.set("JPMP-002", { ...defaultSuperAdmin });
+              (state.registeredUsers || []).forEach((u: any) => {
+                const empId = (u.employeeId || u.employee_id || '').toUpperCase();
+                if (empId) userMap.set(empId, u);
+              });
+              data.forEach((u: any) => {
+                const empId = (u.employeeId || u.employee_id || '').toUpperCase();
+                if (empId) {
+                  const existing = userMap.get(empId) || {};
+                  userMap.set(empId, { ...existing, ...u });
+                }
+              });
+              state.registeredUsers = Array.from(userMap.values());
               saveStateToDisk();
-              persistToSupabase(collection, data);
+              persistToSupabase("registeredUsers", state.registeredUsers);
+              broadcast({
+                type: "collection_updated",
+                collection: "registeredUsers",
+                data: state.registeredUsers
+              }, ws);
+            } else if (collection && collection in state && Array.isArray(data)) {
+              if (data.length === 0 && (state as any)[collection]?.length > 0) {
+                // Ignore empty sync to prevent dropping data
+                break;
+              }
+              const itemMap = new Map<string, any>();
+              ((state as any)[collection] || []).forEach((item: any) => {
+                if (item && item.id) itemMap.set(item.id, item);
+              });
+              data.forEach((item: any) => {
+                if (item && item.id) itemMap.set(item.id, item);
+              });
+              (state as any)[collection] = Array.from(itemMap.values());
+              saveStateToDisk();
+              persistToSupabase(collection, (state as any)[collection]);
               
               // Broadcast the updated collection to all other clients
               broadcast({
                 type: "collection_updated",
                 collection,
-                data
+                data: (state as any)[collection]
               }, ws);
             }
             break;
@@ -1222,6 +1320,42 @@ async function startServer() {
                 collection: "registeredUsers",
                 data: state.registeredUsers
               });
+            }
+            break;
+          }
+
+          case "delete_record": {
+            const { collection, id } = payload;
+            if (collection && collection in state && id) {
+              (state as any)[collection] = ((state as any)[collection] || []).filter((item: any) => item.id !== id);
+              saveStateToDisk();
+
+              if (supabaseServer) {
+                const tableMap: Record<string, string> = {
+                  stocks: 'stocks',
+                  receiving: 'receiving',
+                  returns: 'returns',
+                  recycling: 'recycling',
+                  issuances: 'issuances',
+                  deliveries: 'deliveries',
+                  envLogs: 'env_logs',
+                  forkliftChecks: 'forklift_checks',
+                  registries: 'registries'
+                };
+                const table = tableMap[collection] || collection;
+                supabaseServer.from(table).delete().eq('id', id).then();
+              }
+
+              broadcast({
+                type: "record_deleted",
+                collection,
+                id
+              }, ws);
+              broadcast({
+                type: "collection_updated",
+                collection,
+                data: (state as any)[collection]
+              }, ws);
             }
             break;
           }

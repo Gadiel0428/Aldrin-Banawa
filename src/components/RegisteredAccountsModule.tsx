@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { 
   Users, 
   UserPlus, 
@@ -538,346 +539,363 @@ export default function RegisteredAccountsModule({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredAccounts.map((acc) => {
-                const isSelf = acc.employeeId === currentEmployeeId;
-                const isSuperAdminAcc = 
-                  (acc.employeeId || '').toUpperCase() === 'JPMP-002' || 
-                  (acc.username || '').toUpperCase().includes('ALDRIN BANAWA') ||
-                  (acc.username || '').toUpperCase() === 'SUPER ADMIN';
-                
-                const currentStatus = acc.status || 'ACTIVE';
-                const isPinVisible = revealAllPins || !!showPins[acc.employeeId];
+              <AnimatePresence mode="popLayout" initial={false}>
+                {filteredAccounts.map((acc) => {
+                  const isSelf = acc.employeeId === currentEmployeeId;
+                  const isSuperAdminAcc = 
+                    (acc.employeeId || '').toUpperCase() === 'JPMP-002' || 
+                    (acc.username || '').toUpperCase().includes('ALDRIN BANAWA') ||
+                    (acc.username || '').toUpperCase() === 'SUPER ADMIN';
+                  
+                  const currentStatus = acc.status || 'ACTIVE';
+                  const isPinVisible = revealAllPins || !!showPins[acc.employeeId];
 
-                return (
-                  <tr 
-                    key={acc.employeeId} 
-                    className={`hover:bg-slate-50/90 transition group ${
-                      isSelf ? 'bg-indigo-50/30' : ''
-                    }`}
-                  >
-                    {/* 1. Status Indicator */}
-                    <td className="py-2.5 px-3 whitespace-nowrap">
-                      {isSuperAdmin ? (
-                        <div className="relative inline-block">
-                          <select
-                            value={currentStatus}
-                            onChange={(e) => handleQuickToggleStatus(acc, e.target.value as 'ACTIVE' | 'PENDING' | 'INACTIVE')}
-                            className={`text-[10px] font-bold font-mono uppercase px-2 py-0.5 rounded-full border cursor-pointer focus:outline-none transition-colors ${
-                              currentStatus === 'ACTIVE'
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
-                                : currentStatus === 'PENDING'
-                                ? 'bg-slate-100 text-slate-600 border-slate-300 hover:bg-slate-200'
-                                : 'bg-rose-50 text-rose-700 border-rose-300 hover:bg-rose-100'
-                            }`}
-                            title="Click to toggle operator status (Active / Pending / Inactive)"
-                          >
-                            <option value="ACTIVE">● ACTIVE</option>
-                            <option value="PENDING">○ PENDING</option>
-                            <option value="INACTIVE">⊘ INACTIVE</option>
-                          </select>
-                        </div>
-                      ) : (
-                        <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold font-mono uppercase border ${
-                          currentStatus === 'ACTIVE'
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                            : currentStatus === 'PENDING'
-                            ? 'bg-slate-100 text-slate-600 border-slate-300'
-                            : 'bg-rose-50 text-rose-700 border-rose-200'
-                        }`}>
-                          <span className={`h-1.5 w-1.5 rounded-full ${
-                            currentStatus === 'ACTIVE' ? 'bg-emerald-500 animate-pulse' : currentStatus === 'PENDING' ? 'bg-slate-400' : 'bg-rose-500'
-                          }`} />
-                          {currentStatus}
-                        </span>
-                      )}
-                    </td>
-
-                    {/* 2. Operator Name & Employee ID */}
-                    <td className="py-2.5 px-3">
-                      <div className="flex items-center gap-2">
-                        <div className={`h-7 w-7 rounded-lg flex items-center justify-center font-bold text-xs uppercase shrink-0 border ${
-                          isSuperAdminAcc 
-                            ? 'bg-indigo-600 text-white border-indigo-700' 
-                            : 'bg-slate-100 text-slate-700 border-slate-200'
-                        }`}>
-                          {acc.username.charAt(0)}
-                        </div>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="font-bold text-slate-900 uppercase text-xs truncate">
-                              {acc.username}
-                            </span>
-                            {isSuperAdminAcc && (
-                              <span className="inline-flex items-center gap-0.5 bg-amber-100 text-amber-800 border border-amber-300 text-[8px] px-1.5 py-0.2 rounded font-mono font-bold uppercase shrink-0" title="Primary Super Administrator Root Account">
-                                🔒 ROOT
-                              </span>
-                            )}
-                            {isSelf && (
-                              <span className="inline-block bg-indigo-100 text-indigo-700 text-[8px] px-1.5 py-0.2 rounded font-mono font-bold uppercase shrink-0">
-                                You
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-1 text-[11px] font-mono font-bold text-indigo-600">
-                            <span>{acc.employeeId}</span>
-                            <button
-                              type="button"
-                              onClick={() => copyToClipboard(acc.employeeId, `id-${acc.employeeId}`)}
-                              className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-indigo-600 transition p-0.5"
-                              title="Copy Employee ID"
+                  return (
+                    <motion.tr 
+                      key={acc.employeeId} 
+                      layout
+                      initial={{ opacity: 0, y: 8, scale: 0.99 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.96, x: -16, transition: { duration: 0.2 } }}
+                      transition={{
+                        layout: { type: 'spring', stiffness: 350, damping: 28 },
+                        opacity: { duration: 0.22 }
+                      }}
+                      className={`hover:bg-slate-50/90 transition-colors group ${
+                        isSelf ? 'bg-indigo-50/30' : ''
+                      }`}
+                    >
+                      {/* 1. Status Indicator */}
+                      <td className="py-2.5 px-3 whitespace-nowrap">
+                        {isSuperAdmin ? (
+                          <div className="relative inline-block">
+                            <select
+                              value={currentStatus}
+                              onChange={(e) => handleQuickToggleStatus(acc, e.target.value as 'ACTIVE' | 'PENDING' | 'INACTIVE')}
+                              className={`text-[10px] font-bold font-mono uppercase px-2 py-0.5 rounded-full border cursor-pointer focus:outline-none transition-colors ${
+                                currentStatus === 'ACTIVE'
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100'
+                                  : currentStatus === 'PENDING'
+                                  ? 'bg-slate-100 text-slate-600 border-slate-300 hover:bg-slate-200'
+                                  : 'bg-rose-50 text-rose-700 border-rose-300 hover:bg-rose-100'
+                              }`}
+                              title="Click to toggle operator status (Active / Pending / Inactive)"
                             >
-                              {copiedId === `id-${acc.employeeId}` ? (
-                                <Check className="h-3 w-3 text-emerald-600" />
-                              ) : (
-                                <Copy className="h-3 w-3" />
+                              <option value="ACTIVE">● ACTIVE</option>
+                              <option value="PENDING">○ PENDING</option>
+                              <option value="INACTIVE">⊘ INACTIVE</option>
+                            </select>
+                          </div>
+                        ) : (
+                          <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold font-mono uppercase border ${
+                            currentStatus === 'ACTIVE'
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : currentStatus === 'PENDING'
+                              ? 'bg-slate-100 text-slate-600 border-slate-300'
+                              : 'bg-rose-50 text-rose-700 border-rose-200'
+                          }`}>
+                            <span className={`h-1.5 w-1.5 rounded-full ${
+                              currentStatus === 'ACTIVE' ? 'bg-emerald-500 animate-pulse' : currentStatus === 'PENDING' ? 'bg-slate-400' : 'bg-rose-500'
+                            }`} />
+                            {currentStatus}
+                          </span>
+                        )}
+                      </td>
+
+                      {/* 2. Operator Name & Employee ID */}
+                      <td className="py-2.5 px-3">
+                        <div className="flex items-center gap-2">
+                          <div className={`h-7 w-7 rounded-lg flex items-center justify-center font-bold text-xs uppercase shrink-0 border ${
+                            isSuperAdminAcc 
+                              ? 'bg-indigo-600 text-white border-indigo-700' 
+                              : 'bg-slate-100 text-slate-700 border-slate-200'
+                          }`}>
+                            {acc.username.charAt(0)}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold text-slate-900 uppercase text-xs truncate">
+                                {acc.username}
+                              </span>
+                              {isSuperAdminAcc && (
+                                <span className="inline-flex items-center gap-0.5 bg-amber-100 text-amber-800 border border-amber-300 text-[8px] px-1.5 py-0.2 rounded font-mono font-bold uppercase shrink-0" title="Primary Super Administrator Root Account">
+                                  🔒 ROOT
+                                </span>
                               )}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </td>
-
-                    {/* 3. Operational Role */}
-                    <td className="py-2.5 px-3 font-semibold text-slate-700 uppercase text-[11px]">
-                      <span className="bg-slate-100/90 text-slate-800 border border-slate-200/80 px-2 py-0.5 rounded-md inline-block max-w-[200px] truncate">
-                        {acc.role || 'WAREHOUSE CLERK'}
-                      </span>
-                    </td>
-
-                    {/* 4. Access Permission Level */}
-                    <td className="py-2.5 px-3">
-                      {acc.permission === 'FULL_ACCESS' ? (
-                        <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded text-[10px] font-bold font-mono uppercase whitespace-nowrap">
-                          <Unlock className="h-3 w-3" /> FULL ACCESS
-                        </span>
-                      ) : acc.permission === 'LIMITED_ACCESS' ? (
-                        <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded text-[10px] font-bold font-mono uppercase whitespace-nowrap">
-                          <Edit3 className="h-3 w-3" /> LIMITED (EDIT)
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded text-[10px] font-bold font-mono uppercase whitespace-nowrap">
-                          <Lock className="h-3 w-3" /> VIEW ONLY
-                        </span>
-                      )}
-                    </td>
-
-                    {/* 5. Phone / Contact */}
-                    <td className="py-2.5 px-3 font-mono whitespace-nowrap">
-                      {editingPhoneEmpId === acc.employeeId ? (
-                        <div className="flex items-center gap-1 animate-in fade-in duration-100">
-                          <input
-                            type="tel"
-                            autoFocus
-                            placeholder="0917 123 4567"
-                            value={editingPhoneValue}
-                            onChange={e => setEditingPhoneValue(e.target.value)}
-                            onKeyDown={e => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault();
-                                handleSaveQuickPhone(acc);
-                              } else if (e.key === 'Escape') {
-                                handleCancelQuickPhone();
-                              }
-                            }}
-                            className="w-32 px-2 py-0.5 bg-white border-2 border-indigo-500 rounded text-xs font-mono font-bold text-slate-900 focus:outline-none shadow-xs"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleSaveQuickPhone(acc)}
-                            className="bg-emerald-600 hover:bg-emerald-700 text-white p-1 rounded text-xs transition cursor-pointer"
-                            title="Save"
-                          >
-                            <Check className="h-3 w-3" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleCancelQuickPhone}
-                            className="bg-slate-200 hover:bg-slate-300 text-slate-700 p-1 rounded text-xs transition cursor-pointer"
-                            title="Cancel"
-                          >
-                            <X className="h-3 w-3" />
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-1.5 group/phone">
-                          {acc.phoneNumber ? (
-                            <span 
-                              onClick={() => isSuperAdmin && handleStartEditPhone(acc)}
-                              className={`inline-flex items-center gap-1 text-[11px] font-medium text-slate-700 ${isSuperAdmin ? 'hover:text-indigo-600 cursor-pointer' : ''}`}
-                              title={isSuperAdmin ? 'Click to edit phone number' : undefined}
-                            >
-                              <Phone className="h-3 w-3 text-emerald-600 shrink-0" />
-                              <span>{acc.phoneNumber}</span>
-                            </span>
-                          ) : (
-                            <span 
-                              onClick={() => isSuperAdmin && handleStartEditPhone(acc)}
-                              className={`text-[10px] text-slate-400 italic ${isSuperAdmin ? 'hover:text-indigo-600 hover:underline cursor-pointer' : ''}`}
-                              title={isSuperAdmin ? 'Click to add phone number' : undefined}
-                            >
-                              + Add Phone
-                            </span>
-                          )}
-                          {isSuperAdmin && acc.phoneNumber && (
-                            <button
-                              type="button"
-                              onClick={() => handleStartEditPhone(acc)}
-                              className="opacity-0 group-hover/phone:opacity-100 p-0.5 text-slate-400 hover:text-indigo-600 transition"
-                              title="Edit Phone"
-                            >
-                              <Edit className="h-2.5 w-2.5" />
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </td>
-
-                    {/* 6. 4-Digit Security PIN */}
-                    <td className="py-2.5 px-3 font-mono">
-                      <div className="flex items-center gap-1.5">
-                        <span className="tracking-widest bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded text-slate-800 text-[11px] font-bold">
-                          {isPinVisible ? (acc.pin || '1234') : '••••'}
-                        </span>
-                        {isSuperAdmin && (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => toggleShowPin(acc.employeeId)}
-                              className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
-                              title={isPinVisible ? 'Hide PIN' : 'Reveal PIN'}
-                            >
-                              {isPinVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                            </button>
-                            {isPinVisible && (
+                              {isSelf && (
+                                <span className="inline-block bg-indigo-100 text-indigo-700 text-[8px] px-1.5 py-0.2 rounded font-mono font-bold uppercase shrink-0">
+                                  You
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1 text-[11px] font-mono font-bold text-indigo-600">
+                              <span>{acc.employeeId}</span>
                               <button
                                 type="button"
-                                onClick={() => copyToClipboard(acc.pin || '1234', `pin-${acc.employeeId}`)}
-                                className="text-slate-400 hover:text-indigo-600 p-0.5 cursor-pointer"
-                                title="Copy PIN"
+                                onClick={() => copyToClipboard(acc.employeeId, `id-${acc.employeeId}`)}
+                                className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-indigo-600 transition p-0.5"
+                                title="Copy Employee ID"
                               >
-                                {copiedId === `pin-${acc.employeeId}` ? (
+                                {copiedId === `id-${acc.employeeId}` ? (
                                   <Check className="h-3 w-3 text-emerald-600" />
                                 ) : (
                                   <Copy className="h-3 w-3" />
                                 )}
                               </button>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    </td>
-
-                    {/* 7. Last Active */}
-                    <td className="py-2.5 px-3 whitespace-nowrap">
-                      {acc.lastActive ? (() => {
-                        const { display, time, isRecent, full } = formatLastActive(acc.lastActive);
-                        return (
-                          <div className="flex items-center gap-1.5" title={`Last Active: ${full}`}>
-                            <Clock className={`h-3.5 w-3.5 shrink-0 ${isRecent ? 'text-emerald-500' : 'text-slate-400'}`} />
-                            <div className="flex flex-col leading-tight">
-                              <span className={`font-mono text-[11px] font-bold ${isRecent ? 'text-emerald-700' : 'text-slate-700'}`}>
-                                {display}
-                              </span>
-                              {time && (
-                                <span className="font-mono text-[9px] text-slate-400">
-                                  {time}
-                                </span>
-                              )}
                             </div>
                           </div>
-                        );
-                      })() : (
-                        <div className="flex items-center gap-1 text-slate-400" title="No successful login recorded yet">
-                          <Clock className="h-3 w-3 text-slate-300 shrink-0" />
-                          <span className="text-[10px] font-mono italic">
-                            Never
-                          </span>
                         </div>
-                      )}
-                    </td>
+                      </td>
 
-                    {/* 8. Action Controls */}
-                    <td className="py-2.5 px-3 text-right whitespace-nowrap">
-                      <div className="flex items-center justify-end gap-1.5">
-                        {/* QR Badge Button */}
+                      {/* 3. Operational Role */}
+                      <td className="py-2.5 px-3 font-semibold text-slate-700 uppercase text-[11px]">
+                        <span className="bg-slate-100/90 text-slate-800 border border-slate-200/80 px-2 py-0.5 rounded-md inline-block max-w-[200px] truncate">
+                          {acc.role || 'WAREHOUSE CLERK'}
+                        </span>
+                      </td>
+
+                      {/* 4. Access Permission Level */}
+                      <td className="py-2.5 px-3">
+                        {acc.permission === 'FULL_ACCESS' ? (
+                          <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded text-[10px] font-bold font-mono uppercase whitespace-nowrap">
+                            <Unlock className="h-3 w-3" /> FULL ACCESS
+                          </span>
+                        ) : acc.permission === 'LIMITED_ACCESS' ? (
+                          <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded text-[10px] font-bold font-mono uppercase whitespace-nowrap">
+                            <Edit3 className="h-3 w-3" /> LIMITED (EDIT)
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded text-[10px] font-bold font-mono uppercase whitespace-nowrap">
+                            <Lock className="h-3 w-3" /> VIEW ONLY
+                          </span>
+                        )}
+                      </td>
+
+                      {/* 5. Phone / Contact */}
+                      <td className="py-2.5 px-3 font-mono whitespace-nowrap">
+                        {editingPhoneEmpId === acc.employeeId ? (
+                          <div className="flex items-center gap-1 animate-in fade-in duration-100">
+                            <input
+                              type="tel"
+                              autoFocus
+                              placeholder="0917 123 4567"
+                              value={editingPhoneValue}
+                              onChange={e => setEditingPhoneValue(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleSaveQuickPhone(acc);
+                                } else if (e.key === 'Escape') {
+                                  handleCancelQuickPhone();
+                                }
+                              }}
+                              className="w-32 px-2 py-0.5 bg-white border-2 border-indigo-500 rounded text-xs font-mono font-bold text-slate-900 focus:outline-none shadow-xs"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleSaveQuickPhone(acc)}
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white p-1 rounded text-xs transition cursor-pointer"
+                              title="Save"
+                            >
+                              <Check className="h-3 w-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleCancelQuickPhone}
+                              className="bg-slate-200 hover:bg-slate-300 text-slate-700 p-1 rounded text-xs transition cursor-pointer"
+                              title="Cancel"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5 group/phone">
+                            {acc.phoneNumber ? (
+                              <span 
+                                onClick={() => isSuperAdmin && handleStartEditPhone(acc)}
+                                className={`inline-flex items-center gap-1 text-[11px] font-medium text-slate-700 ${isSuperAdmin ? 'hover:text-indigo-600 cursor-pointer' : ''}`}
+                                title={isSuperAdmin ? 'Click to edit phone number' : undefined}
+                              >
+                                <Phone className="h-3 w-3 text-emerald-600 shrink-0" />
+                                <span>{acc.phoneNumber}</span>
+                              </span>
+                            ) : (
+                              <span 
+                                onClick={() => isSuperAdmin && handleStartEditPhone(acc)}
+                                className={`text-[10px] text-slate-400 italic ${isSuperAdmin ? 'hover:text-indigo-600 hover:underline cursor-pointer' : ''}`}
+                                title={isSuperAdmin ? 'Click to add phone number' : undefined}
+                              >
+                                + Add Phone
+                              </span>
+                            )}
+                            {isSuperAdmin && acc.phoneNumber && (
+                              <button
+                                type="button"
+                                onClick={() => handleStartEditPhone(acc)}
+                                className="opacity-0 group-hover/phone:opacity-100 p-0.5 text-slate-400 hover:text-indigo-600 transition"
+                                title="Edit Phone"
+                              >
+                                <Edit className="h-2.5 w-2.5" />
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* 6. 4-Digit Security PIN */}
+                      <td className="py-2.5 px-3 font-mono">
+                        <div className="flex items-center gap-1.5">
+                          <span className="tracking-widest bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded text-slate-800 text-[11px] font-bold">
+                            {isPinVisible ? (acc.pin || '1234') : '••••'}
+                          </span>
+                          {isSuperAdmin && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => toggleShowPin(acc.employeeId)}
+                                className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                                title={isPinVisible ? 'Hide PIN' : 'Reveal PIN'}
+                              >
+                                {isPinVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                              </button>
+                              {isPinVisible && (
+                                <button
+                                  type="button"
+                                  onClick={() => copyToClipboard(acc.pin || '1234', `pin-${acc.employeeId}`)}
+                                  className="text-slate-400 hover:text-indigo-600 p-0.5 cursor-pointer"
+                                  title="Copy PIN"
+                                >
+                                  {copiedId === `pin-${acc.employeeId}` ? (
+                                    <Check className="h-3 w-3 text-emerald-600" />
+                                  ) : (
+                                    <Copy className="h-3 w-3" />
+                                  )}
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* 7. Last Active */}
+                      <td className="py-2.5 px-3 whitespace-nowrap">
+                        {acc.lastActive ? (() => {
+                          const { display, time, isRecent, full } = formatLastActive(acc.lastActive);
+                          return (
+                            <div className="flex items-center gap-1.5" title={`Last Active: ${full}`}>
+                              <Clock className={`h-3.5 w-3.5 shrink-0 ${isRecent ? 'text-emerald-500' : 'text-slate-400'}`} />
+                              <div className="flex flex-col leading-tight">
+                                <span className={`font-mono text-[11px] font-bold ${isRecent ? 'text-emerald-700' : 'text-slate-700'}`}>
+                                  {display}
+                                </span>
+                                {time && (
+                                  <span className="font-mono text-[9px] text-slate-400">
+                                    {time}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })() : (
+                          <div className="flex items-center gap-1 text-slate-400" title="No successful login recorded yet">
+                            <Clock className="h-3 w-3 text-slate-300 shrink-0" />
+                            <span className="text-[10px] font-mono italic">
+                              Never
+                            </span>
+                          </div>
+                        )}
+                      </td>
+
+                      {/* 8. Action Controls */}
+                      <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {/* QR Badge Button */}
+                          <button
+                            type="button"
+                            onClick={() => setSelectedQrAccount(acc)}
+                            className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 px-2 py-1 rounded-md text-[10px] font-bold transition flex items-center gap-1 cursor-pointer font-mono shadow-2xs"
+                            title="View & Print Login QR Code Badge"
+                          >
+                            <QrCode className="h-3 w-3 text-indigo-600" />
+                            <span>QR PASS</span>
+                          </button>
+
+                          {/* Edit Button */}
+                          {isSuperAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingAccount({ ...acc });
+                                setOriginalEmployeeId(acc.employeeId);
+                              }}
+                              className="bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 px-2 py-1 rounded-md text-[10px] font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs"
+                              title="Edit Operator Information & Access"
+                            >
+                              <Edit className="h-3 w-3 text-slate-600" />
+                              <span className="hidden sm:inline">EDIT</span>
+                            </button>
+                          )}
+
+                          {/* Delete Button */}
+                          {isSuperAdmin && !isSuperAdminAcc && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setConfirmAction({
+                                  title: 'Delete Operator Account',
+                                  message: `Are you sure you want to permanently delete the account for ${acc.username} (${acc.employeeId})? This action will sync across all terminals.`,
+                                  confirmLabel: 'YES, DELETE ACCOUNT',
+                                  confirmVariant: 'danger',
+                                  onConfirm: () => onRemoveAccount(acc.employeeId)
+                                });
+                              }}
+                              className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-1.5 py-1 rounded-md text-[10px] font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs"
+                              title="Delete Account"
+                            >
+                              <Trash2 className="h-3 w-3 text-rose-600" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </motion.tr>
+                  );
+                })}
+
+                {filteredAccounts.length === 0 && (
+                  <motion.tr
+                    key="empty-accounts-state"
+                    layout
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <td colSpan={8} className="py-12 px-4 text-center">
+                      <div className="max-w-xs mx-auto space-y-2 text-slate-400">
+                        <Users className="h-8 w-8 mx-auto text-slate-300" />
+                        <p className="text-xs font-semibold text-slate-600">
+                          No operator accounts match your filter criteria.
+                        </p>
+                        <p className="text-[11px] text-slate-400">
+                          Try resetting your search query or adjusting status / role filters.
+                        </p>
                         <button
                           type="button"
-                          onClick={() => setSelectedQrAccount(acc)}
-                          className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 px-2 py-1 rounded-md text-[10px] font-bold transition flex items-center gap-1 cursor-pointer font-mono shadow-2xs"
-                          title="View & Print Login QR Code Badge"
+                          onClick={() => {
+                            setSearchQuery('');
+                            setStatusFilter('ALL');
+                            setRoleFilter('ALL');
+                            setPermissionFilter('ALL');
+                          }}
+                          className="mt-2 text-xs font-bold text-indigo-600 hover:text-indigo-800 underline cursor-pointer"
                         >
-                          <QrCode className="h-3 w-3 text-indigo-600" />
-                          <span>QR PASS</span>
+                          Clear all filters
                         </button>
-
-                        {/* Edit Button */}
-                        {isSuperAdmin && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingAccount({ ...acc });
-                              setOriginalEmployeeId(acc.employeeId);
-                            }}
-                            className="bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 px-2 py-1 rounded-md text-[10px] font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs"
-                            title="Edit Operator Information & Access"
-                          >
-                            <Edit className="h-3 w-3 text-slate-600" />
-                            <span className="hidden sm:inline">EDIT</span>
-                          </button>
-                        )}
-
-                        {/* Delete Button */}
-                        {isSuperAdmin && !isSuperAdminAcc && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setConfirmAction({
-                                title: 'Delete Operator Account',
-                                message: `Are you sure you want to permanently delete the account for ${acc.username} (${acc.employeeId})? This action will sync across all terminals.`,
-                                confirmLabel: 'YES, DELETE ACCOUNT',
-                                confirmVariant: 'danger',
-                                onConfirm: () => onRemoveAccount(acc.employeeId)
-                              });
-                            }}
-                            className="bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-1.5 py-1 rounded-md text-[10px] font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs"
-                            title="Delete Account"
-                          >
-                            <Trash2 className="h-3 w-3 text-rose-600" />
-                          </button>
-                        )}
                       </div>
                     </td>
-                  </tr>
-                );
-              })}
-
-              {filteredAccounts.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="py-12 px-4 text-center">
-                    <div className="max-w-xs mx-auto space-y-2 text-slate-400">
-                      <Users className="h-8 w-8 mx-auto text-slate-300" />
-                      <p className="text-xs font-semibold text-slate-600">
-                        No operator accounts match your filter criteria.
-                      </p>
-                      <p className="text-[11px] text-slate-400">
-                        Try resetting your search query or adjusting status / role filters.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSearchQuery('');
-                          setStatusFilter('ALL');
-                          setRoleFilter('ALL');
-                          setPermissionFilter('ALL');
-                        }}
-                        className="mt-2 text-xs font-bold text-indigo-600 hover:text-indigo-800 underline cursor-pointer"
-                      >
-                        Clear all filters
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              )}
+                  </motion.tr>
+                )}
+              </AnimatePresence>
             </tbody>
           </table>
         </div>

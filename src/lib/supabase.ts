@@ -666,18 +666,7 @@ export async function syncCollectionToSupabase(collection: string, items: any[])
     }
 
     if (mappedRows.length === 0) {
-      try {
-        if (collection === 'registeredUsers') {
-          // Keep super admin
-          await supabase.from('registered_users').delete().neq('employee_id', 'JPMP-002');
-        } else if (collection === 'chatMessages') {
-          await supabase.from('chat_messages').delete().neq('id', '___NEVER___');
-        } else {
-          await supabase.from(tableName).delete().neq('id', '___NEVER___');
-        }
-      } catch (clearErr) {
-        console.warn(`Supabase clear table failed for ${collection}:`, clearErr);
-      }
+      // Never automatically delete the entire database table on empty array sync
       return true;
     }
 
@@ -688,29 +677,39 @@ export async function syncCollectionToSupabase(collection: string, items: any[])
       return false;
     }
 
-    // Purge records that were removed from this collection
-    try {
-      if (collection === 'registeredUsers') {
-        const activeEmpIds = mappedRows.map((r: any) => r.employee_id).filter(Boolean);
-        if (activeEmpIds.length > 0) {
-          const inListStr = `(${activeEmpIds.map((id: string) => `"${id}"`).join(',')})`;
-          await supabase.from('registered_users').delete().not('employee_id', 'in', inListStr);
-        }
-      } else if (collection !== 'chatMessages') {
-        const activeIds = mappedRows.map((r: any) => r.id).filter(Boolean);
-        if (activeIds.length > 0) {
-          const inListStr = `(${activeIds.map((id: string) => `"${id}"`).join(',')})`;
-          await supabase.from(tableName).delete().not('id', 'in', inListStr);
-        }
-      }
-    } catch (delErr) {
-      console.warn(`Supabase cleanup removed items failed for ${collection}:`, delErr);
-    }
-
     return true;
   } catch (err) {
     console.warn(`Supabase sync exception for ${collection}:`, err);
     savePendingMutation(collection, items);
+    return false;
+  }
+}
+
+// Dedicated helper to delete a specific record by ID from Supabase PostgreSQL
+export async function deleteRecordFromSupabase(collection: string, id: string): Promise<boolean> {
+  const supabase = getSupabase();
+  if (!supabase || !id) return false;
+  try {
+    const tableMap: Record<string, string> = {
+      stocks: 'stocks',
+      receiving: 'receiving',
+      returns: 'returns',
+      recycling: 'recycling',
+      issuances: 'issuances',
+      deliveries: 'deliveries',
+      envLogs: 'env_logs',
+      forkliftChecks: 'forklift_checks',
+      registries: 'registries'
+    };
+    const table = tableMap[collection] || collection;
+    const { error } = await supabase.from(table).delete().eq('id', id);
+    if (error) {
+      console.warn(`Supabase delete error on ${table} for id ${id}:`, error.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn(`Supabase delete exception for ${collection} ID ${id}:`, err);
     return false;
   }
 }

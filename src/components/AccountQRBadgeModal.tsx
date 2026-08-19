@@ -14,7 +14,8 @@ import {
   Sparkles,
   Eye,
   EyeOff,
-  Phone
+  Phone,
+  Download
 } from 'lucide-react';
 import { RegisteredAccount } from '../types';
 
@@ -33,6 +34,7 @@ export default function AccountQRBadgeModal({
 }: AccountQRBadgeModalProps) {
   const [copied, setCopied] = useState(false);
   const [showPin, setShowPin] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   if (!isOpen || !account) return null;
 
@@ -51,131 +53,257 @@ export default function AccountQRBadgeModal({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handlePrintBadge = () => {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      alert('Pop-up blocked. Please allow pop-ups to print the login pass.');
-      return;
+  const handleDownloadBadge = () => {
+    setIsDownloading(true);
+    try {
+      const svgElement = document.querySelector('#badge-qr-svg-wrapper svg') as SVGGraphicsElement;
+      if (!svgElement) {
+        setIsDownloading(false);
+        return;
+      }
+
+      const svgData = new XMLSerializer().serializeToString(svgElement);
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      const img = new Image();
+
+      // High-resolution canvas for the badge pass
+      canvas.width = 400;
+      canvas.height = 540;
+
+      img.onload = () => {
+        if (!ctx) return;
+
+        // Background
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Header Border
+        ctx.fillStyle = '#1e3a8a';
+        ctx.fillRect(0, 0, canvas.width, 10);
+
+        // Title
+        ctx.fillStyle = '#1e40af';
+        ctx.font = 'bold 12px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('JUWEI PLASTIC MOULDING PHILS. INC.', 200, 36);
+
+        ctx.fillStyle = '#0f172a';
+        ctx.font = 'bold 15px Arial, sans-serif';
+        ctx.fillText('OPERATOR LOGIN QR PASS', 200, 58);
+
+        ctx.fillStyle = '#64748b';
+        ctx.font = 'bold 11px Arial, sans-serif';
+        ctx.fillText(account.role.toUpperCase(), 200, 76);
+
+        // Draw QR Code
+        ctx.fillStyle = '#f8fafc';
+        ctx.fillRect(90, 95, 220, 220);
+        ctx.strokeStyle = '#cbd5e1';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(90, 95, 220, 220);
+        ctx.drawImage(img, 100, 105, 200, 200);
+
+        // User Info Box
+        ctx.fillStyle = '#0f172a';
+        ctx.roundRect ? ctx.roundRect(40, 335, 320, 140, 12) : ctx.fillRect(40, 335, 320, 140);
+        ctx.fill();
+
+        ctx.fillStyle = '#38bdf8';
+        ctx.font = 'bold 16px Arial, sans-serif';
+        ctx.fillText(account.username.toUpperCase(), 200, 365);
+
+        ctx.fillStyle = '#a5b4fc';
+        ctx.font = 'bold 13px monospace';
+        ctx.fillText(`EMPLOYEE ID: ${account.employeeId}`, 200, 390);
+
+        ctx.fillStyle = '#fde047';
+        ctx.font = 'bold 13px monospace';
+        ctx.fillText(`LOGIN PIN: ${account.pin || '1234'}`, 200, 415);
+
+        if (account.phoneNumber) {
+          ctx.fillStyle = '#4ade80';
+          ctx.font = '11px monospace';
+          ctx.fillText(`TEL: ${account.phoneNumber}`, 200, 440);
+        }
+
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '9px Arial, sans-serif';
+        ctx.fillText('SCAN AT JUWEI WMS GATEWAY TO AUTO-LOGIN', 200, 510);
+
+        const a = document.createElement('a');
+        a.download = `JPMP-Pass-${account.username}-${account.employeeId}.png`;
+        a.href = canvas.toDataURL('image/png');
+        a.click();
+        setIsDownloading(false);
+      };
+
+      img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
+    } catch (e) {
+      setIsDownloading(false);
     }
+  };
 
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>JPMP Login QR Pass - ${account.username} (${account.employeeId})</title>
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              display: flex;
-              justify-content: center;
-              align-items: center;
-              min-height: 100vh;
-              margin: 0;
-              background-color: #f8fafc;
-              text-transform: uppercase;
-            }
-            .badge {
-              width: 340px;
-              border: 2px solid #1e293b;
-              border-radius: 16px;
-              padding: 24px;
-              background: #ffffff;
-              text-align: center;
-              box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
-            }
-            .header {
-              border-bottom: 2px solid #e2e8f0;
-              padding-bottom: 12px;
-              margin-bottom: 16px;
-            }
-            .company {
-              font-size: 11px;
-              font-weight: bold;
-              color: #4f46e5;
-              letter-spacing: 1px;
-            }
-            .title {
-              font-size: 16px;
-              font-weight: 800;
-              color: #0f172a;
-              margin-top: 4px;
-            }
-            .role {
-              font-size: 10px;
-              font-weight: 700;
-              color: #64748b;
-              margin-top: 2px;
-            }
-            .qr-container {
-              background: #f1f5f9;
-              border: 1px solid #cbd5e1;
-              border-radius: 12px;
-              padding: 16px;
-              display: inline-block;
-              margin: 12px 0;
-            }
-            .user-info {
-              background: #0f172a;
-              color: #ffffff;
-              border-radius: 10px;
-              padding: 12px;
-              margin-top: 12px;
-            }
-            .emp-name {
-              font-size: 14px;
-              font-weight: 800;
-              color: #38bdf8;
-            }
-            .emp-id {
-              font-size: 12px;
-              font-weight: bold;
-              color: #a5b4fc;
-              margin-top: 2px;
-              font-family: monospace;
-            }
-            .footer {
-              font-size: 8px;
-              color: #94a3b8;
-              margin-top: 14px;
-              letter-spacing: 0.5px;
-            }
-            @media print {
-              body { background: none; }
-              .badge { box-shadow: none; }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="badge">
-            <div class="header">
-              <div class="company">JUWEI PLASTIC MOULDING PHILS. INC.</div>
-              <div class="title">OFFICIAL OPERATOR QR LOGIN PASS</div>
-              <div class="role">${account.role}</div>
-            </div>
-            
-            <div class="qr-container">
-              ${document.getElementById('badge-qr-svg-wrapper')?.innerHTML || ''}
-            </div>
+  const handlePrintBadge = () => {
+    try {
+      // Find or create hidden in-page iframe to print directly without opening popup tabs
+      let printFrame = document.getElementById('badge-silent-print-frame') as HTMLIFrameElement;
+      if (!printFrame) {
+        printFrame = document.createElement('iframe');
+        printFrame.id = 'badge-silent-print-frame';
+        printFrame.style.position = 'fixed';
+        printFrame.style.right = '0';
+        printFrame.style.bottom = '0';
+        printFrame.style.width = '0';
+        printFrame.style.height = '0';
+        printFrame.style.border = '0';
+        printFrame.style.visibility = 'hidden';
+        document.body.appendChild(printFrame);
+      }
 
-            <div class="user-info">
-              <div class="emp-name">${account.username}</div>
-              <div class="emp-id">ID: ${account.employeeId}</div>
-              ${account.phoneNumber ? `<div style="font-size: 10px; color: #4ade80; margin-top: 2px; font-family: monospace;">MOBILE: ${account.phoneNumber}</div>` : ''}
-            </div>
+      const svgContent = document.getElementById('badge-qr-svg-wrapper')?.innerHTML || '';
 
-            <div class="footer">
-              SECURITY CONFIDENTIAL • SCAN AT JUWEI WMS GATEWAY TO AUTO-LOGIN
-            </div>
-          </div>
-          <script>
-            window.onload = function() {
-              window.print();
-            };
-          </script>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
+      const frameDoc = printFrame.contentDocument || printFrame.contentWindow?.document;
+      if (frameDoc) {
+        frameDoc.open();
+        frameDoc.write(`
+          <!DOCTYPE html>
+          <html>
+            <head>
+              <title>JPMP Login QR Pass - ${account.username} (${account.employeeId})</title>
+              <style>
+                @page {
+                  size: auto;
+                  margin: 10mm;
+                }
+                body {
+                  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+                  display: flex;
+                  justify-content: center;
+                  align-items: center;
+                  min-height: 100vh;
+                  margin: 0;
+                  background-color: #ffffff;
+                  text-transform: uppercase;
+                  -webkit-print-color-adjust: exact;
+                  print-color-adjust: exact;
+                }
+                .badge {
+                  width: 320px;
+                  border: 2px solid #1e293b;
+                  border-radius: 16px;
+                  padding: 20px;
+                  background: #ffffff;
+                  text-align: center;
+                  box-sizing: border-box;
+                }
+                .header {
+                  border-bottom: 2px solid #e2e8f0;
+                  padding-bottom: 10px;
+                  margin-bottom: 12px;
+                }
+                .company {
+                  font-size: 10px;
+                  font-weight: 800;
+                  color: #2563eb;
+                  letter-spacing: 0.5px;
+                }
+                .title {
+                  font-size: 14px;
+                  font-weight: 800;
+                  color: #0f172a;
+                  margin-top: 4px;
+                }
+                .role {
+                  font-size: 10px;
+                  font-weight: 700;
+                  color: #64748b;
+                  margin-top: 2px;
+                }
+                .qr-container {
+                  background: #f8fafc;
+                  border: 1px solid #cbd5e1;
+                  border-radius: 12px;
+                  padding: 12px;
+                  display: inline-block;
+                  margin: 10px 0;
+                }
+                .user-info {
+                  background: #0f172a;
+                  color: #ffffff;
+                  border-radius: 10px;
+                  padding: 12px;
+                  margin-top: 10px;
+                }
+                .emp-name {
+                  font-size: 14px;
+                  font-weight: 800;
+                  color: #38bdf8;
+                }
+                .emp-id {
+                  font-size: 12px;
+                  font-weight: bold;
+                  color: #a5b4fc;
+                  margin-top: 2px;
+                  font-family: monospace;
+                }
+                .emp-pin {
+                  font-size: 11px;
+                  font-weight: bold;
+                  color: #fde047;
+                  margin-top: 4px;
+                  font-family: monospace;
+                }
+                .footer {
+                  font-size: 8px;
+                  color: #94a3b8;
+                  margin-top: 12px;
+                  letter-spacing: 0.5px;
+                }
+              </style>
+            </head>
+            <body>
+              <div class="badge">
+                <div class="header">
+                  <div class="company">JUWEI PLASTIC MOULDING PHILS. INC.</div>
+                  <div class="title">OFFICIAL OPERATOR QR LOGIN PASS</div>
+                  <div class="role">${account.role}</div>
+                </div>
+                
+                <div class="qr-container">
+                  ${svgContent}
+                </div>
+
+                <div class="user-info">
+                  <div class="emp-name">${account.username}</div>
+                  <div class="emp-id">ID: ${account.employeeId}</div>
+                  <div class="emp-pin">LOGIN PIN: ${account.pin || '1234'}</div>
+                  ${account.phoneNumber ? `<div style="font-size: 10px; color: #4ade80; margin-top: 3px; font-family: monospace;">MOBILE: ${account.phoneNumber}</div>` : ''}
+                </div>
+
+                <div class="footer">
+                  SECURITY CONFIDENTIAL • SCAN AT JUWEI WMS GATEWAY TO AUTO-LOGIN
+                </div>
+              </div>
+            </body>
+          </html>
+        `);
+        frameDoc.close();
+
+        setTimeout(() => {
+          try {
+            printFrame.contentWindow?.focus();
+            printFrame.contentWindow?.print();
+          } catch (e) {
+            window.print();
+          }
+        }, 300);
+      } else {
+        window.print();
+      }
+    } catch (err) {
+      window.print();
+    }
   };
 
   return (
@@ -291,27 +419,39 @@ export default function AccountQRBadgeModal({
               </button>
             )}
 
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
                 onClick={handlePrintBadge}
-                className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-3 rounded-xl text-xs transition flex items-center justify-center gap-1.5 shadow-sm uppercase cursor-pointer"
+                className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-2 rounded-xl text-[11px] transition flex items-center justify-center gap-1 shadow-sm uppercase cursor-pointer"
+                title="Direct in-app print pass"
               >
-                <Printer className="h-4 w-4" /> PRINT BADGE
+                <Printer className="h-3.5 w-3.5" /> PRINT
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDownloadBadge}
+                disabled={isDownloading}
+                className="bg-blue-700 hover:bg-blue-600 text-white font-bold py-2 px-2 rounded-xl text-[11px] transition flex items-center justify-center gap-1 shadow-sm uppercase cursor-pointer disabled:opacity-50"
+                title="Download QR Badge Image as PNG"
+              >
+                <Download className="h-3.5 w-3.5" /> {isDownloading ? 'SAVING...' : 'SAVE PNG'}
               </button>
 
               <button
                 type="button"
                 onClick={handleCopyPayload}
-                className="bg-blue-950 hover:bg-blue-800 text-white border border-blue-700 font-bold py-2 px-3 rounded-xl text-xs transition flex items-center justify-center gap-1.5 uppercase cursor-pointer"
+                className="bg-blue-950 hover:bg-blue-800 text-white border border-blue-700 font-bold py-2 px-2 rounded-xl text-[11px] transition flex items-center justify-center gap-1 uppercase cursor-pointer"
+                title="Copy QR payload string"
               >
                 {copied ? (
                   <>
-                    <Check className="h-4 w-4 text-blue-300" /> COPIED!
+                    <Check className="h-3.5 w-3.5 text-blue-300" /> COPIED!
                   </>
                 ) : (
                   <>
-                    <Copy className="h-4 w-4 text-blue-300" /> COPY DATA
+                    <Copy className="h-3.5 w-3.5 text-blue-300" /> COPY DATA
                   </>
                 )}
               </button>

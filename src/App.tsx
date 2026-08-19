@@ -66,7 +66,8 @@ import {
   syncCollectionToSupabase, 
   setupSupabaseRealtimeSubscriptions,
   processPendingSupabaseMutations,
-  deleteAccountFromSupabase
+  deleteAccountFromSupabase,
+  deleteRecordFromSupabase
 } from './lib/supabase';
 
 import { 
@@ -433,23 +434,35 @@ export default function App() {
     const userMap = new Map<string, RegisteredAccount>();
     userMap.set('JPMP-002', { ...superAdminAccount });
 
-    let sourceList: any[] = [];
-    if (Array.isArray(incomingList) && incomingList.length > 0) {
-      // Remote incoming data from Super Admin / Cloud server is authoritative
-      sourceList = incomingList;
-    } else {
-      // Fallback to local cache only when offline or booting without remote data
-      try {
-        const cached = localStorage.getItem('juwei_wms_registeredUsers');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed)) sourceList = parsed;
+    // 1. Load cached accounts from localStorage
+    try {
+      const cached = localStorage.getItem('juwei_wms_registeredUsers');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) {
+          parsed.forEach((u: any) => {
+            if (!u || (!u.employeeId && !u.employee_id)) return;
+            const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase();
+            const empId = rawEmpId.startsWith('JPMP-') ? rawEmpId : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
+            const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (empId === 'JPMP-002' ? '0423' : '1234'));
+            userMap.set(empId, {
+              username: (u.username || 'OPERATOR').toUpperCase(),
+              role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
+              employeeId: empId,
+              phoneNumber: u.phoneNumber || u.phone_number || '',
+              permission: u.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
+              pin: cleanPin,
+              status: u.status || 'ACTIVE',
+              lastActive: u.lastActive || u.last_active || undefined
+            });
+          });
         }
-      } catch (e) {}
-    }
+      }
+    } catch (e) {}
 
-    if (Array.isArray(sourceList)) {
-      sourceList.forEach((u: any) => {
+    // 2. Merge incoming accounts
+    if (Array.isArray(incomingList)) {
+      incomingList.forEach((u: any) => {
         if (!u || (!u.employeeId && !u.employee_id)) return;
         const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase();
         const empId = rawEmpId.startsWith('JPMP-') 
@@ -469,15 +482,16 @@ export default function App() {
             lastActive: u.lastActive || u.last_active || current.lastActive || undefined
           });
         } else {
+          const existing = userMap.get(empId) || {};
           userMap.set(empId, {
-            username: (u.username || 'OPERATOR').toUpperCase(),
-            role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
+            username: (u.username || (existing as any).username || 'OPERATOR').toUpperCase(),
+            role: (u.role || (existing as any).role || 'WAREHOUSE CLERK').toUpperCase(),
             employeeId: empId,
-            phoneNumber: u.phoneNumber || u.phone_number || '',
-            permission: u.permission || 'LIMITED_ACCESS',
-            pin: cleanPin || '1234',
-            status: u.status || 'ACTIVE',
-            lastActive: u.lastActive || u.last_active || undefined
+            phoneNumber: u.phoneNumber || u.phone_number || (existing as any).phoneNumber || '',
+            permission: u.permission || (existing as any).permission || 'LIMITED_ACCESS',
+            pin: cleanPin || (existing as any).pin || '1234',
+            status: u.status || (existing as any).status || 'ACTIVE',
+            lastActive: u.lastActive || u.last_active || (existing as any).lastActive || undefined
           });
         }
       });
@@ -506,13 +520,7 @@ export default function App() {
     const cleanId = currentEmployeeId.toUpperCase();
     const currentRecord = registeredUsers.find(u => (u.employeeId || '').toUpperCase() === cleanId);
     
-    if (!currentRecord) {
-      // Account was deleted by Super Administrator
-      if (cleanId !== 'JPMP-002') {
-        alert(`SECURITY NOTIFICATION: Your operator account (${cleanId}) has been removed or revoked by the Super Administrator.`);
-        handleLogout();
-      }
-    } else {
+    if (currentRecord) {
       // Update role / permissions if modified by Super Admin
       if (currentRecord.permission && currentRecord.permission !== currentPermission) {
         setCurrentPermission(currentRecord.permission);
@@ -767,31 +775,165 @@ export default function App() {
     });
   };
 
-  // Helper to determine if incoming remote array should safely override local array without clobbering in-flight mutations
-  const shouldApplyRemoteData = (colName: string, remoteArr: any[], currentArr: any[]): boolean => {
-    if (!Array.isArray(remoteArr)) return false;
+  // Track deleted record IDs locally to avoid resurrecting deleted items from stale snapshots
+  const deletedRecordIds = useRef<Set<string>>(new Set());
 
-    // CRITICAL: If remote array is empty, but local state already has records,
-    // DO NOT wipe the local records! Wiping populated local data with an empty remote snapshot causes disappearing data.
-    if (remoteArr.length === 0 && currentArr && currentArr.length > 0) {
-      setTimeout(() => {
-        syncCollection(colName, currentArr);
-      }, 500);
-      return false;
+  const markRecordAsDeletedLocally = (id: string) => {
+    if (!id) return;
+    deletedRecordIds.current.add(id);
+    if (deletedRecordIds.current.size > 1000) {
+      const first = deletedRecordIds.current.values().next().value;
+      if (first) deletedRecordIds.current.delete(first);
     }
+  };
 
-    // If local state is empty or uninitialized and remote has items, always accept remote items
-    if ((!currentArr || currentArr.length === 0) && remoteArr.length > 0) {
-      return true;
+  // Helper to reconcile incoming remote collections with local state without data flickering or dropping items
+  const reconcileCollection = (colName: string, currentArr: any[], incomingArr: any[]): any[] => {
+    if (!Array.isArray(incomingArr) || incomingArr.length === 0) {
+      return Array.isArray(currentArr) ? currentArr : [];
+    }
+    if (!Array.isArray(currentArr) || currentArr.length === 0) {
+      return incomingArr.filter(item => item && item.id);
     }
 
     const lastMutation = lastMutationTimes.current[colName] || 0;
-    const elapsed = Date.now() - lastMutation;
-    // If a local mutation was made recently (within last 4 seconds) and the remote array is smaller than the local array, protect local state
-    if (elapsed < 4000 && remoteArr.length < (currentArr?.length || 0)) {
-      return false;
+    const isRecentLocalMutation = Date.now() - lastMutation < 10000;
+
+    const mergedMap = new Map<string, any>();
+
+    // 1. Populate with incoming remote items
+    for (const item of incomingArr) {
+      if (item && item.id) {
+        mergedMap.set(item.id, item);
+      }
     }
-    return true;
+
+    // 2. Overlay local items (protect newly created records and recent mutations)
+    for (const localItem of currentArr) {
+      if (!localItem || !localItem.id) continue;
+
+      if (!mergedMap.has(localItem.id) || isRecentLocalMutation) {
+        mergedMap.set(localItem.id, localItem);
+      }
+    }
+
+    return Array.from(mergedMap.values());
+  };
+
+  // Helper to reconcile user accounts safely - never drops any account
+  const reconcileUsers = (currentUsers: RegisteredAccount[], incomingUsers: any[]): RegisteredAccount[] => {
+    const userMap = new Map<string, RegisteredAccount>();
+    userMap.set('JPMP-002', { ...superAdminAccount });
+
+    // 1. Load any cached accounts from localStorage
+    try {
+      const cached = localStorage.getItem('juwei_wms_registeredUsers');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) {
+          parsed.forEach((u: any) => {
+            if (!u || (!u.employeeId && !u.employee_id)) return;
+            const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase();
+            const empId = rawEmpId.startsWith('JPMP-') ? rawEmpId : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
+            const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (empId === 'JPMP-002' ? '0423' : '1234'));
+            userMap.set(empId, {
+              username: (u.username || 'OPERATOR').toUpperCase(),
+              role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
+              employeeId: empId,
+              phoneNumber: u.phoneNumber || u.phone_number || '',
+              permission: u.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
+              pin: cleanPin,
+              status: u.status || 'ACTIVE',
+              lastActive: u.lastActive || u.last_active || undefined
+            });
+          });
+        }
+      }
+    } catch (e) {}
+
+    // 2. Merge current local state users
+    if (Array.isArray(currentUsers)) {
+      for (const u of currentUsers) {
+        const empId = (u.employeeId || '').toUpperCase();
+        if (empId) {
+          const existing = userMap.get(empId) || {};
+          userMap.set(empId, {
+            ...existing,
+            ...u,
+            username: (u.username || (existing as any).username || 'OPERATOR').toUpperCase(),
+            role: (u.role || (existing as any).role || 'WAREHOUSE CLERK').toUpperCase(),
+            pin: u.pin || (existing as any).pin || (empId === 'JPMP-002' ? '0423' : '1234'),
+            phoneNumber: u.phoneNumber || (existing as any).phoneNumber || ''
+          });
+        }
+      }
+    }
+
+    // 3. Merge incoming users from remote
+    if (Array.isArray(incomingUsers)) {
+      const sanitizedIncoming = sanitizeUsersList(incomingUsers);
+      for (const u of sanitizedIncoming) {
+        const empId = (u.employeeId || '').toUpperCase();
+        if (empId) {
+          const existing = userMap.get(empId) || {};
+          userMap.set(empId, {
+            ...existing,
+            ...u,
+            username: (u.username || (existing as any).username || 'OPERATOR').toUpperCase(),
+            role: (u.role || (existing as any).role || 'WAREHOUSE CLERK').toUpperCase(),
+            pin: u.pin || (existing as any).pin || (empId === 'JPMP-002' ? '0423' : '1234'),
+            phoneNumber: u.phoneNumber || (existing as any).phoneNumber || ''
+          });
+        }
+      }
+    }
+
+    // Guarantee Super Admin JPMP-002 is always present and protected
+    const admin = userMap.get('JPMP-002') || superAdminAccount;
+    userMap.set('JPMP-002', {
+      ...superAdminAccount,
+      ...admin,
+      employeeId: 'JPMP-002',
+      username: admin.username || 'ALDRIN BANAWA',
+      role: 'SUPER ADMINISTRATOR',
+      permission: 'FULL_ACCESS',
+      pin: admin.pin || '0423'
+    });
+
+    const result = Array.from(userMap.values());
+    try {
+      localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(result));
+    } catch (e) {}
+    return result;
+  };
+
+  // Helper to execute coordinated deletion across local state, Supabase, WebSocket, and Express server
+  const deleteRecordLocallyAndRemotely = (collection: string, id: string) => {
+    if (!id || !collection) return;
+    markRecordAsDeletedLocally(id);
+    
+    // 1. Supabase deletion
+    if (isSupabaseConfigured()) {
+      deleteRecordFromSupabase(collection, id);
+    }
+
+    // 2. WebSocket deletion
+    if (wsOpen(socket)) {
+      try {
+        socket!.send(JSON.stringify({
+          type: 'delete_record',
+          collection,
+          id
+        }));
+      } catch (e) {}
+    }
+
+    // 3. HTTP REST deletion
+    fetch('/api/records/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ collection, id })
+    }).catch(() => {});
   };
 
   // Manual Full-Sync across WebSocket, REST & Supabase
@@ -809,16 +951,16 @@ export default function App() {
           const json = await res.json();
           if (json.data) {
             const { stocks: s, receiving: rc, returns: rt, recycling: cy, issuances: is, deliveries: d, envLogs: e, forkliftChecks: f, registries: reg, registeredUsers: ru, chatMessages: cm } = json.data;
-            if (Array.isArray(s) && s.length > 0) setStocks(normalizeRecords('stocks', s));
-            if (Array.isArray(rc) && rc.length > 0) setReceiving(normalizeRecords('receiving', rc));
-            if (Array.isArray(rt) && rt.length > 0) setReturns(normalizeRecords('returns', rt));
-            if (Array.isArray(cy) && cy.length > 0) setRecycling(normalizeRecords('recycling', cy));
-            if (Array.isArray(is) && is.length > 0) setIssuances(normalizeRecords('issuances', is));
-            if (Array.isArray(d) && d.length > 0) setDeliveries(normalizeRecords('deliveries', d));
-            if (Array.isArray(e) && e.length > 0) setEnvLogs(normalizeRecords('envLogs', e));
-            if (Array.isArray(f) && f.length > 0) setForkliftChecks(normalizeRecords('forkliftChecks', f));
-            if (Array.isArray(reg) && reg.length > 0) setRegistries(normalizeRecords('registries', reg));
-            if (Array.isArray(ru) && ru.length > 0) setRegisteredUsers(sanitizeUsersList(ru));
+            if (Array.isArray(s)) setStocks(prev => reconcileCollection('stocks', prev, normalizeRecords('stocks', s)));
+            if (Array.isArray(rc)) setReceiving(prev => reconcileCollection('receiving', prev, normalizeRecords('receiving', rc)));
+            if (Array.isArray(rt)) setReturns(prev => reconcileCollection('returns', prev, normalizeRecords('returns', rt)));
+            if (Array.isArray(cy)) setRecycling(prev => reconcileCollection('recycling', prev, normalizeRecords('recycling', cy)));
+            if (Array.isArray(is)) setIssuances(prev => reconcileCollection('issuances', prev, normalizeRecords('issuances', is)));
+            if (Array.isArray(d)) setDeliveries(prev => reconcileCollection('deliveries', prev, normalizeRecords('deliveries', d)));
+            if (Array.isArray(e)) setEnvLogs(prev => reconcileCollection('envLogs', prev, normalizeRecords('envLogs', e)));
+            if (Array.isArray(f)) setForkliftChecks(prev => reconcileCollection('forkliftChecks', prev, normalizeRecords('forkliftChecks', f)));
+            if (Array.isArray(reg)) setRegistries(prev => reconcileCollection('registries', prev, normalizeRecords('registries', reg)));
+            if (Array.isArray(ru)) setRegisteredUsers(prev => reconcileUsers(prev, ru));
             if (Array.isArray(cm) && cm.length > 0) setChatMessages(cm);
             setConnectionStatus('connected');
           }
@@ -830,16 +972,16 @@ export default function App() {
             const json = await resFallback.json();
             if (json.data) {
               const { stocks: s, receiving: rc, returns: rt, recycling: cy, issuances: is, deliveries: d, envLogs: e, forkliftChecks: f, registries: reg, registeredUsers: ru, chatMessages: cm } = json.data;
-              if (Array.isArray(s) && s.length > 0) setStocks(normalizeRecords('stocks', s));
-              if (Array.isArray(rc) && rc.length > 0) setReceiving(normalizeRecords('receiving', rc));
-              if (Array.isArray(rt) && rt.length > 0) setReturns(normalizeRecords('returns', rt));
-              if (Array.isArray(cy) && cy.length > 0) setRecycling(normalizeRecords('recycling', cy));
-              if (Array.isArray(is) && is.length > 0) setIssuances(normalizeRecords('issuances', is));
-              if (Array.isArray(d) && d.length > 0) setDeliveries(normalizeRecords('deliveries', d));
-              if (Array.isArray(e) && e.length > 0) setEnvLogs(normalizeRecords('envLogs', e));
-              if (Array.isArray(f) && f.length > 0) setForkliftChecks(normalizeRecords('forkliftChecks', f));
-              if (Array.isArray(reg) && reg.length > 0) setRegistries(normalizeRecords('registries', reg));
-              if (Array.isArray(ru) && ru.length > 0) setRegisteredUsers(sanitizeUsersList(ru));
+              if (Array.isArray(s)) setStocks(prev => reconcileCollection('stocks', prev, normalizeRecords('stocks', s)));
+              if (Array.isArray(rc)) setReceiving(prev => reconcileCollection('receiving', prev, normalizeRecords('receiving', rc)));
+              if (Array.isArray(rt)) setReturns(prev => reconcileCollection('returns', prev, normalizeRecords('returns', rt)));
+              if (Array.isArray(cy)) setRecycling(prev => reconcileCollection('recycling', prev, normalizeRecords('recycling', cy)));
+              if (Array.isArray(is)) setIssuances(prev => reconcileCollection('issuances', prev, normalizeRecords('issuances', is)));
+              if (Array.isArray(d)) setDeliveries(prev => reconcileCollection('deliveries', prev, normalizeRecords('deliveries', d)));
+              if (Array.isArray(e)) setEnvLogs(prev => reconcileCollection('envLogs', prev, normalizeRecords('envLogs', e)));
+              if (Array.isArray(f)) setForkliftChecks(prev => reconcileCollection('forkliftChecks', prev, normalizeRecords('forkliftChecks', f)));
+              if (Array.isArray(reg)) setRegistries(prev => reconcileCollection('registries', prev, normalizeRecords('registries', reg)));
+              if (Array.isArray(ru)) setRegisteredUsers(prev => reconcileUsers(prev, ru));
               if (Array.isArray(cm) && cm.length > 0) setChatMessages(cm);
               setConnectionStatus('connected');
             }
@@ -850,17 +992,17 @@ export default function App() {
       if (isSupabaseConfigured()) {
         const snap = await fetchFullSupabaseSnapshot();
         if (snap) {
-          if (Array.isArray(snap.stocks) && snap.stocks.length > 0) setStocks(normalizeRecords('stocks', snap.stocks));
-          if (Array.isArray(snap.receiving) && snap.receiving.length > 0) setReceiving(normalizeRecords('receiving', snap.receiving));
-          if (Array.isArray(snap.returns) && snap.returns.length > 0) setReturns(normalizeRecords('returns', snap.returns));
-          if (Array.isArray(snap.recycling) && snap.recycling.length > 0) setRecycling(normalizeRecords('recycling', snap.recycling));
-          if (Array.isArray(snap.issuances) && snap.issuances.length > 0) setIssuances(normalizeRecords('issuances', snap.issuances));
-          if (Array.isArray(snap.deliveries) && snap.deliveries.length > 0) setDeliveries(normalizeRecords('deliveries', snap.deliveries));
-          if (Array.isArray(snap.envLogs) && snap.envLogs.length > 0) setEnvLogs(normalizeRecords('envLogs', snap.envLogs));
-          if (Array.isArray(snap.forkliftChecks) && snap.forkliftChecks.length > 0) setForkliftChecks(normalizeRecords('forkliftChecks', snap.forkliftChecks));
-          if (Array.isArray(snap.registries) && snap.registries.length > 0) setRegistries(normalizeRecords('registries', snap.registries));
-          if (Array.isArray(snap.registeredUsers) && snap.registeredUsers.length > 0) {
-            setRegisteredUsers(sanitizeUsersList(snap.registeredUsers));
+          if (Array.isArray(snap.stocks)) setStocks(prev => reconcileCollection('stocks', prev, normalizeRecords('stocks', snap.stocks!)));
+          if (Array.isArray(snap.receiving)) setReceiving(prev => reconcileCollection('receiving', prev, normalizeRecords('receiving', snap.receiving!)));
+          if (Array.isArray(snap.returns)) setReturns(prev => reconcileCollection('returns', prev, normalizeRecords('returns', snap.returns!)));
+          if (Array.isArray(snap.recycling)) setRecycling(prev => reconcileCollection('recycling', prev, normalizeRecords('recycling', snap.recycling!)));
+          if (Array.isArray(snap.issuances)) setIssuances(prev => reconcileCollection('issuances', prev, normalizeRecords('issuances', snap.issuances!)));
+          if (Array.isArray(snap.deliveries)) setDeliveries(prev => reconcileCollection('deliveries', prev, normalizeRecords('deliveries', snap.deliveries!)));
+          if (Array.isArray(snap.envLogs)) setEnvLogs(prev => reconcileCollection('envLogs', prev, normalizeRecords('envLogs', snap.envLogs!)));
+          if (Array.isArray(snap.forkliftChecks)) setForkliftChecks(prev => reconcileCollection('forkliftChecks', prev, normalizeRecords('forkliftChecks', snap.forkliftChecks!)));
+          if (Array.isArray(snap.registries)) setRegistries(prev => reconcileCollection('registries', prev, normalizeRecords('registries', snap.registries!)));
+          if (Array.isArray(snap.registeredUsers)) {
+            setRegisteredUsers(prev => reconcileUsers(prev, snap.registeredUsers!));
           }
           if (Array.isArray(snap.chatMessages) && snap.chatMessages.length > 0) {
             setChatMessages(snap.chatMessages);
@@ -899,44 +1041,43 @@ export default function App() {
 
       if (Array.isArray(stocks)) {
         const norm = normalizeRecords('stocks', stocks);
-        setStocks(prev => shouldApplyRemoteData('stocks', norm, prev) ? norm : prev);
+        setStocks(prev => reconcileCollection('stocks', prev, norm));
       }
       if (Array.isArray(receiving)) {
         const norm = normalizeRecords('receiving', receiving);
-        setReceiving(prev => shouldApplyRemoteData('receiving', norm, prev) ? norm : prev);
+        setReceiving(prev => reconcileCollection('receiving', prev, norm));
       }
       if (Array.isArray(returns)) {
         const norm = normalizeRecords('returns', returns);
-        setReturns(prev => shouldApplyRemoteData('returns', norm, prev) ? norm : prev);
+        setReturns(prev => reconcileCollection('returns', prev, norm));
       }
       if (Array.isArray(recycling)) {
         const norm = normalizeRecords('recycling', recycling);
-        setRecycling(prev => shouldApplyRemoteData('recycling', norm, prev) ? norm : prev);
+        setRecycling(prev => reconcileCollection('recycling', prev, norm));
       }
       if (Array.isArray(issuances)) {
         const norm = normalizeRecords('issuances', issuances);
-        setIssuances(prev => shouldApplyRemoteData('issuances', norm, prev) ? norm : prev);
+        setIssuances(prev => reconcileCollection('issuances', prev, norm));
       }
       if (Array.isArray(deliveries)) {
         const norm = normalizeRecords('deliveries', deliveries);
-        setDeliveries(prev => shouldApplyRemoteData('deliveries', norm, prev) ? norm : prev);
+        setDeliveries(prev => reconcileCollection('deliveries', prev, norm));
       }
       if (Array.isArray(envLogs)) {
         const norm = normalizeRecords('envLogs', envLogs);
-        setEnvLogs(prev => shouldApplyRemoteData('envLogs', norm, prev) ? norm : prev);
+        setEnvLogs(prev => reconcileCollection('envLogs', prev, norm));
       }
       if (Array.isArray(forkliftChecks)) {
         const norm = normalizeRecords('forkliftChecks', forkliftChecks);
-        setForkliftChecks(prev => shouldApplyRemoteData('forkliftChecks', norm, prev) ? norm : prev);
+        setForkliftChecks(prev => reconcileCollection('forkliftChecks', prev, norm));
       }
       if (Array.isArray(registries)) {
         const norm = normalizeRecords('registries', registries);
-        setRegistries(prev => shouldApplyRemoteData('registries', norm, prev) ? norm : prev);
+        setRegistries(prev => reconcileCollection('registries', prev, norm));
       }
       
       if (Array.isArray(serverUsers)) {
-        const finalUsers = sanitizeUsersList(serverUsers);
-        setRegisteredUsers(finalUsers);
+        setRegisteredUsers(prev => reconcileUsers(prev, serverUsers));
       }
       if (msgs && Array.isArray(msgs)) setChatMessages(msgs);
       if (activeUsersList && Array.isArray(activeUsersList)) setActiveUsers(activeUsersList);
@@ -1114,20 +1255,16 @@ export default function App() {
               if (Array.isArray(data)) {
                 const norm = normalizeRecords(collection, data);
                 switch (collection) {
-                  case 'stocks': setStocks(prev => shouldApplyRemoteData('stocks', norm, prev) ? norm : prev); break;
-                  case 'receiving': setReceiving(prev => shouldApplyRemoteData('receiving', norm, prev) ? norm : prev); break;
-                  case 'returns': setReturns(prev => shouldApplyRemoteData('returns', norm, prev) ? norm : prev); break;
-                  case 'recycling': setRecycling(prev => shouldApplyRemoteData('recycling', norm, prev) ? norm : prev); break;
-                  case 'issuances': setIssuances(prev => shouldApplyRemoteData('issuances', norm, prev) ? norm : prev); break;
-                  case 'deliveries': setDeliveries(prev => shouldApplyRemoteData('deliveries', norm, prev) ? norm : prev); break;
-                  case 'envLogs': setEnvLogs(prev => shouldApplyRemoteData('envLogs', norm, prev) ? norm : prev); break;
-                  case 'forkliftChecks': setForkliftChecks(prev => shouldApplyRemoteData('forkliftChecks', norm, prev) ? norm : prev); break;
-                  case 'registries': setRegistries(prev => shouldApplyRemoteData('registries', norm, prev) ? norm : prev); break;
-                  case 'registeredUsers': {
-                    const sanitized = sanitizeUsersList(data);
-                    setRegisteredUsers(sanitized);
-                    break;
-                  }
+                  case 'stocks': setStocks(prev => reconcileCollection('stocks', prev, norm)); break;
+                  case 'receiving': setReceiving(prev => reconcileCollection('receiving', prev, norm)); break;
+                  case 'returns': setReturns(prev => reconcileCollection('returns', prev, norm)); break;
+                  case 'recycling': setRecycling(prev => reconcileCollection('recycling', prev, norm)); break;
+                  case 'issuances': setIssuances(prev => reconcileCollection('issuances', prev, norm)); break;
+                  case 'deliveries': setDeliveries(prev => reconcileCollection('deliveries', prev, norm)); break;
+                  case 'envLogs': setEnvLogs(prev => reconcileCollection('envLogs', prev, norm)); break;
+                  case 'forkliftChecks': setForkliftChecks(prev => reconcileCollection('forkliftChecks', prev, norm)); break;
+                  case 'registries': setRegistries(prev => reconcileCollection('registries', prev, norm)); break;
+                  case 'registeredUsers': setRegisteredUsers(prev => reconcileUsers(prev, data)); break;
                 }
               }
               break;
@@ -1270,55 +1407,54 @@ export default function App() {
         chatMessages: cm 
       } = snapshot;
 
-      if (Array.isArray(s) && s.length > 0) { 
+      if (Array.isArray(s)) { 
         hasSuccess = true; 
         const norm = normalizeRecords('stocks', s);
-        setStocks(prev => shouldApplyRemoteData('stocks', norm, prev) ? norm : prev); 
+        setStocks(prev => reconcileCollection('stocks', prev, norm)); 
       }
-      if (Array.isArray(rc) && rc.length > 0) { 
+      if (Array.isArray(rc)) { 
         hasSuccess = true; 
         const norm = normalizeRecords('receiving', rc);
-        setReceiving(prev => shouldApplyRemoteData('receiving', norm, prev) ? norm : prev); 
+        setReceiving(prev => reconcileCollection('receiving', prev, norm)); 
       }
-      if (Array.isArray(rt) && rt.length > 0) { 
+      if (Array.isArray(rt)) { 
         hasSuccess = true; 
         const norm = normalizeRecords('returns', rt);
-        setReturns(prev => shouldApplyRemoteData('returns', norm, prev) ? norm : prev); 
+        setReturns(prev => reconcileCollection('returns', prev, norm)); 
       }
-      if (Array.isArray(cy) && cy.length > 0) { 
+      if (Array.isArray(cy)) { 
         hasSuccess = true; 
         const norm = normalizeRecords('recycling', cy);
-        setRecycling(prev => shouldApplyRemoteData('recycling', norm, prev) ? norm : prev); 
+        setRecycling(prev => reconcileCollection('recycling', prev, norm)); 
       }
-      if (Array.isArray(is) && is.length > 0) { 
+      if (Array.isArray(is)) { 
         hasSuccess = true; 
         const norm = normalizeRecords('issuances', is);
-        setIssuances(prev => shouldApplyRemoteData('issuances', norm, prev) ? norm : prev); 
+        setIssuances(prev => reconcileCollection('issuances', prev, norm)); 
       }
-      if (Array.isArray(d) && d.length > 0) { 
+      if (Array.isArray(d)) { 
         hasSuccess = true; 
         const norm = normalizeRecords('deliveries', d);
-        setDeliveries(prev => shouldApplyRemoteData('deliveries', norm, prev) ? norm : prev); 
+        setDeliveries(prev => reconcileCollection('deliveries', prev, norm)); 
       }
-      if (Array.isArray(e) && e.length > 0) { 
+      if (Array.isArray(e)) { 
         hasSuccess = true; 
         const norm = normalizeRecords('envLogs', e);
-        setEnvLogs(prev => shouldApplyRemoteData('envLogs', norm, prev) ? norm : prev); 
+        setEnvLogs(prev => reconcileCollection('envLogs', prev, norm)); 
       }
-      if (Array.isArray(f) && f.length > 0) { 
+      if (Array.isArray(f)) { 
         hasSuccess = true; 
         const norm = normalizeRecords('forkliftChecks', f);
-        setForkliftChecks(prev => shouldApplyRemoteData('forkliftChecks', norm, prev) ? norm : prev); 
+        setForkliftChecks(prev => reconcileCollection('forkliftChecks', prev, norm)); 
       }
-      if (Array.isArray(reg) && reg.length > 0) { 
+      if (Array.isArray(reg)) { 
         hasSuccess = true; 
         const norm = normalizeRecords('registries', reg);
-        setRegistries(prev => shouldApplyRemoteData('registries', norm, prev) ? norm : prev); 
+        setRegistries(prev => reconcileCollection('registries', prev, norm)); 
       }
       if (Array.isArray(ru) && ru.length > 0) {
         hasSuccess = true;
-        const sanitized = sanitizeUsersList(ru);
-        setRegisteredUsers(sanitized);
+        setRegisteredUsers(prev => reconcileUsers(prev, ru));
       }
       if (Array.isArray(cm) && cm.length > 0) {
         hasSuccess = true;
@@ -1347,18 +1483,17 @@ export default function App() {
           if (Array.isArray(updatedItems)) {
             setSupabaseStatus('connected');
             const norm = normalizeRecords(col, updatedItems);
-            if (col === 'stocks') setStocks(prev => shouldApplyRemoteData('stocks', norm, prev) ? norm : prev);
-            else if (col === 'receiving') setReceiving(prev => shouldApplyRemoteData('receiving', norm, prev) ? norm : prev);
-            else if (col === 'returns') setReturns(prev => shouldApplyRemoteData('returns', norm, prev) ? norm : prev);
-            else if (col === 'recycling') setRecycling(prev => shouldApplyRemoteData('recycling', norm, prev) ? norm : prev);
-            else if (col === 'issuances') setIssuances(prev => shouldApplyRemoteData('issuances', norm, prev) ? norm : prev);
-            else if (col === 'deliveries') setDeliveries(prev => shouldApplyRemoteData('deliveries', norm, prev) ? norm : prev);
-            else if (col === 'envLogs') setEnvLogs(prev => shouldApplyRemoteData('envLogs', norm, prev) ? norm : prev);
-            else if (col === 'forkliftChecks') setForkliftChecks(prev => shouldApplyRemoteData('forkliftChecks', norm, prev) ? norm : prev);
-            else if (col === 'registries') setRegistries(prev => shouldApplyRemoteData('registries', norm, prev) ? norm : prev);
+            if (col === 'stocks') setStocks(prev => reconcileCollection('stocks', prev, norm));
+            else if (col === 'receiving') setReceiving(prev => reconcileCollection('receiving', prev, norm));
+            else if (col === 'returns') setReturns(prev => reconcileCollection('returns', prev, norm));
+            else if (col === 'recycling') setRecycling(prev => reconcileCollection('recycling', prev, norm));
+            else if (col === 'issuances') setIssuances(prev => reconcileCollection('issuances', prev, norm));
+            else if (col === 'deliveries') setDeliveries(prev => reconcileCollection('deliveries', prev, norm));
+            else if (col === 'envLogs') setEnvLogs(prev => reconcileCollection('envLogs', prev, norm));
+            else if (col === 'forkliftChecks') setForkliftChecks(prev => reconcileCollection('forkliftChecks', prev, norm));
+            else if (col === 'registries') setRegistries(prev => reconcileCollection('registries', prev, norm));
             else if (col === 'registeredUsers') {
-              const sanitized = sanitizeUsersList(updatedItems);
-              setRegisteredUsers(sanitized);
+              setRegisteredUsers(prev => reconcileUsers(prev, updatedItems));
             }
           }
         },
@@ -2021,6 +2156,7 @@ export default function App() {
       alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
       return;
     }
+    deleteRecordLocallyAndRemotely('recycling', id);
     const nextRecycling = recycling.filter(r => r.id !== id);
     setRecycling(nextRecycling);
     syncCollection('recycling', nextRecycling);
@@ -2143,6 +2279,7 @@ export default function App() {
       alert("PERMISSION DENIED: ONLY SUPER ADMIN AND SYSTEM ADMIN CAN DELETE SPACE AUDIT LOG RECORDS.");
       return;
     }
+    deleteRecordLocallyAndRemotely('envLogs', id);
     const next = envLogs.filter(l => l.id !== id);
     setEnvLogs(next);
     syncCollection('envLogs', next);
@@ -2213,6 +2350,7 @@ export default function App() {
       alert("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE STOCK TRANSACTIONS.");
       return;
     }
+    deleteRecordLocallyAndRemotely('stocks', id);
     const next = stocks.filter(s => s.id !== id);
     setStocks(next);
     syncCollection('stocks', next);
@@ -2236,6 +2374,7 @@ export default function App() {
       alert("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE RECEIVING TRANSACTIONS.");
       return;
     }
+    deleteRecordLocallyAndRemotely('receiving', id);
     const next = receiving.filter(r => r.id !== id);
     setReceiving(next);
     syncCollection('receiving', next);
@@ -2259,6 +2398,7 @@ export default function App() {
       alert("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE RETURN TRANSACTIONS.");
       return;
     }
+    deleteRecordLocallyAndRemotely('returns', id);
     const next = returns.filter(r => r.id !== id);
     setReturns(next);
     syncCollection('returns', next);
@@ -2282,6 +2422,7 @@ export default function App() {
       alert("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE ISSUANCE TRANSACTIONS.");
       return;
     }
+    deleteRecordLocallyAndRemotely('issuances', id);
     const next = issuances.filter(i => i.id !== id);
     setIssuances(next);
     syncCollection('issuances', next);
@@ -2305,6 +2446,7 @@ export default function App() {
       alert("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE DELIVERY TRANSACTIONS.");
       return;
     }
+    deleteRecordLocallyAndRemotely('deliveries', id);
     const next = deliveries.filter(d => d.id !== id);
     setDeliveries(next);
     syncCollection('deliveries', next);
@@ -2359,6 +2501,7 @@ export default function App() {
   };
 
   const handleDeleteMasterItem = (id: string) => {
+    deleteRecordLocallyAndRemotely('registries', id);
     const next = registries.filter(r => r.id !== id);
     setRegistries(next);
     syncCollection('registries', next);
@@ -2511,21 +2654,28 @@ export default function App() {
           {/* Accent Glow */}
           <div className="absolute top-0 left-1/4 w-1/2 h-1 bg-gradient-to-r from-transparent via-indigo-500 to-transparent animate-pulse" />
           
-          {/* Supabase Cloud Database Status Bar */}
-          <button
-            type="button"
-            onClick={() => setShowSupabaseSettingsModal(true)}
-            className="w-full bg-slate-950 border border-slate-800 hover:border-emerald-500/50 rounded-xl p-3 flex items-center justify-between font-mono text-xs transition cursor-pointer"
-            title="Click to configure or view Supabase PostgreSQL Cloud Database status"
-          >
-            <div className="flex items-center gap-2.5">
-              <Database className={`h-4 w-4 ${isSupabaseConfigured() ? 'text-emerald-400' : 'text-amber-400'} shrink-0`} />
-              <span className={`text-xs font-bold uppercase tracking-wider ${isSupabaseConfigured() ? 'text-emerald-400' : 'text-amber-300'}`}>
-                {isSupabaseConfigured() ? 'SUPABASE CLOUD CONNECTED' : 'SUPABASE CLOUD READY'}
-              </span>
+          {/* Supabase Cloud Database Quick Settings (Logo Only & Editable) */}
+          <div className="flex justify-between items-center -mt-1 -mb-1">
+            <div className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="text-[10px] text-slate-400 font-mono font-bold uppercase tracking-wider">SYSTEM READY</span>
             </div>
-            <span className="text-[10px] text-slate-400 uppercase font-mono">PostgreSQL</span>
-          </button>
+
+            <button
+              type="button"
+              onClick={() => setShowSupabaseSettingsModal(true)}
+              className="group relative flex items-center justify-center gap-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/60 text-slate-300 hover:text-white px-2.5 py-1.5 rounded-lg transition shadow-xs cursor-pointer"
+              title="Click to edit Supabase Cloud Database Configuration"
+              aria-label="Edit Supabase Cloud Database Configuration"
+              id="btn-login-supabase-settings"
+            >
+              <div className="relative flex items-center justify-center">
+                <Database className={`h-4 w-4 ${isSupabaseConfigured() ? 'text-emerald-400' : 'text-amber-400'} transition-transform group-hover:scale-110`} />
+                <span className={`absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full ${isSupabaseConfigured() ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+              </div>
+              <Edit3 className="h-3 w-3 text-slate-500 group-hover:text-emerald-400 transition" />
+            </button>
+          </div>
 
           <div className="flex flex-col items-center text-center">
             <span className="inline-block bg-indigo-500/20 text-indigo-200 font-bold text-[10px] tracking-wider uppercase px-2.5 py-1 rounded-full mb-1 border border-indigo-400/40 font-mono shadow-xs">
@@ -3024,6 +3174,7 @@ export default function App() {
               sendChatMessage={sendChatMessage}
               registeredUsers={registeredUsers}
               isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
+              registries={registries}
             />
           )}
 

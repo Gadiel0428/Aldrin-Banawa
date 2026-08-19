@@ -22,6 +22,8 @@ import {
   ClipboardCheck, 
   Thermometer, 
   TrendingUp, 
+  TrendingDown,
+  ArrowDownLeft,
   FlameKindling,
   Timer,
   CheckCircle,
@@ -29,7 +31,12 @@ import {
   MessageSquare,
   Send,
   Users,
-  Radio
+  Radio,
+  FileText,
+  Download,
+  Printer,
+  ShieldCheck,
+  Layers
 } from 'lucide-react';
 import { 
   MaterialStockItem, 
@@ -40,8 +47,11 @@ import {
   IssuanceRecord,
   DeliveryRecord,
   RegisteredAccount,
+  MasterRegistryItem,
   getCustomerForPart
 } from '../types';
+import ReceivingVsIssuanceReportModal from './ReceivingVsIssuanceReportModal';
+import { downloadReceivingVsIssuancePDF } from '../utils/reportGenerator';
 
 interface DashboardOverviewProps {
   stocks: MaterialStockItem[];
@@ -59,6 +69,7 @@ interface DashboardOverviewProps {
   sendChatMessage: (text: string) => void;
   registeredUsers?: RegisteredAccount[];
   isSuperAdmin?: boolean;
+  registries?: MasterRegistryItem[];
 }
 
 export default function DashboardOverview({
@@ -75,13 +86,67 @@ export default function DashboardOverview({
   currentUser,
   sendChatMessage,
   registeredUsers = [],
-  isSuperAdmin = false
+  isSuperAdmin = false,
+  registries = []
 }: DashboardOverviewProps) {
   
   const [activeTab, setActiveTab] = useState<'transactions' | 'chat'>('transactions');
   const [selectedCustomer, setSelectedCustomer] = useState<string>('');
   const [msgText, setMsgText] = useState('');
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Receiving vs Issuance Snapshot Aggregates
+  const totalReceivedQty = receiving.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
+  const totalIssuedQty = issuances.reduce((sum, i) => sum + (Number(i.quantityIssued) || 0), 0);
+  const netMaterialDelta = totalReceivedQty - totalIssuedQty;
+  const isNetPositive = netMaterialDelta >= 0;
+  const totalMaterialVolume = totalReceivedQty + totalIssuedQty;
+  const rxVelocityPct = totalMaterialVolume > 0 ? Math.round((totalReceivedQty / totalMaterialVolume) * 100) : 50;
+  const issVelocityPct = totalMaterialVolume > 0 ? Math.round((totalIssuedQty / totalMaterialVolume) * 100) : 50;
+
+  // Top SKUs by Flow Activity (Receiving + Issuance combined)
+  const topFlowSkus = React.useMemo(() => {
+    const map: Record<string, { partCode: string; description: string; rx: number; iss: number; currentStock: number; unit: string }> = {};
+    receiving.forEach(r => {
+      if (!map[r.partCode]) {
+        map[r.partCode] = { partCode: r.partCode, description: r.itemDescription, rx: 0, iss: 0, currentStock: 0, unit: r.unit || 'PCS' };
+      }
+      map[r.partCode].rx += Number(r.quantity) || 0;
+    });
+    issuances.forEach(i => {
+      if (!map[i.partCode]) {
+        map[i.partCode] = { partCode: i.partCode, description: i.description, rx: 0, iss: 0, currentStock: 0, unit: 'PCS' };
+      }
+      map[i.partCode].iss += Number(i.quantityIssued) || 0;
+    });
+    stocks.forEach(s => {
+      if (s.status === 'APPROVED' && map[s.partCode]) {
+        map[s.partCode].currentStock += Number(s.quantity) || 0;
+        if (s.unit) map[s.partCode].unit = s.unit;
+      }
+    });
+    return Object.values(map)
+      .sort((a, b) => (b.rx + b.iss) - (a.rx + a.iss))
+      .slice(0, 5);
+  }, [receiving, issuances, stocks]);
+
+  const handleDirectExportPDF = () => {
+    try {
+      setIsExportingPDF(true);
+      downloadReceivingVsIssuancePDF(receiving, issuances, stocks, {
+        dateRange: 'all',
+        generatedBy: currentUser,
+        employeeId: 'JPMP-002',
+        userRole: isSuperAdmin ? 'Super Administrator' : 'Warehouse Manager'
+      });
+    } catch (err) {
+      console.error('Failed to export PDF:', err);
+    } finally {
+      setIsExportingPDF(false);
+    }
+  };
 
   // Auto-scroll chat to bottom
   useEffect(() => {
@@ -357,11 +422,23 @@ export default function DashboardOverview({
           </p>
         </div>
 
-        <div className="flex sm:flex-col items-end gap-2 border-t sm:border-t-0 sm:border-l border-slate-700/80 pt-3 sm:pt-0 sm:pl-6 shrink-0 w-full sm:w-auto justify-between sm:justify-start">
-          <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider font-mono">FACILITY LOCATION</span>
-          <span className="text-xs font-bold text-white font-mono bg-slate-800/80 px-2.5 py-1 rounded border border-slate-700">
-            PHILIPPINES PLANT
-          </span>
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0 w-full sm:w-auto">
+          {/* Quick PDF Export & Summary Action Buttons */}
+          <button
+            onClick={() => setShowReportModal(true)}
+            className="bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition shadow-sm flex items-center justify-center gap-1.5 cursor-pointer border border-indigo-400/30"
+            title="Generate print-friendly summary and export Receiving vs Issuance PDF"
+          >
+            <FileText className="h-3.5 w-3.5" />
+            <span>Receiving vs Issuance PDF</span>
+          </button>
+          
+          <div className="flex sm:flex-col items-end gap-1 border-t sm:border-t-0 sm:border-l border-slate-700/80 pt-2 sm:pt-0 sm:pl-4 justify-between sm:justify-start">
+            <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider font-mono">FACILITY LOCATION</span>
+            <span className="text-xs font-bold text-white font-mono bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700">
+              PHILIPPINES PLANT
+            </span>
+          </div>
         </div>
       </div>
 
@@ -450,6 +527,192 @@ export default function DashboardOverview({
             </ResponsiveContainer>
           </div>
         </div>
+      </div>
+
+      {/* Receiving vs Issuance Material Flow Summary & Audit Snapshot Section */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-5" id="receiving-vs-issuance-summary-card">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 bg-indigo-50 text-indigo-700 rounded-lg">
+                <FileText className="h-4 w-4" />
+              </div>
+              <h3 className="font-bold text-base text-slate-800">Receiving vs Issuance Material Flow Summary</h3>
+              <span className="text-[10px] uppercase font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-full">
+                MANAGER AUDIT SNAPSHOT
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              Live operational comparison of inbound raw material replenishment versus outbound manufacturing consumption.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleDirectExportPDF}
+              disabled={isExportingPDF}
+              className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition shadow-xs flex items-center gap-1.5 cursor-pointer"
+              title="Generate and download PDF formatted audit report"
+            >
+              <Download className="h-3.5 w-3.5" />
+              {isExportingPDF ? 'Generating...' : 'Export PDF'}
+            </button>
+            <button
+              onClick={() => setShowReportModal(true)}
+              className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer border border-slate-200"
+              title="Open full print-friendly summary modal"
+            >
+              <Printer className="h-3.5 w-3.5" />
+              <span>Full Audit Report</span>
+            </button>
+          </div>
+        </div>
+
+        {/* 4-Column Metric Summary Snapshot */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+          {/* Total Inbound Received */}
+          <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/50 space-y-1">
+            <div className="flex justify-between items-center text-emerald-800">
+              <span className="text-[10px] font-extrabold uppercase tracking-wider">Inbound Received</span>
+              <ArrowDownLeft className="h-4 w-4 text-emerald-600" />
+            </div>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-2xl font-extrabold text-emerald-700 font-mono">
+                {totalReceivedQty.toLocaleString()}
+              </span>
+              <span className="text-[10px] font-bold text-emerald-600 font-mono">PCS</span>
+            </div>
+            <p className="text-[10px] text-emerald-700 font-medium">
+              {receiving.length} Lot Receipt Transactions
+            </p>
+          </div>
+
+          {/* Total Outbound Issued */}
+          <div className="p-3.5 rounded-xl border border-blue-200 bg-blue-50/50 space-y-1">
+            <div className="flex justify-between items-center text-blue-800">
+              <span className="text-[10px] font-extrabold uppercase tracking-wider">Outbound Issued</span>
+              <ArrowUpRight className="h-4 w-4 text-blue-600" />
+            </div>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-2xl font-extrabold text-blue-700 font-mono">
+                {totalIssuedQty.toLocaleString()}
+              </span>
+              <span className="text-[10px] font-bold text-blue-600 font-mono">PCS</span>
+            </div>
+            <p className="text-[10px] text-blue-700 font-medium">
+              {issuances.length} Production Requisitions
+            </p>
+          </div>
+
+          {/* Net Inventory Delta */}
+          <div className={`p-3.5 rounded-xl border space-y-1 ${
+            isNetPositive ? 'bg-indigo-50/50 border-indigo-200 text-indigo-900' : 'bg-rose-50/50 border-rose-200 text-rose-900'
+          }`}>
+            <div className="flex justify-between items-center">
+              <span className="text-[10px] font-extrabold uppercase tracking-wider">Net Movement Delta</span>
+              {isNetPositive ? <TrendingUp className="h-4 w-4 text-indigo-600" /> : <TrendingDown className="h-4 w-4 text-rose-600" />}
+            </div>
+            <div className="flex items-baseline gap-1.5">
+              <span className={`text-2xl font-extrabold font-mono ${isNetPositive ? 'text-indigo-700' : 'text-rose-700'}`}>
+                {netMaterialDelta > 0 ? `+${netMaterialDelta.toLocaleString()}` : netMaterialDelta.toLocaleString()}
+              </span>
+              <span className="text-[10px] font-bold font-mono">PCS</span>
+            </div>
+            <p className="text-[10px] font-medium opacity-80">
+              {isNetPositive ? 'Inventory Inflow Surplus' : 'Net Outflow Consumption'}
+            </p>
+          </div>
+
+          {/* Ratio / Balance */}
+          <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/60 space-y-1">
+            <div className="flex justify-between items-center text-slate-700">
+              <span className="text-[10px] font-extrabold uppercase tracking-wider">Flow Velocity Ratio</span>
+              <Layers className="h-4 w-4 text-slate-500" />
+            </div>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-2xl font-extrabold text-slate-800 font-mono">
+                {rxVelocityPct}:{issVelocityPct}
+              </span>
+              <span className="text-[10px] font-bold text-slate-500 font-mono">RX:ISS</span>
+            </div>
+            <p className="text-[10px] text-slate-500 font-medium">
+              {rxVelocityPct >= 50 ? 'Net Replenishment Pace' : 'Net Depletion Pace'}
+            </p>
+          </div>
+        </div>
+
+        {/* Velocity Balance Ratio Bar */}
+        <div className="space-y-1.5 bg-slate-50 p-3 rounded-xl border border-slate-200/80">
+          <div className="flex justify-between text-xs font-bold">
+            <span className="text-emerald-700 flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+              Inbound Received: {totalReceivedQty.toLocaleString()} PCS ({rxVelocityPct}%)
+            </span>
+            <span className="text-blue-700 flex items-center gap-1.5">
+              Outbound Issued: {totalIssuedQty.toLocaleString()} PCS ({issVelocityPct}%)
+              <span className="h-2 w-2 rounded-full bg-blue-500" />
+            </span>
+          </div>
+          <div className="w-full bg-slate-200 rounded-full h-2.5 flex overflow-hidden">
+            <div 
+              className="bg-emerald-500 transition-all duration-300"
+              style={{ width: `${rxVelocityPct}%` }}
+              title={`Inbound Received: ${rxVelocityPct}%`}
+            />
+            <div 
+              className="bg-blue-600 transition-all duration-300"
+              style={{ width: `${issVelocityPct}%` }}
+              title={`Outbound Issued: ${issVelocityPct}%`}
+            />
+          </div>
+        </div>
+
+        {/* Top Transacted SKUs Material Velocity Preview */}
+        {topFlowSkus.length > 0 && (
+          <div className="space-y-2 pt-1">
+            <div className="flex justify-between items-center text-xs">
+              <span className="text-[11px] uppercase font-bold text-slate-400 font-mono tracking-wider">
+                TOP TRANSACTED MATERIAL VELOCITY
+              </span>
+              <button
+                onClick={() => setShowReportModal(true)}
+                className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 transition flex items-center gap-1 cursor-pointer"
+              >
+                View Full Itemized Breakdown &rarr;
+              </button>
+            </div>
+            
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+              {topFlowSkus.map((sku, idx) => {
+                const delta = sku.rx - sku.iss;
+                return (
+                  <div 
+                    key={`flow-sku-card-${sku.partCode}-${idx}`} 
+                    className="p-3 rounded-xl border border-slate-200 bg-slate-50/70 space-y-1.5 hover:bg-slate-100/70 transition text-xs"
+                  >
+                    <div className="flex justify-between items-start">
+                      <span className="font-mono font-bold text-slate-900 bg-white border border-slate-200 px-1.5 py-0.5 rounded text-[10px]">
+                        {sku.partCode}
+                      </span>
+                      <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-full border ${
+                        delta >= 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'
+                      }`}>
+                        {delta > 0 ? `+${delta}` : delta}
+                      </span>
+                    </div>
+                    <p className="text-[11px] font-medium text-slate-700 truncate" title={sku.description}>
+                      {sku.description}
+                    </p>
+                    <div className="pt-1 flex justify-between text-[10px] text-slate-500 border-t border-slate-200/60 font-mono">
+                      <span className="text-emerald-700 font-bold">Rx: {sku.rx}</span>
+                      <span className="text-blue-700 font-bold">Iss: {sku.iss}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Safety & Operational Control Alerts Grid */}
@@ -1063,6 +1326,19 @@ export default function DashboardOverview({
           </div>
         </div>
       </div>
+
+      {/* Receiving vs Issuance Printable Summary & PDF Export Modal */}
+      {showReportModal && (
+        <ReceivingVsIssuanceReportModal
+          receiving={receiving}
+          issuances={issuances}
+          stocks={stocks}
+          registries={registries}
+          currentUser={currentUser}
+          isSuperAdmin={isSuperAdmin}
+          onClose={() => setShowReportModal(false)}
+        />
+      )}
     </div>
   );
 }
