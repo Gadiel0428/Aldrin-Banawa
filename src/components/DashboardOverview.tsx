@@ -789,14 +789,43 @@ export default function DashboardOverview({
       </div>
 
       {/* Primary KPI Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4" id="kpi-grid">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" id="kpi-grid">
+        {/* Total Active Approved Stock KPI Card */}
+        <div 
+          onClick={() => setView('stock')}
+          className="p-5 bg-white border border-slate-200 rounded-2xl shadow-xs space-y-2 relative overflow-hidden cursor-pointer hover:border-indigo-400 hover:shadow-sm transition group"
+          title="Click to view full Active Stock Inventory"
+        >
+          <div className="flex justify-between items-center">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider group-hover:text-indigo-600 transition">Approved Stock</span>
+            <div className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600 group-hover:bg-indigo-100 transition">
+              <Package className="h-4 w-4" />
+            </div>
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-2xl font-bold text-slate-900 font-mono">
+              {totalStockItems.toLocaleString()}
+            </span>
+            <span className="text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full font-bold font-mono">
+              PCS
+            </span>
+          </div>
+          <p className="text-[11px] text-slate-500 pb-1.5 border-b border-slate-100">
+            {stocks.filter(s => s.status === 'APPROVED').length} active verified lots in bins
+          </p>
+          <div className="pt-1 flex items-center justify-between text-[10px] text-indigo-600 font-semibold font-mono">
+            <span>READY FOR ISSUANCE</span>
+            <span>&rarr;</span>
+          </div>
+        </div>
+
         {/* Low Stock Reorder Threshold KPI Card */}
         <div 
           onClick={() => {
             const el = document.getElementById('low-stock-alert-card');
             if (el) el.scrollIntoView({ behavior: 'smooth' });
           }}
-          className="p-5 bg-white border border-rose-200 rounded-xl shadow-sm space-y-2 relative overflow-hidden cursor-pointer hover:border-rose-400 hover:shadow-md transition group"
+          className="p-5 bg-white border border-rose-200 rounded-2xl shadow-xs space-y-2 relative overflow-hidden cursor-pointer hover:border-rose-400 hover:shadow-sm transition group"
           title="Click to view detailed Low Stock Level Alerts"
         >
           <div className="flex justify-between items-center">
@@ -818,14 +847,14 @@ export default function DashboardOverview({
           <p className="text-[11px] text-slate-500 pb-1.5 border-b border-slate-100">Material stock below minimum limit</p>
 
           <div className="pt-1.5 space-y-1">
-            {lowStockSkus.slice(0, 2).map((item, idx) => (
+            {lowStockSkus.slice(0, 1).map((item, idx) => (
               <div key={`low-stock-kpi-item-${item.partCode || 'item'}-${idx}`} className="flex justify-between items-center text-[10px] bg-rose-50/80 px-1.5 py-0.5 rounded font-mono border border-rose-100">
                 <span className="font-bold text-rose-900 truncate max-w-[80px]">{item.partCode}</span>
                 <span className="text-rose-700 font-bold">{item.currentQty}/{item.reorderMin} {item.unit}</span>
               </div>
             ))}
-            {lowStockSkus.length > 2 && (
-              <p className="text-[9px] text-rose-600 font-bold text-right">+ {lowStockSkus.length - 2} more item(s)</p>
+            {lowStockSkus.length > 1 && (
+              <p className="text-[9px] text-rose-600 font-bold text-right">+ {lowStockSkus.length - 1} more item(s)</p>
             )}
             {lowStockSkus.length === 0 && (
               <p className="text-[9px] text-emerald-600 font-medium">All stock levels normal</p>
@@ -833,10 +862,14 @@ export default function DashboardOverview({
           </div>
         </div>
 
-        <div className="p-5 bg-white border border-slate-200 rounded-xl shadow-sm space-y-2">
+        {/* Quarantine & Hold KPI Card */}
+        <div 
+          onClick={() => setView('stock')}
+          className="p-5 bg-white border border-slate-200 rounded-2xl shadow-xs space-y-2 cursor-pointer hover:border-rose-300 hover:shadow-sm transition group"
+        >
           <div className="flex justify-between items-center">
-            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Quarantine & Hold</span>
-            <div className="p-1.5 rounded-lg bg-rose-50 text-rose-600">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider group-hover:text-rose-600 transition">Quarantine & Hold</span>
+            <div className="p-1.5 rounded-lg bg-rose-50 text-rose-600 group-hover:bg-rose-100 transition">
               <AlertTriangle className="h-4 w-4" />
             </div>
           </div>
@@ -845,18 +878,26 @@ export default function DashboardOverview({
               {quarantineCount}
             </span>
             {quarantineCount > 0 && (
-              <span className="text-[10px] bg-rose-50 border border-rose-100 text-rose-700 px-1.5 py-0.5 rounded font-bold">
+              <span className="text-[10px] bg-rose-50 border border-rose-100 text-rose-700 px-1.5 py-0.5 rounded font-bold font-mono">
                 ATTN
               </span>
             )}
           </div>
-          <p className="text-[11px] text-slate-500">Restricted items under evaluation</p>
+          <p className="text-[11px] text-slate-500 pb-1.5 border-b border-slate-100">Restricted items under evaluation</p>
+          <div className="pt-1 flex items-center justify-between text-[10px] text-slate-500 font-mono">
+            <span>ISOLATION BINS</span>
+            <span>&rarr;</span>
+          </div>
         </div>
 
-        <div className="p-5 bg-white border border-slate-200 rounded-xl shadow-sm space-y-2">
+        {/* Pending IQC KPI Card */}
+        <div 
+          onClick={() => setView('receiving')}
+          className="p-5 bg-white border border-slate-200 rounded-2xl shadow-xs space-y-2 cursor-pointer hover:border-amber-300 hover:shadow-sm transition group"
+        >
           <div className="flex justify-between items-center">
-            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Pending IQC</span>
-            <div className="p-1.5 rounded-lg bg-amber-50 text-amber-600">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider group-hover:text-amber-600 transition">Pending IQC</span>
+            <div className="p-1.5 rounded-lg bg-amber-50 text-amber-600 group-hover:bg-amber-100 transition">
               <Timer className="h-4 w-4" />
             </div>
           </div>
@@ -864,8 +905,17 @@ export default function DashboardOverview({
             <span className="text-2xl font-bold text-slate-800 font-mono">
               {pendingIqcCount}
             </span>
+            {pendingIqcCount > 0 && (
+              <span className="text-[10px] bg-amber-50 border border-amber-200 text-amber-800 px-1.5 py-0.5 rounded font-bold font-mono">
+                PENDING
+              </span>
+            )}
           </div>
-          <p className="text-[11px] text-slate-500">Awaiting Quality evaluation check</p>
+          <p className="text-[11px] text-slate-500 pb-1.5 border-b border-slate-100">Awaiting Quality evaluation check</p>
+          <div className="pt-1 flex items-center justify-between text-[10px] text-amber-700 font-mono">
+            <span>INSPECTION DOCK</span>
+            <span>&rarr;</span>
+          </div>
         </div>
       </div>
 

@@ -330,47 +330,49 @@ export default function RegisteredAccountsModule({
 
   return (
     <div className="space-y-4" id="registered-accounts-module">
-      {/* Top Banner & Metric Badges */}
-      <div className="bg-white rounded-xl shadow-xs border border-slate-200 p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      {/* Top Banner & Metric Badges matching Dashboard Overview */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 rounded-2xl shadow-md border border-slate-800 p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 text-white">
         <div>
-          <div className="flex items-center gap-2 text-indigo-600 mb-1 font-bold text-[11px] uppercase tracking-wider font-mono">
-            <ShieldCheck className="h-4 w-4" /> JPMP Operator Directory & Access Control
+          <div className="flex items-center gap-2 mb-1 font-bold text-[11px] uppercase tracking-wider font-mono">
+            <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded border border-indigo-500/30 flex items-center gap-1">
+              <ShieldCheck className="h-3.5 w-3.5" /> JPMP OPERATOR DIRECTORY
+            </span>
           </div>
-          <h2 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-            <Users className="h-5 w-5 text-indigo-600" /> JPMP Operator Accounts
+          <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
+            <Users className="h-5 w-5 text-indigo-400" /> JPMP Operator Accounts
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-xs text-slate-300 mt-0.5">
             Centralized operator registry, role assignment, active/pending status tracking, and QR PIN security.
           </p>
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+        <div className="flex items-center gap-2.5 flex-wrap justify-start xl:justify-end shrink-0">
           {/* Total Badge */}
-          <div className="bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg text-center min-w-[76px]">
+          <div className="bg-slate-950/70 border border-slate-700/80 px-3 py-1.5 rounded-xl text-center min-w-[70px]">
             <span className="block text-[9px] font-bold text-slate-400 uppercase font-mono">Total</span>
-            <span className="text-base font-extrabold text-slate-800 font-mono">{accountStats.total}</span>
+            <span className="text-base font-extrabold text-white font-mono">{accountStats.total}</span>
           </div>
 
           {/* Active Badge */}
-          <div className="bg-emerald-50 border border-emerald-200/80 px-3 py-1.5 rounded-lg text-center min-w-[76px]">
-            <span className="flex items-center justify-center gap-1 text-[9px] font-bold text-emerald-700 uppercase font-mono">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" /> Active
+          <div className="bg-emerald-950/60 border border-emerald-500/40 px-3 py-1.5 rounded-xl text-center min-w-[70px]">
+            <span className="flex items-center justify-center gap-1 text-[9px] font-bold text-emerald-400 uppercase font-mono">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" /> Active
             </span>
-            <span className="text-base font-extrabold text-emerald-700 font-mono">{accountStats.active}</span>
+            <span className="text-base font-extrabold text-emerald-300 font-mono">{accountStats.active}</span>
           </div>
 
           {/* Pending Badge */}
-          <div className="bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-lg text-center min-w-[76px]">
-            <span className="flex items-center justify-center gap-1 text-[9px] font-bold text-slate-500 uppercase font-mono">
+          <div className="bg-slate-950/70 border border-slate-700/80 px-3 py-1.5 rounded-xl text-center min-w-[70px]">
+            <span className="flex items-center justify-center gap-1 text-[9px] font-bold text-slate-400 uppercase font-mono">
               <span className="h-1.5 w-1.5 rounded-full bg-slate-400" /> Pending
             </span>
-            <span className="text-base font-extrabold text-slate-600 font-mono">{accountStats.pending}</span>
+            <span className="text-base font-extrabold text-slate-300 font-mono">{accountStats.pending}</span>
           </div>
 
           {/* Full Access Badge */}
-          <div className="bg-indigo-50 border border-indigo-100 px-3 py-1.5 rounded-lg text-center min-w-[80px] hidden sm:block">
-            <span className="block text-[9px] font-bold text-indigo-500 uppercase font-mono">Full Access</span>
-            <span className="text-base font-extrabold text-indigo-700 font-mono">{accountStats.fullAccess}</span>
+          <div className="bg-indigo-950/60 border border-indigo-500/40 px-3 py-1.5 rounded-xl text-center min-w-[76px] hidden sm:block">
+            <span className="block text-[9px] font-bold text-indigo-300 uppercase font-mono">Full Access</span>
+            <span className="text-base font-extrabold text-indigo-200 font-mono">{accountStats.fullAccess}</span>
           </div>
 
           {isSuperAdmin && (
@@ -379,11 +381,11 @@ export default function RegisteredAccountsModule({
                 resetAddForm();
                 setShowAddModal(true);
               }}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-xs uppercase font-mono cursor-pointer shrink-0 ml-1"
+              className="bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-indigo-950/40 uppercase font-mono cursor-pointer shrink-0 border border-indigo-400/30"
               id="btn-add-account"
             >
-              <UserPlus className="h-3.5 w-3.5" />
-              <span>Register Operator</span>
+              <UserPlus className="h-4 w-4" />
+              <span className="whitespace-nowrap">Register Operator</span>
             </button>
           )}
         </div>

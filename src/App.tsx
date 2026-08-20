@@ -47,15 +47,20 @@ import {
   X,
   Database,
   Phone,
-  Smartphone
+  Smartphone,
+  Radio,
+  Activity,
+  Server
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import { motion } from 'motion/react';
 import AccountQRBadgeModal from './components/AccountQRBadgeModal';
 import DesktopInstallModal from './components/DesktopInstallModal';
 import MobileAppDownloadModal from './components/MobileAppDownloadModal';
 import { ConfirmModal, ConfirmActionConfig } from './components/ConfirmModal';
 import BarcodeScannerModal from './components/BarcodeScannerModal';
 import SupabaseSettingsModal from './components/SupabaseSettingsModal';
+import ActiveUsersModal from './components/ActiveUsersModal';
 
 import { 
   getStoredSupabaseConfig, 
@@ -328,6 +333,92 @@ export default function App() {
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
   const [serverAddress, setServerAddress] = useState<string>(() => getDefaultServerAddress());
+  const [wsLatency, setWsLatency] = useState<number | null>(null);
+  const [lastSyncedTime, setLastSyncedTime] = useState<Date>(new Date());
+  const [liveSyncToast, setLiveSyncToast] = useState<{ id: string; author: string; action: string; time: string } | null>(null);
+  const [showActiveUsersModal, setShowActiveUsersModal] = useState<boolean>(false);
+
+  // Cross-tab zero-latency synchronization channel
+  const syncChannelRef = useRef<BroadcastChannel | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        const channel = new BroadcastChannel('juwei_wms_live_sync_v1');
+        syncChannelRef.current = channel;
+
+        channel.onmessage = (event) => {
+          const payload = event.data;
+          if (!payload || !payload.type) return;
+
+          if (payload.type === 'sync_collection') {
+            const { collection, data } = payload;
+            if (Array.isArray(data)) {
+              const norm = normalizeRecords(collection, data);
+              switch (collection) {
+                case 'stocks': setStocks(prev => reconcileCollection('stocks', prev, norm)); break;
+                case 'receiving': setReceiving(prev => reconcileCollection('receiving', prev, norm)); break;
+                case 'returns': setReturns(prev => reconcileCollection('returns', prev, norm)); break;
+                case 'recycling': setRecycling(prev => reconcileCollection('recycling', prev, norm)); break;
+                case 'issuances': setIssuances(prev => reconcileCollection('issuances', prev, norm)); break;
+                case 'deliveries': setDeliveries(prev => reconcileCollection('deliveries', prev, norm)); break;
+                case 'envLogs': setEnvLogs(prev => reconcileCollection('envLogs', prev, norm)); break;
+                case 'forkliftChecks': setForkliftChecks(prev => reconcileCollection('forkliftChecks', prev, norm)); break;
+                case 'registries': setRegistries(prev => reconcileCollection('registries', prev, norm)); break;
+                case 'registeredUsers': setRegisteredUsers(prev => reconcileUsers(prev, data)); break;
+              }
+              setLastSyncedTime(new Date());
+            }
+          } else if (payload.type === 'delete_record') {
+            const { collection, id } = payload;
+            if (collection && id) {
+              markRecordAsDeletedLocally(id);
+              setLastSyncedTime(new Date());
+              const filterFn = (prev: any[]) => prev.filter(it => it.id !== id);
+              switch (collection) {
+                case 'stocks': setStocks(filterFn); break;
+                case 'receiving': setReceiving(filterFn); break;
+                case 'returns': setReturns(filterFn); break;
+                case 'recycling': setRecycling(filterFn); break;
+                case 'issuances': setIssuances(filterFn); break;
+                case 'deliveries': setDeliveries(filterFn); break;
+                case 'envLogs': setEnvLogs(filterFn); break;
+                case 'forkliftChecks': setForkliftChecks(filterFn); break;
+                case 'registries': setRegistries(filterFn); break;
+              }
+            }
+          } else if (payload.type === 'delete_account') {
+            const { employeeId } = payload;
+            if (employeeId && employeeId !== 'JPMP-002') {
+              markUserAsDeleted(employeeId);
+              setRegisteredUsers(prev => prev.filter(u => u.employeeId.toUpperCase() !== employeeId.toUpperCase()));
+            }
+          } else if (payload.type === 'activity_toast') {
+            setLiveSyncToast({
+              id: String(Date.now()),
+              author: payload.author || 'Workstation',
+              action: payload.action || 'Updated data',
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+            });
+          }
+        };
+
+        return () => {
+          try { channel.close(); } catch (e) {}
+        };
+      } catch (e) {}
+    }
+  }, []);
+
+  // Auto-dismiss live sync toast notifications after 3.5 seconds
+  useEffect(() => {
+    if (liveSyncToast) {
+      const timer = setTimeout(() => {
+        setLiveSyncToast(null);
+      }, 3500);
+      return () => clearTimeout(timer);
+    }
+  }, [liveSyncToast]);
 
   // Supabase PostgreSQL Realtime state
   const [showSupabaseSettingsModal, setShowSupabaseSettingsModal] = useState<boolean>(false);
@@ -469,7 +560,7 @@ export default function App() {
           ? rawEmpId 
           : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
         const usernameUpper = (u.username || '').toUpperCase();
-        const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : '');
+        const incomingPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : '');
 
         if (empId === 'JPMP-002' || (usernameUpper === 'SUPER ADMIN' || usernameUpper === 'ALDRIN BANAWA')) {
           const current = userMap.get('JPMP-002') || superAdminAccount;
@@ -477,21 +568,21 @@ export default function App() {
             ...current,
             username: u.username ? String(u.username).toUpperCase() : current.username,
             phoneNumber: u.phoneNumber || u.phone_number || current.phoneNumber,
-            pin: cleanPin || current.pin || '0423',
+            pin: incomingPin || current.pin || '0423',
             status: u.status || 'ACTIVE',
             lastActive: u.lastActive || u.last_active || current.lastActive || undefined
           });
         } else {
-          const existing = userMap.get(empId) || {};
+          const existing = userMap.get(empId) || ({} as any);
           userMap.set(empId, {
-            username: (u.username || (existing as any).username || 'OPERATOR').toUpperCase(),
-            role: (u.role || (existing as any).role || 'WAREHOUSE CLERK').toUpperCase(),
+            username: (u.username || existing.username || 'OPERATOR').toUpperCase(),
+            role: (u.role || existing.role || 'WAREHOUSE CLERK').toUpperCase(),
             employeeId: empId,
-            phoneNumber: u.phoneNumber || u.phone_number || (existing as any).phoneNumber || '',
-            permission: u.permission || (existing as any).permission || 'LIMITED_ACCESS',
-            pin: cleanPin || (existing as any).pin || '1234',
-            status: u.status || (existing as any).status || 'ACTIVE',
-            lastActive: u.lastActive || u.last_active || (existing as any).lastActive || undefined
+            phoneNumber: u.phoneNumber || u.phone_number || existing.phoneNumber || '',
+            permission: u.permission || existing.permission || 'LIMITED_ACCESS',
+            pin: incomingPin || existing.pin || '1234',
+            status: u.status || existing.status || 'ACTIVE',
+            lastActive: u.lastActive || u.last_active || existing.lastActive || undefined
           });
         }
       });
@@ -787,104 +878,65 @@ export default function App() {
     }
   };
 
-  // Helper to reconcile incoming remote collections with local state without data flickering or dropping items
-  const reconcileCollection = (colName: string, currentArr: any[], incomingArr: any[]): any[] => {
-    if (!Array.isArray(incomingArr) || incomingArr.length === 0) {
-      return Array.isArray(currentArr) ? currentArr : [];
-    }
-    if (!Array.isArray(currentArr) || currentArr.length === 0) {
-      return incomingArr.filter(item => item && item.id);
-    }
-
-    const lastMutation = lastMutationTimes.current[colName] || 0;
-    const isRecentLocalMutation = Date.now() - lastMutation < 10000;
-
-    const mergedMap = new Map<string, any>();
-
-    // 1. Populate with incoming remote items
-    for (const item of incomingArr) {
-      if (item && item.id) {
-        mergedMap.set(item.id, item);
-      }
-    }
-
-    // 2. Overlay local items (protect newly created records and recent mutations)
-    for (const localItem of currentArr) {
-      if (!localItem || !localItem.id) continue;
-
-      if (!mergedMap.has(localItem.id) || isRecentLocalMutation) {
-        mergedMap.set(localItem.id, localItem);
-      }
-    }
-
-    return Array.from(mergedMap.values());
+  const isRecordDeletedLocally = (id: string) => {
+    return Boolean(id && deletedRecordIds.current.has(id));
   };
 
-  // Helper to reconcile user accounts safely - never drops any account
+  // Helper to reconcile incoming remote collections with local state cleanly without data overlapping or resurrection
+  const reconcileCollection = (colName: string, currentArr: any[], incomingArr: any[]): any[] => {
+    if (!Array.isArray(incomingArr)) {
+      return Array.isArray(currentArr) ? currentArr : [];
+    }
+    // Cleanly accept authoritative incoming collection, excluding any locally deleted record IDs
+    return incomingArr.filter(item => item && item.id && !deletedRecordIds.current.has(item.id));
+  };
+
+  // Helper to reconcile user accounts safely without resurrecting deleted accounts or overlapping stale records
   const reconcileUsers = (currentUsers: RegisteredAccount[], incomingUsers: any[]): RegisteredAccount[] => {
+    const deletedSet = getDeletedUserIds();
     const userMap = new Map<string, RegisteredAccount>();
     userMap.set('JPMP-002', { ...superAdminAccount });
 
-    // 1. Load any cached accounts from localStorage
-    try {
-      const cached = localStorage.getItem('juwei_wms_registeredUsers');
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed)) {
-          parsed.forEach((u: any) => {
-            if (!u || (!u.employeeId && !u.employee_id)) return;
-            const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase();
-            const empId = rawEmpId.startsWith('JPMP-') ? rawEmpId : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
-            const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (empId === 'JPMP-002' ? '0423' : '1234'));
-            userMap.set(empId, {
-              username: (u.username || 'OPERATOR').toUpperCase(),
-              role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
-              employeeId: empId,
-              phoneNumber: u.phoneNumber || u.phone_number || '',
-              permission: u.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
-              pin: cleanPin,
-              status: u.status || 'ACTIVE',
-              lastActive: u.lastActive || u.last_active || undefined
-            });
-          });
-        }
-      }
-    } catch (e) {}
-
-    // 2. Merge current local state users
+    // 1. Load current local state users
     if (Array.isArray(currentUsers)) {
       for (const u of currentUsers) {
-        const empId = (u.employeeId || '').toUpperCase();
-        if (empId) {
-          const existing = userMap.get(empId) || {};
-          userMap.set(empId, {
-            ...existing,
-            ...u,
-            username: (u.username || (existing as any).username || 'OPERATOR').toUpperCase(),
-            role: (u.role || (existing as any).role || 'WAREHOUSE CLERK').toUpperCase(),
-            pin: u.pin || (existing as any).pin || (empId === 'JPMP-002' ? '0423' : '1234'),
-            phoneNumber: u.phoneNumber || (existing as any).phoneNumber || ''
-          });
-        }
+        if (!u || !u.employeeId) continue;
+        const empId = u.employeeId.toUpperCase();
+        if (deletedSet.has(empId) && empId !== 'JPMP-002') continue;
+        const currentPin = u.pin ? String(u.pin).trim() : (empId === 'JPMP-002' ? '0423' : '1234');
+        userMap.set(empId, {
+          ...u,
+          employeeId: empId,
+          username: (u.username || 'OPERATOR').toUpperCase(),
+          role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
+          pin: currentPin,
+          phoneNumber: u.phoneNumber || ''
+        });
       }
     }
 
-    // 3. Merge incoming users from remote
+    // 2. Merge incoming users from remote (incoming remote PIN and properties take top priority)
     if (Array.isArray(incomingUsers)) {
-      const sanitizedIncoming = sanitizeUsersList(incomingUsers);
-      for (const u of sanitizedIncoming) {
-        const empId = (u.employeeId || '').toUpperCase();
-        if (empId) {
-          const existing = userMap.get(empId) || {};
-          userMap.set(empId, {
-            ...existing,
-            ...u,
-            username: (u.username || (existing as any).username || 'OPERATOR').toUpperCase(),
-            role: (u.role || (existing as any).role || 'WAREHOUSE CLERK').toUpperCase(),
-            pin: u.pin || (existing as any).pin || (empId === 'JPMP-002' ? '0423' : '1234'),
-            phoneNumber: u.phoneNumber || (existing as any).phoneNumber || ''
-          });
-        }
+      for (const u of incomingUsers) {
+        if (!u || (!u.employeeId && !u.employee_id)) continue;
+        const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase();
+        const empId = rawEmpId.startsWith('JPMP-') ? rawEmpId : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
+        if (deletedSet.has(empId) && empId !== 'JPMP-002') continue;
+
+        const existing = userMap.get(empId) || ({} as any);
+        const incomingPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : '');
+        const resolvedPin = incomingPin || existing.pin || (empId === 'JPMP-002' ? '0423' : '1234');
+        
+        userMap.set(empId, {
+          username: (u.username || existing.username || 'OPERATOR').toUpperCase(),
+          role: (u.role || existing.role || 'WAREHOUSE CLERK').toUpperCase(),
+          employeeId: empId,
+          phoneNumber: u.phoneNumber || u.phone_number || existing.phoneNumber || '',
+          permission: u.permission || existing.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
+          pin: resolvedPin,
+          status: u.status || existing.status || 'ACTIVE',
+          lastActive: u.lastActive || u.last_active || existing.lastActive || undefined
+        });
       }
     }
 
@@ -911,6 +963,18 @@ export default function App() {
   const deleteRecordLocallyAndRemotely = (collection: string, id: string) => {
     if (!id || !collection) return;
     markRecordAsDeletedLocally(id);
+    setLastSyncedTime(new Date());
+
+    // 0. Cross-tab BroadcastChannel
+    if (syncChannelRef.current) {
+      try {
+        syncChannelRef.current.postMessage({
+          type: 'delete_record',
+          collection,
+          id
+        });
+      } catch (e) {}
+    }
     
     // 1. Supabase deletion
     if (isSupabaseConfigured()) {
@@ -1215,7 +1279,7 @@ export default function App() {
           }
         }
 
-        // Periodic ping heartbeat to keep connection alive and detect half-open sockets
+        // Periodic ping heartbeat to keep connection alive and measure round-trip latency
         pingInterval = setInterval(() => {
           if (ws && ws.readyState === WebSocket.OPEN) {
             try {
@@ -1225,7 +1289,7 @@ export default function App() {
                 try { ws.close(); } catch (e) {}
                 return;
               }
-              ws.send(JSON.stringify({ type: 'ping' }));
+              ws.send(JSON.stringify({ type: 'ping', clientPingTime: Date.now() }));
             } catch (e) {
               console.warn('WS ping error:', e);
             }
@@ -1239,6 +1303,11 @@ export default function App() {
           const payload = JSON.parse(event.data);
           if (payload.type === 'pong') {
             missedPongs = 0;
+            if (payload.clientPingTime) {
+              const rtt = Math.max(1, Date.now() - payload.clientPingTime);
+              setWsLatency(rtt);
+            }
+            setLastSyncedTime(new Date());
             return;
           }
 
@@ -1247,12 +1316,81 @@ export default function App() {
               hasConnectedOnce = true;
               missedPongs = 0;
               setConnectionStatus('connected');
+              setLastSyncedTime(new Date());
               applyStatePayload(payload.data, payload.activeUsers);
+              break;
+            }
+            case 'record_upserted': {
+              const { collection, record, author, actionDesc } = payload;
+              if (record && record.id && collection) {
+                setLastSyncedTime(new Date());
+                if (author && author !== (currentUser || '')) {
+                  setLiveSyncToast({
+                    id: record.id,
+                    author,
+                    action: actionDesc || `Updated ${collection} record`,
+                    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                  });
+                }
+                const updateFn = (prev: any[]) => {
+                  if (isRecordDeletedLocally(record.id)) return prev;
+                  const idx = prev.findIndex(it => it.id === record.id);
+                  if (idx >= 0) {
+                    const next = [...prev];
+                    next[idx] = record;
+                    return next;
+                  }
+                  return [record, ...prev];
+                };
+                switch (collection) {
+                  case 'stocks': setStocks(updateFn); break;
+                  case 'receiving': setReceiving(updateFn); break;
+                  case 'returns': setReturns(updateFn); break;
+                  case 'recycling': setRecycling(updateFn); break;
+                  case 'issuances': setIssuances(updateFn); break;
+                  case 'deliveries': setDeliveries(updateFn); break;
+                  case 'envLogs': setEnvLogs(updateFn); break;
+                  case 'forkliftChecks': setForkliftChecks(updateFn); break;
+                  case 'registries': setRegistries(updateFn); break;
+                }
+              }
+              break;
+            }
+            case 'sync_activity_pulse': {
+              if (payload.username && payload.username !== (currentUser || '')) {
+                setLiveSyncToast({
+                  id: String(Date.now()),
+                  author: payload.username,
+                  action: payload.action || 'Updated data',
+                  time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                });
+              }
+              break;
+            }
+            case 'record_deleted': {
+              const { collection, id } = payload;
+              if (id && collection) {
+                markRecordAsDeletedLocally(id);
+                setLastSyncedTime(new Date());
+                const filterFn = (prev: any[]) => prev.filter(it => it.id !== id);
+                switch (collection) {
+                  case 'stocks': setStocks(filterFn); break;
+                  case 'receiving': setReceiving(filterFn); break;
+                  case 'returns': setReturns(filterFn); break;
+                  case 'recycling': setRecycling(filterFn); break;
+                  case 'issuances': setIssuances(filterFn); break;
+                  case 'deliveries': setDeliveries(filterFn); break;
+                  case 'envLogs': setEnvLogs(filterFn); break;
+                  case 'forkliftChecks': setForkliftChecks(filterFn); break;
+                  case 'registries': setRegistries(filterFn); break;
+                }
+              }
               break;
             }
             case 'collection_updated': {
               const { collection, data } = payload;
               if (Array.isArray(data)) {
+                setLastSyncedTime(new Date());
                 const norm = normalizeRecords(collection, data);
                 switch (collection) {
                   case 'stocks': setStocks(prev => reconcileCollection('stocks', prev, norm)); break;
@@ -1564,6 +1702,7 @@ export default function App() {
   // Sync state helpers (supports Supabase PostgreSQL, WebSocket, and HTTP POST REST)
   const syncCollection = (collection: string, data: any[]) => {
     lastMutationTimes.current[collection] = Date.now();
+    setLastSyncedTime(new Date());
 
     // Save to local cache
     try {
@@ -1572,6 +1711,17 @@ export default function App() {
 
     // Mark as pending before network request
     markPendingSync(collection, data);
+
+    // 0. Cross-tab BroadcastChannel
+    if (syncChannelRef.current) {
+      try {
+        syncChannelRef.current.postMessage({
+          type: 'sync_collection',
+          collection,
+          data
+        });
+      } catch (e) {}
+    }
 
     // 1. Direct Supabase Cloud PostgreSQL Sync
     if (isSupabaseConfigured()) {
@@ -2529,70 +2679,75 @@ export default function App() {
 
   if (!isLoggedIn) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-950 px-4 py-12 sm:px-6 lg:px-8 font-sans uppercase relative" id="juwei-auth-container">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-100 via-sky-50 to-blue-100 px-4 py-12 sm:px-6 lg:px-8 font-sans uppercase relative overflow-hidden" id="juwei-auth-container">
+        {/* Diffused Ambient Glow Orbs with Light Blue and Slate Gray */}
+        <div className="glass-ambient-orb-1 opacity-60" />
+        <div className="glass-ambient-orb-2 opacity-50" />
+        <div className="glass-ambient-orb-3 opacity-40" />
+
         {/* NEWLY REGISTERED USER SECURE PIN DISCOVERY OVERLAY */}
         {newlyRegisteredUser && (
-          <div className="fixed inset-0 bg-slate-950/95 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fadeIn">
-            <div className="max-w-md w-full bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl text-center space-y-6 relative overflow-hidden">
+          <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-md animate-fadeIn">
+            <div className="max-w-md w-full bg-white p-8 rounded-3xl shadow-2xl text-center space-y-6 relative overflow-hidden border border-slate-300 text-slate-900">
               <div className="absolute top-0 left-1/4 w-1/2 h-1 bg-gradient-to-r from-transparent via-emerald-500 to-transparent animate-pulse" />
               
               <div className="flex justify-center">
-                <div className="h-16 w-16 bg-emerald-500/10 border border-emerald-500/20 rounded-full flex items-center justify-center text-emerald-400">
+                <div className="h-16 w-16 bg-emerald-100 border border-emerald-300 rounded-full flex items-center justify-center text-emerald-700 shadow-md shadow-emerald-500/10">
                   <UserCheck className="h-8 w-8 animate-bounce" />
                 </div>
               </div>
 
               <div>
-                <span className="text-emerald-400 font-bold text-[10px] tracking-widest font-mono block">
+                <span className="text-emerald-700 font-bold text-[10px] tracking-widest font-mono block">
                   REGISTRATION SUCCESSFUL
                 </span>
-                <h3 className="text-xl font-bold text-white uppercase tracking-tight mt-1">
+                <h3 className="text-xl font-extrabold text-slate-900 uppercase tracking-tight mt-1">
                   SECURE OPERATOR ID REGISTERED
                 </h3>
-                <p className="text-[10px] text-slate-500 font-bold mt-1 font-mono">
+                <p className="text-[10px] text-slate-600 font-bold mt-1 font-mono">
                   JUWEI PLASTIC MOULDING PHILS. INC.
                 </p>
               </div>
 
               {/* Operator Details */}
-              <div className="bg-slate-950/80 p-4 rounded-xl border border-slate-800 text-left space-y-2">
-                <div className="flex justify-between items-center border-b border-slate-800/60 pb-2">
-                  <span className="text-[10px] text-slate-500 font-bold font-mono">OPERATOR:</span>
-                  <span className="text-xs font-bold text-slate-200">{newlyRegisteredUser.username}</span>
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 text-left space-y-2">
+                <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+                  <span className="text-[10px] text-slate-600 font-bold font-mono">OPERATOR:</span>
+                  <span className="text-xs font-bold text-slate-900">{newlyRegisteredUser.username}</span>
                 </div>
-                <div className="flex justify-between items-center border-b border-slate-800/60 pb-2">
-                  <span className="text-[10px] text-slate-500 font-bold font-mono">EMPLOYEE ID:</span>
-                  <span className="text-xs font-bold text-indigo-400 font-mono">{newlyRegisteredUser.employeeId}</span>
+                <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+                  <span className="text-[10px] text-slate-600 font-bold font-mono">EMPLOYEE ID:</span>
+                  <span className="text-xs font-bold text-blue-700 font-mono">{newlyRegisteredUser.employeeId}</span>
                 </div>
                 {newlyRegisteredUser.phoneNumber && (
-                  <div className="flex justify-between items-center border-b border-slate-800/60 pb-2">
-                    <span className="text-[10px] text-slate-500 font-bold font-mono">VERIFIED MOBILE:</span>
-                    <span className="text-xs font-bold text-emerald-400 font-mono flex items-center gap-1">
-                      <Phone className="h-3 w-3 text-emerald-500" />
+                  <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+                    <span className="text-[10px] text-slate-600 font-bold font-mono">VERIFIED MOBILE:</span>
+                    <span className="text-xs font-bold text-emerald-700 font-mono flex items-center gap-1">
+                      <Phone className="h-3 w-3 text-emerald-600" />
                       {newlyRegisteredUser.phoneNumber}
                     </span>
                   </div>
                 )}
                 <div className="flex justify-between items-center">
-                  <span className="text-[10px] text-slate-500 font-bold font-mono">ASSIGNED ROLE:</span>
-                  <span className="text-xs font-bold text-slate-200">{newlyRegisteredUser.role}</span>
+                  <span className="text-[10px] text-slate-600 font-bold font-mono">ASSIGNED ROLE:</span>
+                  <span className="text-xs font-bold text-slate-800">{newlyRegisteredUser.role}</span>
                 </div>
               </div>
 
               {/* PIN Code & Generated QR Code Pass Box */}
-              <div className="bg-gradient-to-br from-indigo-950/40 to-slate-950 p-5 rounded-2xl border border-indigo-500/30 relative space-y-4">
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-slate-900 border border-indigo-500/40 text-indigo-400 text-[9px] font-mono font-bold tracking-wider px-3 py-1 rounded-full uppercase">
+              <div className="bg-gradient-to-br from-blue-50 to-slate-100 p-5 rounded-2xl border border-blue-200 relative space-y-4 shadow-sm">
+                <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-blue-700 text-white text-[9px] font-mono font-bold tracking-wider px-3 py-1 rounded-full uppercase shadow-xs">
                   YOUR UNIQUE LOGIN PIN & QR PASS
                 </div>
                 
                 <div className="flex items-center justify-center gap-2 mt-2">
-                  <div className="text-3xl font-mono font-bold text-emerald-400 tracking-[0.25em] pl-[0.25em] text-center select-all">
+                  <div className="text-3xl font-mono font-extrabold text-emerald-700 tracking-[0.25em] pl-[0.25em] text-center select-all">
                     {showNewlyRegisteredPin ? newlyRegisteredUser.pin : '••••'}
                   </div>
                   <button
                     type="button"
                     onClick={() => setShowNewlyRegisteredPin(!showNewlyRegisteredPin)}
-                    className="text-slate-400 hover:text-emerald-400 p-1.5 rounded transition cursor-pointer"
+                    className="text-slate-600 hover:text-emerald-700 p-1.5 rounded transition cursor-pointer"
                     title={showNewlyRegisteredPin ? "Hide PIN" : "Reveal PIN"}
                   >
                     {showNewlyRegisteredPin ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -2600,7 +2755,7 @@ export default function App() {
                 </div>
 
                 {/* QR Code Container */}
-                <div className="bg-white p-3 rounded-xl border border-slate-700 inline-block mx-auto shadow-md">
+                <div className="bg-white p-3 rounded-2xl border border-slate-300 inline-block mx-auto shadow-md">
                   <QRCodeSVG
                     value={JSON.stringify({
                       type: 'JPMP_WMS_LOGIN_PASS',
@@ -2614,17 +2769,17 @@ export default function App() {
                   />
                 </div>
 
-                <div className="text-[9px] text-indigo-300 font-semibold uppercase tracking-wide">
+                <div className="text-[9px] text-slate-700 font-bold uppercase tracking-wide">
                   ⚠️ RECORD PIN OR SAVE THIS QR CODE BADGE SECURELY.
-                  <span className="block text-slate-400 mt-0.5">SCAN QR CODE AT WMS GATEWAY TO AUTOMATICALLY LOG IN.</span>
+                  <span className="block text-slate-500 mt-0.5 font-medium">SCAN QR CODE AT WMS GATEWAY TO AUTOMATICALLY LOG IN.</span>
                 </div>
 
                 <button
                   type="button"
                   onClick={() => setQrBadgeAccount(newlyRegisteredUser)}
-                  className="w-full bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-indigo-500/30 py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 uppercase cursor-pointer"
+                  className="w-full bg-white hover:bg-slate-100 text-blue-800 border border-blue-300 py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 uppercase cursor-pointer shadow-xs"
                 >
-                  <Printer className="h-3.5 w-3.5 text-indigo-400" /> PRINT / DOWNLOAD QR PASS BADGE
+                  <Printer className="h-3.5 w-3.5 text-blue-600" /> PRINT / DOWNLOAD QR PASS BADGE
                 </button>
               </div>
 
@@ -2642,7 +2797,7 @@ export default function App() {
                     setIsLoggingIn(false);
                   }, 500);
                 }}
-                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-3 px-4 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-lg uppercase cursor-pointer"
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 px-4 rounded-2xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-lg shadow-blue-600/20 uppercase cursor-pointer border border-blue-500"
               >
                 <Fingerprint className="h-4 w-4" /> PROCEED TO VERIFICATION & LOG IN
               </button>
@@ -2650,79 +2805,85 @@ export default function App() {
           </div>
         )}
 
-        <div id="operator-login-portal" className="operator-login-portal max-w-md w-full space-y-6 bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-xl relative overflow-hidden">
+        <motion.div 
+          id="operator-login-portal" 
+          className="operator-login-portal max-w-md w-full space-y-6 bg-white/95 p-8 sm:p-9 rounded-3xl shadow-2xl relative overflow-hidden border border-slate-300 backdrop-blur-2xl z-10 text-slate-900"
+          initial={{ opacity: 0, y: 20, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+        >
           {/* Accent Glow */}
-          <div className="absolute top-0 left-1/4 w-1/2 h-1 bg-gradient-to-r from-transparent via-indigo-500 to-transparent animate-pulse" />
+          <div className="absolute top-0 left-1/4 w-1/2 h-1 bg-gradient-to-r from-transparent via-blue-500 to-transparent animate-pulse" />
           
           {/* Supabase Cloud Database Quick Settings (Logo Only & Editable) */}
           <div className="flex justify-between items-center -mt-1 -mb-1">
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="text-[10px] text-slate-400 font-mono font-bold uppercase tracking-wider">SYSTEM READY</span>
+              <span className="text-[10px] text-slate-700 font-mono font-bold uppercase tracking-wider">SYSTEM READY</span>
             </div>
 
             <button
               type="button"
               onClick={() => setShowSupabaseSettingsModal(true)}
-              className="group relative flex items-center justify-center gap-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/60 text-slate-300 hover:text-white px-2.5 py-1.5 rounded-lg transition shadow-xs cursor-pointer"
+              className="group relative flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-300 hover:border-emerald-500 text-slate-700 hover:text-slate-900 px-2.5 py-1.5 rounded-xl transition shadow-xs cursor-pointer"
               title="Click to edit Supabase Cloud Database Configuration"
               aria-label="Edit Supabase Cloud Database Configuration"
               id="btn-login-supabase-settings"
             >
               <div className="relative flex items-center justify-center">
-                <Database className={`h-4 w-4 ${isSupabaseConfigured() ? 'text-emerald-400' : 'text-amber-400'} transition-transform group-hover:scale-110`} />
-                <span className={`absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full ${isSupabaseConfigured() ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                <Database className={`h-4 w-4 ${isSupabaseConfigured() ? 'text-emerald-600' : 'text-amber-600'} transition-transform group-hover:scale-110`} />
+                <span className={`absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full ${isSupabaseConfigured() ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
               </div>
-              <Edit3 className="h-3 w-3 text-slate-500 group-hover:text-emerald-400 transition" />
+              <Edit3 className="h-3 w-3 text-slate-500 group-hover:text-emerald-600 transition" />
             </button>
           </div>
 
           <div className="flex flex-col items-center text-center">
-            <span className="inline-block bg-indigo-500/20 text-indigo-200 font-bold text-[10px] tracking-wider uppercase px-2.5 py-1 rounded-full mb-1 border border-indigo-400/40 font-mono shadow-xs">
+            <span className="inline-block bg-blue-100 text-blue-900 font-bold text-[10px] tracking-wider uppercase px-3 py-1 rounded-full mb-1 border border-blue-200 font-mono shadow-xs">
               OFFICIAL WMS OPERATOR PORTAL
             </span>
-            <h2 className="text-xl font-extrabold tracking-tight text-white font-mono mt-1">
+            <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-slate-900 font-mono mt-1">
               JUWEI WMS GATEWAY
             </h2>
-            <p className="mt-0.5 text-[10px] text-slate-200 font-bold uppercase tracking-wide">
+            <p className="mt-0.5 text-[10px] text-slate-600 font-bold uppercase tracking-wide">
               OPERATOR LOG-IN PORTAL
             </p>
           </div>
 
           <div className="space-y-4">
             {/* QR Code Instant Gateway Login Button */}
-              <div className="bg-gradient-to-r from-indigo-950/90 via-slate-900 to-slate-950 p-3.5 rounded-xl border border-indigo-500/50 flex items-center justify-between gap-3 shadow-md">
-                <div className="min-w-0">
-                  <span className="text-xs font-extrabold text-white block font-mono flex items-center gap-1.5 truncate">
-                    <QrCode className="h-4 w-4 text-emerald-400 shrink-0" /> INSTANT QR PASS LOG IN
-                  </span>
-                  <span className="text-[10px] text-slate-200 block font-sans uppercase truncate mt-0.5 font-medium">
-                    Scan badge or upload pass image
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowLoginQrScanner(true)}
-                  className="bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-md uppercase shrink-0 cursor-pointer font-mono"
-                  id="btn-gateway-scan-qr"
-                >
-                  <ScanLine className="h-3.5 w-3.5" /> SCAN QR
-                </button>
+            <div className="bg-gradient-to-r from-blue-50 to-indigo-50/60 p-3.5 rounded-2xl border border-blue-200 flex items-center justify-between gap-3 shadow-xs">
+              <div className="min-w-0">
+                <span className="text-xs font-extrabold text-slate-900 block font-mono flex items-center gap-1.5 truncate">
+                  <QrCode className="h-4 w-4 text-emerald-600 shrink-0" /> INSTANT QR PASS LOG IN
+                </span>
+                <span className="text-[10px] text-slate-600 block font-sans uppercase truncate mt-0.5 font-bold">
+                  Scan badge or upload pass image
+                </span>
               </div>
+              <button
+                type="button"
+                onClick={() => setShowLoginQrScanner(true)}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md uppercase shrink-0 cursor-pointer font-mono border border-blue-500"
+                id="btn-gateway-scan-qr"
+              >
+                <ScanLine className="h-3.5 w-3.5" /> SCAN QR
+              </button>
+            </div>
 
-              <div className="flex items-center gap-2 my-2 text-slate-300 text-[10px] font-mono font-bold uppercase">
-                <div className="h-px bg-slate-700 flex-1" />
-                <span>OR ENTER ID & PIN MANUALLY</span>
-                <div className="h-px bg-slate-700 flex-1" />
-              </div>
+            <div className="flex items-center gap-2 my-2 text-slate-500 text-[10px] font-mono font-bold uppercase">
+              <div className="h-px bg-slate-300 flex-1" />
+              <span>OR ENTER ID & PIN MANUALLY</span>
+              <div className="h-px bg-slate-300 flex-1" />
+            </div>
 
-              <form onSubmit={handleDirectLogin} className="space-y-4">
+            <form onSubmit={handleDirectLogin} className="space-y-4">
                 <div>
-                  <label className="block text-[10px] uppercase font-bold tracking-wider text-white mb-1 font-mono">
+                  <label className="block text-[10px] uppercase font-extrabold tracking-wider text-slate-800 mb-1 font-mono">
                     OPERATOR ID NUMBER
                   </label>
                   <div className="relative">
-                    <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-300 font-mono text-xs font-bold">
+                    <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-500 font-mono text-xs font-bold">
                       ID
                     </span>
                     <input
@@ -2734,19 +2895,19 @@ export default function App() {
                         if (loginError) setLoginError('');
                       }}
                       placeholder="E.G. JPMP-002"
-                      style={{ color: '#ffffff' }}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-xs text-white !text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 focus:border-indigo-400 uppercase font-mono font-bold tracking-wide"
+                      style={{ color: '#0f172a' }}
+                      className="w-full bg-white border-2 border-slate-300 focus:border-blue-600 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-900 !text-slate-900 placeholder-slate-400 focus:outline-none uppercase font-mono font-bold tracking-wide shadow-xs"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-[10px] uppercase font-bold tracking-wider text-white mb-1 font-mono">
+                  <label className="block text-[10px] uppercase font-extrabold tracking-wider text-slate-800 mb-1 font-mono">
                     4-DIGIT SECURE PIN CODE
                   </label>
                   <div className="relative">
-                    <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-300">
-                      <Lock className="h-3.5 w-3.5 text-slate-300" />
+                    <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-500">
+                      <Lock className="h-3.5 w-3.5 text-slate-500" />
                     </span>
                     <input
                       type={showPin ? "text" : "password"}
@@ -2761,13 +2922,13 @@ export default function App() {
                         if (loginError) setLoginError('');
                       }}
                       placeholder="••••"
-                      style={{ color: '#ffffff' }}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-9 pr-10 py-2 text-xs text-white !text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 focus:border-indigo-400 font-mono font-bold tracking-widest"
+                      style={{ color: '#0f172a' }}
+                      className="w-full bg-white border-2 border-slate-300 focus:border-blue-600 rounded-xl pl-9 pr-10 py-2 text-xs text-slate-900 !text-slate-900 placeholder-slate-400 focus:outline-none font-mono font-bold tracking-widest shadow-xs"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPin(!showPin)}
-                      className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-300 hover:text-white transition"
+                      className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-500 hover:text-slate-900 transition cursor-pointer"
                     >
                       {showPin ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                     </button>
@@ -2775,44 +2936,44 @@ export default function App() {
                 </div>
 
                 {loginError && (
-                  <div className="bg-rose-500/10 border border-rose-500/20 text-rose-300 px-3 py-2 rounded-lg text-[10px] text-center font-bold tracking-wide uppercase font-mono animate-shake">
+                  <div className="bg-rose-50 border border-rose-300 text-rose-800 px-3 py-2 rounded-xl text-[10px] text-center font-bold tracking-wide uppercase font-mono animate-shake">
                     ⚠️ {loginError}
                   </div>
                 )}
 
                 <button
                   type="submit"
-                  className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2.5 px-4 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-lg uppercase cursor-pointer"
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 px-4 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-lg uppercase cursor-pointer"
                 >
                   <LogIn className="h-4 w-4" /> LOG IN TO WMS SESSION
                 </button>
               </form>
             </div>
 
-          <div className="pt-4 border-t border-slate-800 flex flex-col items-center gap-2 text-center">
-            <p className="text-[9px] text-slate-300 uppercase tracking-widest font-mono font-bold">
+          <div className="pt-4 border-t border-slate-200 flex flex-col items-center gap-2 text-center">
+            <p className="text-[9px] text-slate-600 uppercase tracking-widest font-mono font-bold">
               SECURE LOG-IN SESSION • JUWEI PLASTIC MOULDING WMS
             </p>
             <div className="flex items-center gap-2 flex-wrap justify-center">
               <button
                 type="button"
                 onClick={() => setShowMobileInstallModal(true)}
-                className="text-[10px] text-emerald-300 hover:text-white bg-emerald-950/60 hover:bg-emerald-900/80 border border-emerald-500/40 px-3 py-1 rounded-lg transition flex items-center gap-1.5 font-mono uppercase font-bold cursor-pointer shadow-xs"
+                className="text-[10px] text-emerald-800 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 px-3 py-1 rounded-lg transition flex items-center gap-1.5 font-mono uppercase font-bold cursor-pointer shadow-xs"
               >
-                <Smartphone className="h-3 w-3 text-emerald-400" />
+                <Smartphone className="h-3 w-3 text-emerald-600" />
                 <span>Mobile APK / App</span>
               </button>
               <button
                 type="button"
                 onClick={() => setShowDesktopInstallModal(true)}
-                className="text-[10px] text-indigo-300 hover:text-white bg-slate-800/80 hover:bg-slate-800 border border-slate-700/80 px-3 py-1 rounded-lg transition flex items-center gap-1.5 font-mono uppercase font-bold cursor-pointer"
+                className="text-[10px] text-blue-800 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 border border-blue-300 px-3 py-1 rounded-lg transition flex items-center gap-1.5 font-mono uppercase font-bold cursor-pointer shadow-xs"
               >
-                <Monitor className="h-3 w-3 text-indigo-400" />
+                <Monitor className="h-3 w-3 text-blue-600" />
                 <span>Desktop App (.exe)</span>
               </button>
             </div>
           </div>
-        </div>
+        </motion.div>
 
         {/* Mobile APK / App Installer Modal */}
         {showMobileInstallModal && (
@@ -2863,20 +3024,20 @@ export default function App() {
 
         {/* Logging In Circle Loading Screen */}
         {isLoggingIn && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-md p-4 animate-in fade-in duration-200">
-            <div className="bg-slate-900 border border-indigo-500/40 rounded-2xl p-8 max-w-sm w-full text-center space-y-4 shadow-2xl">
-              <div className="inline-flex p-4 bg-indigo-500/10 text-indigo-400 rounded-full border border-indigo-500/20">
-                <Loader2 className="h-10 w-10 animate-spin text-indigo-400" />
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-md p-4 animate-in fade-in duration-200">
+            <div className="bg-white border border-slate-300 rounded-3xl p-8 max-w-sm w-full text-center space-y-4 shadow-2xl text-slate-900">
+              <div className="inline-flex p-4 bg-blue-100 text-blue-700 rounded-full border border-blue-300">
+                <Loader2 className="h-10 w-10 animate-spin text-blue-600" />
               </div>
               <div className="space-y-1">
-                <h3 className="font-bold text-white text-base tracking-wide uppercase font-mono">
+                <h3 className="font-extrabold text-slate-900 text-base tracking-wide uppercase font-mono">
                   VERIFYING CREDENTIALS
                 </h3>
-                <p className="text-xs text-indigo-300 font-semibold font-mono">
+                <p className="text-xs text-blue-700 font-bold font-mono">
                   AUTHENTICATING OPERATOR LOG-IN...
                 </p>
               </div>
-              <p className="text-[11px] text-slate-400 font-sans">
+              <p className="text-[11px] text-slate-600 font-sans font-medium">
                 Establishing secure WMS operational session. Please wait a moment...
               </p>
             </div>
@@ -2888,19 +3049,24 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col md:flex-row bg-blue-50 font-sans" id="juwei-app-container">
+    <div className="min-h-screen flex flex-col md:flex-row bg-gradient-to-br from-slate-100 via-sky-50/50 to-blue-100/60 font-sans relative overflow-x-hidden" id="juwei-app-container">
+      {/* Ambient Diffused Glowing Mesh Background Orbs with Light Blue and Gray */}
+      <div className="glass-ambient-orb-1" />
+      <div className="glass-ambient-orb-2" />
+      <div className="glass-ambient-orb-3" />
+
       {/* Sidebar navigation */}
-      <aside className="w-full md:w-64 bg-blue-950 text-white flex flex-col justify-between border-r border-blue-900" id="sidebar-nav">
+      <aside className="w-full md:w-64 glass-sidebar text-white flex flex-col justify-between z-20 shrink-0" id="sidebar-nav">
         <div>
           {/* Logged in Operator badge */}
-          <div className="p-4 bg-blue-900 border-b border-blue-800 flex flex-col gap-2">
+          <div className="p-4 bg-slate-900/60 border-b border-white/10 flex flex-col gap-2 backdrop-blur-md">
             <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <div className="bg-blue-950 border border-blue-800 p-1.5 rounded-lg text-blue-200 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="bg-slate-800/80 border border-white/15 p-1.5 rounded-xl text-blue-300 shrink-0 shadow-xs">
                   <User className="h-4 w-4" />
                 </div>
                 <div className="text-left leading-tight">
-                  <div className="font-bold text-white text-xs">
+                  <div className="font-bold text-white text-xs tracking-tight">
                     {currentUser}
                   </div>
                   <div className="text-[10px] font-mono text-blue-200 py-0.5">
@@ -2912,46 +3078,48 @@ export default function App() {
               <button
                 onClick={handleLogout}
                 title="Log Out / Switch Operator"
-                className="p-1.5 text-blue-200 hover:text-white hover:bg-blue-800 border border-blue-800 rounded-lg transition"
+                className="p-1.5 text-blue-200 hover:text-white hover:bg-white/10 border border-white/15 rounded-xl transition cursor-pointer"
               >
                 <LogOut className="h-3.5 w-3.5" />
               </button>
             </div>
             
             {currentPermission === 'VIEW_ONLY' ? (
-              <div className="bg-blue-950 border border-blue-800 text-blue-200 px-2.5 py-1 rounded text-[9px] font-bold flex items-center justify-center gap-1 font-mono uppercase" title="VIEW ONLY MODE: ACTIONS ARE RESTRICTED">
-                <Lock className="h-3 w-3 text-blue-300 shrink-0" />
+              <div className="bg-slate-900/80 border border-amber-500/40 text-amber-300 px-2.5 py-1 rounded-xl text-[9px] font-bold flex items-center justify-center gap-1 font-mono uppercase shadow-xs" title="VIEW ONLY MODE: ACTIONS ARE RESTRICTED">
+                <Lock className="h-3 w-3 text-amber-400 shrink-0" />
                 <span>VIEW ONLY ACCESS</span>
               </div>
             ) : currentPermission === 'LIMITED_ACCESS' ? (
-              <div className="bg-blue-950 border border-blue-800 text-blue-200 px-2.5 py-1 rounded text-[9px] font-bold flex items-center justify-center gap-1 font-mono uppercase" title="LIMITED ACCESS MODE: CREATE & EDIT PERMITTED">
+              <div className="bg-slate-900/80 border border-blue-400/40 text-blue-200 px-2.5 py-1 rounded-xl text-[9px] font-bold flex items-center justify-center gap-1 font-mono uppercase shadow-xs" title="LIMITED ACCESS MODE: CREATE & EDIT PERMITTED">
                 <Edit3 className="h-3 w-3 text-blue-300 shrink-0" />
                 <span>LIMITED ACCESS (EDIT ALLOWED)</span>
               </div>
             ) : (
-              <div className="bg-blue-950 border border-blue-800 text-blue-200 px-2.5 py-1 rounded text-[9px] font-bold flex items-center justify-center gap-1 font-mono uppercase" title="FULL ACCESS MODE: ALL ACTIONS ENABLED">
-                <Unlock className="h-3 w-3 text-blue-300 shrink-0" />
+              <div className="bg-slate-900/80 border border-emerald-400/40 text-emerald-200 px-2.5 py-1 rounded-xl text-[9px] font-bold flex items-center justify-center gap-1 font-mono uppercase shadow-xs" title="FULL ACCESS MODE: ALL ACTIONS ENABLED">
+                <Unlock className="h-3 w-3 text-emerald-300 shrink-0" />
                 <span>FULL ACCESS</span>
               </div>
             )}
           </div>
 
           {/* Header Branding */}
-          <div className="p-4 bg-blue-950 border-b border-blue-900 flex items-center justify-between">
+          <div className="p-4 bg-slate-950/50 border-b border-white/10 flex items-center justify-between backdrop-blur-md">
             <div>
               <span className="text-white font-mono font-bold tracking-wider text-sm block">JUWEI WMS</span>
               <span className="text-[9px] text-blue-200 font-bold uppercase tracking-wider block">Juwei Plastic Moulding Phils. Inc.</span>
-              <span className="text-[10px] font-mono font-bold text-blue-300 tracking-wider block mt-0.5">WMS v1.0</span>
+              <span className="text-[10px] font-mono font-bold text-blue-300 tracking-wider block mt-0.5">WMS v1.0 • FROSTED</span>
             </div>
-            <span className="h-2 w-2 rounded-full bg-blue-400 animate-pulse" title="System Live" />
+            <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-lg shadow-emerald-400/50 animate-pulse" title="System Live" />
           </div>
 
           {/* Navigation Links */}
-          <nav className="p-4 space-y-1.5" id="nav-list">
+          <nav className="p-3 space-y-1.5" id="nav-list">
             <button 
               onClick={() => setView('dashboard')}
-              className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                view === 'dashboard' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition-all cursor-pointer ${
+                view === 'dashboard' 
+                  ? 'bg-blue-600/90 text-white shadow-lg shadow-blue-600/30 border border-blue-400/40 font-bold backdrop-blur-md' 
+                  : 'text-slate-300 hover:bg-white/10 hover:text-white border border-transparent'
               }`}
             >
               <LayoutDashboard className="h-4 w-4" /> Dashboard Overview
@@ -2959,8 +3127,10 @@ export default function App() {
 
             <button 
               onClick={() => setView('receiving')}
-              className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                view === 'receiving' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition-all cursor-pointer ${
+                view === 'receiving' 
+                  ? 'bg-blue-600/90 text-white shadow-lg shadow-blue-600/30 border border-blue-400/40 font-bold backdrop-blur-md' 
+                  : 'text-slate-300 hover:bg-white/10 hover:text-white border border-transparent'
               }`}
             >
               <ArrowLeftRight className="h-4 w-4" /> Receiving & Returns
@@ -2968,8 +3138,10 @@ export default function App() {
 
             <button 
               onClick={() => setView('stock')}
-              className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                view === 'stock' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition-all cursor-pointer ${
+                view === 'stock' 
+                  ? 'bg-blue-600/90 text-white shadow-lg shadow-blue-600/30 border border-blue-400/40 font-bold backdrop-blur-md' 
+                  : 'text-slate-300 hover:bg-white/10 hover:text-white border border-transparent'
               }`}
             >
               <PackageSearch className="h-4 w-4" /> Stock & FIFO Bins
@@ -2977,8 +3149,10 @@ export default function App() {
 
             <button 
               onClick={() => setView('recycling')}
-              className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                view === 'recycling' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition-all cursor-pointer ${
+                view === 'recycling' 
+                  ? 'bg-blue-600/90 text-white shadow-lg shadow-blue-600/30 border border-blue-400/40 font-bold backdrop-blur-md' 
+                  : 'text-slate-300 hover:bg-white/10 hover:text-white border border-transparent'
               }`}
             >
               <RotateCcw className="h-4 w-4" /> Packaging Recycling
@@ -2986,8 +3160,10 @@ export default function App() {
 
             <button 
               onClick={() => setView('issuance')}
-              className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                view === 'issuance' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition-all cursor-pointer ${
+                view === 'issuance' 
+                  ? 'bg-blue-600/90 text-white shadow-lg shadow-blue-600/30 border border-blue-400/40 font-bold backdrop-blur-md' 
+                  : 'text-slate-300 hover:bg-white/10 hover:text-white border border-transparent'
               }`}
             >
               <Briefcase className="h-4 w-4" /> Production Issuance
@@ -2995,8 +3171,10 @@ export default function App() {
 
             <button 
               onClick={() => setView('delivery')}
-              className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                view === 'delivery' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition-all cursor-pointer ${
+                view === 'delivery' 
+                  ? 'bg-blue-600/90 text-white shadow-lg shadow-blue-600/30 border border-blue-400/40 font-bold backdrop-blur-md' 
+                  : 'text-slate-300 hover:bg-white/10 hover:text-white border border-transparent'
               }`}
             >
               <Truck className="h-4 w-4" /> Outbound & Gate Pass
@@ -3004,8 +3182,10 @@ export default function App() {
 
             <button 
               onClick={() => setView('environmental')}
-              className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                view === 'environmental' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition-all cursor-pointer ${
+                view === 'environmental' 
+                  ? 'bg-blue-600/90 text-white shadow-lg shadow-blue-600/30 border border-blue-400/40 font-bold backdrop-blur-md' 
+                  : 'text-slate-300 hover:bg-white/10 hover:text-white border border-transparent'
               }`}
             >
               <Boxes className="h-4 w-4" /> Space Utilization
@@ -3013,8 +3193,10 @@ export default function App() {
 
             <button 
               onClick={() => setView('master-registry')}
-              className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                view === 'master-registry' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition-all cursor-pointer ${
+                view === 'master-registry' 
+                  ? 'bg-blue-600/90 text-white shadow-lg shadow-blue-600/30 border border-blue-400/40 font-bold backdrop-blur-md' 
+                  : 'text-slate-300 hover:bg-white/10 hover:text-white border border-transparent'
               }`}
               id="nav-master-registry"
             >
@@ -3024,8 +3206,10 @@ export default function App() {
             {(currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002' || (currentUser || '').toUpperCase().includes('ALDRIN') || (currentRole || '').toUpperCase().includes('SUPER')) && (
               <button 
                 onClick={() => setView('accounts')}
-                className={`w-full text-left px-4 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-3 transition-colors ${
-                  view === 'accounts' ? 'bg-blue-600 text-white shadow-md font-bold' : 'text-blue-100 hover:bg-blue-900 hover:text-white'
+                className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition-all cursor-pointer ${
+                  view === 'accounts' 
+                    ? 'bg-blue-600/90 text-white shadow-lg shadow-blue-600/30 border border-blue-400/40 font-bold backdrop-blur-md' 
+                    : 'text-slate-300 hover:bg-white/10 hover:text-white border border-transparent'
                 }`}
                 id="nav-registered-accounts"
               >
@@ -3036,18 +3220,18 @@ export default function App() {
         </div>
 
         {/* Sidebar Footer with system values */}
-        <div className="p-4 border-t border-slate-800 space-y-4">
+        <div className="p-4 border-t border-white/10 space-y-4 backdrop-blur-md bg-slate-950/40">
           <div className="space-y-1.5">
             {currentEmployeeId === 'JPMP-002' ? (
               <>
                 <button 
                   onClick={handleExportBackup}
-                  className="w-full bg-slate-800 hover:bg-slate-700 hover:text-white py-1.5 px-3 rounded text-[10px] font-bold flex items-center justify-center gap-1.5"
+                  className="w-full bg-white/10 hover:bg-white/20 hover:text-white py-2 px-3 rounded-xl text-[10px] font-bold flex items-center justify-center gap-1.5 border border-white/10 backdrop-blur-md transition cursor-pointer"
                 >
                   <Download className="h-3.5 w-3.5" /> Export DB Backup
                 </button>
                 
-                <label className="w-full bg-slate-800 hover:bg-slate-700 hover:text-white py-1.5 px-3 rounded text-[10px] font-bold flex items-center justify-center gap-1.5 cursor-pointer">
+                <label className="w-full bg-white/10 hover:bg-white/20 hover:text-white py-2 px-3 rounded-xl text-[10px] font-bold flex items-center justify-center gap-1.5 cursor-pointer border border-white/10 backdrop-blur-md transition">
                   <Upload className="h-3.5 w-3.5" /> Import DB Restore
                   <input type="file" accept=".json" onChange={handleImportBackup} className="hidden" />
                 </label>
@@ -3083,7 +3267,7 @@ export default function App() {
                 </button>
               </>
             ) : (
-              <div className="text-center py-2 text-[9px] text-slate-500 italic uppercase font-mono">
+              <div className="text-center py-2 text-[9px] text-slate-400 italic uppercase font-mono">
                 Operator Mode Active
               </div>
             )}
@@ -3092,31 +3276,59 @@ export default function App() {
       </aside>
 
       {/* Main Content Pane */}
-      <main className="flex-1 flex flex-col min-w-0">
-        {/* Header bar */}
-        <header className="h-16 bg-white border-b border-slate-200 px-6 sm:px-8 flex justify-between items-center shrink-0 shadow-xs">
-          <div className="flex items-center gap-4">
-            <h1 className="font-bold text-base sm:text-lg text-slate-800 tracking-tight">{getPageTitle()}</h1>
+      <main className="flex-1 flex flex-col min-w-0 bg-transparent z-10">
+        {/* Frosted Glass Header bar */}
+        <header className="h-16 glass-header px-4 sm:px-6 lg:px-8 flex justify-between items-center shrink-0 z-20 sticky top-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <h1 className="font-bold text-base sm:text-lg text-slate-800 tracking-tight truncate flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-blue-600 shrink-0 shadow-xs ring-4 ring-blue-500/20" />
+              <span>{getPageTitle()}</span>
+            </h1>
           </div>
           
-          <div className="flex items-center gap-2 text-xs font-semibold">
+          <div className="flex items-center gap-2 text-xs font-semibold shrink-0">
+            {/* Live Real-time Status Pill */}
+            <div 
+              className={`hidden sm:inline-flex items-center gap-1.5 px-3 h-8.5 rounded-xl border font-mono text-[11px] font-bold backdrop-blur-md shadow-xs ${
+                connectionStatus === 'connected' 
+                  ? 'bg-emerald-50/80 text-emerald-700 border-emerald-300/60' 
+                  : 'bg-slate-100/80 text-slate-600 border-slate-300/60'
+              }`}
+              title={`WebSocket Server: ${connectionStatus.toUpperCase()} ${wsLatency !== null ? `(${wsLatency}ms round-trip latency)` : ''}`}
+            >
+              <Radio className={`h-3.5 w-3.5 shrink-0 ${connectionStatus === 'connected' ? 'text-emerald-500 animate-pulse' : 'text-slate-400'}`} />
+              <span>{connectionStatus === 'connected' ? (wsLatency !== null ? `${wsLatency}ms` : 'LIVE') : 'CONNECTING'}</span>
+            </div>
+
+            {/* Connected Workstations / Active Terminals Pill */}
+            <button
+              type="button"
+              onClick={() => setShowActiveUsersModal(true)}
+              className="inline-flex items-center justify-center gap-1.5 bg-indigo-50/80 hover:bg-indigo-100/90 text-indigo-700 border border-indigo-200/80 px-3 h-8.5 rounded-xl text-xs font-bold font-mono transition shadow-xs cursor-pointer shrink-0 backdrop-blur-md"
+              title="Click to view all active connected workstations in this session"
+              aria-label="Active Workstation Terminals"
+            >
+              <Users className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+              <span>{activeUsers.length} ONLINE</span>
+            </button>
+
             {/* Quick Force Sync Button */}
             <button
               type="button"
               onClick={handleManualSync}
               disabled={isManualSyncing}
-              className="flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-700 w-8 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0 disabled:opacity-50"
-              title={isManualSyncing ? "Syncing data across all workstations..." : "Force Instant Sync with Supabase Cloud Database"}
+              className="inline-flex items-center justify-center bg-white/80 hover:bg-white text-slate-700 w-8.5 h-8.5 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer shrink-0 disabled:opacity-50 border border-white/80 backdrop-blur-md"
+              title={isManualSyncing ? "Syncing data across all workstations..." : `Force Instant Sync (Last synced ${lastSyncedTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`}
               aria-label="Force Instant Sync"
             >
-              <RefreshCw className={`h-4 w-4 text-slate-600 ${isManualSyncing ? 'animate-spin text-blue-600' : ''}`} />
+              <RefreshCw className={`h-3.5 w-3.5 text-slate-600 ${isManualSyncing ? 'animate-spin text-blue-600' : ''}`} />
             </button>
 
             {/* Supabase PostgreSQL Cloud Sync Badge Button */}
             <button
               type="button"
               onClick={() => setShowSupabaseSettingsModal(true)}
-              className="flex items-center justify-center gap-1.5 bg-slate-900 border border-slate-700 hover:border-emerald-500 text-slate-200 hover:text-white px-2.5 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
+              className="inline-flex items-center justify-center gap-1.5 bg-slate-900/85 hover:bg-slate-900 border border-slate-700/80 hover:border-emerald-400 text-slate-200 hover:text-white px-3 h-8.5 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer shrink-0 backdrop-blur-md"
               title={`Supabase PostgreSQL Sync: ${supabaseStatus.toUpperCase()} (Click to configure Cloud Database)`}
               aria-label="Supabase Cloud Database Settings"
             >
@@ -3128,15 +3340,15 @@ export default function App() {
             <button
               type="button"
               onClick={() => setShowMobileInstallModal(true)}
-              className="flex items-center justify-center bg-emerald-950/80 border border-emerald-500/40 hover:border-emerald-400 text-emerald-300 hover:text-white w-8 h-8 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
+              className="inline-flex items-center justify-center bg-emerald-950/80 border border-emerald-500/50 hover:border-emerald-400 text-emerald-300 hover:text-white w-8.5 h-8.5 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer shrink-0 backdrop-blur-md"
               title="Download Android APK / Install Mobile Web App"
               aria-label="Download Android APK / Mobile App"
             >
-              <Smartphone className="h-4 w-4 text-emerald-400 shrink-0" />
+              <Smartphone className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
             </button>
 
             {/* Live Date & Time Display */}
-            <div className="hidden lg:flex items-center gap-1.5 text-[11px] font-mono font-semibold text-slate-500 uppercase tracking-tight bg-slate-50 px-2.5 h-8 rounded-lg border border-slate-200/80 shrink-0">
+            <div className="hidden lg:inline-flex items-center gap-1.5 text-[11px] font-mono font-semibold text-slate-700 uppercase tracking-tight bg-white/70 px-3 h-8.5 rounded-xl border border-white/80 shrink-0 backdrop-blur-md shadow-xs">
               <Clock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
               <span>
                 {currentTime.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' }).toUpperCase()} • {currentTime.toLocaleTimeString('en-US', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
@@ -3147,17 +3359,17 @@ export default function App() {
 
         {/* VIEW ONLY MODE warning banner */}
         {currentPermission === 'VIEW_ONLY' && (
-          <div className="bg-amber-500 text-white px-8 py-2 text-xs font-bold flex items-center justify-between gap-4 shadow-sm border-b border-amber-600 font-mono uppercase shrink-0">
+          <div className="bg-amber-500/90 text-white px-4 sm:px-6 lg:px-8 py-2 text-xs font-bold flex items-center justify-between gap-4 shadow-xs border-b border-amber-600/80 font-mono uppercase shrink-0 backdrop-blur-md">
             <div className="flex items-center gap-2">
               <Lock className="h-4 w-4 shrink-0" />
               <span>[READ-ONLY PRIVILEGES ACTIVE]: OPERATOR IS RESTRICTED FROM CREATION, DELETION, OR MODIFICATION OF ANY DATA.</span>
             </div>
-            <span className="bg-amber-600 text-amber-50 px-2 py-0.5 rounded text-[10px] tracking-wider shrink-0">VIEW ONLY</span>
+            <span className="bg-amber-600/90 text-amber-50 px-2 py-0.5 rounded text-[10px] tracking-wider shrink-0">VIEW ONLY</span>
           </div>
         )}
 
-        {/* View screen renderer */}
-        <div className="p-8 overflow-y-auto flex-1">
+        {/* View screen renderer with Frosted Canvas container */}
+        <div className="p-4 sm:p-6 lg:p-8 overflow-y-auto flex-1 w-full max-w-7xl mx-auto z-10">
           {view === 'dashboard' && (
             <DashboardOverview 
               stocks={stocks}
@@ -3349,6 +3561,49 @@ export default function App() {
           });
         }}
       />
+
+      {/* Active Workstation Terminals Modal */}
+      {showActiveUsersModal && (
+        <ActiveUsersModal
+          isOpen={showActiveUsersModal}
+          onClose={() => setShowActiveUsersModal(false)}
+          activeUsers={activeUsers}
+          registeredUsers={registeredUsers}
+          connectionStatus={connectionStatus}
+          supabaseStatus={supabaseStatus}
+          wsLatency={wsLatency}
+          lastSyncedTime={lastSyncedTime}
+          onForceSync={handleManualSync}
+          isManualSyncing={isManualSyncing}
+        />
+      )}
+
+      {/* Live Remote Activity Sync Toast */}
+      {liveSyncToast && (
+        <div className="fixed bottom-6 right-6 z-50 animate-in fade-in slide-in-from-bottom-3 duration-300 pointer-events-auto">
+          <div className="bg-slate-900/95 text-white border border-emerald-500/40 rounded-xl px-4 py-3 shadow-2xl flex items-center gap-3 backdrop-blur-md">
+            <div className="p-2 bg-emerald-500/20 text-emerald-400 rounded-lg shrink-0">
+              <RefreshCw className="h-4 w-4 animate-spin text-emerald-400" />
+            </div>
+            <div className="text-xs">
+              <div className="font-bold text-white flex items-center gap-1.5 font-mono">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span>LIVE REALTIME SYNC</span>
+                <span className="text-[10px] text-slate-400 font-mono">({liveSyncToast.time})</span>
+              </div>
+              <div className="text-slate-300 text-[11px] mt-0.5">
+                <span className="text-emerald-300 font-bold">{liveSyncToast.author}</span> {liveSyncToast.action}
+              </div>
+            </div>
+            <button
+              onClick={() => setLiveSyncToast(null)}
+              className="text-slate-400 hover:text-white ml-2 text-xs font-bold p-1"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

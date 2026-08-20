@@ -85,11 +85,22 @@ export default function RecyclingModule({
 
   return (
     <div className="space-y-6" id="recycling-module">
-      <div className="border-b border-slate-200 pb-5">
-        <h2 className="text-xl font-bold text-slate-800">Packaging Materials Recycling Management</h2>
-        <p className="text-xs text-slate-500 mt-1">
-          Monitor the condition, classification, reuse cycle count, and final disposition of reusable pallets and carton boxes.
-        </p>
+      {/* Official Header Banner matching Dashboard Overview */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 p-5 rounded-2xl shadow-md border border-slate-800 flex flex-col md:flex-row md:justify-between md:items-center gap-4 text-white">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded border border-indigo-500/30">
+              SUSTAINABILITY & PACKAGING
+            </span>
+            <span className="text-emerald-400 text-[10px] font-bold flex items-center gap-1 font-mono">
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse inline-block" /> RECYCLE
+            </span>
+          </div>
+          <h2 className="text-xl font-bold text-white tracking-tight">Packaging Materials Recycling Management</h2>
+          <p className="text-xs text-slate-300 mt-1">
+            Monitor the condition, classification, reuse cycle count, and final disposition of reusable pallets and carton boxes.
+          </p>
+        </div>
       </div>
 
       {/* Overview stats panel */}

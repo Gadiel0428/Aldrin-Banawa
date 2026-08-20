@@ -29,7 +29,9 @@ import {
   isSupabaseConfigured, 
   getSupabase,
   processPendingSupabaseMutations,
-  testSupabaseConnection
+  testSupabaseConnection,
+  DEFAULT_SUPABASE_URL,
+  DEFAULT_SUPABASE_ANON_KEY
 } from '../lib/supabase';
 
 interface SupabaseSettingsModalProps {
@@ -435,22 +437,22 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.stocks, public.receiving, p
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
-      <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-2xl w-full shadow-2xl overflow-hidden text-slate-100 my-8">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-md p-4 overflow-y-auto">
+      <div className="bg-white border border-slate-300 rounded-3xl max-w-2xl w-full shadow-2xl overflow-hidden text-slate-900 my-8">
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-6 py-4 bg-slate-950 border-b border-slate-800">
+        <div className="flex items-center justify-between px-6 py-4 bg-slate-50 border-b border-slate-200">
           <div className="flex items-center space-x-3">
-            <div className="p-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-emerald-400">
+            <div className="p-2 bg-emerald-100 border border-emerald-300 rounded-xl text-emerald-700 shadow-xs">
               <Database className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-lg text-white">Supabase Cloud Database & Realtime Sync</h3>
-              <p className="text-xs text-slate-400">PostgreSQL Multi-PC Sync & Offline Resilience Engine</p>
+              <h3 className="font-extrabold text-lg text-slate-900">Supabase Cloud Database & Realtime Sync</h3>
+              <p className="text-xs text-slate-600 font-semibold">PostgreSQL Multi-PC Sync & Offline Resilience Engine</p>
             </div>
           </div>
           <button 
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            className="p-1.5 rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-200 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -459,7 +461,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.stocks, public.receiving, p
         {/* Modal Body */}
         <div className="p-6 space-y-6">
           {/* Realtime Status Indicator Card */}
-          <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 flex items-center justify-between">
+          <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between shadow-xs">
             <div className="flex items-center space-x-3">
               <div className="relative">
                 <div className={`w-3.5 h-3.5 rounded-full ${
@@ -471,10 +473,10 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.stocks, public.receiving, p
                 )}
               </div>
               <div>
-                <span className="text-xs uppercase tracking-wider font-semibold text-slate-400 block">
+                <span className="text-xs uppercase tracking-wider font-bold text-slate-600 block">
                   Synchronization Engine Status
                 </span>
-                <span className="text-sm font-bold text-white">
+                <span className="text-sm font-extrabold text-slate-900">
                   {connectionStatus === 'connected' ? 'SUPABASE REALTIME CONNECTED & ACTIVE' :
                    connectionStatus === 'connecting' ? 'CONNECTING TO SUPABASE CLOUD...' :
                    'OFFLINE CACHE ACTIVE (LOCAL RESILIENCE MODE)'}
@@ -487,9 +489,9 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.stocks, public.receiving, p
                 processPendingSupabaseMutations();
                 onForceSync();
               }}
-              className="flex items-center space-x-2 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-lg transition-colors border border-slate-700"
+              className="flex items-center space-x-2 text-xs bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold px-3 py-2 rounded-xl transition-colors border border-slate-300 cursor-pointer"
             >
-              <RefreshCw className="w-3.5 h-3.5" />
+              <RefreshCw className="w-3.5 h-3.5 text-slate-700" />
               <span>Force Sync</span>
             </button>
           </div>
@@ -498,22 +500,42 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.stocks, public.receiving, p
           {testResult && (
             <div className={`p-4 rounded-xl border flex items-start space-x-3 text-sm ${
               testResult.success 
-                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' 
-                : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-800' 
+                : 'bg-rose-50 border-rose-300 text-rose-800'
             }`}>
               {testResult.success ? (
-                <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
+                <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5 text-emerald-700" />
               ) : (
-                <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-rose-700" />
               )}
-              <div className="break-words font-medium">{testResult.message}</div>
+              <div className="break-words font-bold">{testResult.message}</div>
             </div>
           )}
 
           {/* Form Credentials */}
           <form onSubmit={handleSave} className="space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                Supabase Credentials
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setUrl(DEFAULT_SUPABASE_URL);
+                  setAnonKey(DEFAULT_SUPABASE_ANON_KEY);
+                  setTestResult({
+                    success: true,
+                    message: 'Default Supabase project credentials loaded. Click "Save Credentials" or "Test Connection" to activate.'
+                  });
+                }}
+                className="text-[11px] font-mono font-bold text-emerald-800 hover:text-emerald-900 bg-emerald-50 border border-emerald-300 px-2 py-0.5 rounded-lg transition cursor-pointer shadow-xs"
+              >
+                Load Default Project
+              </button>
+            </div>
+
             <div>
-              <label className="text-xs font-semibold uppercase tracking-wider text-slate-300 block mb-1.5">
+              <label className="text-xs font-bold uppercase tracking-wider text-slate-800 block mb-1.5">
                 Supabase Project URL
               </label>
               <div className="relative">
@@ -522,15 +544,15 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.stocks, public.receiving, p
                   type="text" 
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
-                  placeholder="https://your-project-id.supabase.co"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 font-mono"
+                  placeholder={DEFAULT_SUPABASE_URL}
+                  className="w-full bg-white border-2 border-slate-300 focus:border-blue-600 rounded-xl pl-9 pr-3 py-2 text-sm text-slate-900 font-mono font-bold focus:outline-none"
                 />
               </div>
-              <p className="text-[11px] text-slate-500 mt-1">Found in your Supabase Project Settings &gt; API</p>
+              <p className="text-[11px] text-slate-600 font-semibold mt-1">Found in your Supabase Project Settings &gt; API</p>
             </div>
 
             <div>
-              <label className="text-xs font-semibold uppercase tracking-wider text-slate-300 block mb-1.5">
+              <label className="text-xs font-bold uppercase tracking-wider text-slate-800 block mb-1.5">
                 Supabase Anon / Public API Key
               </label>
               <div className="relative">
@@ -539,19 +561,19 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.stocks, public.receiving, p
                   type={showKey ? "text" : "password"} 
                   value={anonKey}
                   onChange={(e) => setAnonKey(e.target.value)}
-                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-10 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 font-mono"
+                  placeholder={DEFAULT_SUPABASE_ANON_KEY}
+                  className="w-full bg-white border-2 border-slate-300 focus:border-blue-600 rounded-xl pl-9 pr-10 py-2 text-sm text-slate-900 font-mono font-bold focus:outline-none"
                 />
                 <button
                   type="button"
                   onClick={() => setShowKey(!showKey)}
-                  className="absolute right-3 top-2.5 text-slate-500 hover:text-slate-300 transition-colors"
+                  className="absolute right-3 top-2.5 text-slate-500 hover:text-slate-900 transition-colors cursor-pointer"
                   title={showKey ? "Hide key" : "Show key"}
                 >
                   {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
-              <p className="text-[11px] text-slate-500 mt-1">Publishable key safe for client-side multi-PC synchronization.</p>
+              <p className="text-[11px] text-slate-600 font-semibold mt-1">Publishable key safe for client-side multi-PC synchronization.</p>
             </div>
 
             <div className="flex items-center space-x-3 pt-2">
@@ -559,15 +581,15 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.stocks, public.receiving, p
                 type="button"
                 onClick={handleTestConnection}
                 disabled={testingConnection}
-                className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-100 font-semibold text-xs py-2.5 rounded-lg transition-colors border border-slate-700 flex items-center justify-center space-x-2"
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs py-2.5 rounded-xl transition-colors border border-slate-300 flex items-center justify-center space-x-2 cursor-pointer"
               >
-                {testingConnection ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4 text-amber-400" />}
+                {testingConnection ? <RefreshCw className="w-4 h-4 animate-spin text-blue-600" /> : <Zap className="w-4 h-4 text-amber-600" />}
                 <span>{testingConnection ? 'Testing...' : 'Test Connection'}</span>
               </button>
 
               <button
                 type="submit"
-                className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs py-2.5 rounded-lg transition-colors shadow-lg shadow-emerald-900/30 flex items-center justify-center space-x-2"
+                className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2.5 rounded-xl transition-colors shadow-lg shadow-blue-600/20 flex items-center justify-center space-x-2 cursor-pointer"
               >
                 <CheckCircle2 className="w-4 h-4" />
                 <span>Save Credentials</span>
@@ -576,11 +598,11 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.stocks, public.receiving, p
           </form>
 
           {/* Database Setup Helper Section */}
-          <div className="pt-4 border-t border-slate-800 space-y-3">
+          <div className="pt-4 border-t border-slate-200 space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">
-                <Terminal className="w-4 h-4 text-emerald-400" />
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                <Terminal className="w-4 h-4 text-blue-600" />
+                <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-800">
                   Supabase Database Setup SQL
                 </h4>
               </div>
@@ -588,25 +610,25 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.stocks, public.receiving, p
               <button
                 type="button"
                 onClick={handleCopySchemaSql}
-                className="flex items-center space-x-1.5 text-xs text-emerald-400 hover:text-emerald-300 bg-emerald-950/50 border border-emerald-800/50 px-2.5 py-1 rounded transition-colors"
+                className="flex items-center space-x-1.5 text-xs text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 border border-blue-300 px-2.5 py-1 rounded-lg transition-colors font-bold cursor-pointer"
               >
                 {copiedSql ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                 <span>{copiedSql ? 'Copied SQL!' : 'Copy Schema SQL'}</span>
               </button>
             </div>
 
-            <p className="text-xs text-slate-400 leading-relaxed">
+            <p className="text-xs text-slate-600 font-medium leading-relaxed">
               To setup or reset your Supabase project, copy the SQL above and run it in the{' '}
-              <strong className="text-slate-200">Supabase SQL Editor</strong>. It automatically configures all 11 WMS tables, Row Level Security policies, indexes, and Realtime publications.
+              <strong className="text-slate-900 font-bold">Supabase SQL Editor</strong>. It automatically configures all 11 WMS tables, Row Level Security policies, indexes, and Realtime publications.
             </p>
           </div>
         </div>
 
         {/* Modal Footer */}
-        <div className="px-6 py-3 bg-slate-950 border-t border-slate-800 text-right">
+        <div className="px-6 py-3 bg-slate-50 border-t border-slate-200 text-right">
           <button
             onClick={onClose}
-            className="text-xs font-semibold text-slate-400 hover:text-white px-4 py-1.5 rounded-lg transition-colors"
+            className="text-xs font-bold text-slate-600 hover:text-slate-900 px-4 py-1.5 rounded-lg transition-colors cursor-pointer"
           >
             Close Window
           </button>

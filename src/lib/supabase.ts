@@ -21,6 +21,9 @@ export interface SupabaseConfig {
   anonKey: string;
 }
 
+export const DEFAULT_SUPABASE_URL = 'https://bbzqmmlhcwwjiewdfdmq.supabase.co';
+export const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_2U24dZnUD_Ab6RlHvVW5MA__EJlhytz';
+
 // Key names for storage
 const STORAGE_KEY_URL = 'juwei_wms_supabase_url';
 const STORAGE_KEY_KEY = 'juwei_wms_supabase_key';
@@ -31,8 +34,16 @@ export function getStoredSupabaseConfig(): SupabaseConfig {
   const envUrl = metaEnv.VITE_SUPABASE_URL || '';
   const envKey = metaEnv.VITE_SUPABASE_ANON_KEY || '';
 
-  let storedUrl = (localStorage.getItem(STORAGE_KEY_URL) || envUrl).trim();
-  let storedKey = (localStorage.getItem(STORAGE_KEY_KEY) || envKey).trim();
+  let storedUrl = (localStorage.getItem(STORAGE_KEY_URL) || envUrl || DEFAULT_SUPABASE_URL).trim();
+  let storedKey = (localStorage.getItem(STORAGE_KEY_KEY) || envKey || DEFAULT_SUPABASE_ANON_KEY).trim();
+
+  // If stored URL was previous placeholder or empty, fallback to the configured default
+  if (!storedUrl || storedUrl.toLowerCase().includes('your-project-id')) {
+    storedUrl = DEFAULT_SUPABASE_URL;
+  }
+  if (!storedKey || storedKey.toLowerCase().includes('eyjhbgcioijiuzi1niisinr5cci6ikpxvcj9')) {
+    storedKey = DEFAULT_SUPABASE_ANON_KEY;
+  }
 
   // Normalize URL protocol
   if (storedUrl && !storedUrl.startsWith('http://') && !storedUrl.startsWith('https://')) {

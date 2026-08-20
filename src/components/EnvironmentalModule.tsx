@@ -243,13 +243,24 @@ export default function EnvironmentalModule({
 
   return (
     <div className="space-y-6" id="environmental-module">
-      <div className="border-b border-slate-200 pb-5">
-        <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-          <Boxes className="h-6 w-6 text-indigo-600" /> Storage Space & Slot Utilization
-        </h2>
-        <p className="text-xs text-slate-500 mt-1">
-          Monitor density across active storage zones, audit pallet slot allocation limits, and verify core warehouse safety rules.
-        </p>
+      {/* Official Header Banner matching Dashboard Overview */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 p-5 rounded-2xl shadow-md border border-slate-800 flex flex-col md:flex-row md:justify-between md:items-center gap-4 text-white">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded border border-indigo-500/30">
+              FACILITY & SLOTS UTILIZATION
+            </span>
+            <span className="text-emerald-400 text-[10px] font-bold flex items-center gap-1 font-mono">
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse inline-block" /> MONITORED
+            </span>
+          </div>
+          <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
+            <Boxes className="h-6 w-6 text-indigo-400" /> Storage Space & Slot Utilization
+          </h2>
+          <p className="text-xs text-slate-300 mt-1">
+            Monitor density across active storage zones, audit pallet slot allocation limits, and verify core warehouse safety rules.
+          </p>
+        </div>
       </div>
 
       {/* Overview Analytics row */}

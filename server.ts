@@ -29,8 +29,10 @@ async function startServer() {
 
   // Initialize Supabase Server Client if environment variables or config file exist
   const CONFIG_SUPABASE_FILE = path.join(process.cwd(), "supabase-config.json");
-  let supabaseUrl = process.env.VITE_SUPABASE_URL || "";
-  let supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
+  const DEFAULT_SUPABASE_URL = "https://bbzqmmlhcwwjiewdfdmq.supabase.co";
+  const DEFAULT_SUPABASE_KEY = "sb_publishable_2U24dZnUD_Ab6RlHvVW5MA__EJlhytz";
+  let supabaseUrl = process.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+  let supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_KEY;
   
   if (fs.existsSync(CONFIG_SUPABASE_FILE)) {
     try {
@@ -792,7 +794,14 @@ async function startServer() {
           const empId = (u.employeeId || u.employee_id || '').toUpperCase();
           if (empId) {
             const existing = userMap.get(empId) || {};
-            userMap.set(empId, { ...existing, ...u });
+            const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (existing.pin || (empId === 'JPMP-002' ? '0423' : '1234')));
+            userMap.set(empId, {
+              ...existing,
+              ...u,
+              employeeId: empId,
+              pin: cleanPin,
+              pin_hash: cleanPin
+            });
           }
         });
         state.registeredUsers = Array.from(userMap.values());
@@ -807,17 +816,8 @@ async function startServer() {
       }
 
       if (collection && collection in state && Array.isArray(data)) {
-        if (data.length === 0 && (state as any)[collection]?.length > 0) {
-          return res.json({ success: true, collection, updatedCount: (state as any)[collection].length });
-        }
-        const itemMap = new Map<string, any>();
-        ((state as any)[collection] || []).forEach((item: any) => {
-          if (item && item.id) itemMap.set(item.id, item);
-        });
-        data.forEach((item: any) => {
-          if (item && item.id) itemMap.set(item.id, item);
-        });
-        (state as any)[collection] = Array.from(itemMap.values());
+        // Authoritative update: cleanly set state to the updated items array without overlapping old/deleted data
+        (state as any)[collection] = data.filter((item: any) => item && item.id);
         saveStateToDisk();
         persistToSupabase(collection, (state as any)[collection]);
         
@@ -992,6 +992,44 @@ async function startServer() {
         });
 
         return res.json({ success: true, collection, id });
+      }
+      return res.status(400).json({ error: "Invalid collection" });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Explicit endpoint to upsert single or batch records with real-time multi-client broadcast
+  app.post("/api/records/upsert", async (req, res) => {
+    try {
+      const { collection, record, author, actionDesc } = req.body;
+      if (!collection || !record || !record.id) {
+        return res.status(400).json({ error: "Collection and record with valid ID required" });
+      }
+
+      if (collection in state) {
+        const arr = ((state as any)[collection] || []).filter((item: any) => item.id !== record.id);
+        arr.unshift(record);
+        (state as any)[collection] = arr;
+        saveStateToDisk();
+        persistToSupabase(collection, [record]);
+
+        broadcast({
+          type: "record_upserted",
+          collection,
+          record,
+          author: author || "Operator",
+          actionDesc: actionDesc || `Updated ${collection} record`,
+          timestamp: new Date().toISOString()
+        });
+
+        broadcast({
+          type: "collection_updated",
+          collection,
+          data: (state as any)[collection]
+        });
+
+        return res.json({ success: true, collection, id: record.id, count: (state as any)[collection].length });
       }
       return res.status(400).json({ error: "Invalid collection" });
     } catch (err: any) {
@@ -1201,7 +1239,11 @@ async function startServer() {
 
         switch (payload.type) {
           case "ping": {
-            ws.send(JSON.stringify({ type: "pong" }));
+            ws.send(JSON.stringify({ 
+              type: "pong", 
+              clientPingTime: payload.clientPingTime, 
+              serverTime: Date.now() 
+            }));
             break;
           }
 
@@ -1239,6 +1281,44 @@ async function startServer() {
             break;
           }
 
+          case "upsert_record": {
+            const { collection, record, author, actionDesc } = payload;
+            if (collection && collection in state && record && record.id) {
+              const arr = ((state as any)[collection] || []).filter((item: any) => item.id !== record.id);
+              arr.unshift(record);
+              (state as any)[collection] = arr;
+              saveStateToDisk();
+              persistToSupabase(collection, [record]);
+
+              broadcast({
+                type: "record_upserted",
+                collection,
+                record,
+                author: author || "Operator",
+                actionDesc: actionDesc || `Updated ${collection} record`,
+                timestamp: new Date().toISOString()
+              }, ws);
+
+              broadcast({
+                type: "collection_updated",
+                collection,
+                data: (state as any)[collection]
+              }, ws);
+            }
+            break;
+          }
+
+          case "sync_activity_pulse": {
+            broadcast({
+              type: "sync_activity_pulse",
+              username: payload.username || "Operator",
+              action: payload.action || "Updated inventory",
+              collection: payload.collection || "",
+              timestamp: new Date().toISOString()
+            }, ws);
+            break;
+          }
+
           case "update_collection": {
             const { collection, data } = payload;
             if (collection === "registeredUsers" && Array.isArray(data)) {
@@ -1252,7 +1332,14 @@ async function startServer() {
                 const empId = (u.employeeId || u.employee_id || '').toUpperCase();
                 if (empId) {
                   const existing = userMap.get(empId) || {};
-                  userMap.set(empId, { ...existing, ...u });
+                  const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (existing.pin || (empId === 'JPMP-002' ? '0423' : '1234')));
+                  userMap.set(empId, {
+                    ...existing,
+                    ...u,
+                    employeeId: empId,
+                    pin: cleanPin,
+                    pin_hash: cleanPin
+                  });
                 }
               });
               state.registeredUsers = Array.from(userMap.values());
@@ -1264,18 +1351,7 @@ async function startServer() {
                 data: state.registeredUsers
               }, ws);
             } else if (collection && collection in state && Array.isArray(data)) {
-              if (data.length === 0 && (state as any)[collection]?.length > 0) {
-                // Ignore empty sync to prevent dropping data
-                break;
-              }
-              const itemMap = new Map<string, any>();
-              ((state as any)[collection] || []).forEach((item: any) => {
-                if (item && item.id) itemMap.set(item.id, item);
-              });
-              data.forEach((item: any) => {
-                if (item && item.id) itemMap.set(item.id, item);
-              });
-              (state as any)[collection] = Array.from(itemMap.values());
+              (state as any)[collection] = data.filter((item: any) => item && item.id);
               saveStateToDisk();
               persistToSupabase(collection, (state as any)[collection]);
               

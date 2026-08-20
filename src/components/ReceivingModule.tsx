@@ -460,31 +460,40 @@ export default function ReceivingModule({
 
   return (
     <div className="space-y-6" id="receiving-module">
-      <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 border-b border-slate-200 pb-5">
+      {/* Official Header Banner matching Dashboard Overview */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 p-5 rounded-2xl shadow-md border border-slate-800 flex flex-col md:flex-row md:justify-between md:items-center gap-4 text-white">
         <div>
-          <h2 className="text-xl font-bold text-slate-800">Material Receiving & Returns</h2>
-          <p className="text-xs text-slate-500 mt-1">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded border border-indigo-500/30">
+              RECEIVING & INBOUND LOGISTICS
+            </span>
+            <span className="text-emerald-400 text-[10px] font-bold flex items-center gap-1 font-mono">
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse inline-block" /> ACTIVE
+            </span>
+          </div>
+          <h2 className="text-xl font-bold text-white tracking-tight">Material Receiving & Returns</h2>
+          <p className="text-xs text-slate-300 mt-1">
             Perform physical condition checks, stamp Transfer Slips, control hold statuses, and process returns.
           </p>
         </div>
         
         {/* Module Tabs */}
-        <div className="flex bg-slate-100 p-1 rounded-lg self-start">
+        <div className="flex bg-slate-950/60 p-1.5 rounded-xl border border-slate-700/60 self-start md:self-auto shrink-0">
           <button 
             onClick={() => { setActiveTab('external-internal'); setSearchQuery(''); }}
-            className={`px-4 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${
-              activeTab === 'external-internal' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+            className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 cursor-pointer ${
+              activeTab === 'external-internal' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
             }`}
           >
-            <Truck className="h-3.5 w-3.5" /> External & Internal Arrivals
+            <Truck className="h-4 w-4" /> External & Internal Arrivals
           </button>
           <button 
             onClick={() => { setActiveTab('returns'); setSearchQuery(''); }}
-            className={`px-4 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${
-              activeTab === 'returns' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+            className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 cursor-pointer ${
+              activeTab === 'returns' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
             }`}
           >
-            <RotateCcw className="h-3.5 w-3.5" /> Material Excess Returns
+            <RotateCcw className="h-4 w-4" /> Material Excess Returns
           </button>
         </div>
       </div>
