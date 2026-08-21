@@ -30,7 +30,7 @@ export default function BarcodeScannerModal({
   isOpen,
   onClose,
   onScanResult,
-  title = "WMS Barcode Scanner",
+  title = "Barcode Scanner",
   subtitle = "Scan material tag or lot label using USB / Bluetooth handheld barcode scanner"
 }: BarcodeScannerModalProps) {
   const [activeTab, setActiveTab] = useState<'scanner' | 'upload'>('scanner');
@@ -118,137 +118,130 @@ export default function BarcodeScannerModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-blue-950/80 backdrop-blur-md animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md animate-fade-in">
       {/* Hidden container for Html5Qrcode offline image scanner engine */}
       <div id={hiddenScannerRegionId} className="hidden" />
 
-      <div className="bg-blue-900 border-2 border-blue-700 rounded-2xl w-full max-w-lg shadow-2xl text-white overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg shadow-2xl text-slate-100 overflow-hidden flex flex-col max-h-[90vh]">
         {/* Modal Header */}
-        <div className="px-5 py-4 border-b border-blue-800 flex items-center justify-between gap-3 bg-blue-950">
-          <div className="flex items-center gap-3 min-w-0 flex-1">
-            <div className="p-2.5 bg-blue-800 text-blue-200 rounded-xl border border-blue-600 shrink-0">
-              <Barcode className="h-5 w-5" />
+        <div className="px-5 py-3.5 border-b border-slate-800/80 flex items-center justify-between gap-3 bg-slate-950/40">
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <div className="p-2 bg-slate-800/80 text-slate-300 rounded-lg border border-slate-700/60 shrink-0">
+              <Barcode className="h-4 w-4" />
             </div>
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2.5 flex-wrap">
-                <h3 className="font-bold text-sm sm:text-base text-white tracking-tight leading-tight">
-                  {title}
-                </h3>
-                <span className="text-[10px] font-mono font-bold bg-blue-800 text-blue-100 border border-blue-600 px-2.5 py-0.5 rounded-full uppercase tracking-wider whitespace-nowrap shrink-0">
-                  WMS HARDWARE SCANNER
-                </span>
-              </div>
-              <p className="text-xs text-blue-200 mt-1 leading-normal">{subtitle}</p>
+              <h3 className="font-semibold text-sm text-white tracking-tight">
+                {title}
+              </h3>
+              <p className="text-[11px] text-slate-400 truncate">{subtitle}</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0 self-center">
+          <div className="flex items-center gap-1.5 shrink-0">
             <button
               type="button"
               onClick={() => setAudioEnabled(!audioEnabled)}
               title={audioEnabled ? "Mute scan sound" : "Enable scan sound"}
-              className={`p-2 rounded-lg transition border cursor-pointer ${
-                audioEnabled ? 'bg-blue-800 text-white border-blue-600' : 'bg-blue-950 text-blue-300 border-blue-800'
+              className={`p-1.5 rounded-lg transition border cursor-pointer ${
+                audioEnabled ? 'bg-slate-800 text-slate-200 border-slate-700' : 'bg-slate-950 text-slate-500 border-slate-800'
               }`}
             >
-              {audioEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+              {audioEnabled ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="p-2 text-blue-200 hover:text-white hover:bg-blue-800 rounded-lg transition cursor-pointer"
+              className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer"
             >
-              <X className="h-5 w-5" />
+              <X className="h-4 w-4" />
             </button>
           </div>
         </div>
 
-        {/* Tab Switcher */}
-        <div className="flex border-b border-blue-800 bg-blue-950 p-1.5 gap-1.5 text-xs font-semibold">
-          <button
-            onClick={() => setActiveTab('scanner')}
-            className={`flex-1 py-2 px-3 rounded-lg transition flex items-center justify-center gap-2 cursor-pointer ${
-              activeTab === 'scanner'
-                ? 'bg-blue-600 text-white font-bold shadow-md'
-                : 'text-blue-200 hover:text-white hover:bg-blue-800'
-            }`}
-          >
-            <Barcode className="h-4 w-4" />
-            Handheld Scanner
-          </button>
-          <button
-            onClick={() => setActiveTab('upload')}
-            className={`flex-1 py-2 px-3 rounded-lg transition flex items-center justify-center gap-2 cursor-pointer ${
-              activeTab === 'upload'
-                ? 'bg-blue-600 text-white font-bold shadow-md'
-                : 'text-blue-200 hover:text-white hover:bg-blue-800'
-            }`}
-          >
-            <Upload className="h-4 w-4" />
-            Upload Image
-          </button>
+        {/* Minimalist Tab Navigation */}
+        <div className="px-5 pt-3 pb-1">
+          <div className="flex p-1 bg-slate-950/60 rounded-xl border border-slate-800/80 text-xs">
+            <button
+              onClick={() => setActiveTab('scanner')}
+              className={`flex-1 py-1.5 px-3 rounded-lg transition-all flex items-center justify-center gap-2 cursor-pointer text-xs font-medium ${
+                activeTab === 'scanner'
+                  ? 'bg-slate-800 text-white shadow-xs'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Barcode className="h-3.5 w-3.5" />
+              Handheld Scanner
+            </button>
+            <button
+              onClick={() => setActiveTab('upload')}
+              className={`flex-1 py-1.5 px-3 rounded-lg transition-all flex items-center justify-center gap-2 cursor-pointer text-xs font-medium ${
+                activeTab === 'upload'
+                  ? 'bg-slate-800 text-white shadow-xs'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Upload className="h-3.5 w-3.5" />
+              Upload Image
+            </button>
+          </div>
         </div>
 
         {/* Modal Body */}
         <div className="p-5 overflow-y-auto flex-1 space-y-4">
           {/* Success / Verification Circle Loading Overlay */}
           {scannedCode && (
-            <div className="bg-slate-950/90 border border-indigo-500/50 rounded-xl p-6 text-center space-y-3 animate-in fade-in duration-200">
-              <div className="inline-flex p-3 bg-indigo-500/10 text-indigo-400 rounded-full border border-indigo-500/20">
-                <Loader2 className="h-8 w-8 animate-spin text-indigo-400" />
+            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-6 text-center space-y-2.5 animate-in fade-in duration-200">
+              <div className="inline-flex p-2.5 bg-indigo-500/10 text-indigo-400 rounded-full border border-indigo-500/20">
+                <Loader2 className="h-6 w-6 animate-spin text-indigo-400" />
               </div>
-              <h4 className="font-bold text-indigo-300 text-sm tracking-wide uppercase font-mono">VERIFYING QR CODE & LOGGING IN...</h4>
-              <p className="text-xs text-slate-400">Authenticating operator credentials, please wait...</p>
+              <h4 className="font-mono text-xs font-bold text-slate-200 uppercase tracking-wider">Verifying Barcode Data...</h4>
+              <p className="text-[11px] text-slate-400 font-mono">{scannedCode}</p>
             </div>
           )}
 
           {/* TAB 1: Hardware Barcode Scanner Input */}
           {activeTab === 'scanner' && !scannedCode && (
-            <div className="space-y-4">
-              {/* Hardware Input Area */}
-              <form onSubmit={handleInputSubmit} className="space-y-3">
-                {/* Header Row with Status */}
-                <div className="flex items-center justify-between gap-2">
-                  <label className="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono flex items-center gap-1.5">
-                    <Barcode className="h-4 w-4 text-indigo-400" />
+            <div className="space-y-3.5">
+              <form onSubmit={handleInputSubmit} className="space-y-2.5">
+                {/* Header Row with Minimalist Status */}
+                <div className="flex items-center justify-between px-0.5">
+                  <span className="text-[11px] font-mono font-medium text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <Barcode className="h-3.5 w-3.5 text-slate-500" />
                     Active Barcode Reader Input
-                  </label>
-                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-bold text-emerald-400 uppercase tracking-wider">
-                    <span className="relative flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                    </span>
-                    Scanner Ready
+                  </span>
+                  <div className="flex items-center gap-1.5 text-[10px] font-mono text-emerald-400">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    <span>Scanner Ready</span>
                   </div>
                 </div>
 
-                {/* Sleek Dark Input Bar */}
-                <div className="relative bg-slate-950 border-2 border-indigo-500/70 focus-within:border-indigo-400 focus-within:ring-4 focus-within:ring-indigo-500/20 rounded-xl p-2 transition-all flex items-center gap-2.5 shadow-inner">
-                  <div className="pl-2 text-indigo-400 shrink-0 flex items-center">
+                {/* Minimalist Input Bar */}
+                <div className="relative bg-slate-950/70 border border-slate-700/80 focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500/30 rounded-xl p-1.5 transition-all flex items-center gap-2 shadow-xs">
+                  <div className="pl-2.5 text-slate-400 shrink-0 flex items-center">
                     {barcodeInput ? (
-                      <Loader2 className="h-5 w-5 text-indigo-400 animate-spin" />
+                      <Loader2 className="h-4 w-4 text-indigo-400 animate-spin" />
                     ) : (
-                      <Barcode className="h-5 w-5 text-indigo-400" />
+                      <Barcode className="h-4 w-4 text-slate-500" />
                     )}
                   </div>
 
-                  <div className="relative flex-1 flex items-center min-h-[38px]">
+                  <div className="relative flex-1 flex items-center min-h-[36px]">
                     <input
                       ref={inputRef}
                       type="password"
                       value={barcodeInput}
                       onChange={(e) => setBarcodeInput(e.target.value)}
                       placeholder="Scan barcode or type code..."
-                      className={`w-full bg-transparent px-2 py-1 text-sm font-mono font-bold focus:outline-none placeholder:text-slate-500 placeholder:font-sans placeholder:font-normal ${
+                      className={`w-full bg-transparent px-1 text-sm font-mono focus:outline-none placeholder:text-slate-500 placeholder:font-sans placeholder:text-xs ${
                         barcodeInput ? 'text-transparent caret-indigo-400' : 'text-slate-100'
                       }`}
                       autoFocus
                     />
                     {barcodeInput && (
-                      <div className="absolute inset-0 flex items-center pointer-events-none px-2">
-                        <span className="text-xs font-mono font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-2">
-                          <Loader2 className="h-4 w-4 animate-spin text-indigo-400 shrink-0" />
-                          CAPTURING BARCODE DATA...
+                      <div className="absolute inset-0 flex items-center pointer-events-none px-1">
+                        <span className="text-xs font-mono font-medium text-indigo-400 uppercase tracking-wider flex items-center gap-1.5">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400 shrink-0" />
+                          Capturing barcode data...
                         </span>
                       </div>
                     )}
@@ -261,41 +254,34 @@ export default function BarcodeScannerModal({
                       className="p-1 text-slate-500 hover:text-slate-300 rounded transition cursor-pointer"
                       title="Clear input"
                     >
-                      <X className="h-4 w-4" />
+                      <X className="h-3.5 w-3.5" />
                     </button>
                   )}
 
                   <button
                     type="submit"
                     disabled={!barcodeInput.trim()}
-                    className={`px-4 py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider transition-all duration-200 shrink-0 flex items-center gap-2 ${
+                    className={`px-3.5 py-2 rounded-lg text-xs font-medium tracking-wide transition-all shrink-0 flex items-center gap-1.5 ${
                       barcodeInput.trim()
-                        ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/30 cursor-pointer'
-                        : 'bg-slate-800 text-slate-500 border border-slate-700/60 cursor-not-allowed'
+                        ? 'bg-indigo-600 hover:bg-indigo-500 text-white cursor-pointer shadow-xs'
+                        : 'bg-slate-800/80 text-slate-500 border border-slate-700/40 cursor-not-allowed'
                     }`}
                   >
                     {barcodeInput ? (
                       <>
-                        <Loader2 className="h-4 w-4 animate-spin text-white" />
-                        <span>PROCESSING</span>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-white" />
+                        <span>Processing</span>
                       </>
                     ) : (
-                      <span>SUBMIT</span>
+                      <span>Submit</span>
                     )}
                   </button>
                 </div>
 
-                {/* Helper Banner */}
-                <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 flex items-start gap-3 text-xs text-slate-400">
-                  <div className="p-1.5 bg-slate-800/80 rounded-lg shrink-0 text-indigo-400 border border-slate-700/60">
-                    <Keyboard className="h-4 w-4" />
-                  </div>
-                  <div className="space-y-0.5 min-w-0 flex-1">
-                    <p className="font-semibold text-slate-300 text-xs">Automated Hardware Input Receiver</p>
-                    <p className="text-[11px] leading-normal text-slate-400">
-                      Standard USB or Bluetooth handheld barcode scanners automatically transmit data into this active field.
-                    </p>
-                  </div>
+                {/* Minimalist Subtle Note */}
+                <div className="pt-1 flex items-center gap-2 text-[11px] text-slate-400 px-1">
+                  <Keyboard className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                  <span>Handheld scanners automatically input and submit barcode values into this field.</span>
                 </div>
               </form>
             </div>
@@ -303,14 +289,14 @@ export default function BarcodeScannerModal({
 
           {/* TAB 2: File Upload Scanner */}
           {activeTab === 'upload' && !scannedCode && (
-            <div className="space-y-4 text-center py-2">
-              <label className="border-2 border-dashed border-slate-700 hover:border-indigo-500 bg-slate-950/60 hover:bg-slate-950 rounded-2xl p-8 cursor-pointer transition flex flex-col items-center justify-center gap-3">
-                <div className="p-4 bg-indigo-600/20 text-indigo-400 rounded-full border border-indigo-500/30">
-                  <Upload className="h-8 w-8" />
+            <div className="space-y-3 text-center py-1">
+              <label className="border border-dashed border-slate-700/80 hover:border-slate-500 bg-slate-950/40 hover:bg-slate-950/70 rounded-xl p-6 cursor-pointer transition flex flex-col items-center justify-center gap-2.5">
+                <div className="p-2.5 bg-slate-800 text-slate-300 rounded-full border border-slate-700">
+                  <Upload className="h-5 w-5" />
                 </div>
                 <div>
-                  <h4 className="font-bold text-white text-sm">Select Barcode or QR Image File</h4>
-                  <p className="text-xs text-slate-400 mt-1">Parses PNG, JPG, WEBP, or SVG material tag images</p>
+                  <h4 className="font-medium text-slate-200 text-xs">Select Barcode or QR Image</h4>
+                  <p className="text-[11px] text-slate-500 mt-0.5">PNG, JPG, WEBP, or SVG material tag images</p>
                 </div>
                 <input
                   type="file"
@@ -321,9 +307,9 @@ export default function BarcodeScannerModal({
               </label>
 
               {uploadError && (
-                <div className="p-3 bg-amber-950/40 border border-amber-800/50 rounded-xl flex items-center gap-2 text-xs text-amber-300 text-left">
-                  <AlertCircle className="h-4 w-4 shrink-0 text-amber-400" />
-                  <span>{uploadError}</span>
+                <div className="p-2.5 bg-amber-950/30 border border-amber-800/40 rounded-lg flex items-center gap-2 text-xs text-amber-300 text-left">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+                  <span className="text-[11px]">{uploadError}</span>
                 </div>
               )}
             </div>
@@ -331,13 +317,13 @@ export default function BarcodeScannerModal({
         </div>
 
         {/* Modal Footer */}
-        <div className="px-5 py-3 border-t border-slate-800 bg-slate-950/80 flex justify-between items-center text-xs text-slate-400">
-          <span className="font-mono text-[11px]">Hardware Mode: USB / Bluetooth Barcode Scanner</span>
+        <div className="px-5 py-2.5 border-t border-slate-800/80 bg-slate-950/40 flex justify-between items-center text-[11px] text-slate-400">
+          <span className="font-mono text-slate-500">USB / Bluetooth Scanner Ready</span>
           <button
             onClick={onClose}
-            className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg font-semibold transition cursor-pointer"
+            className="px-3 py-1 bg-slate-800/80 hover:bg-slate-800 text-slate-300 rounded-lg font-medium transition cursor-pointer"
           >
-            Cancel
+            Close
           </button>
         </div>
       </div>

@@ -214,6 +214,27 @@ export interface MasterRegistryItem {
   location?: string;
 }
 
+export interface ActivePresenceUser {
+  username: string;
+  employeeId?: string;
+  role?: string;
+  activeView?: string;
+  connectedAt?: string;
+  lastPing?: number;
+  terminalName?: string;
+}
+
+export interface QueuedMutation {
+  id: string;
+  type: 'upsert' | 'delete';
+  collection: string;
+  record?: any;
+  recordId?: string;
+  author?: string;
+  actionDesc?: string;
+  timestamp: number;
+}
+
 export function getCustomerForPart(partCode?: string, description?: string): string {
   const code = (partCode || '').toUpperCase();
   const desc = (description || '').toUpperCase();

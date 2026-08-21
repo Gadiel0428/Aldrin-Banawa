@@ -53,7 +53,7 @@ import {
   Server
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import AccountQRBadgeModal from './components/AccountQRBadgeModal';
 import DesktopInstallModal from './components/DesktopInstallModal';
 import MobileAppDownloadModal from './components/MobileAppDownloadModal';
@@ -66,6 +66,7 @@ import {
   getStoredSupabaseConfig, 
   saveStoredSupabaseConfig,
   isSupabaseConfigured, 
+  getSupabase,
   fetchCollectionFromSupabase, 
   fetchFullSupabaseSnapshot,
   syncCollectionToSupabase, 
@@ -86,7 +87,9 @@ import {
   EnvironmentalLog,
   ForkliftChecklist,
   MasterRegistryItem,
-  RegisteredAccount
+  RegisteredAccount,
+  ActivePresenceUser,
+  QueuedMutation
 } from './types';
 
 import { 
@@ -329,6 +332,7 @@ export default function App() {
   // Real-time states
   const [socket, setSocket] = useState<WebSocket | null>(null);
   const [activeUsers, setActiveUsers] = useState<string[]>([]);
+  const [activePresence, setActivePresence] = useState<ActivePresenceUser[]>([]);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
@@ -369,6 +373,40 @@ export default function App() {
               }
               setLastSyncedTime(new Date());
             }
+          } else if (payload.type === 'upsert_record') {
+            const { collection, record, author, actionDesc } = payload;
+            if (record && record.id && collection) {
+              unmarkRecordAsDeletedLocally(record.id);
+              setLastSyncedTime(new Date());
+              if (author && author !== (currentUser || '')) {
+                setLiveSyncToast({
+                  id: record.id,
+                  author,
+                  action: actionDesc || `Updated ${collection} record`,
+                  time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                });
+              }
+              const updateFn = (prev: any[]) => {
+                const idx = prev.findIndex(it => it.id === record.id);
+                if (idx >= 0) {
+                  const next = [...prev];
+                  next[idx] = record;
+                  return next;
+                }
+                return [record, ...prev];
+              };
+              switch (collection) {
+                case 'stocks': setStocks(updateFn); break;
+                case 'receiving': setReceiving(updateFn); break;
+                case 'returns': setReturns(updateFn); break;
+                case 'recycling': setRecycling(updateFn); break;
+                case 'issuances': setIssuances(updateFn); break;
+                case 'deliveries': setDeliveries(updateFn); break;
+                case 'envLogs': setEnvLogs(updateFn); break;
+                case 'forkliftChecks': setForkliftChecks(updateFn); break;
+                case 'registries': setRegistries(updateFn); break;
+              }
+            }
           } else if (payload.type === 'delete_record') {
             const { collection, id } = payload;
             if (collection && id) {
@@ -393,6 +431,11 @@ export default function App() {
               markUserAsDeleted(employeeId);
               setRegisteredUsers(prev => prev.filter(u => u.employeeId.toUpperCase() !== employeeId.toUpperCase()));
             }
+          } else if (payload.type === 'all_accounts_cleared') {
+            setRegisteredUsers([superAdminAccount]);
+            try {
+              localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify([superAdminAccount]));
+            } catch (e) {}
           } else if (payload.type === 'activity_toast') {
             setLiveSyncToast({
               id: String(Date.now()),
@@ -525,68 +568,40 @@ export default function App() {
     const userMap = new Map<string, RegisteredAccount>();
     userMap.set('JPMP-002', { ...superAdminAccount });
 
-    // 1. Load cached accounts from localStorage
-    try {
-      const cached = localStorage.getItem('juwei_wms_registeredUsers');
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed)) {
-          parsed.forEach((u: any) => {
-            if (!u || (!u.employeeId && !u.employee_id)) return;
-            const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase();
-            const empId = rawEmpId.startsWith('JPMP-') ? rawEmpId : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
-            const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (empId === 'JPMP-002' ? '0423' : '1234'));
-            userMap.set(empId, {
-              username: (u.username || 'OPERATOR').toUpperCase(),
-              role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
-              employeeId: empId,
-              phoneNumber: u.phoneNumber || u.phone_number || '',
-              permission: u.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
-              pin: cleanPin,
-              status: u.status || 'ACTIVE',
-              lastActive: u.lastActive || u.last_active || undefined
-            });
-          });
+    const source = Array.isArray(incomingList) ? incomingList : (() => {
+      try {
+        const cached = localStorage.getItem('juwei_wms_registeredUsers');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed)) return parsed;
         }
-      }
-    } catch (e) {}
+      } catch (e) {}
+      return [superAdminAccount];
+    })();
 
-    // 2. Merge incoming accounts
-    if (Array.isArray(incomingList)) {
-      incomingList.forEach((u: any) => {
-        if (!u || (!u.employeeId && !u.employee_id)) return;
-        const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase();
-        const empId = rawEmpId.startsWith('JPMP-') 
-          ? rawEmpId 
-          : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
-        const usernameUpper = (u.username || '').toUpperCase();
-        const incomingPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : '');
+    const deletedSet = getDeletedUserIds();
 
-        if (empId === 'JPMP-002' || (usernameUpper === 'SUPER ADMIN' || usernameUpper === 'ALDRIN BANAWA')) {
-          const current = userMap.get('JPMP-002') || superAdminAccount;
-          userMap.set('JPMP-002', {
-            ...current,
-            username: u.username ? String(u.username).toUpperCase() : current.username,
-            phoneNumber: u.phoneNumber || u.phone_number || current.phoneNumber,
-            pin: incomingPin || current.pin || '0423',
-            status: u.status || 'ACTIVE',
-            lastActive: u.lastActive || u.last_active || current.lastActive || undefined
-          });
-        } else {
-          const existing = userMap.get(empId) || ({} as any);
-          userMap.set(empId, {
-            username: (u.username || existing.username || 'OPERATOR').toUpperCase(),
-            role: (u.role || existing.role || 'WAREHOUSE CLERK').toUpperCase(),
-            employeeId: empId,
-            phoneNumber: u.phoneNumber || u.phone_number || existing.phoneNumber || '',
-            permission: u.permission || existing.permission || 'LIMITED_ACCESS',
-            pin: incomingPin || existing.pin || '1234',
-            status: u.status || existing.status || 'ACTIVE',
-            lastActive: u.lastActive || u.last_active || existing.lastActive || undefined
-          });
-        }
+    source.forEach((u: any) => {
+      if (!u || (!u.employeeId && !u.employee_id)) return;
+      const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase();
+      const empId = rawEmpId.startsWith('JPMP-') ? rawEmpId : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
+      if (deletedSet.has(empId) && empId !== 'JPMP-002') return;
+
+      const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (empId === 'JPMP-002' ? '0423' : '1234'));
+      userMap.set(empId, {
+        username: (u.username || 'OPERATOR').toUpperCase(),
+        role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
+        employeeId: empId,
+        phoneNumber: u.phoneNumber || u.phone_number || '',
+        permission: u.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
+        pin: cleanPin,
+        status: u.status || 'ACTIVE',
+        lastActive: u.lastActive || u.last_active || undefined
       });
-    }
+    });
+
+    // Guarantee Super Admin
+    userMap.set('JPMP-002', { ...superAdminAccount });
 
     const result = Array.from(userMap.values());
     try {
@@ -878,8 +893,75 @@ export default function App() {
     }
   };
 
+  const unmarkRecordAsDeletedLocally = (id: string) => {
+    if (!id) return;
+    deletedRecordIds.current.delete(id);
+  };
+
   const isRecordDeletedLocally = (id: string) => {
     return Boolean(id && deletedRecordIds.current.has(id));
+  };
+
+  // Offline Mutations Queue Storage & Processor
+  const PENDING_MUTATIONS_KEY = 'juwei_wms_mutation_queue_v1';
+
+  const getPendingMutations = (): QueuedMutation[] => {
+    try {
+      const raw = localStorage.getItem(PENDING_MUTATIONS_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      return [];
+    }
+  };
+
+  const savePendingMutations = (mutations: QueuedMutation[]) => {
+    try {
+      localStorage.setItem(PENDING_MUTATIONS_KEY, JSON.stringify(mutations));
+    } catch (e) {}
+  };
+
+  const queueOfflineMutation = (mutation: Omit<QueuedMutation, 'id' | 'timestamp'>) => {
+    const item: QueuedMutation = {
+      ...mutation,
+      id: `MUT-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      timestamp: Date.now()
+    };
+    const list = getPendingMutations();
+    list.push(item);
+    savePendingMutations(list);
+  };
+
+  const flushPendingMutationsQueue = async () => {
+    const mutations = getPendingMutations();
+    if (mutations.length === 0) return;
+
+    let targetAddr = serverAddress.trim() || getDefaultServerAddress();
+    const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
+    const isHttps = isSecureServerHost(cleanHost, targetAddr);
+    const httpProto = isHttps ? 'https:' : 'http:';
+
+    try {
+      const res = await fetch('/api/sync/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mutations })
+      });
+      if (res.ok) {
+        localStorage.removeItem(PENDING_MUTATIONS_KEY);
+        return;
+      }
+    } catch (e) {}
+
+    try {
+      const resFallback = await fetch(`${httpProto}//${cleanHost}/api/sync/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mutations })
+      });
+      if (resFallback.ok) {
+        localStorage.removeItem(PENDING_MUTATIONS_KEY);
+      }
+    } catch (err) {}
   };
 
   // Helper to reconcile incoming remote collections with local state cleanly without data overlapping or resurrection
@@ -897,47 +979,25 @@ export default function App() {
     const userMap = new Map<string, RegisteredAccount>();
     userMap.set('JPMP-002', { ...superAdminAccount });
 
-    // 1. Load current local state users
-    if (Array.isArray(currentUsers)) {
-      for (const u of currentUsers) {
-        if (!u || !u.employeeId) continue;
-        const empId = u.employeeId.toUpperCase();
-        if (deletedSet.has(empId) && empId !== 'JPMP-002') continue;
-        const currentPin = u.pin ? String(u.pin).trim() : (empId === 'JPMP-002' ? '0423' : '1234');
-        userMap.set(empId, {
-          ...u,
-          employeeId: empId,
-          username: (u.username || 'OPERATOR').toUpperCase(),
-          role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
-          pin: currentPin,
-          phoneNumber: u.phoneNumber || ''
-        });
-      }
-    }
+    const sourceList = Array.isArray(incomingUsers) ? incomingUsers : (Array.isArray(currentUsers) ? currentUsers : []);
 
-    // 2. Merge incoming users from remote (incoming remote PIN and properties take top priority)
-    if (Array.isArray(incomingUsers)) {
-      for (const u of incomingUsers) {
-        if (!u || (!u.employeeId && !u.employee_id)) continue;
-        const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase();
-        const empId = rawEmpId.startsWith('JPMP-') ? rawEmpId : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
-        if (deletedSet.has(empId) && empId !== 'JPMP-002') continue;
+    for (const u of sourceList) {
+      if (!u || (!u.employeeId && !u.employee_id)) continue;
+      const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase();
+      const empId = rawEmpId.startsWith('JPMP-') ? rawEmpId : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
+      if (deletedSet.has(empId) && empId !== 'JPMP-002') continue;
 
-        const existing = userMap.get(empId) || ({} as any);
-        const incomingPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : '');
-        const resolvedPin = incomingPin || existing.pin || (empId === 'JPMP-002' ? '0423' : '1234');
-        
-        userMap.set(empId, {
-          username: (u.username || existing.username || 'OPERATOR').toUpperCase(),
-          role: (u.role || existing.role || 'WAREHOUSE CLERK').toUpperCase(),
-          employeeId: empId,
-          phoneNumber: u.phoneNumber || u.phone_number || existing.phoneNumber || '',
-          permission: u.permission || existing.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
-          pin: resolvedPin,
-          status: u.status || existing.status || 'ACTIVE',
-          lastActive: u.lastActive || u.last_active || existing.lastActive || undefined
-        });
-      }
+      const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (empId === 'JPMP-002' ? '0423' : '1234'));
+      userMap.set(empId, {
+        username: (u.username || 'OPERATOR').toUpperCase(),
+        role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
+        employeeId: empId,
+        phoneNumber: u.phoneNumber || u.phone_number || '',
+        permission: u.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
+        pin: cleanPin,
+        status: u.status || 'ACTIVE',
+        lastActive: u.lastActive || u.last_active || undefined
+      });
     }
 
     // Guarantee Super Admin JPMP-002 is always present and protected
@@ -959,11 +1019,102 @@ export default function App() {
     return result;
   };
 
+  // Helper to execute coordinated single-record upsert across local state, Supabase, WebSocket, and Express server
+  const upsertRecordLocallyAndRemotely = (
+    collection: string, 
+    record: any, 
+    actionDesc?: string
+  ) => {
+    if (!record || !record.id || !collection) return;
+    unmarkRecordAsDeletedLocally(record.id);
+    setLastSyncedTime(new Date());
+
+    // Queue for offline resilience
+    queueOfflineMutation({
+      type: 'upsert',
+      collection,
+      record,
+      author: currentUser || 'Operator',
+      actionDesc
+    });
+
+    // 0. Cross-tab BroadcastChannel
+    if (syncChannelRef.current) {
+      try {
+        syncChannelRef.current.postMessage({
+          type: 'upsert_record',
+          collection,
+          record,
+          author: currentUser || 'Operator',
+          actionDesc
+        });
+      } catch (e) {}
+    }
+
+    // 1. Supabase direct write
+    if (isSupabaseConfigured()) {
+      syncCollectionToSupabase(collection, [record]);
+    }
+
+    // 2. WebSocket targeted delta broadcast
+    if (wsOpen(socket)) {
+      try {
+        socket!.send(JSON.stringify({
+          type: 'upsert_record',
+          collection,
+          record,
+          author: currentUser || 'Operator',
+          actionDesc
+        }));
+      } catch (e) {}
+    }
+
+    // 3. HTTP REST upsert endpoint
+    let targetAddr = serverAddress.trim() || getDefaultServerAddress();
+    const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
+    const isHttps = isSecureServerHost(cleanHost, targetAddr);
+    const httpProto = isHttps ? 'https:' : 'http:';
+
+    fetch('/api/records/upsert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        collection,
+        record,
+        author: currentUser || 'Operator',
+        actionDesc
+      })
+    })
+    .then(res => {
+      if (res.ok) flushPendingMutationsQueue();
+    })
+    .catch(() => {
+      fetch(`${httpProto}//${cleanHost}/api/records/upsert`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          collection,
+          record,
+          author: currentUser || 'Operator',
+          actionDesc
+        })
+      }).catch(() => {});
+    });
+  };
+
   // Helper to execute coordinated deletion across local state, Supabase, WebSocket, and Express server
   const deleteRecordLocallyAndRemotely = (collection: string, id: string) => {
     if (!id || !collection) return;
     markRecordAsDeletedLocally(id);
     setLastSyncedTime(new Date());
+
+    // Queue for offline resilience
+    queueOfflineMutation({
+      type: 'delete',
+      collection,
+      recordId: id,
+      author: currentUser || 'Operator'
+    });
 
     // 0. Cross-tab BroadcastChannel
     if (syncChannelRef.current) {
@@ -993,11 +1144,26 @@ export default function App() {
     }
 
     // 3. HTTP REST deletion
+    let targetAddr = serverAddress.trim() || getDefaultServerAddress();
+    const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
+    const isHttps = isSecureServerHost(cleanHost, targetAddr);
+    const httpProto = isHttps ? 'https:' : 'http:';
+
     fetch('/api/records/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ collection, id })
-    }).catch(() => {});
+    })
+    .then(res => {
+      if (res.ok) flushPendingMutationsQueue();
+    })
+    .catch(() => {
+      fetch(`${httpProto}//${cleanHost}/api/records/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ collection, id })
+      }).catch(() => {});
+    });
   };
 
   // Manual Full-Sync across WebSocket, REST & Supabase
@@ -1099,7 +1265,7 @@ export default function App() {
     let retryDelay = 1000;
     let missedPongs = 0;
 
-    const applyStatePayload = (dataPayload: any, activeUsersList?: string[]) => {
+    const applyStatePayload = (dataPayload: any, activeUsersList?: string[], activePresenceList?: ActivePresenceUser[]) => {
       if (!dataPayload) return;
       const { stocks, receiving, returns, recycling, issuances, deliveries, envLogs, forkliftChecks, registries, registeredUsers: serverUsers, chatMessages: msgs } = dataPayload;
 
@@ -1145,6 +1311,7 @@ export default function App() {
       }
       if (msgs && Array.isArray(msgs)) setChatMessages(msgs);
       if (activeUsersList && Array.isArray(activeUsersList)) setActiveUsers(activeUsersList);
+      if (activePresenceList && Array.isArray(activePresenceList)) setActivePresence(activePresenceList);
     };
 
     const tryFetchSync = async (url: string): Promise<boolean> => {
@@ -1155,7 +1322,7 @@ export default function App() {
           if (isMounted) {
             hasConnectedOnce = true;
             setConnectionStatus('connected');
-            if (json.data) applyStatePayload(json.data, json.activeUsers);
+            if (json.data) applyStatePayload(json.data, json.activeUsers, json.activePresence);
           }
           return true;
         }
@@ -1206,7 +1373,8 @@ export default function App() {
     };
 
     const runSyncCheck = async (): Promise<boolean> => {
-      // 0. Flush any pending offline mutations first
+      // 0. Flush any pending offline mutations and collections first
+      await flushPendingMutationsQueue();
       await flushPendingSyncQueue();
 
       // 1. Try relative URL /api/sync first (fastest, guaranteed on same origin)
@@ -1272,7 +1440,10 @@ export default function App() {
           try {
             ws.send(JSON.stringify({
               type: 'join',
-              username: currentUser || 'JUWEI OPERATOR'
+              username: currentUser || 'JUWEI OPERATOR',
+              employeeId: currentEmployeeId || '',
+              role: currentRole || (currentPermission === 'FULL_ACCESS' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR'),
+              activeView: view
             }));
           } catch (e) {
             console.warn('WS send join error:', e);
@@ -1317,7 +1488,10 @@ export default function App() {
               missedPongs = 0;
               setConnectionStatus('connected');
               setLastSyncedTime(new Date());
-              applyStatePayload(payload.data, payload.activeUsers);
+              applyStatePayload(payload.data, payload.activeUsers, payload.activePresence);
+              if (payload.activePresence && Array.isArray(payload.activePresence)) {
+                setActivePresence(payload.activePresence);
+              }
               break;
             }
             case 'record_upserted': {
@@ -1419,12 +1593,22 @@ export default function App() {
               }
               break;
             }
+            case 'all_accounts_cleared': {
+              setRegisteredUsers([superAdminAccount]);
+              try {
+                localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify([superAdminAccount]));
+              } catch (e) {}
+              break;
+            }
             case 'chat_broadcast': {
               setChatMessages(prev => [...prev, payload.message]);
               break;
             }
             case 'presence_updated': {
               setActiveUsers(payload.activeUsers || []);
+              if (payload.activePresence && Array.isArray(payload.activePresence)) {
+                setActivePresence(payload.activePresence);
+              }
               break;
             }
             case 'supabase_config_updated': {
@@ -1502,17 +1686,20 @@ export default function App() {
     };
   }, [serverAddress]);
 
-  // Keep WebSocket presence username in sync without tearing down WS connection
+  // Keep WebSocket presence and active view module in sync dynamically across all connected operators
   useEffect(() => {
-    if (wsOpen(socket) && currentUser) {
+    if (wsOpen(socket)) {
       try {
         socket!.send(JSON.stringify({
-          type: 'join',
-          username: currentUser
+          type: 'presence_update',
+          username: currentUser || 'JUWEI OPERATOR',
+          employeeId: currentEmployeeId || '',
+          role: currentRole || (currentPermission === 'FULL_ACCESS' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR'),
+          activeView: view
         }));
       } catch (e) {}
     }
-  }, [currentUser, socket]);
+  }, [currentUser, currentEmployeeId, currentRole, currentPermission, view, socket]);
 
   // Supabase PostgreSQL Realtime Subscription, Auto-Config & Cloud Sync Engine
   useEffect(() => {
@@ -1613,7 +1800,7 @@ export default function App() {
 
       loadAllSupabaseData();
 
-      // Setup Realtime subscription for PostgreSQL events
+      // Setup Realtime subscription for PostgreSQL events with granular delta sync
       channel = setupSupabaseRealtimeSubscriptions(
         async (col) => {
           if (!isMounted) return;
@@ -1645,6 +1832,62 @@ export default function App() {
         (status) => {
           if (isMounted) {
             setSupabaseStatus(status);
+          }
+        },
+        (col, action, record, id) => {
+          if (!isMounted) return;
+          setLastSyncedTime(new Date());
+          setSupabaseStatus('connected');
+
+          if (action === 'upsert' && record && record.id) {
+            if (isRecordDeletedLocally(record.id)) return;
+            const updateFn = (prev: any[]) => {
+              const idx = prev.findIndex(it => it.id === record.id);
+              if (idx >= 0) {
+                const next = [...prev];
+                next[idx] = record;
+                return next;
+              }
+              return [record, ...prev];
+            };
+
+            switch (col) {
+              case 'stocks': setStocks(updateFn); break;
+              case 'receiving': setReceiving(updateFn); break;
+              case 'returns': setReturns(updateFn); break;
+              case 'recycling': setRecycling(updateFn); break;
+              case 'issuances': setIssuances(updateFn); break;
+              case 'deliveries': setDeliveries(updateFn); break;
+              case 'envLogs': setEnvLogs(updateFn); break;
+              case 'forkliftChecks': setForkliftChecks(updateFn); break;
+              case 'registries': setRegistries(updateFn); break;
+              case 'registeredUsers': {
+                setRegisteredUsers(prev => reconcileUsers(prev, [record]));
+                break;
+              }
+            }
+          } else if (action === 'delete' && id) {
+            markRecordAsDeletedLocally(id);
+            const filterFn = (prev: any[]) => prev.filter(it => it.id !== id);
+            switch (col) {
+              case 'stocks': setStocks(filterFn); break;
+              case 'receiving': setReceiving(filterFn); break;
+              case 'returns': setReturns(filterFn); break;
+              case 'recycling': setRecycling(filterFn); break;
+              case 'issuances': setIssuances(filterFn); break;
+              case 'deliveries': setDeliveries(filterFn); break;
+              case 'envLogs': setEnvLogs(filterFn); break;
+              case 'forkliftChecks': setForkliftChecks(filterFn); break;
+              case 'registries': setRegistries(filterFn); break;
+              case 'registeredUsers': {
+                const cleanId = id.toUpperCase();
+                if (cleanId !== 'JPMP-002') {
+                  markUserAsDeleted(cleanId);
+                  setRegisteredUsers(prev => prev.filter(u => u.employeeId.toUpperCase() !== cleanId));
+                }
+                break;
+              }
+            }
           }
         }
       );
@@ -1894,6 +2137,57 @@ export default function App() {
 
     // 6. Sync updated collection
     syncCollection('registeredUsers', nextUsers);
+  };
+
+  const handleClearAllAccountsExceptSuperAdmin = () => {
+    const onlySuperAdmin = [superAdminAccount];
+    setRegisteredUsers(onlySuperAdmin);
+    try {
+      localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(onlySuperAdmin));
+    } catch (e) {}
+
+    // 1. Supabase deletion
+    if (isSupabaseConfigured()) {
+      try {
+        const client = getSupabase();
+        if (client) {
+          Promise.resolve(client.from('registered_users').delete().neq('employee_id', 'JPMP-002'))
+            .then(() => {
+              syncCollectionToSupabase('registeredUsers', onlySuperAdmin);
+            })
+            .catch(() => {});
+        }
+      } catch (e) {}
+    }
+
+    // 2. Server reset
+    fetch('/api/accounts/clear-all-except-super-admin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    }).catch(() => {});
+
+    // 3. Broadcast channel
+    if (syncChannelRef.current) {
+      try {
+        syncChannelRef.current.postMessage({
+          type: 'all_accounts_cleared',
+          data: onlySuperAdmin
+        });
+      } catch (e) {}
+    }
+
+    // 4. WebSocket broadcast
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      try {
+        socket.send(JSON.stringify({
+          type: 'all_accounts_cleared',
+          data: onlySuperAdmin
+        }));
+      } catch (e) {}
+    }
+
+    // 5. Sync collection
+    syncCollection('registeredUsers', onlySuperAdmin);
   };
 
   const handleUpdateAccount = (oldEmpId: string, updated: RegisteredAccount) => {
@@ -2679,75 +2973,68 @@ export default function App() {
 
   if (!isLoggedIn) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-100 via-sky-50 to-blue-100 px-4 py-12 sm:px-6 lg:px-8 font-sans uppercase relative overflow-hidden" id="juwei-auth-container">
-        {/* Diffused Ambient Glow Orbs with Light Blue and Slate Gray */}
-        <div className="glass-ambient-orb-1 opacity-60" />
-        <div className="glass-ambient-orb-2 opacity-50" />
-        <div className="glass-ambient-orb-3 opacity-40" />
-
+      <div className="min-h-screen flex items-center justify-center bg-slate-900 px-4 py-12 sm:px-6 lg:px-8 font-sans relative overflow-hidden" id="juwei-auth-container">
         {/* NEWLY REGISTERED USER SECURE PIN DISCOVERY OVERLAY */}
         {newlyRegisteredUser && (
-          <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-md animate-fadeIn">
-            <div className="max-w-md w-full bg-white p-8 rounded-3xl shadow-2xl text-center space-y-6 relative overflow-hidden border border-slate-300 text-slate-900">
-              <div className="absolute top-0 left-1/4 w-1/2 h-1 bg-gradient-to-r from-transparent via-emerald-500 to-transparent animate-pulse" />
-              
+          <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-center justify-center p-4 backdrop-blur-md animate-in fade-in duration-200">
+            <div className="max-w-md w-full bg-white p-8 rounded-2xl shadow-2xl text-center space-y-6 relative overflow-hidden border border-slate-200 text-slate-900">
               <div className="flex justify-center">
-                <div className="h-16 w-16 bg-emerald-100 border border-emerald-300 rounded-full flex items-center justify-center text-emerald-700 shadow-md shadow-emerald-500/10">
-                  <UserCheck className="h-8 w-8 animate-bounce" />
+                <div className="h-14 w-14 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-center text-emerald-600 shadow-xs">
+                  <UserCheck className="h-7 w-7" />
                 </div>
               </div>
 
               <div>
-                <span className="text-emerald-700 font-bold text-[10px] tracking-widest font-mono block">
-                  REGISTRATION SUCCESSFUL
+                <span className="text-emerald-700 font-semibold text-[10px] tracking-wider font-mono uppercase block">
+                  Registration Successful
                 </span>
-                <h3 className="text-xl font-extrabold text-slate-900 uppercase tracking-tight mt-1">
-                  SECURE OPERATOR ID REGISTERED
+                <h3 className="text-lg font-bold text-slate-900 tracking-tight mt-1">
+                  Secure Operator ID Registered
                 </h3>
-                <p className="text-[10px] text-slate-600 font-bold mt-1 font-mono">
-                  JUWEI PLASTIC MOULDING PHILS. INC.
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Juwei Plastic Moulding Phils. Inc.
                 </p>
               </div>
 
               {/* Operator Details */}
-              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 text-left space-y-2">
-                <div className="flex justify-between items-center border-b border-slate-200 pb-2">
-                  <span className="text-[10px] text-slate-600 font-bold font-mono">OPERATOR:</span>
-                  <span className="text-xs font-bold text-slate-900">{newlyRegisteredUser.username}</span>
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-left space-y-2 text-xs">
+                <div className="flex justify-between items-center border-b border-slate-200 pb-1.5">
+                  <span className="text-[10px] text-slate-500 font-semibold uppercase">Operator:</span>
+                  <span className="font-semibold text-slate-900">{newlyRegisteredUser.username}</span>
                 </div>
-                <div className="flex justify-between items-center border-b border-slate-200 pb-2">
-                  <span className="text-[10px] text-slate-600 font-bold font-mono">EMPLOYEE ID:</span>
-                  <span className="text-xs font-bold text-blue-700 font-mono">{newlyRegisteredUser.employeeId}</span>
+                <div className="flex justify-between items-center border-b border-slate-200 pb-1.5">
+                  <span className="text-[10px] text-slate-500 font-semibold uppercase">Employee ID:</span>
+                  <span className="font-semibold text-indigo-600 font-mono">{newlyRegisteredUser.employeeId}</span>
                 </div>
                 {newlyRegisteredUser.phoneNumber && (
-                  <div className="flex justify-between items-center border-b border-slate-200 pb-2">
-                    <span className="text-[10px] text-slate-600 font-bold font-mono">VERIFIED MOBILE:</span>
-                    <span className="text-xs font-bold text-emerald-700 font-mono flex items-center gap-1">
-                      <Phone className="h-3 w-3 text-emerald-600" />
+                  <div className="flex justify-between items-center border-b border-slate-200 pb-1.5">
+                    <span className="text-[10px] text-slate-500 font-semibold uppercase">Verified Mobile:</span>
+                    <span className="font-semibold text-emerald-600 font-mono flex items-center gap-1">
+                      <Phone className="h-3 w-3 text-emerald-500" />
                       {newlyRegisteredUser.phoneNumber}
                     </span>
                   </div>
                 )}
                 <div className="flex justify-between items-center">
-                  <span className="text-[10px] text-slate-600 font-bold font-mono">ASSIGNED ROLE:</span>
-                  <span className="text-xs font-bold text-slate-800">{newlyRegisteredUser.role}</span>
+                  <span className="text-[10px] text-slate-500 font-semibold uppercase">Assigned Role:</span>
+                  <span className="font-semibold text-slate-800">{newlyRegisteredUser.role}</span>
                 </div>
               </div>
 
               {/* PIN Code & Generated QR Code Pass Box */}
-              <div className="bg-gradient-to-br from-blue-50 to-slate-100 p-5 rounded-2xl border border-blue-200 relative space-y-4 shadow-sm">
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-blue-700 text-white text-[9px] font-mono font-bold tracking-wider px-3 py-1 rounded-full uppercase shadow-xs">
-                  YOUR UNIQUE LOGIN PIN & QR PASS
+              <div className="bg-indigo-50/60 p-5 rounded-xl border border-indigo-100 relative space-y-3">
+                <div className="text-[10px] text-indigo-700 font-mono font-semibold uppercase tracking-wider">
+                  Unique Login PIN & QR Pass
                 </div>
                 
-                <div className="flex items-center justify-center gap-2 mt-2">
-                  <div className="text-3xl font-mono font-extrabold text-emerald-700 tracking-[0.25em] pl-[0.25em] text-center select-all">
+                <div className="flex items-center justify-center gap-2">
+                  <div className="text-2xl font-mono font-bold text-emerald-700 tracking-[0.25em] pl-[0.25em] text-center select-all">
                     {showNewlyRegisteredPin ? newlyRegisteredUser.pin : '••••'}
                   </div>
                   <button
                     type="button"
                     onClick={() => setShowNewlyRegisteredPin(!showNewlyRegisteredPin)}
-                    className="text-slate-600 hover:text-emerald-700 p-1.5 rounded transition cursor-pointer"
+                    className="text-slate-500 hover:text-emerald-700 p-1.5 rounded transition cursor-pointer"
                     title={showNewlyRegisteredPin ? "Hide PIN" : "Reveal PIN"}
                   >
                     {showNewlyRegisteredPin ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -2755,7 +3042,7 @@ export default function App() {
                 </div>
 
                 {/* QR Code Container */}
-                <div className="bg-white p-3 rounded-2xl border border-slate-300 inline-block mx-auto shadow-md">
+                <div className="bg-white p-2.5 rounded-xl border border-slate-200 inline-block mx-auto shadow-xs">
                   <QRCodeSVG
                     value={JSON.stringify({
                       type: 'JPMP_WMS_LOGIN_PASS',
@@ -2763,23 +3050,22 @@ export default function App() {
                       username: newlyRegisteredUser.username,
                       pin: newlyRegisteredUser.pin
                     })}
-                    size={130}
+                    size={120}
                     level="H"
                     includeMargin={true}
                   />
                 </div>
 
-                <div className="text-[9px] text-slate-700 font-bold uppercase tracking-wide">
-                  ⚠️ RECORD PIN OR SAVE THIS QR CODE BADGE SECURELY.
-                  <span className="block text-slate-500 mt-0.5 font-medium">SCAN QR CODE AT WMS GATEWAY TO AUTOMATICALLY LOG IN.</span>
+                <div className="text-[10px] text-slate-600 font-medium">
+                  Scan QR code at WMS Gateway to log in instantly.
                 </div>
 
                 <button
                   type="button"
                   onClick={() => setQrBadgeAccount(newlyRegisteredUser)}
-                  className="w-full bg-white hover:bg-slate-100 text-blue-800 border border-blue-300 py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 uppercase cursor-pointer shadow-xs"
+                  className="w-full bg-white hover:bg-slate-50 text-indigo-700 border border-indigo-200 py-2 px-3 rounded-lg text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
                 >
-                  <Printer className="h-3.5 w-3.5 text-blue-600" /> PRINT / DOWNLOAD QR PASS BADGE
+                  <Printer className="h-3.5 w-3.5 text-indigo-600" /> Print / Download QR Pass Badge
                 </button>
               </div>
 
@@ -2797,9 +3083,9 @@ export default function App() {
                     setIsLoggingIn(false);
                   }, 500);
                 }}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 px-4 rounded-2xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-lg shadow-blue-600/20 uppercase cursor-pointer border border-blue-500"
+                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 px-4 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-2 shadow-xs cursor-pointer"
               >
-                <Fingerprint className="h-4 w-4" /> PROCEED TO VERIFICATION & LOG IN
+                <Fingerprint className="h-4 w-4" /> Proceed to Verification & Log In
               </button>
             </div>
           </div>
@@ -2807,169 +3093,155 @@ export default function App() {
 
         <motion.div 
           id="operator-login-portal" 
-          className="operator-login-portal max-w-md w-full space-y-6 bg-white/95 p-8 sm:p-9 rounded-3xl shadow-2xl relative overflow-hidden border border-slate-300 backdrop-blur-2xl z-10 text-slate-900"
-          initial={{ opacity: 0, y: 20, scale: 0.98 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+          className="operator-login-portal max-w-md w-full space-y-6 bg-slate-900 border border-slate-800 p-8 sm:p-9 rounded-2xl shadow-2xl relative overflow-hidden z-10 text-slate-100"
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.25, ease: "easeOut" }}
         >
-          {/* Accent Glow */}
-          <div className="absolute top-0 left-1/4 w-1/2 h-1 bg-gradient-to-r from-transparent via-blue-500 to-transparent animate-pulse" />
-          
-          {/* Supabase Cloud Database Quick Settings (Logo Only & Editable) */}
-          <div className="flex justify-between items-center -mt-1 -mb-1">
+          {/* Supabase Cloud Database Quick Settings */}
+          <div className="flex justify-between items-center">
             <div className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="text-[10px] text-slate-700 font-mono font-bold uppercase tracking-wider">SYSTEM READY</span>
+              <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-[11px] text-slate-400 font-mono font-medium">SYSTEM READY</span>
             </div>
 
             <button
               type="button"
               onClick={() => setShowSupabaseSettingsModal(true)}
-              className="group relative flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-300 hover:border-emerald-500 text-slate-700 hover:text-slate-900 px-2.5 py-1.5 rounded-xl transition shadow-xs cursor-pointer"
+              className="flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700/80 border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer text-xs"
               title="Click to edit Supabase Cloud Database Configuration"
               aria-label="Edit Supabase Cloud Database Configuration"
               id="btn-login-supabase-settings"
             >
-              <div className="relative flex items-center justify-center">
-                <Database className={`h-4 w-4 ${isSupabaseConfigured() ? 'text-emerald-600' : 'text-amber-600'} transition-transform group-hover:scale-110`} />
-                <span className={`absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full ${isSupabaseConfigured() ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
-              </div>
-              <Edit3 className="h-3 w-3 text-slate-500 group-hover:text-emerald-600 transition" />
+              <Database className={`h-3.5 w-3.5 ${isSupabaseConfigured() ? 'text-emerald-400' : 'text-amber-400'}`} />
+              <span className="text-[11px] font-mono">DB Config</span>
             </button>
           </div>
 
           <div className="flex flex-col items-center text-center">
-            <span className="inline-block bg-blue-100 text-blue-900 font-bold text-[10px] tracking-wider uppercase px-3 py-1 rounded-full mb-1 border border-blue-200 font-mono shadow-xs">
-              OFFICIAL WMS OPERATOR PORTAL
-            </span>
-            <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-slate-900 font-mono mt-1">
+            <span className="inline-block bg-indigo-500/10 text-indigo-300 font-mono font-semibold text-[10px] uppercase px-2.5 py-0.5 rounded-md mb-2 border border-indigo-500/20">
               JUWEI WMS GATEWAY
+            </span>
+            <h2 className="text-xl font-bold tracking-tight text-white">
+              Operator Sign In
             </h2>
-            <p className="mt-0.5 text-[10px] text-slate-600 font-bold uppercase tracking-wide">
-              OPERATOR LOG-IN PORTAL
+            <p className="mt-1 text-xs text-slate-400">
+              Enter your Employee ID and 4-digit PIN to begin
             </p>
           </div>
 
           <div className="space-y-4">
             {/* QR Code Instant Gateway Login Button */}
-            <div className="bg-gradient-to-r from-blue-50 to-indigo-50/60 p-3.5 rounded-2xl border border-blue-200 flex items-center justify-between gap-3 shadow-xs">
+            <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-700/80 flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <span className="text-xs font-extrabold text-slate-900 block font-mono flex items-center gap-1.5 truncate">
-                  <QrCode className="h-4 w-4 text-emerald-600 shrink-0" /> INSTANT QR PASS LOG IN
+                <span className="text-xs font-semibold text-white flex items-center gap-1.5 truncate">
+                  <QrCode className="h-4 w-4 text-emerald-400 shrink-0" /> Instant QR Pass Login
                 </span>
-                <span className="text-[10px] text-slate-600 block font-sans uppercase truncate mt-0.5 font-bold">
+                <span className="text-[11px] text-slate-400 block truncate mt-0.5">
                   Scan badge or upload pass image
                 </span>
               </div>
               <button
                 type="button"
                 onClick={() => setShowLoginQrScanner(true)}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md uppercase shrink-0 cursor-pointer font-mono border border-blue-500"
+                className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer"
                 id="btn-gateway-scan-qr"
               >
-                <ScanLine className="h-3.5 w-3.5" /> SCAN QR
+                <ScanLine className="h-3.5 w-3.5" /> Scan QR
               </button>
             </div>
 
-            <div className="flex items-center gap-2 my-2 text-slate-500 text-[10px] font-mono font-bold uppercase">
-              <div className="h-px bg-slate-300 flex-1" />
-              <span>OR ENTER ID & PIN MANUALLY</span>
-              <div className="h-px bg-slate-300 flex-1" />
+            <div className="flex items-center gap-2 my-2 text-slate-500 text-[10px] font-mono font-medium uppercase">
+              <div className="h-px bg-slate-800 flex-1" />
+              <span>Or enter manually</span>
+              <div className="h-px bg-slate-800 flex-1" />
             </div>
 
-            <form onSubmit={handleDirectLogin} className="space-y-4">
-                <div>
-                  <label className="block text-[10px] uppercase font-extrabold tracking-wider text-slate-800 mb-1 font-mono">
-                    OPERATOR ID NUMBER
-                  </label>
-                  <div className="relative">
-                    <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-500 font-mono text-xs font-bold">
-                      ID
-                    </span>
-                    <input
-                      type="text"
-                      required
-                      value={loginEmployeeId}
-                      onChange={(e) => {
-                        setLoginEmployeeId(e.target.value);
-                        if (loginError) setLoginError('');
-                      }}
-                      placeholder="E.G. JPMP-002"
-                      style={{ color: '#0f172a' }}
-                      className="w-full bg-white border-2 border-slate-300 focus:border-blue-600 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-900 !text-slate-900 placeholder-slate-400 focus:outline-none uppercase font-mono font-bold tracking-wide shadow-xs"
-                    />
-                  </div>
+            <form onSubmit={handleDirectLogin} className="space-y-3.5">
+              <div>
+                <label className="block text-[11px] font-medium text-slate-300 mb-1">
+                  Employee ID
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    required
+                    value={loginEmployeeId}
+                    onChange={(e) => {
+                      setLoginEmployeeId(e.target.value);
+                      if (loginError) setLoginError('');
+                    }}
+                    placeholder="e.g. JPMP-002"
+                    className="w-full bg-slate-800/80 border border-slate-700 focus:border-indigo-500 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none font-mono tracking-wide"
+                  />
                 </div>
+              </div>
 
-                <div>
-                  <label className="block text-[10px] uppercase font-extrabold tracking-wider text-slate-800 mb-1 font-mono">
-                    4-DIGIT SECURE PIN CODE
-                  </label>
-                  <div className="relative">
-                    <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-500">
-                      <Lock className="h-3.5 w-3.5 text-slate-500" />
-                    </span>
-                    <input
-                      type={showPin ? "text" : "password"}
-                      required
-                      maxLength={4}
-                      pattern="\d*"
-                      inputMode="numeric"
-                      value={loginPin}
-                      onChange={(e) => {
-                        const val = e.target.value.replace(/\D/g, '');
-                        setLoginPin(val);
-                        if (loginError) setLoginError('');
-                      }}
-                      placeholder="••••"
-                      style={{ color: '#0f172a' }}
-                      className="w-full bg-white border-2 border-slate-300 focus:border-blue-600 rounded-xl pl-9 pr-10 py-2 text-xs text-slate-900 !text-slate-900 placeholder-slate-400 focus:outline-none font-mono font-bold tracking-widest shadow-xs"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPin(!showPin)}
-                      className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-500 hover:text-slate-900 transition cursor-pointer"
-                    >
-                      {showPin ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                    </button>
-                  </div>
+              <div>
+                <label className="block text-[11px] font-medium text-slate-300 mb-1">
+                  4-Digit PIN Code
+                </label>
+                <div className="relative">
+                  <input
+                    type={showPin ? "text" : "password"}
+                    required
+                    maxLength={4}
+                    pattern="\d*"
+                    inputMode="numeric"
+                    value={loginPin}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/\D/g, '');
+                      setLoginPin(val);
+                      if (loginError) setLoginError('');
+                    }}
+                    placeholder="••••"
+                    className="w-full bg-slate-800/80 border border-slate-700 focus:border-indigo-500 rounded-lg px-3 pr-10 py-2 text-xs text-white placeholder-slate-500 focus:outline-none font-mono tracking-widest"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPin(!showPin)}
+                    className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                  >
+                    {showPin ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
                 </div>
+              </div>
 
-                {loginError && (
-                  <div className="bg-rose-50 border border-rose-300 text-rose-800 px-3 py-2 rounded-xl text-[10px] text-center font-bold tracking-wide uppercase font-mono animate-shake">
-                    ⚠️ {loginError}
-                  </div>
-                )}
+              {loginError && (
+                <div className="bg-rose-950/40 border border-rose-500/30 text-rose-300 px-3 py-2 rounded-lg text-xs text-center font-medium font-mono">
+                  {loginError}
+                </div>
+              )}
 
-                <button
-                  type="submit"
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 px-4 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 shadow-lg uppercase cursor-pointer"
-                >
-                  <LogIn className="h-4 w-4" /> LOG IN TO WMS SESSION
-                </button>
-              </form>
-            </div>
+              <button
+                type="submit"
+                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2.5 px-4 rounded-lg text-xs font-semibold transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+              >
+                <LogIn className="h-4 w-4" /> Sign In to WMS Session
+              </button>
+            </form>
+          </div>
 
-          <div className="pt-4 border-t border-slate-200 flex flex-col items-center gap-2 text-center">
-            <p className="text-[9px] text-slate-600 uppercase tracking-widest font-mono font-bold">
-              SECURE LOG-IN SESSION • JUWEI PLASTIC MOULDING WMS
+          <div className="pt-4 border-t border-slate-800 flex flex-col items-center gap-2.5 text-center">
+            <p className="text-[10px] text-slate-500 font-mono">
+              JUWEI PLASTIC MOULDING PHILS. INC.
             </p>
             <div className="flex items-center gap-2 flex-wrap justify-center">
               <button
                 type="button"
                 onClick={() => setShowMobileInstallModal(true)}
-                className="text-[10px] text-emerald-800 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 px-3 py-1 rounded-lg transition flex items-center gap-1.5 font-mono uppercase font-bold cursor-pointer shadow-xs"
+                className="text-[11px] text-slate-400 hover:text-slate-200 bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 px-3 py-1 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer font-mono"
               >
-                <Smartphone className="h-3 w-3 text-emerald-600" />
-                <span>Mobile APK / App</span>
+                <Smartphone className="h-3 w-3 text-emerald-400" />
+                <span>Mobile App</span>
               </button>
               <button
                 type="button"
                 onClick={() => setShowDesktopInstallModal(true)}
-                className="text-[10px] text-blue-800 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 border border-blue-300 px-3 py-1 rounded-lg transition flex items-center gap-1.5 font-mono uppercase font-bold cursor-pointer shadow-xs"
+                className="text-[11px] text-slate-400 hover:text-slate-200 bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 px-3 py-1 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer font-mono"
               >
-                <Monitor className="h-3 w-3 text-blue-600" />
-                <span>Desktop App (.exe)</span>
+                <Monitor className="h-3 w-3 text-indigo-400" />
+                <span>Desktop App</span>
               </button>
             </div>
           </div>
@@ -3049,190 +3321,189 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col md:flex-row bg-gradient-to-br from-slate-100 via-sky-50/50 to-blue-100/60 font-sans relative overflow-x-hidden" id="juwei-app-container">
-      {/* Ambient Diffused Glowing Mesh Background Orbs with Light Blue and Gray */}
-      <div className="glass-ambient-orb-1" />
-      <div className="glass-ambient-orb-2" />
-      <div className="glass-ambient-orb-3" />
-
+    <div className="min-h-screen flex flex-col md:flex-row bg-slate-50 font-sans relative overflow-x-hidden text-slate-900" id="juwei-app-container">
       {/* Sidebar navigation */}
-      <aside className="w-full md:w-64 glass-sidebar text-white flex flex-col justify-between z-20 shrink-0" id="sidebar-nav">
+      <aside className="w-full md:w-64 bg-slate-900 border-r border-slate-800 text-slate-200 flex flex-col justify-between z-20 shrink-0" id="sidebar-nav">
         <div>
           {/* Logged in Operator badge */}
-          <div className="p-4 bg-slate-900/60 border-b border-white/10 flex flex-col gap-2 backdrop-blur-md">
+          <div className="p-4 bg-slate-950/70 border-b border-slate-800 flex flex-col gap-2.5">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2.5">
-                <div className="bg-slate-800/80 border border-white/15 p-1.5 rounded-xl text-blue-300 shrink-0 shadow-xs">
+                <div className="bg-slate-800 border border-slate-700 p-2 rounded-xl text-indigo-400 shrink-0">
                   <User className="h-4 w-4" />
                 </div>
                 <div className="text-left leading-tight">
                   <div className="font-bold text-white text-xs tracking-tight">
                     {currentUser}
                   </div>
-                  <div className="text-[10px] font-mono text-blue-200 py-0.5">
+                  <div className="text-[10px] font-mono text-slate-400 py-0.5">
                     ({currentEmployeeId})
                   </div>
-                  <div className="text-[9px] text-blue-300 font-bold uppercase tracking-wider">{currentRole}</div>
+                  <div className="text-[9px] text-indigo-400 font-semibold uppercase tracking-wider">{currentRole}</div>
                 </div>
               </div>
               <button
                 onClick={handleLogout}
                 title="Log Out / Switch Operator"
-                className="p-1.5 text-blue-200 hover:text-white hover:bg-white/10 border border-white/15 rounded-xl transition cursor-pointer"
+                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-700/60 rounded-xl transition-colors cursor-pointer"
               >
                 <LogOut className="h-3.5 w-3.5" />
               </button>
             </div>
             
             {currentPermission === 'VIEW_ONLY' ? (
-              <div className="bg-slate-900/80 border border-amber-500/40 text-amber-300 px-2.5 py-1 rounded-xl text-[9px] font-bold flex items-center justify-center gap-1 font-mono uppercase shadow-xs" title="VIEW ONLY MODE: ACTIONS ARE RESTRICTED">
+              <div className="bg-amber-950/40 border border-amber-500/30 text-amber-300 px-2.5 py-1 rounded-lg text-[9px] font-semibold flex items-center justify-center gap-1 font-mono uppercase" title="VIEW ONLY MODE: ACTIONS ARE RESTRICTED">
                 <Lock className="h-3 w-3 text-amber-400 shrink-0" />
                 <span>VIEW ONLY ACCESS</span>
               </div>
             ) : currentPermission === 'LIMITED_ACCESS' ? (
-              <div className="bg-slate-900/80 border border-blue-400/40 text-blue-200 px-2.5 py-1 rounded-xl text-[9px] font-bold flex items-center justify-center gap-1 font-mono uppercase shadow-xs" title="LIMITED ACCESS MODE: CREATE & EDIT PERMITTED">
-                <Edit3 className="h-3 w-3 text-blue-300 shrink-0" />
+              <div className="bg-blue-950/40 border border-blue-500/30 text-blue-300 px-2.5 py-1 rounded-lg text-[9px] font-semibold flex items-center justify-center gap-1 font-mono uppercase" title="LIMITED ACCESS MODE: CREATE & EDIT PERMITTED">
+                <Edit3 className="h-3 w-3 text-blue-400 shrink-0" />
                 <span>LIMITED ACCESS (EDIT ALLOWED)</span>
               </div>
             ) : (
-              <div className="bg-slate-900/80 border border-emerald-400/40 text-emerald-200 px-2.5 py-1 rounded-xl text-[9px] font-bold flex items-center justify-center gap-1 font-mono uppercase shadow-xs" title="FULL ACCESS MODE: ALL ACTIONS ENABLED">
-                <Unlock className="h-3 w-3 text-emerald-300 shrink-0" />
+              <div className="bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 px-2.5 py-1 rounded-lg text-[9px] font-semibold flex items-center justify-center gap-1 font-mono uppercase" title="FULL ACCESS MODE: ALL ACTIONS ENABLED">
+                <Unlock className="h-3 w-3 text-emerald-400 shrink-0" />
                 <span>FULL ACCESS</span>
               </div>
             )}
           </div>
 
           {/* Header Branding */}
-          <div className="p-4 bg-slate-950/50 border-b border-white/10 flex items-center justify-between backdrop-blur-md">
+          <div className="p-4 bg-slate-950/40 border-b border-slate-800 flex items-center justify-between">
             <div>
-              <span className="text-white font-mono font-bold tracking-wider text-sm block">JUWEI WMS</span>
-              <span className="text-[9px] text-blue-200 font-bold uppercase tracking-wider block">Juwei Plastic Moulding Phils. Inc.</span>
-              <span className="text-[10px] font-mono font-bold text-blue-300 tracking-wider block mt-0.5">WMS v1.0 • FROSTED</span>
+              <div className="flex items-center gap-2">
+                <span className="text-white font-mono font-bold tracking-wider text-sm">JUWEI WMS</span>
+                <span className="px-1.5 py-0.5 bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-[9px] font-mono font-bold rounded">
+                  v1.0
+                </span>
+              </div>
+              <span className="text-[10px] text-slate-400 block mt-0.5">Juwei Plastic Moulding Phils. Inc.</span>
             </div>
-            <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-lg shadow-emerald-400/50 animate-pulse" title="System Live" />
+            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" title="System Live" />
           </div>
 
           {/* Navigation Links */}
-          <nav className="p-3 space-y-1.5" id="nav-list">
+          <nav className="p-3 space-y-1" id="nav-list">
             <button 
               onClick={() => setView('dashboard')}
-              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition-all cursor-pointer ${
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all cursor-pointer ${
                 view === 'dashboard' 
-                  ? 'bg-blue-600/90 text-white shadow-lg shadow-blue-600/30 border border-blue-400/40 font-bold backdrop-blur-md' 
-                  : 'text-slate-300 hover:bg-white/10 hover:text-white border border-transparent'
+                  ? 'bg-indigo-600 text-white font-semibold shadow-xs' 
+                  : 'text-slate-400 hover:bg-slate-800/80 hover:text-slate-100 font-medium'
               }`}
             >
-              <LayoutDashboard className="h-4 w-4" /> Dashboard Overview
+              <LayoutDashboard className="h-4 w-4 shrink-0" /> Dashboard Overview
             </button>
 
             <button 
               onClick={() => setView('receiving')}
-              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition-all cursor-pointer ${
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all cursor-pointer ${
                 view === 'receiving' 
-                  ? 'bg-blue-600/90 text-white shadow-lg shadow-blue-600/30 border border-blue-400/40 font-bold backdrop-blur-md' 
-                  : 'text-slate-300 hover:bg-white/10 hover:text-white border border-transparent'
+                  ? 'bg-indigo-600 text-white font-semibold shadow-xs' 
+                  : 'text-slate-400 hover:bg-slate-800/80 hover:text-slate-100 font-medium'
               }`}
             >
-              <ArrowLeftRight className="h-4 w-4" /> Receiving & Returns
+              <ArrowLeftRight className="h-4 w-4 shrink-0" /> Receiving & Returns
             </button>
 
             <button 
               onClick={() => setView('stock')}
-              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition-all cursor-pointer ${
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all cursor-pointer ${
                 view === 'stock' 
-                  ? 'bg-blue-600/90 text-white shadow-lg shadow-blue-600/30 border border-blue-400/40 font-bold backdrop-blur-md' 
-                  : 'text-slate-300 hover:bg-white/10 hover:text-white border border-transparent'
+                  ? 'bg-indigo-600 text-white font-semibold shadow-xs' 
+                  : 'text-slate-400 hover:bg-slate-800/80 hover:text-slate-100 font-medium'
               }`}
             >
-              <PackageSearch className="h-4 w-4" /> Stock & FIFO Bins
+              <PackageSearch className="h-4 w-4 shrink-0" /> Stock & FIFO Bins
             </button>
 
             <button 
               onClick={() => setView('recycling')}
-              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition-all cursor-pointer ${
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all cursor-pointer ${
                 view === 'recycling' 
-                  ? 'bg-blue-600/90 text-white shadow-lg shadow-blue-600/30 border border-blue-400/40 font-bold backdrop-blur-md' 
-                  : 'text-slate-300 hover:bg-white/10 hover:text-white border border-transparent'
+                  ? 'bg-indigo-600 text-white font-semibold shadow-xs' 
+                  : 'text-slate-400 hover:bg-slate-800/80 hover:text-slate-100 font-medium'
               }`}
             >
-              <RotateCcw className="h-4 w-4" /> Packaging Recycling
+              <RotateCcw className="h-4 w-4 shrink-0" /> Packaging Recycling
             </button>
 
             <button 
               onClick={() => setView('issuance')}
-              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition-all cursor-pointer ${
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all cursor-pointer ${
                 view === 'issuance' 
-                  ? 'bg-blue-600/90 text-white shadow-lg shadow-blue-600/30 border border-blue-400/40 font-bold backdrop-blur-md' 
-                  : 'text-slate-300 hover:bg-white/10 hover:text-white border border-transparent'
+                  ? 'bg-indigo-600 text-white font-semibold shadow-xs' 
+                  : 'text-slate-400 hover:bg-slate-800/80 hover:text-slate-100 font-medium'
               }`}
             >
-              <Briefcase className="h-4 w-4" /> Production Issuance
+              <Briefcase className="h-4 w-4 shrink-0" /> Production Issuance
             </button>
 
             <button 
               onClick={() => setView('delivery')}
-              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition-all cursor-pointer ${
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all cursor-pointer ${
                 view === 'delivery' 
-                  ? 'bg-blue-600/90 text-white shadow-lg shadow-blue-600/30 border border-blue-400/40 font-bold backdrop-blur-md' 
-                  : 'text-slate-300 hover:bg-white/10 hover:text-white border border-transparent'
+                  ? 'bg-indigo-600 text-white font-semibold shadow-xs' 
+                  : 'text-slate-400 hover:bg-slate-800/80 hover:text-slate-100 font-medium'
               }`}
             >
-              <Truck className="h-4 w-4" /> Outbound & Gate Pass
+              <Truck className="h-4 w-4 shrink-0" /> Outbound & Gate Pass
             </button>
 
             <button 
               onClick={() => setView('environmental')}
-              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition-all cursor-pointer ${
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all cursor-pointer ${
                 view === 'environmental' 
-                  ? 'bg-blue-600/90 text-white shadow-lg shadow-blue-600/30 border border-blue-400/40 font-bold backdrop-blur-md' 
-                  : 'text-slate-300 hover:bg-white/10 hover:text-white border border-transparent'
+                  ? 'bg-indigo-600 text-white font-semibold shadow-xs' 
+                  : 'text-slate-400 hover:bg-slate-800/80 hover:text-slate-100 font-medium'
               }`}
             >
-              <Boxes className="h-4 w-4" /> Space Utilization
+              <Boxes className="h-4 w-4 shrink-0" /> Space Utilization
             </button>
 
             <button 
               onClick={() => setView('master-registry')}
-              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition-all cursor-pointer ${
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all cursor-pointer ${
                 view === 'master-registry' 
-                  ? 'bg-blue-600/90 text-white shadow-lg shadow-blue-600/30 border border-blue-400/40 font-bold backdrop-blur-md' 
-                  : 'text-slate-300 hover:bg-white/10 hover:text-white border border-transparent'
+                  ? 'bg-indigo-600 text-white font-semibold shadow-xs' 
+                  : 'text-slate-400 hover:bg-slate-800/80 hover:text-slate-100 font-medium'
               }`}
               id="nav-master-registry"
             >
-              <FolderPlus className="h-4 w-4" /> Master Data Register
+              <FolderPlus className="h-4 w-4 shrink-0" /> Master Data Register
             </button>
 
             {(currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002' || (currentUser || '').toUpperCase().includes('ALDRIN') || (currentRole || '').toUpperCase().includes('SUPER')) && (
               <button 
                 onClick={() => setView('accounts')}
-                className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-3 transition-all cursor-pointer ${
+                className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all cursor-pointer ${
                   view === 'accounts' 
-                    ? 'bg-blue-600/90 text-white shadow-lg shadow-blue-600/30 border border-blue-400/40 font-bold backdrop-blur-md' 
-                    : 'text-slate-300 hover:bg-white/10 hover:text-white border border-transparent'
+                    ? 'bg-indigo-600 text-white font-semibold shadow-xs' 
+                    : 'text-slate-400 hover:bg-slate-800/80 hover:text-slate-100 font-medium'
                 }`}
                 id="nav-registered-accounts"
               >
-                <Users className="h-4 w-4" /> JPMP Accounts
+                <Users className="h-4 w-4 shrink-0" /> JPMP Accounts
               </button>
             )}
           </nav>
         </div>
 
         {/* Sidebar Footer with system values */}
-        <div className="p-4 border-t border-white/10 space-y-4 backdrop-blur-md bg-slate-950/40">
+        <div className="p-4 border-t border-slate-800 space-y-2 bg-slate-950/60">
           <div className="space-y-1.5">
             {currentEmployeeId === 'JPMP-002' ? (
               <>
                 <button 
                   onClick={handleExportBackup}
-                  className="w-full bg-white/10 hover:bg-white/20 hover:text-white py-2 px-3 rounded-xl text-[10px] font-bold flex items-center justify-center gap-1.5 border border-white/10 backdrop-blur-md transition cursor-pointer"
+                  className="w-full bg-slate-800/80 hover:bg-slate-800 text-slate-300 hover:text-white py-2 px-3 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1.5 border border-slate-700/60 transition-colors cursor-pointer"
                 >
-                  <Download className="h-3.5 w-3.5" /> Export DB Backup
+                  <Download className="h-3.5 w-3.5 text-indigo-400" /> Export DB Backup
                 </button>
                 
-                <label className="w-full bg-white/10 hover:bg-white/20 hover:text-white py-2 px-3 rounded-xl text-[10px] font-bold flex items-center justify-center gap-1.5 cursor-pointer border border-white/10 backdrop-blur-md transition">
-                  <Upload className="h-3.5 w-3.5" /> Import DB Restore
+                <label className="w-full bg-slate-800/80 hover:bg-slate-800 text-slate-300 hover:text-white py-2 px-3 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer border border-slate-700/60 transition-colors">
+                  <Upload className="h-3.5 w-3.5 text-indigo-400" /> Import DB Restore
                   <input type="file" accept=".json" onChange={handleImportBackup} className="hidden" />
                 </label>
 
@@ -3246,7 +3517,7 @@ export default function App() {
                       onConfirm: () => resetStateToDefaults()
                     });
                   }}
-                  className="w-full text-rose-400 hover:text-rose-300 py-1 text-[10px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                  className="w-full text-rose-400/80 hover:text-rose-300 py-1 text-[10px] font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors"
                 >
                   <Trash2 className="h-3 w-3" /> Reset default database
                 </button>
@@ -3261,14 +3532,14 @@ export default function App() {
                       onConfirm: () => resetAccountsToDefaults()
                     });
                   }}
-                  className="w-full text-rose-500 hover:text-rose-400 py-1 text-[10px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+                  className="w-full text-rose-400/70 hover:text-rose-300 py-1 text-[10px] font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors"
                 >
                   <Trash2 className="h-3 w-3" /> Wipe operator accounts
                 </button>
               </>
             ) : (
-              <div className="text-center py-2 text-[9px] text-slate-400 italic uppercase font-mono">
-                Operator Mode Active
+              <div className="text-center py-2 text-[10px] text-slate-500 font-mono">
+                Operator Session Active
               </div>
             )}
           </div>
@@ -3276,23 +3547,23 @@ export default function App() {
       </aside>
 
       {/* Main Content Pane */}
-      <main className="flex-1 flex flex-col min-w-0 bg-transparent z-10">
-        {/* Frosted Glass Header bar */}
-        <header className="h-16 glass-header px-4 sm:px-6 lg:px-8 flex justify-between items-center shrink-0 z-20 sticky top-0">
+      <main className="flex-1 flex flex-col min-w-0 bg-slate-50 z-10">
+        {/* Minimalist Header Bar */}
+        <header className="h-16 bg-white/90 backdrop-blur-md border-b border-slate-200/90 px-4 sm:px-6 lg:px-8 flex justify-between items-center shrink-0 z-20 sticky top-0">
           <div className="flex items-center gap-3 min-w-0">
-            <h1 className="font-bold text-base sm:text-lg text-slate-800 tracking-tight truncate flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-blue-600 shrink-0 shadow-xs ring-4 ring-blue-500/20" />
+            <h1 className="font-bold text-base sm:text-lg text-slate-900 tracking-tight truncate flex items-center gap-2" id="top-bar-page-title">
+              <span className="w-2 h-2 rounded-full bg-indigo-600 shrink-0" />
               <span>{getPageTitle()}</span>
             </h1>
           </div>
           
-          <div className="flex items-center gap-2 text-xs font-semibold shrink-0">
+          <div className="flex items-center gap-2 text-xs font-medium shrink-0">
             {/* Live Real-time Status Pill */}
             <div 
-              className={`hidden sm:inline-flex items-center gap-1.5 px-3 h-8.5 rounded-xl border font-mono text-[11px] font-bold backdrop-blur-md shadow-xs ${
+              className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 h-8 rounded-lg border font-mono text-[11px] font-semibold ${
                 connectionStatus === 'connected' 
-                  ? 'bg-emerald-50/80 text-emerald-700 border-emerald-300/60' 
-                  : 'bg-slate-100/80 text-slate-600 border-slate-300/60'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                  : 'bg-slate-100 text-slate-600 border-slate-200'
               }`}
               title={`WebSocket Server: ${connectionStatus.toUpperCase()} ${wsLatency !== null ? `(${wsLatency}ms round-trip latency)` : ''}`}
             >
@@ -3304,7 +3575,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setShowActiveUsersModal(true)}
-              className="inline-flex items-center justify-center gap-1.5 bg-indigo-50/80 hover:bg-indigo-100/90 text-indigo-700 border border-indigo-200/80 px-3 h-8.5 rounded-xl text-xs font-bold font-mono transition shadow-xs cursor-pointer shrink-0 backdrop-blur-md"
+              className="inline-flex items-center justify-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 px-2.5 h-8 rounded-lg text-xs font-semibold font-mono transition-colors cursor-pointer shrink-0"
               title="Click to view all active connected workstations in this session"
               aria-label="Active Workstation Terminals"
             >
@@ -3317,41 +3588,41 @@ export default function App() {
               type="button"
               onClick={handleManualSync}
               disabled={isManualSyncing}
-              className="inline-flex items-center justify-center bg-white/80 hover:bg-white text-slate-700 w-8.5 h-8.5 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer shrink-0 disabled:opacity-50 border border-white/80 backdrop-blur-md"
+              className="inline-flex items-center justify-center bg-white hover:bg-slate-100 text-slate-700 w-8 h-8 rounded-lg text-xs transition-colors cursor-pointer shrink-0 disabled:opacity-50 border border-slate-200"
               title={isManualSyncing ? "Syncing data across all workstations..." : `Force Instant Sync (Last synced ${lastSyncedTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`}
               aria-label="Force Instant Sync"
             >
-              <RefreshCw className={`h-3.5 w-3.5 text-slate-600 ${isManualSyncing ? 'animate-spin text-blue-600' : ''}`} />
+              <RefreshCw className={`h-3.5 w-3.5 text-slate-600 ${isManualSyncing ? 'animate-spin text-indigo-600' : ''}`} />
             </button>
 
             {/* Supabase PostgreSQL Cloud Sync Badge Button */}
             <button
               type="button"
               onClick={() => setShowSupabaseSettingsModal(true)}
-              className="inline-flex items-center justify-center gap-1.5 bg-slate-900/85 hover:bg-slate-900 border border-slate-700/80 hover:border-emerald-400 text-slate-200 hover:text-white px-3 h-8.5 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer shrink-0 backdrop-blur-md"
+              className="inline-flex items-center justify-center gap-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-emerald-500 text-slate-200 hover:text-white px-2.5 h-8 rounded-lg text-xs font-semibold transition-colors cursor-pointer shrink-0"
               title={`Supabase PostgreSQL Sync: ${supabaseStatus.toUpperCase()} (Click to configure Cloud Database)`}
               aria-label="Supabase Cloud Database Settings"
             >
               <Database className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-              <span className={`w-2 h-2 rounded-full ${supabaseStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : supabaseStatus === 'connecting' ? 'bg-amber-400 animate-bounce' : 'bg-slate-500'}`} />
+              <span className={`w-1.5 h-1.5 rounded-full ${supabaseStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : supabaseStatus === 'connecting' ? 'bg-amber-400 animate-bounce' : 'bg-slate-500'}`} />
             </button>
 
             {/* Mobile APK / App Install Hub Button */}
             <button
               type="button"
               onClick={() => setShowMobileInstallModal(true)}
-              className="inline-flex items-center justify-center bg-emerald-950/80 border border-emerald-500/50 hover:border-emerald-400 text-emerald-300 hover:text-white w-8.5 h-8.5 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer shrink-0 backdrop-blur-md"
+              className="inline-flex items-center justify-center bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 hover:text-slate-900 w-8 h-8 rounded-lg text-xs transition-colors cursor-pointer shrink-0"
               title="Download Android APK / Install Mobile Web App"
               aria-label="Download Android APK / Mobile App"
             >
-              <Smartphone className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+              <Smartphone className="h-3.5 w-3.5 text-slate-600 shrink-0" />
             </button>
 
             {/* Live Date & Time Display */}
-            <div className="hidden lg:inline-flex items-center gap-1.5 text-[11px] font-mono font-semibold text-slate-700 uppercase tracking-tight bg-white/70 px-3 h-8.5 rounded-xl border border-white/80 shrink-0 backdrop-blur-md shadow-xs">
+            <div className="hidden lg:inline-flex items-center gap-1.5 text-[11px] font-mono font-medium text-slate-600 bg-slate-100/80 px-2.5 h-8 rounded-lg border border-slate-200 shrink-0">
               <Clock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
               <span>
-                {currentTime.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' }).toUpperCase()} • {currentTime.toLocaleTimeString('en-US', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                {currentTime.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' })} • {currentTime.toLocaleTimeString('en-US', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </span>
             </div>
           </div>
@@ -3359,154 +3630,166 @@ export default function App() {
 
         {/* VIEW ONLY MODE warning banner */}
         {currentPermission === 'VIEW_ONLY' && (
-          <div className="bg-amber-500/90 text-white px-4 sm:px-6 lg:px-8 py-2 text-xs font-bold flex items-center justify-between gap-4 shadow-xs border-b border-amber-600/80 font-mono uppercase shrink-0 backdrop-blur-md">
+          <div className="bg-amber-500 text-white px-4 sm:px-6 lg:px-8 py-2 text-xs font-semibold flex items-center justify-between gap-4 border-b border-amber-600 font-mono uppercase shrink-0">
             <div className="flex items-center gap-2">
               <Lock className="h-4 w-4 shrink-0" />
               <span>[READ-ONLY PRIVILEGES ACTIVE]: OPERATOR IS RESTRICTED FROM CREATION, DELETION, OR MODIFICATION OF ANY DATA.</span>
             </div>
-            <span className="bg-amber-600/90 text-amber-50 px-2 py-0.5 rounded text-[10px] tracking-wider shrink-0">VIEW ONLY</span>
+            <span className="bg-amber-600 text-amber-50 px-2 py-0.5 rounded text-[10px] tracking-wider shrink-0">VIEW ONLY</span>
           </div>
         )}
 
-        {/* View screen renderer with Frosted Canvas container */}
-        <div className="p-4 sm:p-6 lg:p-8 overflow-y-auto flex-1 w-full max-w-7xl mx-auto z-10">
-          {view === 'dashboard' && (
-            <DashboardOverview 
-              stocks={stocks}
-              receiving={receiving}
-              issuances={issuances}
-              deliveries={deliveries}
-              recycling={recycling}
-              envLogs={envLogs}
-              forkliftChecks={forkliftChecks}
-              setView={setView}
-              activeUsers={activeUsers}
-              chatMessages={chatMessages}
-              currentUser={currentUser}
-              sendChatMessage={sendChatMessage}
-              registeredUsers={registeredUsers}
-              isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
-              registries={registries}
-            />
-          )}
+        {/* View screen renderer with smooth animated transition */}
+        <div className="p-4 sm:p-6 lg:p-7 overflow-y-auto flex-1 w-full z-10" id="main-content-viewport">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={view}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
+              className="w-full"
+            >
+              {view === 'dashboard' && (
+                <DashboardOverview 
+                  stocks={stocks}
+                  receiving={receiving}
+                  issuances={issuances}
+                  deliveries={deliveries}
+                  recycling={recycling}
+                  envLogs={envLogs}
+                  forkliftChecks={forkliftChecks}
+                  setView={setView}
+                  activeUsers={activeUsers}
+                  chatMessages={chatMessages}
+                  currentUser={currentUser}
+                  sendChatMessage={sendChatMessage}
+                  registeredUsers={registeredUsers}
+                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
+                  registries={registries}
+                />
+              )}
 
-          {view === 'receiving' && (
-            <ReceivingModule 
-              receiving={receiving}
-              onAddReceiving={handleAddReceiving}
-              onUpdateIqc={handleUpdateIqc}
-              onEditReceiving={handleEditReceiving}
-              onDeleteReceiving={handleDeleteReceiving}
-              returns={returns}
-              onAddReturn={handleAddReturn}
-              onUpdateReturnStatus={handleUpdateReturnStatus}
-              onEditReturn={handleEditReturn}
-              onDeleteReturn={handleDeleteReturn}
-              stocks={stocks}
-              registries={registries}
-              isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
-              onOpenRegisterModal={() => setView('master-registry')}
-            />
-          )}
+              {view === 'receiving' && (
+                <ReceivingModule 
+                  receiving={receiving}
+                  onAddReceiving={handleAddReceiving}
+                  onUpdateIqc={handleUpdateIqc}
+                  onEditReceiving={handleEditReceiving}
+                  onDeleteReceiving={handleDeleteReceiving}
+                  returns={returns}
+                  onAddReturn={handleAddReturn}
+                  onUpdateReturnStatus={handleUpdateReturnStatus}
+                  onEditReturn={handleEditReturn}
+                  onDeleteReturn={handleDeleteReturn}
+                  stocks={stocks}
+                  registries={registries}
+                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
+                  onOpenRegisterModal={() => setView('master-registry')}
+                />
+              )}
 
-          {view === 'stock' && (
-            <StockFIFOControl 
-              stocks={stocks}
-              onAddStock={handleAddStock}
-              onUpdateStockQty={handleUpdateStockQty}
-              onUpdateStockStatus={handleUpdateStockStatus}
-              onEditStock={handleEditStock}
-              onDeleteStock={handleDeleteStock}
-              isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
-              receiving={receiving}
-              issuances={issuances}
-              returns={returns}
-            />
-          )}
+              {view === 'stock' && (
+                <StockFIFOControl 
+                  stocks={stocks}
+                  onAddStock={handleAddStock}
+                  onUpdateStockQty={handleUpdateStockQty}
+                  onUpdateStockStatus={handleUpdateStockStatus}
+                  onEditStock={handleEditStock}
+                  onDeleteStock={handleDeleteStock}
+                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
+                  receiving={receiving}
+                  issuances={issuances}
+                  returns={returns}
+                />
+              )}
 
-          {view === 'recycling' && (
-            <RecyclingModule 
-              recycling={recycling}
-              onAddRecycling={handleAddRecycling}
-              onDeleteRecycling={handleDeleteRecycling}
-              isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
-            />
-          )}
+              {view === 'recycling' && (
+                <RecyclingModule 
+                  recycling={recycling}
+                  onAddRecycling={handleAddRecycling}
+                  onDeleteRecycling={handleDeleteRecycling}
+                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
+                />
+              )}
 
-          {view === 'issuance' && (
-            <IssuanceModule 
-              stocks={stocks}
-              issuances={issuances}
-              onAddIssuance={handleAddIssuance}
-              onDeductStock={handleDeductStock}
-              onEditIssuance={handleEditIssuance}
-              onDeleteIssuance={handleDeleteIssuance}
-              registries={registries}
-              currentUser={currentUser}
-              isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
-            />
-          )}
+              {view === 'issuance' && (
+                <IssuanceModule 
+                  stocks={stocks}
+                  issuances={issuances}
+                  onAddIssuance={handleAddIssuance}
+                  onDeductStock={handleDeductStock}
+                  onEditIssuance={handleEditIssuance}
+                  onDeleteIssuance={handleDeleteIssuance}
+                  registries={registries}
+                  currentUser={currentUser}
+                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
+                />
+              )}
 
-          {view === 'delivery' && (
-            <DeliveryModule 
-              deliveries={deliveries}
-              forkliftChecks={forkliftChecks}
-              onAddDelivery={handleAddDelivery}
-              onAddForkliftCheck={handleAddForkliftCheck}
-              onUpdateDeliveryStatus={handleUpdateDeliveryStatus}
-              onEditDelivery={handleEditDelivery}
-              onDeleteDelivery={handleDeleteDelivery}
-              stocks={stocks}
-              registries={registries}
-              currentUser={currentUser}
-              isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
-            />
-          )}
+              {view === 'delivery' && (
+                <DeliveryModule 
+                  deliveries={deliveries}
+                  forkliftChecks={forkliftChecks}
+                  onAddDelivery={handleAddDelivery}
+                  onAddForkliftCheck={handleAddForkliftCheck}
+                  onUpdateDeliveryStatus={handleUpdateDeliveryStatus}
+                  onEditDelivery={handleEditDelivery}
+                  onDeleteDelivery={handleDeleteDelivery}
+                  stocks={stocks}
+                  registries={registries}
+                  currentUser={currentUser}
+                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
+                />
+              )}
 
-          {view === 'environmental' && (
-            <EnvironmentalModule 
-              envLogs={envLogs}
-              onAddEnvLog={handleAddEnvLog}
-              onClearEnvLogs={handleClearEnvLogs}
-              onDeleteEnvLog={handleDeleteEnvLog}
-              registries={registries}
-              onRegisterLocation={handleRegisterMasterItem}
-              onUpdateLocation={(id, data) => {
-                const existing = registries.find(r => r.id === id);
-                if (existing) {
-                  handleUpdateMasterItem({ ...existing, ...data });
-                }
-              }}
-              onDeleteLocation={handleDeleteMasterItem}
-              currentUserRole={currentRole}
-              currentUser={currentUser}
-              isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentRole?.toUpperCase().includes('SUPER') || currentRole?.toUpperCase().includes('SYSTEM')}
-            />
-          )}
+              {view === 'environmental' && (
+                <EnvironmentalModule 
+                  envLogs={envLogs}
+                  onAddEnvLog={handleAddEnvLog}
+                  onClearEnvLogs={handleClearEnvLogs}
+                  onDeleteEnvLog={handleDeleteEnvLog}
+                  registries={registries}
+                  onRegisterLocation={handleRegisterMasterItem}
+                  onUpdateLocation={(id, data) => {
+                    const existing = registries.find(r => r.id === id);
+                    if (existing) {
+                      handleUpdateMasterItem({ ...existing, ...data });
+                    }
+                  }}
+                  onDeleteLocation={handleDeleteMasterItem}
+                  currentUserRole={currentRole}
+                  currentUser={currentUser}
+                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentRole?.toUpperCase().includes('SUPER') || currentRole?.toUpperCase().includes('SYSTEM')}
+                />
+              )}
 
-          {view === 'master-registry' && (
-            <MasterRegistryModule 
-              registries={registries}
-              onRegisterItem={handleRegisterMasterItem}
-              onUpdateItem={handleUpdateMasterItem}
-              onDeleteItem={handleDeleteMasterItem}
-              onResetDefaults={handleResetMasterDefaults}
-              isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
-              defaultType="ALL"
-            />
-          )}
+              {view === 'master-registry' && (
+                <MasterRegistryModule 
+                  registries={registries}
+                  onRegisterItem={handleRegisterMasterItem}
+                  onUpdateItem={handleUpdateMasterItem}
+                  onDeleteItem={handleDeleteMasterItem}
+                  onResetDefaults={handleResetMasterDefaults}
+                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
+                  defaultType="ALL"
+                />
+              )}
 
-          {view === 'accounts' && (currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002' || (currentUser || '').toUpperCase().includes('ALDRIN') || (currentRole || '').toUpperCase().includes('SUPER')) && (
-            <RegisteredAccountsModule 
-              accounts={registeredUsers}
-              onAddAccount={handleRegister}
-              onUpdateAccount={handleUpdateAccount}
-              onRemoveAccount={handleRemoveUser}
-              currentUser={currentUser}
-              currentEmployeeId={currentEmployeeId}
-              isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
-            />
-          )}
+              {view === 'accounts' && (currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002' || (currentUser || '').toUpperCase().includes('ALDRIN') || (currentRole || '').toUpperCase().includes('SUPER')) && (
+                <RegisteredAccountsModule 
+                  accounts={registeredUsers}
+                  onAddAccount={handleRegister}
+                  onUpdateAccount={handleUpdateAccount}
+                  onRemoveAccount={handleRemoveUser}
+                  onClearAllAccounts={handleClearAllAccountsExceptSuperAdmin}
+                  currentUser={currentUser}
+                  currentEmployeeId={currentEmployeeId}
+                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
+                />
+              )}
+            </motion.div>
+          </AnimatePresence>
         </div>
       </main>
 
@@ -3568,6 +3851,7 @@ export default function App() {
           isOpen={showActiveUsersModal}
           onClose={() => setShowActiveUsersModal(false)}
           activeUsers={activeUsers}
+          activePresence={activePresence}
           registeredUsers={registeredUsers}
           connectionStatus={connectionStatus}
           supabaseStatus={supabaseStatus}

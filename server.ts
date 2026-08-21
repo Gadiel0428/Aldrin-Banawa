@@ -666,13 +666,40 @@ async function startServer() {
     next();
   });
 
-  // Active connections tracker
-  const activeConnections = new Map<WebSocket, string>();
+  // Active connections tracker with rich presence metadata
+  interface ConnectedClientInfo {
+    username: string;
+    employeeId?: string;
+    role?: string;
+    activeView?: string;
+    connectedAt: string;
+    lastPing: number;
+  }
+  const activeConnections = new Map<WebSocket, ConnectedClientInfo>();
 
-  // Helper to get array of all active users
+  // Helper to get array of all active user names
   function getActiveUsersList(): string[] {
-    const users = Array.from(activeConnections.values()).filter(Boolean);
+    const users = Array.from(activeConnections.values()).map(c => c.username).filter(Boolean);
     return Array.from(new Set(users));
+  }
+
+  // Helper to get structured presence list with active view & employee info
+  function getActivePresenceList(): Array<{
+    username: string;
+    employeeId: string;
+    role: string;
+    activeView: string;
+    connectedAt: string;
+    lastPing: number;
+  }> {
+    return Array.from(activeConnections.values()).map(c => ({
+      username: c.username,
+      employeeId: c.employeeId || '',
+      role: c.role || 'OPERATOR',
+      activeView: c.activeView || 'dashboard',
+      connectedAt: c.connectedAt,
+      lastPing: c.lastPing
+    }));
   }
 
   // API health endpoint
@@ -950,6 +977,48 @@ async function startServer() {
     }
   });
 
+  // Explicit endpoint to clear all registered operator accounts except the Super Administrator
+  app.post("/api/accounts/clear-all-except-super-admin", async (req, res) => {
+    try {
+      state.registeredUsers = [{ ...defaultSuperAdmin }];
+      saveStateToDisk();
+
+      if (supabaseServer) {
+        try {
+          await supabaseServer.from('registered_users').delete().neq('employee_id', 'JPMP-002');
+          await supabaseServer.from('registered_users').upsert([{
+            employee_id: 'JPMP-002',
+            username: 'ALDRIN BANAWA',
+            role: 'SUPER ADMINISTRATOR',
+            permission: 'FULL_ACCESS',
+            pin_hash: '0423',
+            updated_at: new Date().toISOString()
+          }]);
+        } catch (sErr) {
+          console.warn("Supabase clear users error:", sErr);
+        }
+      }
+
+      broadcast({
+        type: "collection_updated",
+        collection: "registeredUsers",
+        data: state.registeredUsers
+      });
+      broadcast({
+        type: "all_accounts_cleared",
+        data: state.registeredUsers
+      });
+
+      return res.json({ 
+        success: true, 
+        message: "All registered operator accounts cleared. Super Administrator preserved.",
+        remainingAccounts: state.registeredUsers
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   // Explicit endpoint to permanently delete a collection record across server, disk, and Supabase
   app.post("/api/records/delete", async (req, res) => {
     try {
@@ -1032,6 +1101,60 @@ async function startServer() {
         return res.json({ success: true, collection, id: record.id, count: (state as any)[collection].length });
       }
       return res.status(400).json({ error: "Invalid collection" });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Batch sync endpoint for offline mutation queue synchronization
+  app.post("/api/sync/batch", async (req, res) => {
+    try {
+      const { mutations } = req.body;
+      if (!Array.isArray(mutations) || mutations.length === 0) {
+        return res.json({ success: true, processedCount: 0, state });
+      }
+
+      let processedCount = 0;
+      for (const m of mutations) {
+        if (!m || !m.collection || !(m.collection in state)) continue;
+        
+        if (m.type === 'upsert' && m.record && m.record.id) {
+          const arr = ((state as any)[m.collection] || []).filter((item: any) => item.id !== m.record.id);
+          arr.unshift(m.record);
+          (state as any)[m.collection] = arr;
+          processedCount++;
+
+          broadcast({
+            type: "record_upserted",
+            collection: m.collection,
+            record: m.record,
+            author: m.author || "Operator",
+            actionDesc: m.actionDesc || `Synced ${m.collection} record`,
+            timestamp: new Date().toISOString()
+          });
+        } else if (m.type === 'delete' && (m.recordId || m.id)) {
+          const delId = m.recordId || m.id;
+          (state as any)[m.collection] = ((state as any)[m.collection] || []).filter((item: any) => item.id !== delId);
+          processedCount++;
+
+          broadcast({
+            type: "record_deleted",
+            collection: m.collection,
+            id: delId
+          });
+        }
+      }
+
+      if (processedCount > 0) {
+        saveStateToDisk();
+        for (const col of Object.keys(state)) {
+          if (Array.isArray((state as any)[col])) {
+            persistToSupabase(col, (state as any)[col]);
+          }
+        }
+      }
+
+      return res.json({ success: true, processedCount, state });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
@@ -1222,7 +1345,8 @@ async function startServer() {
           ...state,
           chatMessages
         },
-        activeUsers: getActiveUsersList()
+        activeUsers: getActiveUsersList(),
+        activePresence: getActivePresenceList()
       }));
     } catch (err) {
       console.warn("Error sending initial WS state:", err);
@@ -1239,6 +1363,8 @@ async function startServer() {
 
         switch (payload.type) {
           case "ping": {
+            const info = activeConnections.get(ws);
+            if (info) info.lastPing = Date.now();
             ws.send(JSON.stringify({ 
               type: "pong", 
               clientPingTime: payload.clientPingTime, 
@@ -1249,7 +1375,18 @@ async function startServer() {
 
           case "join": {
             const username = payload.username || "Anonymous Officer";
-            activeConnections.set(ws, username);
+            const employeeId = payload.employeeId || "";
+            const role = payload.role || "OPERATOR";
+            const activeView = payload.activeView || "dashboard";
+
+            activeConnections.set(ws, {
+              username,
+              employeeId,
+              role,
+              activeView,
+              connectedAt: new Date().toISOString(),
+              lastPing: Date.now()
+            });
             
             // Re-send initial complete state and updated active users list
             ws.send(JSON.stringify({
@@ -1258,26 +1395,46 @@ async function startServer() {
                 ...state,
                 chatMessages
               },
-              activeUsers: getActiveUsersList()
+              activeUsers: getActiveUsersList(),
+              activePresence: getActivePresenceList()
             }));
 
             // Notify others
             broadcast({
               type: "presence_updated",
-              activeUsers: getActiveUsersList()
+              activeUsers: getActiveUsersList(),
+              activePresence: getActivePresenceList()
             });
 
             // Log user join in chat log
             const joinMsg: ChatMessage = {
               id: `sys-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
               sender: "System",
-              text: `${username} has connected to the active session.`,
+              text: `${username} (${employeeId || 'Terminal'}) connected to active session.`,
               timestamp: new Date().toISOString(),
               isSystem: true
             };
             chatMessages.push(joinMsg);
             if (chatMessages.length > 100) chatMessages.shift();
             broadcast({ type: "chat_broadcast", message: joinMsg });
+            break;
+          }
+
+          case "presence_update": {
+            const info = activeConnections.get(ws);
+            if (info) {
+              if (payload.username) info.username = payload.username;
+              if (payload.employeeId) info.employeeId = payload.employeeId;
+              if (payload.role) info.role = payload.role;
+              if (payload.activeView) info.activeView = payload.activeView;
+              info.lastPing = Date.now();
+
+              broadcast({
+                type: "presence_updated",
+                activeUsers: getActiveUsersList(),
+                activePresence: getActivePresenceList()
+              });
+            }
             break;
           }
 
@@ -1482,21 +1639,23 @@ async function startServer() {
     });
 
     ws.on("close", () => {
-      const username = activeConnections.get(ws);
-      if (username) {
+      const clientInfo = activeConnections.get(ws);
+      if (clientInfo) {
+        const username = clientInfo.username || "Operator";
         activeConnections.delete(ws);
         
         // Notify others
         broadcast({
           type: "presence_updated",
-          activeUsers: getActiveUsersList()
+          activeUsers: getActiveUsersList(),
+          activePresence: getActivePresenceList()
         });
 
         // Log disconnect
         const leaveMsg: ChatMessage = {
           id: `sys-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
           sender: "System",
-          text: `${username} has disconnected.`,
+          text: `${username} disconnected from session.`,
           timestamp: new Date().toISOString(),
           isSystem: true
         };

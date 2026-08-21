@@ -1,12 +1,13 @@
 import React from 'react';
-import { Users, X, Activity, Server, Radio, Shield, Clock, CheckCircle2 } from 'lucide-react';
+import { Users, X, Activity, Server, Radio, Shield, Clock, CheckCircle2, Monitor, MapPin } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { RegisteredAccount } from '../types';
+import { RegisteredAccount, ActivePresenceUser } from '../types';
 
 interface ActiveUsersModalProps {
   isOpen: boolean;
   onClose: () => void;
   activeUsers: string[];
+  activePresence?: ActivePresenceUser[];
   registeredUsers: RegisteredAccount[];
   connectionStatus: 'connected' | 'connecting' | 'disconnected';
   supabaseStatus: 'connected' | 'connecting' | 'disconnected';
@@ -16,10 +17,27 @@ interface ActiveUsersModalProps {
   isManualSyncing: boolean;
 }
 
+const VIEW_LABELS: Record<string, string> = {
+  dashboard: 'Operations Dashboard',
+  stock: 'Stock Inventory & FIFO',
+  receiving: 'Material Receiving Inspection',
+  issuance: 'Assembly Material Issuance',
+  returns: 'Return / Rejection Material',
+  recycling: 'Packaging Recycling Control',
+  delivery: 'Finished Goods Dispatch',
+  'env-monitoring': '5S Environmental Control',
+  forklift: 'Forklift Safety Inspection',
+  users: 'Authorized Operator Accounts',
+  master: 'Master Code Registry',
+  backup: 'System Backup & Archives',
+  history: 'Audit Logs & Traceability'
+};
+
 export default function ActiveUsersModal({
   isOpen,
   onClose,
   activeUsers,
+  activePresence = [],
   registeredUsers,
   connectionStatus,
   supabaseStatus,
@@ -29,6 +47,8 @@ export default function ActiveUsersModal({
   isManualSyncing
 }: ActiveUsersModalProps) {
   if (!isOpen) return null;
+
+  const totalOnline = Math.max(activeUsers.length, activePresence.length);
 
   return (
     <AnimatePresence>
@@ -50,7 +70,7 @@ export default function ActiveUsersModal({
                 <h3 className="font-bold text-white text-base tracking-wide flex items-center gap-2">
                   <span>LIVE ACTIVE TERMINALS</span>
                   <span className="bg-indigo-500/20 text-indigo-300 text-xs px-2 py-0.5 rounded-full border border-indigo-500/30 font-mono">
-                    {activeUsers.length} ONLINE
+                    {totalOnline} ONLINE
                   </span>
                 </h3>
                 <p className="text-xs text-slate-400 font-mono">
@@ -60,7 +80,7 @@ export default function ActiveUsersModal({
             </div>
             <button
               onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-800 border border-slate-700/80 rounded-lg transition"
+              className="p-1.5 text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-800 border border-slate-700/80 rounded-lg transition cursor-pointer"
             >
               <X className="h-4 w-4" />
             </button>
@@ -100,22 +120,28 @@ export default function ActiveUsersModal({
 
           {/* Active Workstations / Operators List */}
           <div className="p-4 overflow-y-auto flex-1 space-y-2.5">
-            <div className="text-[11px] font-mono text-slate-400 uppercase font-bold tracking-wider px-1">
-              Connected Operators ({activeUsers.length})
+            <div className="text-[11px] font-mono text-slate-400 uppercase font-bold tracking-wider px-1 flex items-center justify-between">
+              <span>Connected Operators ({totalOnline})</span>
+              <span className="text-[10px] text-emerald-400 font-mono flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" /> Real-time sync active
+              </span>
             </div>
 
-            {activeUsers.length === 0 ? (
+            {totalOnline === 0 ? (
               <div className="p-6 text-center text-slate-500 italic text-xs bg-slate-950/30 rounded-xl border border-slate-800">
                 No external operator terminals currently registered in this session.
               </div>
             ) : (
-              activeUsers.map((user, idx) => {
+              (activePresence.length > 0 ? activePresence : activeUsers.map(u => ({ username: u }))).map((presenceItem: any, idx) => {
+                const user = presenceItem.username || 'Operator';
                 const matchedAccount = registeredUsers.find(
                   u => u.username.toUpperCase() === user.toUpperCase() ||
+                       (presenceItem.employeeId && u.employeeId.toUpperCase() === presenceItem.employeeId.toUpperCase()) ||
                        user.toUpperCase().includes(u.employeeId.toUpperCase())
                 );
 
-                const isSuper = user.toUpperCase().includes('ALDRIN') || user.toUpperCase().includes('JPMP-002') || (matchedAccount && matchedAccount.permission === 'FULL_ACCESS');
+                const isSuper = user.toUpperCase().includes('ALDRIN') || user.toUpperCase().includes('JPMP-002') || (matchedAccount && matchedAccount.permission === 'FULL_ACCESS') || presenceItem.role === 'SUPER ADMINISTRATOR';
+                const activeViewLabel = presenceItem.activeView ? (VIEW_LABELS[presenceItem.activeView] || presenceItem.activeView) : 'Operations Console';
 
                 return (
                   <div
@@ -138,9 +164,15 @@ export default function ActiveUsersModal({
                             </span>
                           )}
                         </div>
-                        <div className="text-[10px] text-slate-400 font-mono truncate">
-                          {matchedAccount ? `${matchedAccount.role} • ${matchedAccount.employeeId}` : 'Active Workstation Terminal'}
+                        <div className="text-[10px] text-slate-400 font-mono truncate flex items-center gap-1 mt-0.5">
+                          <span>{matchedAccount ? `${matchedAccount.role} • ${matchedAccount.employeeId}` : (presenceItem.employeeId ? `${presenceItem.role || 'Operator'} • ${presenceItem.employeeId}` : 'Active Terminal')}</span>
                         </div>
+                        {presenceItem.activeView && (
+                          <div className="text-[9px] text-indigo-300/90 font-mono truncate flex items-center gap-1 mt-0.5">
+                            <Monitor className="h-2.5 w-2.5 text-indigo-400" />
+                            <span>Module: {activeViewLabel}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
 

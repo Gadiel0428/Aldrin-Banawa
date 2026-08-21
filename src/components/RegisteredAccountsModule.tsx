@@ -45,6 +45,7 @@ interface RegisteredAccountsModuleProps {
   ) => RegisteredAccount | boolean | null;
   onUpdateAccount: (oldEmpId: string, updated: RegisteredAccount) => void;
   onRemoveAccount: (employeeId: string) => void;
+  onClearAllAccounts?: () => void;
   currentUser: string;
   currentEmployeeId: string;
   isSuperAdmin?: boolean;
@@ -55,6 +56,7 @@ export default function RegisteredAccountsModule({
   onAddAccount,
   onUpdateAccount,
   onRemoveAccount,
+  onClearAllAccounts,
   currentUser,
   currentEmployeeId,
   isSuperAdmin = false
@@ -376,17 +378,41 @@ export default function RegisteredAccountsModule({
           </div>
 
           {isSuperAdmin && (
-            <button
-              onClick={() => {
-                resetAddForm();
-                setShowAddModal(true);
-              }}
-              className="bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-indigo-950/40 uppercase font-mono cursor-pointer shrink-0 border border-indigo-400/30"
-              id="btn-add-account"
-            >
-              <UserPlus className="h-4 w-4" />
-              <span className="whitespace-nowrap">Register Operator</span>
-            </button>
+            <div className="flex items-center gap-2">
+              {onClearAllAccounts && (accounts.length > 1 || accounts.some(u => (u.employeeId || '').toUpperCase() !== 'JPMP-002')) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmAction({
+                      title: "PURGE ALL OPERATOR ACCOUNTS",
+                      message: "WARNING: This will permanently remove all registered operator accounts from the system. Only the root Super Administrator (ALDRIN BANAWA / JPMP-002) will remain active. Are you sure?",
+                      confirmVariant: "danger",
+                      confirmLabel: "YES, CLEAR ALL",
+                      onConfirm: () => {
+                        if (onClearAllAccounts) onClearAllAccounts();
+                        setConfirmAction(null);
+                      }
+                    });
+                  }}
+                  className="bg-red-950/60 hover:bg-red-900/80 active:bg-red-800 text-red-300 border border-red-500/40 px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs uppercase font-mono cursor-pointer shrink-0"
+                  id="btn-clear-all-accounts"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span className="whitespace-nowrap">Clear All</span>
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  resetAddForm();
+                  setShowAddModal(true);
+                }}
+                className="bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-indigo-950/40 uppercase font-mono cursor-pointer shrink-0 border border-indigo-400/30"
+                id="btn-add-account"
+              >
+                <UserPlus className="h-4 w-4" />
+                <span className="whitespace-nowrap">Register Operator</span>
+              </button>
+            </div>
           )}
         </div>
       </div>
