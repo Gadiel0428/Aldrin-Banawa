@@ -115,6 +115,24 @@ import MasterRegistryModule, { DEFAULT_MASTER_REGISTRIES } from './components/Ma
 
 const DEFAULT_ONLINE_CLOUD_HOST = 'ais-dev-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app';
 
+// Isolated real-time clock component to prevent full application re-render cycles every second
+function LiveClock() {
+  const [time, setTime] = useState<Date>(() => new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="hidden lg:inline-flex items-center gap-1.5 text-[11px] font-mono font-medium text-slate-600 bg-slate-100/80 px-2.5 h-8 rounded-lg border border-slate-200 shrink-0">
+      <Clock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+      <span>
+        {time.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' })} • {time.toLocaleTimeString('en-US', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+      </span>
+    </div>
+  );
+}
+
 export function sanitizeServerHost(raw: string): string {
   if (!raw) return '';
   let cleaned = raw.trim();
@@ -468,20 +486,31 @@ export default function App() {
   const [supabaseStatus, setSupabaseStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected');
   const [supabaseRefreshTrigger, setSupabaseRefreshTrigger] = useState<number>(0);
 
-  // User Authentication / Registration states - Always show Login Gateway on startup
-  const [currentUser, setCurrentUser] = useState<string>('');
-  const [currentRole, setCurrentRole] = useState<string>('');
-  const [currentEmployeeId, setCurrentEmployeeId] = useState<string>('');
-  const [currentPermission, setCurrentPermission] = useState<string>('LIMITED_ACCESS');
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
+  // User Authentication / Registration states - Persist login state reliably across page focus and reloads
+  const [currentUser, setCurrentUser] = useState<string>(() => {
+    try { return localStorage.getItem('juwei_wms_currentUser') || ''; } catch (e) { return ''; }
+  });
+  const [currentRole, setCurrentRole] = useState<string>(() => {
+    try { return localStorage.getItem('juwei_wms_userRole') || ''; } catch (e) { return ''; }
+  });
+  const [currentEmployeeId, setCurrentEmployeeId] = useState<string>(() => {
+    try { return localStorage.getItem('juwei_wms_employeeId') || ''; } catch (e) { return ''; }
+  });
+  const [currentPermission, setCurrentPermission] = useState<string>(() => {
+    try { return localStorage.getItem('juwei_wms_userPermission') || 'LIMITED_ACCESS'; } catch (e) { return 'LIMITED_ACCESS'; }
+  });
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem('juwei_wms_isLoggedIn');
+      const user = localStorage.getItem('juwei_wms_currentUser');
+      return stored === 'true' && Boolean(user);
+    } catch (e) {
+      return false;
+    }
+  });
   const [authTab, setAuthTab] = useState<'login' | 'register'>('login');
 
   useEffect(() => {
-    // Clear any previous persistent login state so every fresh app startup always presents the Login Gateway first
-    try {
-      localStorage.removeItem('juwei_wms_isLoggedIn');
-    } catch (e) {}
-
     // Enforce custom JUWEI WMS branding and remove any Google default favicon
     try {
       document.title = 'JUWEI WAREHOUSE MANAGEMENT SYSTEM';
@@ -643,16 +672,8 @@ export default function App() {
     }
   }, [registeredUsers, isLoggedIn, currentEmployeeId, currentPermission, currentRole, currentUser]);
 
-  // Live real-time system clock
-  const [currentTime, setCurrentTime] = useState<Date>(new Date());
+  // Clipboard feedback state
   const [linkCopied, setLinkCopied] = useState<boolean>(false);
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   // Initialize standard fallback state
   const resetStateToDefaults = () => {
@@ -964,13 +985,62 @@ export default function App() {
     } catch (err) {}
   };
 
+  // Helper to compare collections by content to avoid unnecessary state re-renders
+  const areCollectionsEqual = (a: any[], b: any[]): boolean => {
+    if (a === b) return true;
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      const itemA = a[i];
+      const itemB = b[i];
+      if (!itemA || !itemB) return false;
+      if (itemA.id !== itemB.id) return false;
+      if (itemA.quantity !== itemB.quantity ||
+          itemA.status !== itemB.status ||
+          itemA.date !== itemB.date ||
+          itemA.iqcStatus !== itemB.iqcStatus ||
+          itemA.quantityIssued !== itemB.quantityIssued ||
+          itemA.partCode !== itemB.partCode ||
+          itemA.location !== itemB.location ||
+          itemA.remarks !== itemB.remarks) {
+        return false;
+      }
+    }
+    return true;
+  };
+
   // Helper to reconcile incoming remote collections with local state cleanly without data overlapping or resurrection
   const reconcileCollection = (colName: string, currentArr: any[], incomingArr: any[]): any[] => {
     if (!Array.isArray(incomingArr)) {
       return Array.isArray(currentArr) ? currentArr : [];
     }
     // Cleanly accept authoritative incoming collection, excluding any locally deleted record IDs
-    return incomingArr.filter(item => item && item.id && !deletedRecordIds.current.has(item.id));
+    const filtered = incomingArr.filter(item => item && item.id && !deletedRecordIds.current.has(item.id));
+    if (Array.isArray(currentArr) && areCollectionsEqual(currentArr, filtered)) {
+      return currentArr;
+    }
+    return filtered;
+  };
+
+  // Helper to compare users by content to avoid unnecessary user state re-renders
+  const areUsersEqual = (a: RegisteredAccount[], b: RegisteredAccount[]): boolean => {
+    if (a === b) return true;
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      const uA = a[i];
+      const uB = b[i];
+      if (!uA || !uB) return false;
+      if (uA.employeeId !== uB.employeeId ||
+          uA.username !== uB.username ||
+          uA.role !== uB.role ||
+          uA.permission !== uB.permission ||
+          uA.pin !== uB.pin ||
+          uA.status !== uB.status) {
+        return false;
+      }
+    }
+    return true;
   };
 
   // Helper to reconcile user accounts safely without resurrecting deleted accounts or overlapping stale records
@@ -1013,6 +1083,9 @@ export default function App() {
     });
 
     const result = Array.from(userMap.values());
+    if (Array.isArray(currentUsers) && areUsersEqual(currentUsers, result)) {
+      return currentUsers;
+    }
     try {
       localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(result));
     } catch (e) {}
@@ -3618,13 +3691,8 @@ export default function App() {
               <Smartphone className="h-3.5 w-3.5 text-slate-600 shrink-0" />
             </button>
 
-            {/* Live Date & Time Display */}
-            <div className="hidden lg:inline-flex items-center gap-1.5 text-[11px] font-mono font-medium text-slate-600 bg-slate-100/80 px-2.5 h-8 rounded-lg border border-slate-200 shrink-0">
-              <Clock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-              <span>
-                {currentTime.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' })} • {currentTime.toLocaleTimeString('en-US', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-              </span>
-            </div>
+            {/* Isolated Live Date & Time Display */}
+            <LiveClock />
           </div>
         </header>
 
@@ -3639,18 +3707,10 @@ export default function App() {
           </div>
         )}
 
-        {/* View screen renderer with smooth animated transition */}
+        {/* View screen renderer with stable zero-flicker container */}
         <div className="p-4 sm:p-6 lg:p-7 overflow-y-auto flex-1 w-full z-10" id="main-content-viewport">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={view}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.18, ease: "easeOut" }}
-              className="w-full"
-            >
-              {view === 'dashboard' && (
+          <div key={view} className="w-full">
+            {view === 'dashboard' && (
                 <DashboardOverview 
                   stocks={stocks}
                   receiving={receiving}
@@ -3788,8 +3848,7 @@ export default function App() {
                   isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
                 />
               )}
-            </motion.div>
-          </AnimatePresence>
+          </div>
         </div>
       </main>
 

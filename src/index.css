@@ -192,9 +192,9 @@
   color: #f8fafc;
 }
 
-/* Smooth transitions for interactive elements */
+/* Smooth transitions for interactive elements without opacity/transform flicker */
 button, a, input, select, textarea, .transition-smooth {
-  transition-property: color, background-color, border-color, opacity, box-shadow, transform;
+  transition-property: color, background-color, border-color, box-shadow;
   transition-duration: 150ms;
   transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
 }
