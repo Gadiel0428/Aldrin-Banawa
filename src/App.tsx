@@ -599,10 +599,10 @@ export default function App() {
 
     const source = Array.isArray(incomingList) ? incomingList : (() => {
       try {
-        const cached = localStorage.getItem('juwei_wms_registeredUsers');
+        const cached = localStorage.getItem('juwei_wms_registeredUsers') || localStorage.getItem('juwei_wms_cache_registeredUsers');
         if (cached) {
           const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed)) return parsed;
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
         }
       } catch (e) {}
       return [superAdminAccount];
@@ -990,11 +990,17 @@ export default function App() {
     if (a === b) return true;
     if (!Array.isArray(a) || !Array.isArray(b)) return false;
     if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) {
-      const itemA = a[i];
-      const itemB = b[i];
-      if (!itemA || !itemB) return false;
-      if (itemA.id !== itemB.id) return false;
+
+    const mapA = new Map<string, any>();
+    for (const item of a) {
+      if (item && item.id) mapA.set(item.id, item);
+    }
+    if (mapA.size !== b.length) return false;
+
+    for (const itemB of b) {
+      if (!itemB || !itemB.id) return false;
+      const itemA = mapA.get(itemB.id);
+      if (!itemA) return false;
       
       const keysA = Object.keys(itemA);
       for (const k of keysA) {
@@ -1080,31 +1086,40 @@ export default function App() {
     if (a === b) return true;
     if (!Array.isArray(a) || !Array.isArray(b)) return false;
     if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) {
-      const uA = a[i];
-      const uB = b[i];
-      if (!uA || !uB) return false;
-      if (uA.employeeId !== uB.employeeId ||
-          uA.username !== uB.username ||
-          uA.role !== uB.role ||
-          uA.permission !== uB.permission ||
-          uA.pin !== uB.pin ||
-          uA.status !== uB.status) {
+    
+    const mapA = new Map<string, RegisteredAccount>();
+    for (const u of a) {
+      if (u && u.employeeId) mapA.set(u.employeeId.toUpperCase(), u);
+    }
+    if (mapA.size !== b.length) return false;
+
+    for (const uB of b) {
+      if (!uB || !uB.employeeId) return false;
+      const uA = mapA.get(uB.employeeId.toUpperCase());
+      if (!uA) return false;
+      if (
+        (uA.username || '').toUpperCase() !== (uB.username || '').toUpperCase() ||
+        (uA.role || '').toUpperCase() !== (uB.role || '').toUpperCase() ||
+        (uA.permission || '') !== (uB.permission || '') ||
+        (uA.pin || '') !== (uB.pin || '') ||
+        (uA.status || '') !== (uB.status || '') ||
+        (uA.phoneNumber || '') !== (uB.phoneNumber || '')
+      ) {
         return false;
       }
     }
     return true;
   };
 
-  // Helper to reconcile user accounts safely without resurrecting deleted accounts or overlapping stale records
+  // Helper to reconcile user accounts safely without data loss, disappearing accounts, or flickering
   const reconcileUsers = (currentUsers: RegisteredAccount[], incomingUsers: any[]): RegisteredAccount[] => {
     const deletedSet = getDeletedUserIds();
     const userMap = new Map<string, RegisteredAccount>();
-    userMap.set('JPMP-002', { ...superAdminAccount });
 
-    const sourceList = Array.isArray(incomingUsers) ? incomingUsers : (Array.isArray(currentUsers) ? currentUsers : []);
-
-    for (const u of sourceList) {
+    // 1. Keep all existing local users that are NOT deleted
+    const safeCurrent = Array.isArray(currentUsers) ? currentUsers : [];
+    for (const rawUser of safeCurrent) {
+      const u = rawUser as any;
       if (!u || (!u.employeeId && !u.employee_id)) continue;
       const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase();
       const empId = rawEmpId.startsWith('JPMP-') ? rawEmpId : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
@@ -1123,7 +1138,30 @@ export default function App() {
       });
     }
 
-    // Guarantee Super Admin JPMP-002 is always present and protected
+    // 2. Merge incoming accounts from network, Supabase, or WebSocket
+    const incomingList = Array.isArray(incomingUsers) ? incomingUsers : [];
+    for (const u of incomingList) {
+      if (!u || (!u.employeeId && !u.employee_id)) continue;
+      const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase();
+      const empId = rawEmpId.startsWith('JPMP-') ? rawEmpId : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
+      if (deletedSet.has(empId) && empId !== 'JPMP-002') continue;
+
+      const existing = userMap.get(empId);
+      const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (existing?.pin || (empId === 'JPMP-002' ? '0423' : '1234')));
+
+      userMap.set(empId, {
+        username: (u.username || existing?.username || 'OPERATOR').toUpperCase(),
+        role: (u.role || existing?.role || 'WAREHOUSE CLERK').toUpperCase(),
+        employeeId: empId,
+        phoneNumber: u.phoneNumber || u.phone_number || existing?.phoneNumber || '',
+        permission: u.permission || existing?.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
+        pin: cleanPin,
+        status: u.status || existing?.status || 'ACTIVE',
+        lastActive: u.lastActive || u.last_active || existing?.lastActive || undefined
+      });
+    }
+
+    // 3. Guarantee Super Admin JPMP-002 is always active, full access, and protected
     const admin = userMap.get('JPMP-002') || superAdminAccount;
     userMap.set('JPMP-002', {
       ...superAdminAccount,
@@ -1132,16 +1170,22 @@ export default function App() {
       username: admin.username || 'ALDRIN BANAWA',
       role: 'SUPER ADMINISTRATOR',
       permission: 'FULL_ACCESS',
-      pin: admin.pin || '0423'
+      pin: admin.pin || '0423',
+      status: 'ACTIVE'
     });
 
     const result = Array.from(userMap.values());
+
+    // Check if result is identical to currentUsers to avoid re-renders and UI flicker
     if (Array.isArray(currentUsers) && areUsersEqual(currentUsers, result)) {
       return currentUsers;
     }
+
     try {
       localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(result));
+      localStorage.setItem('juwei_wms_cache_registeredUsers', JSON.stringify(result));
     } catch (e) {}
+
     return result;
   };
 
