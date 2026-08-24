@@ -820,12 +820,14 @@ export async function fetchFullSupabaseSnapshot(): Promise<{
   }
 }
 
-// Realtime Channel Subscription with explicit multi-table listeners, granular delta parsing & auto-reconnect
+// Realtime Channel Subscription with explicit multi-table listeners, granular delta parsing, presence tracking & auto-reconnect
 export function setupSupabaseRealtimeSubscriptions(
   onCollectionChange: (collection: string) => void,
   onChatMessage: (msg: any) => void,
   onStatusChange: (status: 'connected' | 'connecting' | 'disconnected') => void,
-  onRecordDelta?: (collection: string, action: 'upsert' | 'delete', record?: any, id?: string) => void
+  onRecordDelta?: (collection: string, action: 'upsert' | 'delete', record?: any, id?: string) => void,
+  onPresenceSync?: (presenceList: any[]) => void,
+  onRemoteForceSync?: (senderStationId?: string) => void
 ): RealtimeChannel | null {
   const supabase = getSupabase();
   if (!supabase) {
@@ -842,8 +844,15 @@ export function setupSupabaseRealtimeSubscriptions(
 
   onStatusChange('connecting');
 
-  const channelName = `juwei-wms-realtime-${Date.now()}`;
-  let channel = supabase.channel(channelName);
+  // Use unified shared room name for all cluster workstations
+  const channelName = 'juwei-wms-global-cluster';
+  let channel = supabase.channel(channelName, {
+    config: {
+      presence: {
+        key: 'terminal'
+      }
+    }
+  });
 
   const tableList: { table: string; collection: string; mapper: (r: any) => any }[] = [
     { table: 'stocks', collection: 'stocks', mapper: mapRowToStock },
@@ -949,6 +958,37 @@ export function setupSupabaseRealtimeSubscriptions(
     }
   );
 
+  // Supabase Realtime Presence Synchronization
+  channel = channel
+    .on('presence', { event: 'sync' }, () => {
+      try {
+        const state = channel.presenceState();
+        const list: any[] = [];
+        Object.values(state).forEach((presences: any) => {
+          if (Array.isArray(presences)) {
+            presences.forEach((p) => {
+              if (p && (p.username || p.employeeId)) {
+                list.push({
+                  ...p,
+                  source: 'supabase'
+                });
+              }
+            });
+          }
+        });
+        if (onPresenceSync) {
+          onPresenceSync(list);
+        }
+      } catch (e) {
+        console.warn('Presence sync parse error:', e);
+      }
+    })
+    .on('broadcast', { event: 'force_sync' }, (eventPayload: any) => {
+      if (onRemoteForceSync) {
+        onRemoteForceSync(eventPayload?.payload?.stationId);
+      }
+    });
+
   channel.subscribe((status, err) => {
     if (status === 'SUBSCRIBED') {
       onStatusChange('connected');
@@ -961,4 +1001,47 @@ export function setupSupabaseRealtimeSubscriptions(
 
   activeRealtimeChannel = channel;
   return channel;
+}
+
+// Track local active presence on Supabase Realtime
+export async function trackSupabasePresence(presenceData: {
+  username: string;
+  employeeId?: string;
+  role?: string;
+  activeView?: string;
+  stationId?: string;
+}) {
+  if (activeRealtimeChannel) {
+    try {
+      await activeRealtimeChannel.track({
+        ...presenceData,
+        lastPing: Date.now(),
+        connectedAt: new Date().toISOString()
+      });
+    } catch (e) {
+      console.warn('Supabase track presence error:', e);
+    }
+  }
+}
+
+// Untrack presence when closing
+export async function untrackSupabasePresence() {
+  if (activeRealtimeChannel) {
+    try {
+      await activeRealtimeChannel.untrack();
+    } catch (e) {}
+  }
+}
+
+// Broadcast remote force sync command across all Supabase terminals
+export async function broadcastSupabaseForceSync(stationId?: string) {
+  if (activeRealtimeChannel) {
+    try {
+      await activeRealtimeChannel.send({
+        type: 'broadcast',
+        event: 'force_sync',
+        payload: { triggeredAt: Date.now(), stationId: stationId || undefined }
+      });
+    } catch (e) {}
+  }
 }

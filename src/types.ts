@@ -215,6 +215,7 @@ export interface MasterRegistryItem {
 }
 
 export interface ActivePresenceUser {
+  stationId?: string;
   username: string;
   employeeId?: string;
   role?: string;
@@ -222,6 +223,7 @@ export interface ActivePresenceUser {
   connectedAt?: string;
   lastPing?: number;
   terminalName?: string;
+  source?: 'websocket' | 'supabase' | 'local' | 'self';
 }
 
 export interface QueuedMutation {

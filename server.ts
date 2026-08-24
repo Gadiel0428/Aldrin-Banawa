@@ -668,6 +668,7 @@ async function startServer() {
 
   // Active connections tracker with rich presence metadata
   interface ConnectedClientInfo {
+    stationId?: string;
     username: string;
     employeeId?: string;
     role?: string;
@@ -685,20 +686,24 @@ async function startServer() {
 
   // Helper to get structured presence list with active view & employee info
   function getActivePresenceList(): Array<{
+    stationId: string;
     username: string;
     employeeId: string;
     role: string;
     activeView: string;
     connectedAt: string;
     lastPing: number;
+    source: string;
   }> {
     return Array.from(activeConnections.values()).map(c => ({
+      stationId: c.stationId || '',
       username: c.username,
       employeeId: c.employeeId || '',
       role: c.role || 'OPERATOR',
       activeView: c.activeView || 'dashboard',
       connectedAt: c.connectedAt,
-      lastPing: c.lastPing
+      lastPing: c.lastPing,
+      source: 'websocket'
     }));
   }
 
@@ -1313,9 +1318,13 @@ async function startServer() {
 
   // Periodic heartbeat to sweep dead / half-open WebSocket connections
   const heartbeatInterval = setInterval(() => {
+    let changed = false;
     wss.clients.forEach((client: any) => {
       if (client.isAlive === false) {
-        activeConnections.delete(client);
+        if (activeConnections.has(client)) {
+          activeConnections.delete(client);
+          changed = true;
+        }
         return client.terminate();
       }
       client.isAlive = false;
@@ -1323,6 +1332,13 @@ async function startServer() {
         client.ping();
       } catch (e) {}
     });
+    if (changed) {
+      broadcast({
+        type: "presence_updated",
+        activeUsers: getActiveUsersList(),
+        activePresence: getActivePresenceList()
+      });
+    }
   }, 25000);
 
   wss.on("close", () => {
@@ -1378,8 +1394,10 @@ async function startServer() {
             const employeeId = payload.employeeId || "";
             const role = payload.role || "OPERATOR";
             const activeView = payload.activeView || "dashboard";
+            const stationId = payload.stationId || "";
 
             activeConnections.set(ws, {
+              stationId,
               username,
               employeeId,
               role,
@@ -1410,7 +1428,7 @@ async function startServer() {
             const joinMsg: ChatMessage = {
               id: `sys-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
               sender: "System",
-              text: `${username} (${employeeId || 'Terminal'}) connected to active session.`,
+              text: `${username} (${employeeId || stationId || 'Terminal'}) connected to active cluster session.`,
               timestamp: new Date().toISOString(),
               isSystem: true
             };
@@ -1421,20 +1439,50 @@ async function startServer() {
           }
 
           case "presence_update": {
-            const info = activeConnections.get(ws);
-            if (info) {
+            let info = activeConnections.get(ws);
+            if (!info) {
+              info = {
+                stationId: payload.stationId || '',
+                username: payload.username || 'OPERATOR',
+                employeeId: payload.employeeId || '',
+                role: payload.role || 'OPERATOR',
+                activeView: payload.activeView || 'dashboard',
+                connectedAt: new Date().toISOString(),
+                lastPing: Date.now()
+              };
+              activeConnections.set(ws, info);
+            } else {
+              if (payload.stationId) info.stationId = payload.stationId;
               if (payload.username) info.username = payload.username;
               if (payload.employeeId) info.employeeId = payload.employeeId;
               if (payload.role) info.role = payload.role;
               if (payload.activeView) info.activeView = payload.activeView;
               info.lastPing = Date.now();
-
-              broadcast({
-                type: "presence_updated",
-                activeUsers: getActiveUsersList(),
-                activePresence: getActivePresenceList()
-              });
             }
+
+            broadcast({
+              type: "presence_updated",
+              activeUsers: getActiveUsersList(),
+              activePresence: getActivePresenceList()
+            });
+            break;
+          }
+
+          case "get_presence": {
+            ws.send(JSON.stringify({
+              type: "presence_updated",
+              activeUsers: getActiveUsersList(),
+              activePresence: getActivePresenceList()
+            }));
+            break;
+          }
+
+          case "force_sync_all": {
+            broadcast({
+              type: "force_sync",
+              triggeredBy: payload.author || "Operator",
+              timestamp: new Date().toISOString()
+            });
             break;
           }
 

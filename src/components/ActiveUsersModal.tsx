@@ -142,10 +142,12 @@ export default function ActiveUsersModal({
 
                 const isSuper = user.toUpperCase().includes('ALDRIN') || user.toUpperCase().includes('JPMP-002') || (matchedAccount && matchedAccount.permission === 'FULL_ACCESS') || presenceItem.role === 'SUPER ADMINISTRATOR';
                 const activeViewLabel = presenceItem.activeView ? (VIEW_LABELS[presenceItem.activeView] || presenceItem.activeView) : 'Operations Console';
+                const stationTag = presenceItem.stationId || `WS-${idx + 1}`;
+                const sourceTag = presenceItem.source === 'self' ? 'This Terminal' : (presenceItem.source === 'local' ? 'Local Tab' : (presenceItem.source === 'supabase' ? 'Cloud Supabase' : 'Cluster LAN'));
 
                 return (
                   <div
-                    key={`${user}-${idx}`}
+                    key={`${user}-${stationTag}-${idx}`}
                     className="p-3 bg-slate-800/70 border border-slate-700/80 rounded-xl flex items-center justify-between gap-3 hover:border-indigo-500/50 transition"
                   >
                     <div className="flex items-center gap-3 min-w-0">
@@ -158,6 +160,9 @@ export default function ActiveUsersModal({
                       <div className="min-w-0">
                         <div className="font-bold text-white text-xs truncate flex items-center gap-1.5">
                           <span>{user}</span>
+                          <span className="text-[9px] bg-slate-700/80 text-slate-300 px-1 py-0.2 rounded border border-slate-600/60 font-mono">
+                            {stationTag}
+                          </span>
                           {isSuper && (
                             <span className="text-[9px] bg-indigo-500/20 text-indigo-300 px-1.5 py-0.2 rounded border border-indigo-500/30 font-mono">
                               ADMIN
@@ -166,6 +171,8 @@ export default function ActiveUsersModal({
                         </div>
                         <div className="text-[10px] text-slate-400 font-mono truncate flex items-center gap-1 mt-0.5">
                           <span>{matchedAccount ? `${matchedAccount.role} • ${matchedAccount.employeeId}` : (presenceItem.employeeId ? `${presenceItem.role || 'Operator'} • ${presenceItem.employeeId}` : 'Active Terminal')}</span>
+                          <span className="text-slate-500">•</span>
+                          <span className="text-emerald-400/90 text-[9px]">{sourceTag}</span>
                         </div>
                         {presenceItem.activeView && (
                           <div className="text-[9px] text-indigo-300/90 font-mono truncate flex items-center gap-1 mt-0.5">

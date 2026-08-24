@@ -73,7 +73,10 @@ import {
   setupSupabaseRealtimeSubscriptions,
   processPendingSupabaseMutations,
   deleteAccountFromSupabase,
-  deleteRecordFromSupabase
+  deleteRecordFromSupabase,
+  trackSupabasePresence,
+  untrackSupabasePresence,
+  broadcastSupabaseForceSync
 } from './lib/supabase';
 
 import { 
@@ -347,10 +350,57 @@ export default function App() {
     } catch (e) {}
   }, [registries]);
 
+  // User Authentication / Registration states - Persist login state reliably across page focus and reloads
+  const [currentUser, setCurrentUser] = useState<string>(() => {
+    try { return localStorage.getItem('juwei_wms_currentUser') || ''; } catch (e) { return ''; }
+  });
+  const [currentRole, setCurrentRole] = useState<string>(() => {
+    try { return localStorage.getItem('juwei_wms_userRole') || ''; } catch (e) { return ''; }
+  });
+  const [currentEmployeeId, setCurrentEmployeeId] = useState<string>(() => {
+    try { return localStorage.getItem('juwei_wms_employeeId') || ''; } catch (e) { return ''; }
+  });
+  const [currentPermission, setCurrentPermission] = useState<string>(() => {
+    try { return localStorage.getItem('juwei_wms_userPermission') || 'LIMITED_ACCESS'; } catch (e) { return 'LIMITED_ACCESS'; }
+  });
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem('juwei_wms_isLoggedIn');
+      const user = localStorage.getItem('juwei_wms_currentUser');
+      return stored === 'true' && Boolean(user);
+    } catch (e) {
+      return false;
+    }
+  });
+  const [authTab, setAuthTab] = useState<'login' | 'register'>('login');
+
+  // Supabase PostgreSQL Realtime state
+  const [showSupabaseSettingsModal, setShowSupabaseSettingsModal] = useState<boolean>(false);
+  const [supabaseStatus, setSupabaseStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected');
+  const [supabaseRefreshTrigger, setSupabaseRefreshTrigger] = useState<number>(0);
+
+  // Helper to obtain persistent workstation / session identifier
+  const getStationId = (): string => {
+    if (typeof window === 'undefined') return 'WS-MASTER';
+    try {
+      let id = sessionStorage.getItem('juwei_wms_station_id');
+      if (!id) {
+        id = 'WS-' + Math.random().toString(36).substring(2, 6).toUpperCase();
+        sessionStorage.setItem('juwei_wms_station_id', id);
+      }
+      return id;
+    } catch (e) {
+      return 'WS-LOCAL';
+    }
+  };
+
   // Real-time states
   const [socket, setSocket] = useState<WebSocket | null>(null);
   const [activeUsers, setActiveUsers] = useState<string[]>([]);
   const [activePresence, setActivePresence] = useState<ActivePresenceUser[]>([]);
+  const [wsPresence, setWsPresence] = useState<ActivePresenceUser[]>([]);
+  const [supabasePresence, setSupabasePresence] = useState<ActivePresenceUser[]>([]);
+  const [localTabsPresence, setLocalTabsPresence] = useState<ActivePresenceUser[]>([]);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
@@ -363,6 +413,57 @@ export default function App() {
   // Cross-tab zero-latency synchronization channel
   const syncChannelRef = useRef<BroadcastChannel | null>(null);
 
+  // Unified Presence Combiner & Active Terminals Reconciler
+  useEffect(() => {
+    const myStationId = getStationId();
+    const selfItem: ActivePresenceUser = {
+      stationId: myStationId,
+      username: currentUser || 'JUWEI OPERATOR',
+      employeeId: currentEmployeeId || 'JPMP-002',
+      role: currentRole || (currentPermission === 'FULL_ACCESS' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR'),
+      activeView: view,
+      connectedAt: new Date().toISOString(),
+      lastPing: Date.now(),
+      source: 'self'
+    };
+
+    const combined: ActivePresenceUser[] = [
+      selfItem,
+      ...wsPresence.map(p => ({ ...p, source: (p.source || 'websocket') as ('websocket' | 'supabase' | 'local' | 'self') })),
+      ...supabasePresence.map(p => ({ ...p, source: (p.source || 'supabase') as ('websocket' | 'supabase' | 'local' | 'self') })),
+      ...localTabsPresence.map(p => ({ ...p, source: (p.source || 'local') as ('websocket' | 'supabase' | 'local' | 'self') }))
+    ];
+
+    const map = new Map<string, ActivePresenceUser>();
+    const now = Date.now();
+
+    for (const item of combined) {
+      if (!item || !item.username) continue;
+      // Stale cutoff (45 seconds) for external presences
+      if (item.source !== 'self' && item.lastPing && (now - item.lastPing > 45000)) {
+        continue;
+      }
+
+      // Unique deduplication key: stationId > (employeeId + username) > username
+      const key = item.stationId 
+        ? item.stationId 
+        : (item.employeeId ? `${item.employeeId.toUpperCase()}_${item.username.toUpperCase()}` : item.username.toUpperCase());
+
+      // If self is in map, don't overwrite with remote copy of self
+      if (map.has(key)) {
+        const existing = map.get(key)!;
+        if (existing.source === 'self') continue;
+      }
+      map.set(key, item);
+    }
+
+    const uniqueList = Array.from(map.values());
+    setActivePresence(uniqueList);
+
+    const userNames = Array.from(new Set(uniqueList.map(p => p.username.toUpperCase())));
+    setActiveUsers(userNames.length > 0 ? userNames : [selfItem.username.toUpperCase()]);
+  }, [currentUser, currentEmployeeId, currentRole, currentPermission, view, wsPresence, supabasePresence, localTabsPresence]);
+
   useEffect(() => {
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
       try {
@@ -373,7 +474,18 @@ export default function App() {
           const payload = event.data;
           if (!payload || !payload.type) return;
 
-          if (payload.type === 'sync_collection') {
+          if (payload.type === 'presence_heartbeat') {
+            if (payload.presence && payload.presence.stationId && payload.presence.stationId !== getStationId()) {
+              setLocalTabsPresence(prev => {
+                const filtered = prev.filter(p => p.stationId !== payload.presence.stationId);
+                return [...filtered, { ...payload.presence, source: 'local', lastPing: Date.now() }];
+              });
+            }
+          } else if (payload.type === 'presence_leave') {
+            if (payload.stationId) {
+              setLocalTabsPresence(prev => prev.filter(p => p.stationId !== payload.stationId));
+            }
+          } else if (payload.type === 'sync_collection') {
             const { collection, data } = payload;
             if (Array.isArray(data)) {
               const norm = normalizeRecords(collection, data);
@@ -464,12 +576,56 @@ export default function App() {
           }
         };
 
+        // Emit initial presence heartbeat
+        channel.postMessage({
+          type: 'presence_heartbeat',
+          presence: {
+            stationId: getStationId(),
+            username: currentUser || 'JUWEI OPERATOR',
+            employeeId: currentEmployeeId || 'JPMP-002',
+            role: currentRole || 'SUPER ADMINISTRATOR',
+            activeView: view,
+            connectedAt: new Date().toISOString(),
+            lastPing: Date.now()
+          }
+        });
+
+        // Periodic local presence broadcast
+        const heartbeatTimer = setInterval(() => {
+          try {
+            channel.postMessage({
+              type: 'presence_heartbeat',
+              presence: {
+                stationId: getStationId(),
+                username: currentUser || 'JUWEI OPERATOR',
+                employeeId: currentEmployeeId || 'JPMP-002',
+                role: currentRole || 'SUPER ADMINISTRATOR',
+                activeView: view,
+                connectedAt: new Date().toISOString(),
+                lastPing: Date.now()
+              }
+            });
+          } catch (e) {}
+        }, 8000);
+
+        const handleUnload = () => {
+          try {
+            channel.postMessage({
+              type: 'presence_leave',
+              stationId: getStationId()
+            });
+          } catch (e) {}
+        };
+        window.addEventListener('beforeunload', handleUnload);
+
         return () => {
+          clearInterval(heartbeatTimer);
+          window.removeEventListener('beforeunload', handleUnload);
           try { channel.close(); } catch (e) {}
         };
       } catch (e) {}
     }
-  }, []);
+  }, [currentUser, currentEmployeeId, currentRole, view]);
 
   // Auto-dismiss live sync toast notifications after 3.5 seconds
   useEffect(() => {
@@ -480,35 +636,6 @@ export default function App() {
       return () => clearTimeout(timer);
     }
   }, [liveSyncToast]);
-
-  // Supabase PostgreSQL Realtime state
-  const [showSupabaseSettingsModal, setShowSupabaseSettingsModal] = useState<boolean>(false);
-  const [supabaseStatus, setSupabaseStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected');
-  const [supabaseRefreshTrigger, setSupabaseRefreshTrigger] = useState<number>(0);
-
-  // User Authentication / Registration states - Persist login state reliably across page focus and reloads
-  const [currentUser, setCurrentUser] = useState<string>(() => {
-    try { return localStorage.getItem('juwei_wms_currentUser') || ''; } catch (e) { return ''; }
-  });
-  const [currentRole, setCurrentRole] = useState<string>(() => {
-    try { return localStorage.getItem('juwei_wms_userRole') || ''; } catch (e) { return ''; }
-  });
-  const [currentEmployeeId, setCurrentEmployeeId] = useState<string>(() => {
-    try { return localStorage.getItem('juwei_wms_employeeId') || ''; } catch (e) { return ''; }
-  });
-  const [currentPermission, setCurrentPermission] = useState<string>(() => {
-    try { return localStorage.getItem('juwei_wms_userPermission') || 'LIMITED_ACCESS'; } catch (e) { return 'LIMITED_ACCESS'; }
-  });
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
-    try {
-      const stored = localStorage.getItem('juwei_wms_isLoggedIn');
-      const user = localStorage.getItem('juwei_wms_currentUser');
-      return stored === 'true' && Boolean(user);
-    } catch (e) {
-      return false;
-    }
-  });
-  const [authTab, setAuthTab] = useState<'login' | 'register'>('login');
 
   useEffect(() => {
     // Enforce custom JUWEI WMS branding and remove any Google default favicon
@@ -1336,10 +1463,46 @@ export default function App() {
     });
   };
 
-  // Manual Full-Sync across WebSocket, REST & Supabase
+  // Manual Full-Sync across WebSocket, REST, Supabase & Local Terminals
   const handleManualSync = async () => {
     setIsManualSyncing(true);
     try {
+      // 1. Broadcast force sync over WebSocket & request latest cluster presence
+      if (wsOpen(socket)) {
+        try {
+          socket!.send(JSON.stringify({ 
+            type: 'force_sync_all',
+            author: currentUser || 'SUPER ADMINISTRATOR'
+          }));
+          socket!.send(JSON.stringify({ 
+            type: 'get_presence'
+          }));
+        } catch (e) {}
+      }
+
+      // 2. Broadcast force sync over Supabase Realtime & re-track local terminal
+      if (isSupabaseConfigured()) {
+        broadcastSupabaseForceSync();
+        trackSupabasePresence({
+          stationId: getStationId(),
+          username: currentUser || 'JUWEI OPERATOR',
+          employeeId: currentEmployeeId || '',
+          role: currentRole || (currentPermission === 'FULL_ACCESS' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR'),
+          activeView: view
+        });
+      }
+
+      // 3. Broadcast force sync over local BroadcastChannel
+      if (syncChannelRef.current) {
+        try {
+          syncChannelRef.current.postMessage({
+            type: 'activity_toast',
+            author: currentUser || 'Workstation',
+            action: 'Requested immediate cluster data synchronization'
+          });
+        } catch (e) {}
+      }
+
       let targetAddr = serverAddress.trim() || getDefaultServerAddress();
       const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
       const isHttps = isSecureServerHost(cleanHost, targetAddr);
@@ -1362,6 +1525,9 @@ export default function App() {
             if (Array.isArray(reg)) setRegistries(prev => reconcileCollection('registries', prev, normalizeRecords('registries', reg)));
             if (Array.isArray(ru)) setRegisteredUsers(prev => reconcileUsers(prev, ru));
             if (Array.isArray(cm) && cm.length > 0) setChatMessages(cm);
+            if (json.activePresence && Array.isArray(json.activePresence)) {
+              setWsPresence(json.activePresence);
+            }
             setConnectionStatus('connected');
           }
         }
@@ -1383,6 +1549,9 @@ export default function App() {
               if (Array.isArray(reg)) setRegistries(prev => reconcileCollection('registries', prev, normalizeRecords('registries', reg)));
               if (Array.isArray(ru)) setRegisteredUsers(prev => reconcileUsers(prev, ru));
               if (Array.isArray(cm) && cm.length > 0) setChatMessages(cm);
+              if (json.activePresence && Array.isArray(json.activePresence)) {
+                setWsPresence(json.activePresence);
+              }
               setConnectionStatus('connected');
             }
           }
@@ -1411,12 +1580,7 @@ export default function App() {
         }
       }
 
-      if (wsOpen(socket)) {
-        try {
-          socket!.send(JSON.stringify({ type: 'ping' }));
-          socket!.send(JSON.stringify({ type: 'join', username: currentUser || 'JUWEI OPERATOR' }));
-        } catch (e) {}
-      }
+      setLastSyncedTime(new Date());
     } catch (err) {
       console.warn('Manual sync failure:', err);
     } finally {
@@ -1610,6 +1774,7 @@ export default function App() {
           try {
             ws.send(JSON.stringify({
               type: 'join',
+              stationId: getStationId(),
               username: currentUser || 'JUWEI OPERATOR',
               employeeId: currentEmployeeId || '',
               role: currentRole || (currentPermission === 'FULL_ACCESS' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR'),
@@ -1660,7 +1825,7 @@ export default function App() {
               setLastSyncedTime(new Date());
               applyStatePayload(payload.data, payload.activeUsers, payload.activePresence);
               if (payload.activePresence && Array.isArray(payload.activePresence)) {
-                setActivePresence(payload.activePresence);
+                setWsPresence(payload.activePresence);
               }
               break;
             }
@@ -1776,9 +1941,27 @@ export default function App() {
               break;
             }
             case 'presence_updated': {
-              setActiveUsers(payload.activeUsers || []);
+              if (payload.activeUsers && Array.isArray(payload.activeUsers)) {
+                setActiveUsers(payload.activeUsers);
+              }
               if (payload.activePresence && Array.isArray(payload.activePresence)) {
-                setActivePresence(payload.activePresence);
+                setWsPresence(payload.activePresence);
+              }
+              break;
+            }
+            case 'force_sync': {
+              setLastSyncedTime(new Date());
+              if (payload.triggeredBy && payload.triggeredBy !== (currentUser || '')) {
+                setLiveSyncToast({
+                  id: String(Date.now()),
+                  author: payload.triggeredBy,
+                  action: 'Triggered cluster-wide data refresh',
+                  time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                });
+              }
+              runSyncCheck();
+              if (isSupabaseConfigured()) {
+                setSupabaseRefreshTrigger(prev => prev + 1);
               }
               break;
             }
@@ -1857,18 +2040,30 @@ export default function App() {
     };
   }, [serverAddress]);
 
-  // Keep WebSocket presence and active view module in sync dynamically across all connected operators
+  // Keep WebSocket & Supabase presence and active view module in sync dynamically across all connected operators
   useEffect(() => {
+    const stationId = getStationId();
     if (wsOpen(socket)) {
       try {
         socket!.send(JSON.stringify({
           type: 'presence_update',
+          stationId,
           username: currentUser || 'JUWEI OPERATOR',
           employeeId: currentEmployeeId || '',
           role: currentRole || (currentPermission === 'FULL_ACCESS' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR'),
           activeView: view
         }));
       } catch (e) {}
+    }
+
+    if (isSupabaseConfigured()) {
+      trackSupabasePresence({
+        stationId,
+        username: currentUser || 'JUWEI OPERATOR',
+        employeeId: currentEmployeeId || '',
+        role: currentRole || (currentPermission === 'FULL_ACCESS' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR'),
+        activeView: view
+      });
     }
   }, [currentUser, currentEmployeeId, currentRole, currentPermission, view, socket]);
 
@@ -1971,7 +2166,7 @@ export default function App() {
 
       loadAllSupabaseData();
 
-      // Setup Realtime subscription for PostgreSQL events with granular delta sync
+      // Setup Realtime subscription for PostgreSQL events with granular delta sync & presence tracking
       channel = setupSupabaseRealtimeSubscriptions(
         async (col) => {
           if (!isMounted) return;
@@ -2060,6 +2255,23 @@ export default function App() {
                 break;
               }
             }
+          }
+        },
+        (presences) => {
+          if (!isMounted) return;
+          setSupabasePresence(presences || []);
+        },
+        (senderStationId) => {
+          if (!isMounted) return;
+          if (senderStationId && senderStationId !== getStationId()) {
+            setLiveSyncToast({
+              id: String(Date.now()),
+              author: 'Remote Terminal',
+              action: 'Dispatched cloud synchronization request',
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+            });
+            loadAllSupabaseData();
+            setLastSyncedTime(new Date());
           }
         }
       );
