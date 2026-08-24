@@ -995,31 +995,84 @@ export default function App() {
       const itemB = b[i];
       if (!itemA || !itemB) return false;
       if (itemA.id !== itemB.id) return false;
-      if (itemA.quantity !== itemB.quantity ||
-          itemA.status !== itemB.status ||
-          itemA.date !== itemB.date ||
-          itemA.iqcStatus !== itemB.iqcStatus ||
-          itemA.quantityIssued !== itemB.quantityIssued ||
-          itemA.partCode !== itemB.partCode ||
-          itemA.location !== itemB.location ||
-          itemA.remarks !== itemB.remarks) {
-        return false;
+      
+      const keysA = Object.keys(itemA);
+      for (const k of keysA) {
+        if (k === 'updated_at' || k === 'updatedAt' || k === '_v') continue;
+        const valA = itemA[k];
+        const valB = itemB[k];
+        if (valA === valB) continue;
+        if (typeof valA === 'object' && valA !== null && typeof valB === 'object' && valB !== null) {
+          if (JSON.stringify(valA) !== JSON.stringify(valB)) return false;
+        } else {
+          return false;
+        }
       }
     }
     return true;
   };
 
-  // Helper to reconcile incoming remote collections with local state cleanly without data overlapping or resurrection
+  // Helper to reconcile incoming remote collections with local state cleanly without data loss, disappearing records, or flickering
   const reconcileCollection = (colName: string, currentArr: any[], incomingArr: any[]): any[] => {
     if (!Array.isArray(incomingArr)) {
       return Array.isArray(currentArr) ? currentArr : [];
     }
-    // Cleanly accept authoritative incoming collection, excluding any locally deleted record IDs
-    const filtered = incomingArr.filter(item => item && item.id && !deletedRecordIds.current.has(item.id));
-    if (Array.isArray(currentArr) && areCollectionsEqual(currentArr, filtered)) {
-      return currentArr;
+
+    const safeCurrent = Array.isArray(currentArr) ? currentArr : [];
+    const deletedSet = deletedRecordIds.current;
+
+    // Filter incoming records from server/Supabase to exclude locally deleted IDs
+    const filteredIncoming = incomingArr.filter(item => item && item.id && !deletedSet.has(item.id));
+
+    // Build map of incoming items
+    const incomingMap = new Map<string, any>();
+    for (const item of filteredIncoming) {
+      incomingMap.set(item.id, item);
     }
-    return filtered;
+
+    // Build merged map starting with current local records that are not deleted
+    const mergedMap = new Map<string, any>();
+    
+    // 1. Keep all local current items that are NOT deleted
+    for (const item of safeCurrent) {
+      if (item && item.id && !deletedSet.has(item.id)) {
+        if (incomingMap.has(item.id)) {
+          // If item exists in both, prefer local if mutated recently (within 20s) to prevent rollback
+          const lastMut = lastMutationTimes.current[colName] || 0;
+          const isRecentlyMutated = (Date.now() - lastMut) < 20000;
+          if (isRecentlyMutated) {
+            mergedMap.set(item.id, item);
+          } else {
+            mergedMap.set(item.id, incomingMap.get(item.id));
+          }
+        } else {
+          // CRITICAL FIX: This item exists locally but server snapshot hasn't included it yet (e.g., just encoded).
+          // Always preserve local newly-encoded records so they NEVER disappear!
+          mergedMap.set(item.id, item);
+        }
+      }
+    }
+
+    // 2. Add any incoming records not already in mergedMap
+    for (const item of filteredIncoming) {
+      if (!mergedMap.has(item.id)) {
+        mergedMap.set(item.id, item);
+      }
+    }
+
+    const mergedList = Array.from(mergedMap.values());
+
+    // If contents are equal to currentArr, return currentArr to preserve reference (prevents re-render and flicker)
+    if (areCollectionsEqual(safeCurrent, mergedList)) {
+      return safeCurrent;
+    }
+
+    // Persist merged data to local cache immediately
+    try {
+      localStorage.setItem(`juwei_wms_cache_${colName}`, JSON.stringify(mergedList));
+    } catch (e) {}
+
+    return mergedList;
   };
 
   // Helper to compare users by content to avoid unnecessary user state re-renders
@@ -1583,6 +1636,7 @@ export default function App() {
                   if (isRecordDeletedLocally(record.id)) return prev;
                   const idx = prev.findIndex(it => it.id === record.id);
                   if (idx >= 0) {
+                    if (JSON.stringify(prev[idx]) === JSON.stringify(record)) return prev;
                     const next = [...prev];
                     next[idx] = record;
                     return next;
@@ -1917,6 +1971,7 @@ export default function App() {
             const updateFn = (prev: any[]) => {
               const idx = prev.findIndex(it => it.id === record.id);
               if (idx >= 0) {
+                if (JSON.stringify(prev[idx]) === JSON.stringify(record)) return prev;
                 const next = [...prev];
                 next[idx] = record;
                 return next;
