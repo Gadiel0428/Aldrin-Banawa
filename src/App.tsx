@@ -1031,10 +1031,24 @@ export default function App() {
 
   // Track deleted record IDs locally to avoid resurrecting deleted items from stale snapshots
   const deletedRecordIds = useRef<Set<string>>(new Set());
+  // Track recently mutated record IDs locally to protect local in-flight edits from temporary rollback
+  const recentlyMutatedRecords = useRef<Map<string, number>>(new Map());
+
+  const markRecordMutatedLocally = (id: string) => {
+    if (!id) return;
+    recentlyMutatedRecords.current.set(id, Date.now());
+    if (recentlyMutatedRecords.current.size > 2000) {
+      const now = Date.now();
+      for (const [key, time] of recentlyMutatedRecords.current.entries()) {
+        if (now - time > 60000) recentlyMutatedRecords.current.delete(key);
+      }
+    }
+  };
 
   const markRecordAsDeletedLocally = (id: string) => {
     if (!id) return;
     deletedRecordIds.current.add(id);
+    recentlyMutatedRecords.current.delete(id);
     if (deletedRecordIds.current.size > 1000) {
       const first = deletedRecordIds.current.values().next().value;
       if (first) deletedRecordIds.current.delete(first);
@@ -1153,43 +1167,37 @@ export default function App() {
 
     const safeCurrent = Array.isArray(currentArr) ? currentArr : [];
     const deletedSet = deletedRecordIds.current;
+    const now = Date.now();
 
     // Filter incoming records from server/Supabase to exclude locally deleted IDs
     const filteredIncoming = incomingArr.filter(item => item && item.id && !deletedSet.has(item.id));
 
-    // Build map of incoming items
-    const incomingMap = new Map<string, any>();
-    for (const item of filteredIncoming) {
-      incomingMap.set(item.id, item);
-    }
-
-    // Build merged map starting with current local records that are not deleted
+    // Build merged map starting with authoritative incoming items
     const mergedMap = new Map<string, any>();
-    
-    // 1. Keep all local current items that are NOT deleted
-    for (const item of safeCurrent) {
-      if (item && item.id && !deletedSet.has(item.id)) {
-        if (incomingMap.has(item.id)) {
-          // If item exists in both, prefer local if mutated recently (within 20s) to prevent rollback
-          const lastMut = lastMutationTimes.current[colName] || 0;
-          const isRecentlyMutated = (Date.now() - lastMut) < 20000;
-          if (isRecentlyMutated) {
-            mergedMap.set(item.id, item);
-          } else {
-            mergedMap.set(item.id, incomingMap.get(item.id));
-          }
+
+    // 1. Process all incoming records
+    for (const remoteItem of filteredIncoming) {
+      const localItem = safeCurrent.find(it => it && it.id === remoteItem.id);
+      if (localItem) {
+        // If modified locally on this workstation within the last 6 seconds, keep local version temporarily to avoid typing jitter
+        const lastLocalMut = recentlyMutatedRecords.current.get(localItem.id) || 0;
+        if (now - lastLocalMut < 6000) {
+          mergedMap.set(remoteItem.id, localItem);
         } else {
-          // CRITICAL FIX: This item exists locally but server snapshot hasn't included it yet (e.g., just encoded).
-          // Always preserve local newly-encoded records so they NEVER disappear!
-          mergedMap.set(item.id, item);
+          mergedMap.set(remoteItem.id, remoteItem);
         }
+      } else {
+        mergedMap.set(remoteItem.id, remoteItem);
       }
     }
 
-    // 2. Add any incoming records not already in mergedMap
-    for (const item of filteredIncoming) {
-      if (!mergedMap.has(item.id)) {
-        mergedMap.set(item.id, item);
+    // 2. Preserve any newly-created items on this workstation that the server snapshot hasn't returned yet (within last 15s)
+    for (const localItem of safeCurrent) {
+      if (localItem && localItem.id && !deletedSet.has(localItem.id) && !mergedMap.has(localItem.id)) {
+        const lastLocalMut = recentlyMutatedRecords.current.get(localItem.id) || 0;
+        if (now - lastLocalMut < 15000) {
+          mergedMap.set(localItem.id, localItem);
+        }
       }
     }
 
@@ -1242,50 +1250,43 @@ export default function App() {
   const reconcileUsers = (currentUsers: RegisteredAccount[], incomingUsers: any[]): RegisteredAccount[] => {
     const deletedSet = getDeletedUserIds();
     const userMap = new Map<string, RegisteredAccount>();
+    const now = Date.now();
 
-    // 1. Keep all existing local users that are NOT deleted
-    const safeCurrent = Array.isArray(currentUsers) ? currentUsers : [];
-    for (const rawUser of safeCurrent) {
-      const u = rawUser as any;
-      if (!u || (!u.employeeId && !u.employee_id)) continue;
-      const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase();
-      const empId = rawEmpId.startsWith('JPMP-') ? rawEmpId : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
-      if (deletedSet.has(empId) && empId !== 'JPMP-002') continue;
-
-      const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (empId === 'JPMP-002' ? '0423' : '1234'));
-      userMap.set(empId, {
-        username: (u.username || 'OPERATOR').toUpperCase(),
-        role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
-        employeeId: empId,
-        phoneNumber: u.phoneNumber || u.phone_number || '',
-        permission: u.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
-        pin: cleanPin,
-        status: u.status || 'ACTIVE',
-        lastActive: u.lastActive || u.last_active || undefined
-      });
-    }
-
-    // 2. Merge incoming accounts from network, Supabase, or WebSocket
     const incomingList = Array.isArray(incomingUsers) ? incomingUsers : [];
+    const safeCurrent = Array.isArray(currentUsers) ? currentUsers : [];
+
+    // 1. Add all authoritative incoming users
     for (const u of incomingList) {
       if (!u || (!u.employeeId && !u.employee_id)) continue;
       const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase();
       const empId = rawEmpId.startsWith('JPMP-') ? rawEmpId : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
       if (deletedSet.has(empId) && empId !== 'JPMP-002') continue;
 
-      const existing = userMap.get(empId);
-      const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (existing?.pin || (empId === 'JPMP-002' ? '0423' : '1234')));
+      const localUser = safeCurrent.find(cu => (cu.employeeId || '').toUpperCase() === empId);
+      const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (localUser?.pin || (empId === 'JPMP-002' ? '0423' : '1234')));
 
       userMap.set(empId, {
-        username: (u.username || existing?.username || 'OPERATOR').toUpperCase(),
-        role: (u.role || existing?.role || 'WAREHOUSE CLERK').toUpperCase(),
+        username: (u.username || localUser?.username || 'OPERATOR').toUpperCase(),
+        role: (u.role || localUser?.role || 'WAREHOUSE CLERK').toUpperCase(),
         employeeId: empId,
-        phoneNumber: u.phoneNumber || u.phone_number || existing?.phoneNumber || '',
-        permission: u.permission || existing?.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
+        phoneNumber: u.phoneNumber || u.phone_number || localUser?.phoneNumber || '',
+        permission: u.permission || localUser?.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
         pin: cleanPin,
-        status: u.status || existing?.status || 'ACTIVE',
-        lastActive: u.lastActive || u.last_active || existing?.lastActive || undefined
+        status: u.status || localUser?.status || 'ACTIVE',
+        lastActive: u.lastActive || u.last_active || localUser?.lastActive || undefined
       });
+    }
+
+    // 2. Preserve any local user that was created/registered on this terminal within the last 15s but not yet in remote snapshot
+    for (const cu of safeCurrent) {
+      if (!cu || !cu.employeeId) continue;
+      const empId = cu.employeeId.toUpperCase();
+      if (!userMap.has(empId) && !deletedSet.has(empId)) {
+        const lastLocalMut = recentlyMutatedRecords.current.get(empId) || 0;
+        if (now - lastLocalMut < 15000) {
+          userMap.set(empId, cu);
+        }
+      }
     }
 
     // 3. Guarantee Super Admin JPMP-002 is always active, full access, and protected
@@ -1324,6 +1325,8 @@ export default function App() {
   ) => {
     if (!record || !record.id || !collection) return;
     unmarkRecordAsDeletedLocally(record.id);
+    markRecordMutatedLocally(record.id);
+    lastMutationTimes.current[collection] = Date.now();
     setLastSyncedTime(new Date());
 
     // Queue for offline resilience
@@ -2331,6 +2334,13 @@ export default function App() {
     lastMutationTimes.current[collection] = Date.now();
     setLastSyncedTime(new Date());
 
+    if (Array.isArray(data)) {
+      data.forEach(item => {
+        if (item && item.id) markRecordMutatedLocally(item.id);
+        if (item && item.employeeId) markRecordMutatedLocally(String(item.employeeId).toUpperCase());
+      });
+    }
+
     // Save to local cache
     try {
       localStorage.setItem(`juwei_wms_cache_${collection}`, JSON.stringify(data));
@@ -2464,6 +2474,7 @@ export default function App() {
 
     // Remove from deleted tracking if re-registered
     unmarkUserAsDeleted(cleanEmployeeId);
+    markRecordMutatedLocally(cleanEmployeeId);
 
     const nextUsers = [...registeredUsers.filter(u => (u.employeeId || '').toUpperCase() !== cleanEmployeeId), newUser];
     setRegisteredUsers(nextUsers);
