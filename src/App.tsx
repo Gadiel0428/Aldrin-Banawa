@@ -841,7 +841,8 @@ export default function App() {
     } catch (e) {}
 
     // Call server reset endpoint
-    fetch('/api/reset-database', {
+    const baseUrl = getApiBaseUrl();
+    fetch(`${baseUrl}/api/reset-database`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     }).catch(() => {});
@@ -862,7 +863,8 @@ export default function App() {
       localStorage.removeItem('juwei_wms_deleted_accounts');
     } catch (e) {}
     syncCollection('registeredUsers', defaultAccounts);
-    fetch('/api/reset-database', {
+    const baseUrl = getApiBaseUrl();
+    fetch(`${baseUrl}/api/reset-database`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     }).catch(() => {});
@@ -1114,8 +1116,9 @@ export default function App() {
     const isHttps = isSecureServerHost(cleanHost, targetAddr);
     const httpProto = isHttps ? 'https:' : 'http:';
 
+    const baseUrl = getApiBaseUrl();
     try {
-      const res = await fetch('/api/sync/batch', {
+      const res = await fetch(`${baseUrl}/api/sync/batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mutations })
@@ -1138,32 +1141,55 @@ export default function App() {
     } catch (err) {}
   };
 
-  // Helper to compare collections by content to avoid unnecessary state re-renders
+  // Deep equivalency checker that tolerates null/undefined/empty string and numeric/boolean string formats
+  const areValuesEquivalent = (valA: any, valB: any): boolean => {
+    if (valA === valB) return true;
+    const isBlankA = valA === null || valA === undefined || valA === '';
+    const isBlankB = valB === null || valB === undefined || valB === '';
+    if (isBlankA && isBlankB) return true;
+    if (isBlankA !== isBlankB) return false;
+
+    // Number vs number-string equivalency (e.g. 100 vs "100")
+    if ((typeof valA === 'number' && typeof valB === 'string') || (typeof valA === 'string' && typeof valB === 'number')) {
+      const numA = Number(valA);
+      const numB = Number(valB);
+      if (!isNaN(numA) && !isNaN(numB)) {
+        return numA === numB;
+      }
+    }
+
+    // Boolean string equivalency
+    if (typeof valA === 'boolean' && typeof valB === 'string') {
+      return String(valA) === valB.toLowerCase();
+    }
+    if (typeof valA === 'string' && typeof valB === 'boolean') {
+      return valA.toLowerCase() === String(valB);
+    }
+
+    // Objects / Arrays comparison
+    if (typeof valA === 'object' && valA !== null && typeof valB === 'object' && valB !== null) {
+      return JSON.stringify(valA) === JSON.stringify(valB);
+    }
+
+    return false;
+  };
+
+  // Helper to compare collections by content to avoid unnecessary state re-renders and table flickering
   const areCollectionsEqual = (a: any[], b: any[]): boolean => {
     if (a === b) return true;
     if (!Array.isArray(a) || !Array.isArray(b)) return false;
     if (a.length !== b.length) return false;
 
-    const mapA = new Map<string, any>();
-    for (const item of a) {
-      if (item && item.id) mapA.set(item.id, item);
-    }
-    if (mapA.size !== b.length) return false;
-
-    for (const itemB of b) {
+    for (let i = 0; i < b.length; i++) {
+      const itemB = b[i];
       if (!itemB || !itemB.id) return false;
-      const itemA = mapA.get(itemB.id);
-      if (!itemA) return false;
-      
-      const keysA = Object.keys(itemA);
-      for (const k of keysA) {
-        if (k === 'updated_at' || k === 'updatedAt' || k === '_v') continue;
-        const valA = itemA[k];
-        const valB = itemB[k];
-        if (valA === valB) continue;
-        if (typeof valA === 'object' && valA !== null && typeof valB === 'object' && valB !== null) {
-          if (JSON.stringify(valA) !== JSON.stringify(valB)) return false;
-        } else {
+      const itemA = a[i];
+      if (!itemA || itemA.id !== itemB.id) return false;
+
+      const allKeys = new Set([...Object.keys(itemA), ...Object.keys(itemB)]);
+      for (const k of allKeys) {
+        if (k === 'updated_at' || k === 'updatedAt' || k === '_v' || k === 'last_ping' || k === 'connectedAt') continue;
+        if (!areValuesEquivalent(itemA[k], itemB[k])) {
           return false;
         }
       }
@@ -1213,19 +1239,34 @@ export default function App() {
       }
     }
 
-    const mergedList = Array.from(mergedMap.values());
+    // 3. Stable Ordering: preserve safeCurrent's exact index order for all existing items, then prepend any new items
+    const orderedList: any[] = [];
+    const usedIds = new Set<string>();
 
-    // If contents are equal to currentArr, return currentArr to preserve reference (prevents re-render and flicker)
-    if (areCollectionsEqual(safeCurrent, mergedList)) {
+    for (const existingItem of safeCurrent) {
+      if (existingItem && existingItem.id && mergedMap.has(existingItem.id)) {
+        orderedList.push(mergedMap.get(existingItem.id));
+        usedIds.add(existingItem.id);
+      }
+    }
+
+    for (const [id, item] of mergedMap.entries()) {
+      if (!usedIds.has(id)) {
+        orderedList.unshift(item);
+      }
+    }
+
+    // If contents and ordering are equal to currentArr, return currentArr reference (prevents re-render and flicker)
+    if (areCollectionsEqual(safeCurrent, orderedList)) {
       return safeCurrent;
     }
 
     // Persist merged data to local cache immediately
     try {
-      localStorage.setItem(`juwei_wms_cache_${colName}`, JSON.stringify(mergedList));
+      localStorage.setItem(`juwei_wms_cache_${colName}`, JSON.stringify(orderedList));
     } catch (e) {}
 
-    return mergedList;
+    return orderedList;
   };
 
   // Helper to compare users by content to avoid unnecessary user state re-renders
@@ -1234,16 +1275,11 @@ export default function App() {
     if (!Array.isArray(a) || !Array.isArray(b)) return false;
     if (a.length !== b.length) return false;
     
-    const mapA = new Map<string, RegisteredAccount>();
-    for (const u of a) {
-      if (u && u.employeeId) mapA.set(u.employeeId.toUpperCase(), u);
-    }
-    if (mapA.size !== b.length) return false;
-
-    for (const uB of b) {
+    for (let i = 0; i < b.length; i++) {
+      const uB = b[i];
       if (!uB || !uB.employeeId) return false;
-      const uA = mapA.get(uB.employeeId.toUpperCase());
-      if (!uA) return false;
+      const uA = a[i];
+      if (!uA || (uA.employeeId || '').toUpperCase() !== (uB.employeeId || '').toUpperCase()) return false;
       if (
         (uA.username || '').toUpperCase() !== (uB.username || '').toUpperCase() ||
         (uA.role || '').toUpperCase() !== (uB.role || '').toUpperCase() ||
@@ -1314,19 +1350,37 @@ export default function App() {
       status: 'ACTIVE'
     });
 
-    const result = Array.from(userMap.values());
+    // 4. Stable ordering of user accounts
+    const orderedUsers: RegisteredAccount[] = [];
+    const usedEmpIds = new Set<string>();
+
+    for (const existingUser of safeCurrent) {
+      if (existingUser && existingUser.employeeId) {
+        const empId = existingUser.employeeId.toUpperCase();
+        if (userMap.has(empId)) {
+          orderedUsers.push(userMap.get(empId)!);
+          usedEmpIds.add(empId);
+        }
+      }
+    }
+
+    for (const [empId, user] of userMap.entries()) {
+      if (!usedEmpIds.has(empId)) {
+        orderedUsers.push(user);
+      }
+    }
 
     // Check if result is identical to currentUsers to avoid re-renders and UI flicker
-    if (Array.isArray(currentUsers) && areUsersEqual(currentUsers, result)) {
+    if (Array.isArray(currentUsers) && areUsersEqual(currentUsers, orderedUsers)) {
       return currentUsers;
     }
 
     try {
-      localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(result));
-      localStorage.setItem('juwei_wms_cache_registeredUsers', JSON.stringify(result));
+      localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(orderedUsers));
+      localStorage.setItem('juwei_wms_cache_registeredUsers', JSON.stringify(orderedUsers));
     } catch (e) {}
 
-    return result;
+    return orderedUsers;
   };
 
   // Helper to execute coordinated single-record upsert across local state, Supabase, WebSocket, and Express server
@@ -2319,8 +2373,9 @@ export default function App() {
     const httpProto = isHttps ? 'https:' : 'http:';
 
     const checkConfig = async () => {
+      const baseUrl = getApiBaseUrl();
       try {
-        let res = await fetch('/api/supabase-config');
+        let res = await fetch(`${baseUrl}/api/supabase-config`);
         if (!res.ok) {
           res = await fetch(`${httpProto}//${cleanHost}/api/supabase-config`);
         }
@@ -2410,7 +2465,8 @@ export default function App() {
     const isHttps = isSecureServerHost(cleanHost, targetAddr);
     const httpProto = isHttps ? 'https:' : 'http:';
     
-    fetch('/api/sync', {
+    const baseUrl = getApiBaseUrl();
+    fetch(`${baseUrl}/api/sync`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ collection, data })
@@ -2536,7 +2592,8 @@ export default function App() {
     deleteAccountFromSupabase(cleanId).catch(() => {});
 
     // 4. Send deletion request to server endpoint to purge memory, disk, and Supabase
-    fetch('/api/accounts/delete', {
+    const baseUrl = getApiBaseUrl();
+    fetch(`${baseUrl}/api/accounts/delete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ employeeId: cleanId })
@@ -2580,7 +2637,8 @@ export default function App() {
     }
 
     // 2. Server reset
-    fetch('/api/accounts/clear-all-except-super-admin', {
+    const baseUrl = getApiBaseUrl();
+    fetch(`${baseUrl}/api/accounts/clear-all-except-super-admin`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     }).catch(() => {});
@@ -2647,7 +2705,8 @@ export default function App() {
     if (cleanNewId !== cleanOldId) {
       unmarkUserAsDeleted(cleanNewId);
       deleteAccountFromSupabase(cleanOldId).catch(() => {});
-      fetch('/api/accounts/delete', {
+      const baseUrl = getApiBaseUrl();
+      fetch(`${baseUrl}/api/accounts/delete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ employeeId: cleanOldId })
@@ -2813,7 +2872,8 @@ export default function App() {
         console.warn('WS system activity error:', e);
       }
     } else {
-      fetch('/api/chat', {
+      const baseUrl = getApiBaseUrl();
+      fetch(`${baseUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: 'System Audit', text, isSystem: true })
@@ -2833,7 +2893,8 @@ export default function App() {
         console.warn('WS chat error:', e);
       }
     } else {
-      fetch('/api/chat', {
+      const baseUrl = getApiBaseUrl();
+      fetch(`${baseUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: currentUser, text, isSystem: false })
