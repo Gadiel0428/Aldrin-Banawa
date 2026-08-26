@@ -27,8 +27,20 @@ async function startServer() {
   const server = http.createServer(app);
   const PORT = 3000;
 
+  // Safe Disk Storage Path Resolution (AppData on Windows Desktop, Current Working Dir in Cloud)
+  function getStorageFilePath(filename: string): string {
+    const customDir = process.env.JUWEI_DATA_DIR;
+    if (customDir) {
+      try {
+        if (!fs.existsSync(customDir)) fs.mkdirSync(customDir, { recursive: true });
+        return path.join(customDir, filename);
+      } catch (e) {}
+    }
+    return path.join(process.cwd(), filename);
+  }
+
   // Initialize Supabase Server Client if environment variables or config file exist
-  const CONFIG_SUPABASE_FILE = path.join(process.cwd(), "supabase-config.json");
+  const CONFIG_SUPABASE_FILE = getStorageFilePath("supabase-config.json");
   const DEFAULT_SUPABASE_URL = "https://bbzqmmlhcwwjiewdfdmq.supabase.co";
   const DEFAULT_SUPABASE_KEY = "sb_publishable_2U24dZnUD_Ab6RlHvVW5MA__EJlhytz";
   let supabaseUrl = process.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
@@ -37,6 +49,14 @@ async function startServer() {
   if (fs.existsSync(CONFIG_SUPABASE_FILE)) {
     try {
       const cfg = JSON.parse(fs.readFileSync(CONFIG_SUPABASE_FILE, "utf-8"));
+      if (cfg && cfg.url && cfg.anonKey) {
+        supabaseUrl = cfg.url.trim();
+        supabaseKey = cfg.anonKey.trim();
+      }
+    } catch (e) {}
+  } else if (fs.existsSync(path.join(process.cwd(), "supabase-config.json"))) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "supabase-config.json"), "utf-8"));
       if (cfg && cfg.url && cfg.anonKey) {
         supabaseUrl = cfg.url.trim();
         supabaseKey = cfg.anonKey.trim();
@@ -121,12 +141,16 @@ async function startServer() {
   ];
 
   // Disk Persistence File (Fallback)
-  const DATA_FILE = path.join(process.cwd(), "data-store.json");
+  const DATA_FILE = getStorageFilePath("data-store.json");
 
   function loadStateFromDisk() {
     try {
-      if (fs.existsSync(DATA_FILE)) {
-        const raw = fs.readFileSync(DATA_FILE, "utf-8");
+      let targetFile = DATA_FILE;
+      if (!fs.existsSync(targetFile) && fs.existsSync(path.join(process.cwd(), "data-store.json"))) {
+        targetFile = path.join(process.cwd(), "data-store.json");
+      }
+      if (fs.existsSync(targetFile)) {
+        const raw = fs.readFileSync(targetFile, "utf-8");
         const parsed = JSON.parse(raw);
         if (parsed && parsed.state && typeof parsed.state === "object") {
           Object.keys(parsed.state).forEach((key) => {
@@ -142,7 +166,7 @@ async function startServer() {
         console.log("JUWEI WMS: Loaded persisted database state from disk.");
       }
     } catch (err) {
-      console.error("JUWEI WMS: Error loading data-store.json:", err);
+      console.warn("JUWEI WMS: Non-fatal notice loading data-store.json:", err);
     }
   }
 
@@ -579,9 +603,13 @@ async function startServer() {
   function saveStateToDisk() {
     try {
       const payload = JSON.stringify({ state, chatMessages }, null, 2);
+      const dir = path.dirname(DATA_FILE);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
       fs.writeFileSync(DATA_FILE, payload, "utf-8");
     } catch (err) {
-      console.error("JUWEI WMS: Error saving data-store.json:", err);
+      console.warn("JUWEI WMS: Notice saving data-store.json (non-fatal, in-memory state preserved):", err);
     }
   }
 

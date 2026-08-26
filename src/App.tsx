@@ -179,6 +179,18 @@ function getDefaultServerAddress(): string {
   return DEFAULT_ONLINE_CLOUD_HOST;
 }
 
+export function getApiBaseUrl(): string {
+  if (typeof window !== 'undefined' && window.location) {
+    if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+      return '';
+    }
+  }
+  const targetHost = getDefaultServerAddress() || 'localhost:3000';
+  const isHttps = isSecureServerHost(targetHost);
+  const proto = isHttps ? 'https:' : 'http:';
+  return `${proto}//${targetHost}`;
+}
+
 export function wsOpen(ws: WebSocket | null): boolean {
   return ws !== null && ws.readyState === WebSocket.OPEN;
 }
@@ -1374,8 +1386,9 @@ export default function App() {
     const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
     const isHttps = isSecureServerHost(cleanHost, targetAddr);
     const httpProto = isHttps ? 'https:' : 'http:';
+    const baseUrl = getApiBaseUrl();
 
-    fetch('/api/records/upsert', {
+    fetch(`${baseUrl}/api/records/upsert`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1448,8 +1461,9 @@ export default function App() {
     const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
     const isHttps = isSecureServerHost(cleanHost, targetAddr);
     const httpProto = isHttps ? 'https:' : 'http:';
+    const baseUrl = getApiBaseUrl();
 
-    fetch('/api/records/delete', {
+    fetch(`${baseUrl}/api/records/delete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ collection, id })
@@ -1510,9 +1524,10 @@ export default function App() {
       const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
       const isHttps = isSecureServerHost(cleanHost, targetAddr);
       const httpProto = isHttps ? 'https:' : 'http:';
+      const baseUrl = getApiBaseUrl();
 
       try {
-        const res = await fetch('/api/sync', { cache: 'no-store', headers: { 'Accept': 'application/json' } });
+        const res = await fetch(`${baseUrl}/api/sync`, { cache: 'no-store', headers: { 'Accept': 'application/json' } });
         if (res.ok) {
           const json = await res.json();
           if (json.data) {
@@ -1678,12 +1693,13 @@ export default function App() {
       const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
       const isHttps = isSecureServerHost(cleanHost, targetAddr);
       const httpProto = isHttps ? 'https:' : 'http:';
+      const baseUrl = getApiBaseUrl();
 
       for (const collection of collections) {
         const data = q[collection];
         if (data && Array.isArray(data)) {
           try {
-            const res = await fetch('/api/sync', {
+            const res = await fetch(`${baseUrl}/api/sync`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ collection, data })
@@ -1714,19 +1730,24 @@ export default function App() {
       await flushPendingMutationsQueue();
       await flushPendingSyncQueue();
 
-      // 1. Try relative URL /api/sync first (fastest, guaranteed on same origin)
-      const relOk = await tryFetchSync('/api/sync');
+      // 1. Try relative / configured baseUrl /api/sync first
+      const baseUrl = getApiBaseUrl();
+      const relOk = await tryFetchSync(`${baseUrl}/api/sync`);
       if (relOk) return true;
 
-      // 2. Try window host if available
-      if (window.location.host) {
+      // 2. Try localhost:3000 if desktop / embedded node server
+      const local3000Ok = await tryFetchSync('http://localhost:3000/api/sync');
+      if (local3000Ok) return true;
+
+      // 3. Try window host if available
+      if (typeof window !== 'undefined' && window.location && window.location.host) {
         const localProto = window.location.protocol === 'https:' ? 'https:' : 'http:';
         const localOk = await tryFetchSync(`${localProto}//${window.location.host}/api/sync`);
         if (localOk) return true;
       }
 
-      // 3. Try configured server host address
-      let targetAddr = serverAddress.trim();
+      // 4. Try configured server host address
+      let targetAddr = serverAddress.trim() || getDefaultServerAddress();
       const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
       const isHttps = isSecureServerHost(cleanHost, targetAddr);
       const httpProto = isHttps ? 'https:' : 'http:';
@@ -1747,8 +1768,11 @@ export default function App() {
         return;
       }
 
-      let targetAddr = serverAddress.trim();
-      const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
+      let targetAddr = serverAddress.trim() || getDefaultServerAddress();
+      let cleanHost = sanitizeServerHost(targetAddr);
+      if (!cleanHost || cleanHost.length === 0) {
+        cleanHost = 'localhost:3000';
+      }
       const isHttps = isSecureServerHost(cleanHost, targetAddr);
       const wsProto = isHttps ? 'wss:' : 'ws:';
       const socketUrl = `${wsProto}//${cleanHost}/ws`;

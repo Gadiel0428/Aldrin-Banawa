@@ -120,6 +120,24 @@
   tr {
     transition: background-color 0.15s ease;
   }
+
+  tbody tr {
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+  }
+
+  tbody tr:hover {
+    background-color: #f1f5f9 !important;
+  }
+
+  /* Table row hover for dark card & dark panel contexts */
+  .glass-card-dark tbody tr:hover,
+  .glass-card-darker tbody tr:hover,
+  .glass-panel-dark tbody tr:hover,
+  .dark tbody tr:hover,
+  [data-theme="dark"] tbody tr:hover {
+    background-color: rgba(51, 65, 85, 0.45) !important;
+  }
 }
 
 /* Minimalist Clean Frosted Cards */
