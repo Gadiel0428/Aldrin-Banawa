@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Monitor, Download, X, ShieldCheck, Cpu, FileCode2 } from 'lucide-react';
 
 interface DesktopInstallModalProps {
@@ -8,8 +9,6 @@ interface DesktopInstallModalProps {
 
 export default function DesktopInstallModal({ isOpen, onClose }: DesktopInstallModalProps) {
   const [copiedCmd, setCopiedCmd] = useState(false);
-
-  if (!isOpen) return null;
 
   const getAppUrl = () => {
     if (typeof window !== 'undefined' && window.location && window.location.host) {
@@ -432,110 +431,127 @@ $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-blue-950/80 backdrop-blur-md p-4 animate-in fade-in duration-200">
-      <div className="bg-blue-900 border-2 border-blue-700 rounded-2xl max-w-xl w-full text-white shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-        
-        {/* Header */}
-        <div className="p-5 border-b border-blue-800 bg-blue-950 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-blue-800 text-blue-200 rounded-xl border border-blue-600">
-              <Monitor className="h-6 w-6" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-lg font-extrabold tracking-tight text-white">JUWEI WMS Desktop Installer</h2>
-                <span className="px-2 py-0.5 bg-emerald-700 text-emerald-100 border border-emerald-500 text-[10px] font-mono font-bold rounded-full">
-                  Windows 10/11 Verified
-                </span>
-              </div>
-              <p className="text-xs text-blue-200 mt-0.5">
-                Install JUWEI Warehouse Management System as a Standalone Windows Application
-              </p>
-            </div>
-          </div>
-
-          <button 
-            onClick={onClose}
-            className="p-1.5 text-blue-200 hover:text-white hover:bg-blue-800 rounded-lg transition cursor-pointer"
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          key="desktop-install-backdrop"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.2 }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-blue-950/80 backdrop-blur-md p-4"
+        >
+          <motion.div
+            key="desktop-install-content"
+            initial={{ opacity: 0, scale: 0.94, y: 16 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.94, y: 16 }}
+            transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
+            className="bg-blue-900 border-2 border-blue-700 rounded-2xl max-w-xl w-full text-white shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
           >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        {/* Body Content */}
-        <div className="p-6 space-y-4 text-xs overflow-y-auto">
-
-          {/* OPTION 1: 1-CLICK BAT INSTALLER (RECOMMENDED) */}
-          <div className="p-4 bg-blue-950 border-2 border-emerald-500/80 rounded-xl space-y-3 shadow-lg">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-emerald-300 font-bold text-sm">
-                <FileCode2 className="h-4 w-4 text-emerald-400" /> Option 1: 1-Click .BAT Windows Installer
+            {/* Header */}
+            <div className="p-5 border-b border-blue-800 bg-blue-950 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-blue-800 text-blue-200 rounded-xl border border-blue-600">
+                  <Monitor className="h-6 w-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-lg font-extrabold tracking-tight text-white">JUWEI WMS Desktop Installer</h2>
+                    <span className="px-2 py-0.5 bg-emerald-700 text-emerald-100 border border-emerald-500 text-[10px] font-mono font-bold rounded-full">
+                      Windows 10/11 Verified
+                    </span>
+                  </div>
+                  <p className="text-xs text-blue-200 mt-0.5">
+                    Install JUWEI Warehouse Management System as a Standalone Windows Application
+                  </p>
+                </div>
               </div>
-              <span className="px-2 py-0.5 bg-emerald-800 text-emerald-100 border border-emerald-500 rounded text-[10px] font-mono font-bold">
-                RECOMMENDED &bull; 100% WORKS
-              </span>
-            </div>
 
-            <p className="text-blue-100 leading-relaxed text-[11px]">
-              Downloads <code>Install-JUWEI-WMS-Desktop.bat</code>. Simply <strong>double-click</strong> the downloaded file to automatically compile <code>JUWEI-WMS-Desktop.exe</code> and create the desktop shortcut! No PowerShell security warnings or execution policy issues.
-            </p>
-
-            <button
-              onClick={downloadBatInstaller}
-              className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 text-xs transition cursor-pointer"
-            >
-              <Download className="h-4 w-4" /> Download Install-JUWEI-WMS-Desktop.bat (1-Click)
-            </button>
-          </div>
-
-          {/* OPTION 2: Native .EXE PowerShell Compiler */}
-          <div className="p-4 bg-blue-950 border border-blue-700 rounded-xl space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-white font-bold text-sm">
-                <Cpu className="h-4 w-4 text-blue-300" /> Option 2: Generate JUWEI-WMS-Desktop.exe (PowerShell)
-              </div>
-              <span className="px-2 py-0.5 bg-blue-800 text-blue-100 border border-blue-600 rounded text-[10px] font-mono font-bold">
-                FIXED .PS1
-              </span>
-            </div>
-
-            <p className="text-blue-100 leading-relaxed text-[11px]">
-              Downloads the updated <code>Build-JUWEI-WMS-EXE.ps1</code> script with fixed assembly bindings and C# GUI output types.
-            </p>
-
-            <div className="flex gap-2">
-              <button
-                onClick={downloadExeCompilerScript}
-                className="flex-1 py-2.5 px-3 bg-blue-800 hover:bg-blue-700 text-white border border-blue-600 font-bold rounded-xl flex items-center justify-center gap-2 text-xs transition cursor-pointer"
+              <button 
+                onClick={onClose}
+                className="p-1.5 text-blue-200 hover:text-white hover:bg-blue-800 rounded-lg transition cursor-pointer"
               >
-                <Download className="h-4 w-4 text-blue-200" /> Download Build-JUWEI-WMS-EXE.ps1
-              </button>
-              <button
-                onClick={copyPowerShellBypassCommand}
-                className="px-3 py-2.5 bg-blue-900 hover:bg-blue-800 text-blue-200 border border-blue-700 font-mono text-[11px] rounded-xl transition cursor-pointer"
-                title="Copy PowerShell Bypass Command"
-              >
-                {copiedCmd ? 'Copied!' : 'Copy PS Command'}
+                <X className="h-5 w-5" />
               </button>
             </div>
-          </div>
 
-        </div>
+            {/* Body Content */}
+            <div className="p-6 space-y-4 text-xs overflow-y-auto">
 
-        {/* Footer */}
-        <div className="p-4 border-t border-blue-800 bg-blue-950 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-[11px] text-blue-200 font-mono">
-            <ShieldCheck className="h-3.5 w-3.5 text-blue-300" /> JUWEI Moulding Corp WMS Desktop
-          </div>
-          <button
-            onClick={onClose}
-            className="px-4 py-2 bg-blue-800 hover:bg-blue-700 text-white border border-blue-600 rounded-xl text-xs font-bold transition cursor-pointer"
-          >
-            Close
-          </button>
-        </div>
+              {/* OPTION 1: 1-CLICK BAT INSTALLER (RECOMMENDED) */}
+              <div className="p-4 bg-blue-950 border-2 border-emerald-500/80 rounded-xl space-y-3 shadow-lg">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-emerald-300 font-bold text-sm">
+                    <FileCode2 className="h-4 w-4 text-emerald-400" /> Option 1: 1-Click .BAT Windows Installer
+                  </div>
+                  <span className="px-2 py-0.5 bg-emerald-800 text-emerald-100 border border-emerald-500 rounded text-[10px] font-mono font-bold">
+                    RECOMMENDED &bull; 100% WORKS
+                  </span>
+                </div>
 
-      </div>
-    </div>
+                <p className="text-blue-100 leading-relaxed text-[11px]">
+                  Downloads <code>Install-JUWEI-WMS-Desktop.bat</code>. Simply <strong>double-click</strong> the downloaded file to automatically compile <code>JUWEI-WMS-Desktop.exe</code> and create the desktop shortcut! No PowerShell security warnings or execution policy issues.
+                </p>
+
+                <button
+                  onClick={downloadBatInstaller}
+                  className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 text-xs transition cursor-pointer"
+                >
+                  <Download className="h-4 w-4" /> Download Install-JUWEI-WMS-Desktop.bat (1-Click)
+                </button>
+              </div>
+
+              {/* OPTION 2: Native .EXE PowerShell Compiler */}
+              <div className="p-4 bg-blue-950 border border-blue-700 rounded-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-white font-bold text-sm">
+                    <Cpu className="h-4 w-4 text-blue-300" /> Option 2: Generate JUWEI-WMS-Desktop.exe (PowerShell)
+                  </div>
+                  <span className="px-2 py-0.5 bg-blue-800 text-blue-100 border border-blue-600 rounded text-[10px] font-mono font-bold">
+                    FIXED .PS1
+                  </span>
+                </div>
+
+                <p className="text-blue-100 leading-relaxed text-[11px]">
+                  Downloads the updated <code>Build-JUWEI-WMS-EXE.ps1</code> script with fixed assembly bindings and C# GUI output types.
+                </p>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={downloadExeCompilerScript}
+                    className="flex-1 py-2.5 px-3 bg-blue-800 hover:bg-blue-700 text-white border border-blue-600 font-bold rounded-xl flex items-center justify-center gap-2 text-xs transition cursor-pointer"
+                  >
+                    <Download className="h-4 w-4 text-blue-200" /> Download Build-JUWEI-WMS-EXE.ps1
+                  </button>
+                  <button
+                    onClick={copyPowerShellBypassCommand}
+                    className="px-3 py-2.5 bg-blue-900 hover:bg-blue-800 text-blue-200 border border-blue-700 font-mono text-[11px] rounded-xl transition cursor-pointer"
+                    title="Copy PowerShell Bypass Command"
+                  >
+                    {copiedCmd ? 'Copied!' : 'Copy PS Command'}
+                  </button>
+                </div>
+              </div>
+
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-blue-800 bg-blue-950 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-[11px] text-blue-200 font-mono">
+                <ShieldCheck className="h-3.5 w-3.5 text-blue-300" /> JUWEI Moulding Corp WMS Desktop
+              </div>
+              <button
+                onClick={onClose}
+                className="px-4 py-2 bg-blue-800 hover:bg-blue-700 text-white border border-blue-600 rounded-xl text-xs font-bold transition cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }

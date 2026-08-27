@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Plus, 
   Search, 
@@ -32,6 +32,7 @@ import {
 import { ReceivingRecord, ReturnRecord, MaterialStockItem, getCustomerForPart, UOM_OPTIONS, MasterRegistryItem, RegistryType } from '../types';
 import { FIFO_COLORS_BY_MONTH } from '../data';
 import BarcodeScannerModal from './BarcodeScannerModal';
+import { motion, AnimatePresence } from 'motion/react';
 
 interface ReceivingModuleProps {
   receiving: ReceivingRecord[];
@@ -152,30 +153,66 @@ export default function ReceivingModule({
     }
   };
   
+  // LocalStorage keys for draft persistence
+  const RECEIVING_DRAFT_KEY = 'juwei_wms_draft_receiving';
+  const RETURN_DRAFT_KEY = 'juwei_wms_draft_receiving_return';
+
+  const loadReceivingDraft = () => {
+    try {
+      const raw = localStorage.getItem(RECEIVING_DRAFT_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch (e) {}
+    return null;
+  };
+
+  const loadReturnDraft = () => {
+    try {
+      const raw = localStorage.getItem(RETURN_DRAFT_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch (e) {}
+    return null;
+  };
+
+  const initialReceivingDraft = loadReceivingDraft();
+  const initialReturnDraft = loadReturnDraft();
+
   // States for new receiving form
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [source, setSource] = useState<string>('INTERNAL');
+  const [showAddForm, setShowAddForm] = useState<boolean>(() => {
+    if (initialReceivingDraft?.showAddForm !== undefined) return Boolean(initialReceivingDraft.showAddForm);
+    return Boolean(
+      initialReceivingDraft?.supplierOrDept || 
+      initialReceivingDraft?.partCode || 
+      (initialReceivingDraft?.quantity && initialReceivingDraft.quantity > 0)
+    );
+  });
+  const [source, setSource] = useState<string>(initialReceivingDraft?.source || 'INTERNAL');
   const isInternalSource = (src: string) => src === 'INTERNAL' || src === 'WIP/BOM/FG(Internal)';
-  const [modelName, setModelName] = useState('');
-  const [itemDescription, setItemDescription] = useState('');
-  const [partCode, setPartCode] = useState('');
-  const [quantity, setQuantity] = useState(0);
-  const [unit, setUnit] = useState('KG');
-  const [lotNumber, setLotNumber] = useState('');
-  const [supplierOrDept, setSupplierOrDept] = useState('');
-  const [poNumber, setPoNumber] = useState('');
-  const [rrNumber, setRrNumber] = useState('');
-  const [drNumber, setDrNumber] = useState('');
-  const [siNumber, setSiNumber] = useState('');
-  const [wayBill, setWayBill] = useState('');
-  const [transferFormNumber, setTransferFormNumber] = useState('');
-  const [customer, setCustomer] = useState('');
-  const [color, setColor] = useState('');
-  const [receivedDate, setReceivedDate] = useState(new Date().toISOString().split('T')[0]);
-  const [location, setLocation] = useState('');
-  const [vendorSupplier, setVendorSupplier] = useState('');
-  const [reorderMin, setReorderMin] = useState(0);
-  const [remarks, setRemarks] = useState('');
+  const [modelName, setModelName] = useState(initialReceivingDraft?.modelName || '');
+  const [itemDescription, setItemDescription] = useState(initialReceivingDraft?.itemDescription || '');
+  const [partCode, setPartCode] = useState(initialReceivingDraft?.partCode || '');
+  const [quantity, setQuantity] = useState<number>(initialReceivingDraft?.quantity || 0);
+  const [unit, setUnit] = useState(initialReceivingDraft?.unit || 'KG');
+  const [lotNumber, setLotNumber] = useState(initialReceivingDraft?.lotNumber || '');
+  const [supplierOrDept, setSupplierOrDept] = useState(initialReceivingDraft?.supplierOrDept || '');
+  const [poNumber, setPoNumber] = useState(initialReceivingDraft?.poNumber || '');
+  const [rrNumber, setRrNumber] = useState(initialReceivingDraft?.rrNumber || '');
+  const [drNumber, setDrNumber] = useState(initialReceivingDraft?.drNumber || '');
+  const [siNumber, setSiNumber] = useState(initialReceivingDraft?.siNumber || '');
+  const [wayBill, setWayBill] = useState(initialReceivingDraft?.wayBill || '');
+  const [transferFormNumber, setTransferFormNumber] = useState(initialReceivingDraft?.transferFormNumber || '');
+  const [customer, setCustomer] = useState(initialReceivingDraft?.customer || '');
+  const [color, setColor] = useState(initialReceivingDraft?.color || '');
+  const [receivedDate, setReceivedDate] = useState(initialReceivingDraft?.receivedDate || new Date().toISOString().split('T')[0]);
+  const [location, setLocation] = useState(initialReceivingDraft?.location || '');
+  const [vendorSupplier, setVendorSupplier] = useState(initialReceivingDraft?.vendorSupplier || '');
+  const [reorderMin, setReorderMin] = useState<number>(initialReceivingDraft?.reorderMin || 0);
+  const [remarks, setRemarks] = useState(initialReceivingDraft?.remarks || '');
 
   // Category helpers
   const deptUpper = (supplierOrDept || '').toUpperCase();
@@ -189,33 +226,211 @@ export default function ReceivingModule({
   const isWipCategory = deptUpper.includes('WIP') || deptUpper.includes('WORK IN PROGRESS') || deptUpper.includes('SUB-PART') || isFgCategory;
   
   // States for BOM
-  const [bomItems, setBomItems] = useState<{ partCode: string; description: string; quantityRequired: number; unit: string }[]>([]);
+  const [bomItems, setBomItems] = useState<{ partCode: string; description: string; quantityRequired: number; unit: string }[]>(
+    Array.isArray(initialReceivingDraft?.bomItems) ? initialReceivingDraft.bomItems : []
+  );
   const [selectedStockIdForBom, setSelectedStockIdForBom] = useState('');
   const [newBomPartCode, setNewBomPartCode] = useState('');
   const [newBomDescription, setNewBomDescription] = useState('');
   const [newBomQty, setNewBomQty] = useState(0);
   const [newBomUnit, setNewBomUnit] = useState('PCS');
-  const [autoDeductBom, setAutoDeductBom] = useState(true);
+  const [autoDeductBom, setAutoDeductBom] = useState(initialReceivingDraft?.autoDeductBom ?? true);
   
   // SOP Receiving Condition Verification Checklist
-  const [sopReceivingInspection, setSopReceivingInspection] = useState(true);
-  const [sopMaterialTraceability, setSopMaterialTraceability] = useState(true);
-  const [sopQuantityAccuracy, setSopQuantityAccuracy] = useState(true);
-  const [sopMaterialCondition, setSopMaterialCondition] = useState(true);
-  const [sopSystemRecording, setSopSystemRecording] = useState(true);
+  const [sopReceivingInspection, setSopReceivingInspection] = useState(initialReceivingDraft?.sopReceivingInspection ?? true);
+  const [sopMaterialTraceability, setSopMaterialTraceability] = useState(initialReceivingDraft?.sopMaterialTraceability ?? true);
+  const [sopQuantityAccuracy, setSopQuantityAccuracy] = useState(initialReceivingDraft?.sopQuantityAccuracy ?? true);
+  const [sopMaterialCondition, setSopMaterialCondition] = useState(initialReceivingDraft?.sopMaterialCondition ?? true);
+  const [sopSystemRecording, setSopSystemRecording] = useState(initialReceivingDraft?.sopSystemRecording ?? true);
 
   // Return form states
-  const [showReturnForm, setShowReturnForm] = useState(false);
-  const [retCategory, setRetCategory] = useState('');
-  const [retDesc, setRetDesc] = useState('');
-  const [retPartCode, setRetPartCode] = useState('');
-  const [retQty, setRetQty] = useState(0);
-  const [retUnit, setRetUnit] = useState('KG');
-  const [retLot, setRetLot] = useState('');
-  const [retDept, setRetDept] = useState('');
-  const [retReason, setRetReason] = useState('');
-  const [retCondition, setRetCondition] = useState<'Good' | 'Damaged' | 'Contaminated' | 'Unidentified'>('Good');
-  const [retSlip, setRetSlip] = useState('');
+  const [showReturnForm, setShowReturnForm] = useState<boolean>(() => {
+    if (initialReturnDraft?.showReturnForm !== undefined) return Boolean(initialReturnDraft.showReturnForm);
+    return Boolean(
+      initialReturnDraft?.retCategory || 
+      initialReturnDraft?.retPartCode || 
+      (initialReturnDraft?.retQty && initialReturnDraft.retQty > 0)
+    );
+  });
+  const [retCategory, setRetCategory] = useState(initialReturnDraft?.retCategory || '');
+  const [retDesc, setRetDesc] = useState(initialReturnDraft?.retDesc || '');
+  const [retPartCode, setRetPartCode] = useState(initialReturnDraft?.retPartCode || '');
+  const [retQty, setRetQty] = useState<number>(initialReturnDraft?.retQty || 0);
+  const [retUnit, setRetUnit] = useState(initialReturnDraft?.retUnit || 'KG');
+  const [retLot, setRetLot] = useState(initialReturnDraft?.retLot || '');
+  const [retDept, setRetDept] = useState(initialReturnDraft?.retDept || '');
+  const [retReason, setRetReason] = useState(initialReturnDraft?.retReason || '');
+  const [retCondition, setRetCondition] = useState<'Good' | 'Damaged' | 'Contaminated' | 'Unidentified'>(initialReturnDraft?.retCondition || 'Good');
+  const [retSlip, setRetSlip] = useState(initialReturnDraft?.retSlip || '');
+
+  // Auto-save receiving draft to localStorage
+  useEffect(() => {
+    const hasContent = Boolean(
+      supplierOrDept ||
+      partCode ||
+      itemDescription ||
+      modelName ||
+      lotNumber ||
+      quantity > 0 ||
+      poNumber ||
+      rrNumber ||
+      drNumber ||
+      siNumber ||
+      wayBill ||
+      transferFormNumber ||
+      customer ||
+      color ||
+      location ||
+      vendorSupplier ||
+      remarks ||
+      (bomItems && bomItems.length > 0)
+    );
+
+    if (hasContent || showAddForm) {
+      const draft = {
+        showAddForm,
+        source,
+        modelName,
+        itemDescription,
+        partCode,
+        quantity,
+        unit,
+        lotNumber,
+        supplierOrDept,
+        poNumber,
+        rrNumber,
+        drNumber,
+        siNumber,
+        wayBill,
+        transferFormNumber,
+        customer,
+        color,
+        receivedDate,
+        location,
+        vendorSupplier,
+        reorderMin,
+        remarks,
+        bomItems,
+        autoDeductBom,
+        sopReceivingInspection,
+        sopMaterialTraceability,
+        sopQuantityAccuracy,
+        sopMaterialCondition,
+        sopSystemRecording,
+        savedAt: Date.now()
+      };
+      try {
+        localStorage.setItem(RECEIVING_DRAFT_KEY, JSON.stringify(draft));
+      } catch (e) {}
+    }
+  }, [
+    showAddForm, source, modelName, itemDescription, partCode, quantity, unit,
+    lotNumber, supplierOrDept, poNumber, rrNumber, drNumber, siNumber,
+    wayBill, transferFormNumber, customer, color, receivedDate, location,
+    vendorSupplier, reorderMin, remarks, bomItems, autoDeductBom,
+    sopReceivingInspection, sopMaterialTraceability, sopQuantityAccuracy,
+    sopMaterialCondition, sopSystemRecording
+  ]);
+
+  // Auto-save return draft to localStorage
+  useEffect(() => {
+    const hasReturnContent = Boolean(
+      retCategory ||
+      retDesc ||
+      retPartCode ||
+      retQty > 0 ||
+      retLot ||
+      retDept ||
+      retReason ||
+      retSlip
+    );
+
+    if (hasReturnContent || showReturnForm) {
+      const draft = {
+        showReturnForm,
+        retCategory,
+        retDesc,
+        retPartCode,
+        retQty,
+        retUnit,
+        retLot,
+        retDept,
+        retReason,
+        retCondition,
+        retSlip,
+        savedAt: Date.now()
+      };
+      try {
+        localStorage.setItem(RETURN_DRAFT_KEY, JSON.stringify(draft));
+      } catch (e) {}
+    }
+  }, [
+    showReturnForm, retCategory, retDesc, retPartCode, retQty,
+    retUnit, retLot, retDept, retReason, retCondition, retSlip
+  ]);
+
+  // Clear helpers
+  const clearReceivingDraft = () => {
+    try {
+      localStorage.removeItem(RECEIVING_DRAFT_KEY);
+    } catch (e) {}
+  };
+
+  const handleDiscardReceiving = () => {
+    clearReceivingDraft();
+    setModelName('');
+    setItemDescription('');
+    setPartCode('');
+    setCustomer('');
+    setColor('');
+    setQuantity(0);
+    setLotNumber('');
+    setSupplierOrDept('');
+    setReceivedDate(new Date().toISOString().split('T')[0]);
+    setLocation('');
+    setVendorSupplier('');
+    setReorderMin(0);
+    setRemarks('');
+    setPoNumber('');
+    setRrNumber('');
+    setDrNumber('');
+    setSiNumber('');
+    setWayBill('');
+    setTransferFormNumber('');
+    setSopReceivingInspection(true);
+    setSopMaterialTraceability(true);
+    setSopQuantityAccuracy(true);
+    setSopMaterialCondition(true);
+    setSopSystemRecording(true);
+    setBomItems([]);
+    setSelectedStockIdForBom('');
+    setNewBomPartCode('');
+    setNewBomDescription('');
+    setNewBomQty(0);
+    setNewBomUnit('pcs');
+    setAutoDeductBom(true);
+    setShowAddForm(false);
+  };
+
+  const clearReturnDraft = () => {
+    try {
+      localStorage.removeItem(RETURN_DRAFT_KEY);
+    } catch (e) {}
+  };
+
+  const handleDiscardReturn = () => {
+    clearReturnDraft();
+    setRetCategory('');
+    setRetDesc('');
+    setRetPartCode('');
+    setRetQty(0);
+    setRetLot('');
+    setRetDept('');
+    setRetReason('');
+    setRetCondition('Good');
+    setRetSlip('');
+    setShowReturnForm(false);
+  };
 
   // Helper functions for BOM item management
   const handleBomItemSelection = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -337,6 +552,7 @@ export default function ReceivingModule({
     };
 
     onAddReceiving(newRecord);
+    clearReceivingDraft();
     
     // Reset form states
     setModelName('');
@@ -403,6 +619,7 @@ export default function ReceivingModule({
     };
 
     onAddReturn(newReturn);
+    clearReturnDraft();
 
     // Reset Form
     setRetCategory('');
@@ -576,13 +793,18 @@ export default function ReceivingModule({
               id="arrival-form"
             >
               <div className="border-b border-slate-100 pb-3 flex justify-between items-center">
-                <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
-                  <Sparkles className="h-4 w-4 text-slate-500" /> Receiving Information Entry Form
-                </h3>
+                <div className="flex items-center gap-2.5">
+                  <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+                    <Sparkles className="h-4 w-4 text-slate-500" /> Receiving Information Entry Form
+                  </h3>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                    <CheckCircle2 className="h-3 w-3 text-emerald-600" /> Auto-saved draft
+                  </span>
+                </div>
                 <button 
                   type="button" 
-                  onClick={() => setShowAddForm(false)}
-                  className="text-xs text-slate-400 hover:text-slate-600"
+                  onClick={handleDiscardReceiving}
+                  className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -959,14 +1181,14 @@ export default function ReceivingModule({
               <div className="flex justify-end gap-2">
                 <button 
                   type="button"
-                  onClick={() => setShowAddForm(false)}
-                  className="px-4 py-2 border border-slate-200 text-slate-600 text-xs font-semibold rounded-lg hover:bg-slate-50"
+                  onClick={handleDiscardReceiving}
+                  className="px-4 py-2 border border-slate-200 text-slate-600 text-xs font-semibold rounded-lg hover:bg-slate-50 cursor-pointer"
                 >
                   Discard
                 </button>
                 <button 
                   type="submit"
-                  className="px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800"
+                  className="px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 cursor-pointer"
                 >
                   Verify and Log Into System
                 </button>
@@ -1249,13 +1471,18 @@ export default function ReceivingModule({
               id="return-form"
             >
               <div className="border-b border-slate-100 pb-3 flex justify-between items-center">
-                <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
-                  <RotateCcw className="h-4 w-4 text-slate-500" /> Return Requisition Entry Form
-                </h3>
+                <div className="flex items-center gap-2.5">
+                  <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+                    <RotateCcw className="h-4 w-4 text-slate-500" /> Return Requisition Entry Form
+                  </h3>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                    <CheckCircle2 className="h-3 w-3 text-emerald-600" /> Auto-saved draft
+                  </span>
+                </div>
                 <button 
                   type="button" 
-                  onClick={() => setShowReturnForm(false)}
-                  className="text-xs text-slate-400 hover:text-slate-600"
+                  onClick={handleDiscardReturn}
+                  className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -1408,14 +1635,14 @@ export default function ReceivingModule({
               <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
                 <button 
                   type="button"
-                  onClick={() => setShowReturnForm(false)}
-                  className="px-4 py-2 border border-slate-200 text-slate-600 text-xs font-semibold rounded-lg hover:bg-slate-50"
+                  onClick={handleDiscardReturn}
+                  className="px-4 py-2 border border-slate-200 text-slate-600 text-xs font-semibold rounded-lg hover:bg-slate-50 cursor-pointer"
                 >
                   Discard
                 </button>
                 <button 
                   type="submit"
-                  className="px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800"
+                  className="px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 cursor-pointer"
                 >
                   Process and Register Return Slip
                 </button>
@@ -1539,411 +1766,443 @@ export default function ReceivingModule({
       )}
 
       {/* Edit Receiving Record Modal (Super Admin) */}
-      {editingReceiving && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <div>
-                <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-                  <Edit className="h-4 w-4 text-indigo-600" /> Edit Registered Material Arrival ({editingReceiving.id})
-                </h4>
-                <p className="text-[11px] text-slate-500">Super Admin Record Overwrite</p>
-              </div>
-              <button 
-                onClick={() => setEditingReceiving(null)}
-                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Model</label>
-                <input 
-                  type="text" 
-                  value={editingReceiving.partCode}
-                  onChange={e => setEditingReceiving({ ...editingReceiving, partCode: e.target.value.toUpperCase() })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Date</label>
-                <input 
-                  type="date" 
-                  value={editingReceiving.date}
-                  onChange={e => setEditingReceiving({ ...editingReceiving, date: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div className="col-span-2">
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Part Code / Item Code</label>
-                <input 
-                  type="text" 
-                  value={editingReceiving.itemDescription}
-                  onChange={e => setEditingReceiving({ ...editingReceiving, itemDescription: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity</label>
-                <input 
-                  type="text" 
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  value={editingReceiving.quantity || ''}
-                  onKeyDown={(e) => {
-                    if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
-                      e.preventDefault();
-                    }
-                  }}
-                  onChange={e => {
-                    const val = e.target.value.replace(/\D/g, '');
-                    setEditingReceiving({ ...editingReceiving, quantity: val ? parseInt(val, 10) : 0 });
-                  }}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Unit of Measure (UOM)</label>
-                <select 
-                  value={editingReceiving.unit}
-                  onChange={e => setEditingReceiving({ ...editingReceiving, unit: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono font-semibold"
+      <AnimatePresence>
+        {editingReceiving && (
+          <motion.div
+            key="editing-receiving-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50"
+          >
+            <motion.div
+              key="editing-receiving-content"
+              initial={{ opacity: 0, scale: 0.94, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 16 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
+              className="bg-white rounded-xl shadow-xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto"
+            >
+              <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                <div>
+                  <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                    <Edit className="h-4 w-4 text-indigo-600" /> Edit Registered Material Arrival ({editingReceiving.id})
+                  </h4>
+                  <p className="text-[11px] text-slate-500">Super Admin Record Overwrite</p>
+                </div>
+                <button 
+                  onClick={() => setEditingReceiving(null)}
+                  className="text-slate-400 hover:text-slate-600 text-sm font-bold"
                 >
-                  {UOM_OPTIONS.map(u => (
-                    <option key={u} value={u}>{u}</option>
-                  ))}
-                </select>
+                  ✕
+                </button>
               </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Part Name</label>
-                <input 
-                  type="text" 
-                  value={editingReceiving.lotNumber}
-                  onChange={e => setEditingReceiving({ ...editingReceiving, lotNumber: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Model</label>
+                  <input 
+                    type="text" 
+                    value={editingReceiving.partCode}
+                    onChange={e => setEditingReceiving({ ...editingReceiving, partCode: e.target.value.toUpperCase() })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Category</label>
-                <select 
-                  value={editingReceiving.supplierOrDept}
-                  onChange={e => setEditingReceiving({ ...editingReceiving, supplierOrDept: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded text-xs focus:ring-1 focus:ring-indigo-500 font-medium text-slate-700 cursor-pointer"
-                >
-                  <option value="">Select Category...</option>
-                  {registries.filter(r => r.type === 'CATEGORY' && r.status === 'ACTIVE').map(cat => (
-                    <option key={cat.id} value={cat.name}>{cat.name}</option>
-                  ))}
-                  {!registries.some(r => r.type === 'CATEGORY' && r.status === 'ACTIVE') && (
-                    <>
-                      <option value="RAW MATERIALS / RESINS">RAW MATERIALS / RESINS</option>
-                      <option value="PACKAGING MATERIALS">PACKAGING MATERIALS</option>
-                      <option value="CONSUMABLES">CONSUMABLES</option>
-                      <option value="PRODUCTION SUPPLIES">PRODUCTION SUPPLIES</option>
-                      <option value="OFFICE SUPPLIES">OFFICE SUPPLIES</option>
-                      <option value="WIP / SUB-PARTS">WIP / SUB-PARTS</option>
-                    </>
-                  )}
-                </select>
-              </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Date</label>
+                  <input 
+                    type="date" 
+                    value={editingReceiving.date}
+                    onChange={e => setEditingReceiving({ ...editingReceiving, date: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">IQC Status</label>
-                <select 
-                  value={editingReceiving.iqcStatus}
-                  onChange={e => setEditingReceiving({ ...editingReceiving, iqcStatus: e.target.value as any })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-bold"
-                >
-                  <option value="PENDING_IQC">PENDING IQC</option>
-                  <option value="APPROVED_IQC">APPROVED IQC</option>
-                  <option value="REJECTED_IQC">REJECTED IQC</option>
-                  <option value="NA">NA (Internal)</option>
-                </select>
-              </div>
+                <div className="col-span-2">
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Part Code / Item Code</label>
+                  <input 
+                    type="text" 
+                    value={editingReceiving.itemDescription}
+                    onChange={e => setEditingReceiving({ ...editingReceiving, itemDescription: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Date Received</label>
-                <input 
-                  type="date" 
-                  value={editingReceiving.receivedDate || editingReceiving.date}
-                  onChange={e => setEditingReceiving({ ...editingReceiving, receivedDate: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity</label>
+                  <input 
+                    type="text" 
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={editingReceiving.quantity || ''}
+                    onKeyDown={(e) => {
+                      if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
+                        e.preventDefault();
+                      }
+                    }}
+                    onChange={e => {
+                      const val = e.target.value.replace(/\D/g, '');
+                      setEditingReceiving({ ...editingReceiving, quantity: val ? parseInt(val, 10) : 0 });
+                    }}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Location</label>
-                <input 
-                  type="text" 
-                  value={editingReceiving.location || ''}
-                  onChange={e => setEditingReceiving({ ...editingReceiving, location: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Unit of Measure (UOM)</label>
+                  <select 
+                    value={editingReceiving.unit}
+                    onChange={e => setEditingReceiving({ ...editingReceiving, unit: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono font-semibold"
+                  >
+                    {UOM_OPTIONS.map(u => (
+                      <option key={u} value={u}>{u}</option>
+                    ))}
+                  </select>
+                </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Vendor / Supplier / Dept</label>
-                <input 
-                  type="text" 
-                  value={editingReceiving.vendorSupplier || ''}
-                  onChange={e => setEditingReceiving({ ...editingReceiving, vendorSupplier: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Part Name</label>
+                  <input 
+                    type="text" 
+                    value={editingReceiving.lotNumber}
+                    onChange={e => setEditingReceiving({ ...editingReceiving, lotNumber: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Purchase Order (PO) #</label>
-                <input 
-                  type="text" 
-                  value={editingReceiving.poNumber || ''}
-                  onChange={e => setEditingReceiving({ ...editingReceiving, poNumber: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Delivery Receipt (DR) #</label>
-                <input 
-                  type="text" 
-                  value={editingReceiving.drNumber || ''}
-                  onChange={e => setEditingReceiving({ ...editingReceiving, drNumber: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Sales Invoice (SI) #</label>
-                <input 
-                  type="text" 
-                  value={editingReceiving.siNumber || ''}
-                  onChange={e => setEditingReceiving({ ...editingReceiving, siNumber: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Reorder Min</label>
-                <input 
-                  type="number" 
-                  value={editingReceiving.reorderMin || ''}
-                  onChange={e => setEditingReceiving({ ...editingReceiving, reorderMin: Number(e.target.value) })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div className="col-span-2">
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Remarks</label>
-                <input 
-                  type="text" 
-                  value={editingReceiving.remarks || ''}
-                  onChange={e => setEditingReceiving({ ...editingReceiving, remarks: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 text-xs font-semibold pt-3 border-t border-slate-100">
-              <button 
-                onClick={() => setEditingReceiving(null)}
-                className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button 
-                onClick={() => {
-                  onEditReceiving?.(editingReceiving);
-                  setEditingReceiving(null);
-                }}
-                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold"
-              >
-                Save Record Changes
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Edit Return Record Modal (Super Admin) */}
-      {editingReturn && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <div>
-                <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-                  <Edit className="h-4 w-4 text-indigo-600" /> Edit Registered Return ({editingReturn.returnSlipFormNumber})
-                </h4>
-                <p className="text-[11px] text-slate-500">Super Admin Record Overwrite</p>
-              </div>
-              <button 
-                onClick={() => setEditingReturn(null)}
-                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Slip Form Number</label>
-                <input 
-                  type="text" 
-                  value={editingReturn.returnSlipFormNumber}
-                  onChange={e => setEditingReturn({ ...editingReturn, returnSlipFormNumber: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Date</label>
-                <input 
-                  type="date" 
-                  value={editingReturn.date}
-                  onChange={e => setEditingReturn({ ...editingReturn, date: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Department</label>
-                <input 
-                  type="text" 
-                  value={editingReturn.department}
-                  onChange={e => setEditingReturn({ ...editingReturn, department: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Part Code</label>
-                <input 
-                  type="text" 
-                  value={editingReturn.partCode}
-                  onChange={e => setEditingReturn({ ...editingReturn, partCode: e.target.value.toUpperCase() })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div className="col-span-2">
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Material Description</label>
-                <input 
-                  type="text" 
-                  value={editingReturn.materialDescription}
-                  onChange={e => setEditingReturn({ ...editingReturn, materialDescription: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div className="col-span-2">
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Return Reason / Detailed Log Remarks</label>
-                <input 
-                  type="text" 
-                  value={editingReturn.reason || ''}
-                  onChange={e => setEditingReturn({ ...editingReturn, reason: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                  placeholder="Describe return reason or log remarks"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Category</label>
-                <select 
-                  value={editingReturn.category || ''}
-                  onChange={e => setEditingReturn({ ...editingReturn, category: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-bold text-xs"
-                >
-                  <option value="">Select Category...</option>
-                  <option value="RESIN/RAW MATERIALS">RESIN/RAW MATERIALS</option>
-                  <option value="INDIRECT BOM">INDIRECT BOM</option>
-                  <option value="DIRECT BOM">DIRECT BOM</option>
-                  <option value="CONSUMABLES">CONSUMABLES</option>
-                  <option value="PACKAGING MATERIALS">PACKAGING MATERIALS</option>
-                  <option value="WIP (WORK IN PROGRESS)">WIP (WORK IN PROGRESS)</option>
-                  <option value="FG (FINISHED GOOD)">FG (FINISHED GOOD)</option>
-                  <option value="OFFICE SUPPLIES">OFFICE SUPPLIES</option>
-                  {registries
-                    .filter(r => r.type === 'CATEGORY' && r.status === 'ACTIVE')
-                    .map(cat => (
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Category</label>
+                  <select 
+                    value={editingReceiving.supplierOrDept}
+                    onChange={e => setEditingReceiving({ ...editingReceiving, supplierOrDept: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded text-xs focus:ring-1 focus:ring-indigo-500 font-medium text-slate-700 cursor-pointer"
+                  >
+                    <option value="">Select Category...</option>
+                    {registries.filter(r => r.type === 'CATEGORY' && r.status === 'ACTIVE').map(cat => (
                       <option key={cat.id} value={cat.name}>{cat.name}</option>
                     ))}
-                </select>
+                    {!registries.some(r => r.type === 'CATEGORY' && r.status === 'ACTIVE') && (
+                      <>
+                        <option value="RAW MATERIALS / RESINS">RAW MATERIALS / RESINS</option>
+                        <option value="PACKAGING MATERIALS">PACKAGING MATERIALS</option>
+                        <option value="CONSUMABLES">CONSUMABLES</option>
+                        <option value="PRODUCTION SUPPLIES">PRODUCTION SUPPLIES</option>
+                        <option value="OFFICE SUPPLIES">OFFICE SUPPLIES</option>
+                        <option value="WIP / SUB-PARTS">WIP / SUB-PARTS</option>
+                      </>
+                    )}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">IQC Status</label>
+                  <select 
+                    value={editingReceiving.iqcStatus}
+                    onChange={e => setEditingReceiving({ ...editingReceiving, iqcStatus: e.target.value as any })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-bold"
+                  >
+                    <option value="PENDING_IQC">PENDING IQC</option>
+                    <option value="APPROVED_IQC">APPROVED IQC</option>
+                    <option value="REJECTED_IQC">REJECTED IQC</option>
+                    <option value="NA">NA (Internal)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Date Received</label>
+                  <input 
+                    type="date" 
+                    value={editingReceiving.receivedDate || editingReceiving.date}
+                    onChange={e => setEditingReceiving({ ...editingReceiving, receivedDate: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Location</label>
+                  <input 
+                    type="text" 
+                    value={editingReceiving.location || ''}
+                    onChange={e => setEditingReceiving({ ...editingReceiving, location: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Vendor / Supplier / Dept</label>
+                  <input 
+                    type="text" 
+                    value={editingReceiving.vendorSupplier || ''}
+                    onChange={e => setEditingReceiving({ ...editingReceiving, vendorSupplier: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Purchase Order (PO) #</label>
+                  <input 
+                    type="text" 
+                    value={editingReceiving.poNumber || ''}
+                    onChange={e => setEditingReceiving({ ...editingReceiving, poNumber: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Delivery Receipt (DR) #</label>
+                  <input 
+                    type="text" 
+                    value={editingReceiving.drNumber || ''}
+                    onChange={e => setEditingReceiving({ ...editingReceiving, drNumber: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Sales Invoice (SI) #</label>
+                  <input 
+                    type="text" 
+                    value={editingReceiving.siNumber || ''}
+                    onChange={e => setEditingReceiving({ ...editingReceiving, siNumber: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Reorder Min</label>
+                  <input 
+                    type="number" 
+                    value={editingReceiving.reorderMin || ''}
+                    onChange={e => setEditingReceiving({ ...editingReceiving, reorderMin: Number(e.target.value) })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Remarks</label>
+                  <input 
+                    type="text" 
+                    value={editingReceiving.remarks || ''}
+                    onChange={e => setEditingReceiving({ ...editingReceiving, remarks: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
               </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity</label>
-                <input 
-                  type="number" 
-                  value={editingReturn.quantity}
-                  onChange={e => setEditingReturn({ ...editingReturn, quantity: Number(e.target.value) })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Lot Number</label>
-                <input 
-                  type="text" 
-                  value={editingReturn.lotNumber}
-                  onChange={e => setEditingReturn({ ...editingReturn, lotNumber: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Condition</label>
-                <select 
-                  value={editingReturn.condition}
-                  onChange={e => setEditingReturn({ ...editingReturn, condition: e.target.value as any })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+              <div className="flex justify-end gap-2 text-xs font-semibold pt-3 border-t border-slate-100">
+                <button 
+                  onClick={() => setEditingReceiving(null)}
+                  className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50"
                 >
-                  <option value="Good">Good</option>
-                  <option value="Damaged">Damaged</option>
-                  <option value="Contaminated">Contaminated</option>
-                  <option value="Unidentified">Unidentified</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Status</label>
-                <select 
-                  value={editingReturn.status}
-                  onChange={e => setEditingReturn({ ...editingReturn, status: e.target.value as any })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-bold"
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => {
+                    onEditReceiving?.(editingReceiving);
+                    setEditingReceiving(null);
+                  }}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold"
                 >
-                  <option value="PENDING">PENDING</option>
-                  <option value="APPROVED">APPROVED</option>
-                  <option value="QUARANTINED">QUARANTINED</option>
-                </select>
+                  Save Record Changes
+                </button>
               </div>
-            </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-            <div className="flex justify-end gap-2 text-xs font-semibold pt-3 border-t border-slate-100">
-              <button 
-                onClick={() => setEditingReturn(null)}
-                className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button 
-                onClick={() => {
-                  onEditReturn?.(editingReturn);
-                  setEditingReturn(null);
-                }}
-                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold"
-              >
-                Save Return Changes
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Edit Return Record Modal (Super Admin) */}
+      <AnimatePresence>
+        {editingReturn && (
+          <motion.div
+            key="editing-return-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50"
+          >
+            <motion.div
+              key="editing-return-content"
+              initial={{ opacity: 0, scale: 0.94, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 16 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
+              className="bg-white rounded-xl shadow-xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto"
+            >
+              <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                <div>
+                  <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                    <Edit className="h-4 w-4 text-indigo-600" /> Edit Registered Return ({editingReturn.returnSlipFormNumber})
+                  </h4>
+                  <p className="text-[11px] text-slate-500">Super Admin Record Overwrite</p>
+                </div>
+                <button 
+                  onClick={() => setEditingReturn(null)}
+                  className="text-slate-400 hover:text-slate-600 text-sm font-bold"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Slip Form Number</label>
+                  <input 
+                    type="text" 
+                    value={editingReturn.returnSlipFormNumber}
+                    onChange={e => setEditingReturn({ ...editingReturn, returnSlipFormNumber: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Date</label>
+                  <input 
+                    type="date" 
+                    value={editingReturn.date}
+                    onChange={e => setEditingReturn({ ...editingReturn, date: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Department</label>
+                  <input 
+                    type="text" 
+                    value={editingReturn.department}
+                    onChange={e => setEditingReturn({ ...editingReturn, department: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Part Code</label>
+                  <input 
+                    type="text" 
+                    value={editingReturn.partCode}
+                    onChange={e => setEditingReturn({ ...editingReturn, partCode: e.target.value.toUpperCase() })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Material Description</label>
+                  <input 
+                    type="text" 
+                    value={editingReturn.materialDescription}
+                    onChange={e => setEditingReturn({ ...editingReturn, materialDescription: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Return Reason / Detailed Log Remarks</label>
+                  <input 
+                    type="text" 
+                    value={editingReturn.reason || ''}
+                    onChange={e => setEditingReturn({ ...editingReturn, reason: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                    placeholder="Describe return reason or log remarks"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Category</label>
+                  <select 
+                    value={editingReturn.category || ''}
+                    onChange={e => setEditingReturn({ ...editingReturn, category: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-bold text-xs"
+                  >
+                    <option value="">Select Category...</option>
+                    <option value="RESIN/RAW MATERIALS">RESIN/RAW MATERIALS</option>
+                    <option value="INDIRECT BOM">INDIRECT BOM</option>
+                    <option value="DIRECT BOM">DIRECT BOM</option>
+                    <option value="CONSUMABLES">CONSUMABLES</option>
+                    <option value="PACKAGING MATERIALS">PACKAGING MATERIALS</option>
+                    <option value="WIP (WORK IN PROGRESS)">WIP (WORK IN PROGRESS)</option>
+                    <option value="FG (FINISHED GOOD)">FG (FINISHED GOOD)</option>
+                    <option value="OFFICE SUPPLIES">OFFICE SUPPLIES</option>
+                    {registries
+                      .filter(r => r.type === 'CATEGORY' && r.status === 'ACTIVE')
+                      .map(cat => (
+                        <option key={cat.id} value={cat.name}>{cat.name}</option>
+                      ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity</label>
+                  <input 
+                    type="number" 
+                    value={editingReturn.quantity}
+                    onChange={e => setEditingReturn({ ...editingReturn, quantity: Number(e.target.value) })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Lot Number</label>
+                  <input 
+                    type="text" 
+                    value={editingReturn.lotNumber}
+                    onChange={e => setEditingReturn({ ...editingReturn, lotNumber: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Condition</label>
+                  <select 
+                    value={editingReturn.condition}
+                    onChange={e => setEditingReturn({ ...editingReturn, condition: e.target.value as any })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="Good">Good</option>
+                    <option value="Damaged">Damaged</option>
+                    <option value="Contaminated">Contaminated</option>
+                    <option value="Unidentified">Unidentified</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Status</label>
+                  <select 
+                    value={editingReturn.status}
+                    onChange={e => setEditingReturn({ ...editingReturn, status: e.target.value as any })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-bold"
+                  >
+                    <option value="PENDING">PENDING</option>
+                    <option value="APPROVED">APPROVED</option>
+                    <option value="QUARANTINED">QUARANTINED</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 text-xs font-semibold pt-3 border-t border-slate-100">
+                <button 
+                  onClick={() => setEditingReturn(null)}
+                  className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => {
+                    onEditReturn?.(editingReturn);
+                    setEditingReturn(null);
+                  }}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold"
+                >
+                  Save Return Changes
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {/* Barcode / QR Code Scanner Modal */}
       <BarcodeScannerModal 
         isOpen={showScannerModal}
@@ -1953,61 +2212,77 @@ export default function ReceivingModule({
         subtitle="Use handheld barcode scanner or enter barcode manually"
       />
       {/* Yes / No Action Confirmation Modal */}
-      {confirmAction && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-amber-400" />
-                <h3 className="font-bold text-sm">{confirmAction.title}</h3>
-              </div>
-              <button 
-                onClick={() => setConfirmAction(null)} 
-                className="text-slate-400 hover:text-white transition"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-4">
-              <p className="text-xs text-slate-600 font-medium leading-relaxed">
-                {confirmAction.message}
-              </p>
-
-              <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg flex items-center gap-2 text-amber-800 text-[11px] font-semibold">
-                <AlertOctagon className="h-4 w-4 text-amber-600 shrink-0" />
-                <span>Please select YES to confirm or NO to cancel this action.</span>
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setConfirmAction(null)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5"
+      <AnimatePresence>
+        {confirmAction && (
+          <motion.div
+            key="confirm-action-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          >
+            <motion.div
+              key="confirm-action-content"
+              initial={{ opacity: 0, scale: 0.94, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 16 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
+              className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden"
+            >
+              <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-5 w-5 text-amber-400" />
+                  <h3 className="font-bold text-sm">{confirmAction.title}</h3>
+                </div>
+                <button 
+                  onClick={() => setConfirmAction(null)} 
+                  className="text-slate-400 hover:text-white transition"
                 >
-                  <XCircle className="h-4 w-4 text-slate-500" />
-                  NO
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    confirmAction.onConfirm();
-                    setConfirmAction(null);
-                  }}
-                  className={`px-5 py-2 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shadow-sm ${
-                    confirmAction.confirmVariant === 'primary' 
-                      ? 'bg-indigo-600 hover:bg-indigo-700' 
-                      : 'bg-rose-600 hover:bg-rose-700'
-                  }`}
-                >
-                  <CheckCircle2 className="h-4 w-4 text-white" />
-                  {confirmAction.confirmLabel || 'YES'}
+                  <X className="h-5 w-5" />
                 </button>
               </div>
-            </div>
-          </div>
-        </div>
-      )}
+
+              <div className="p-5 space-y-4">
+                <p className="text-xs text-slate-600 font-medium leading-relaxed">
+                  {confirmAction.message}
+                </p>
+
+                <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg flex items-center gap-2 text-amber-800 text-[11px] font-semibold">
+                  <AlertOctagon className="h-4 w-4 text-amber-600 shrink-0" />
+                  <span>Please select YES to confirm or NO to cancel this action.</span>
+                </div>
+
+                <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmAction(null)}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5"
+                  >
+                    <XCircle className="h-4 w-4 text-slate-500" />
+                    NO
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      confirmAction.onConfirm();
+                      setConfirmAction(null);
+                    }}
+                    className={`px-5 py-2 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shadow-sm ${
+                      confirmAction.confirmVariant === 'primary' 
+                        ? 'bg-indigo-600 hover:bg-indigo-700' 
+                        : 'bg-rose-600 hover:bg-rose-700'
+                    }`}
+                  >
+                    <CheckCircle2 className="h-4 w-4 text-white" />
+                    {confirmAction.confirmLabel || 'YES'}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

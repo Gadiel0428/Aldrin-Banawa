@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { 
   Search, 
   Filter, 
@@ -742,113 +743,34 @@ export default function StockFIFOControl({
       </div>
 
       {/* Manual Quantity Adjustment Popover Dialog */}
-      {showAdjustModal && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-lg border border-slate-200 p-6 max-w-sm w-full space-y-4">
-            <h4 className="font-bold text-sm text-slate-800">Adjust Inventory Balance</h4>
-            <p className="text-xs text-slate-500">Record physical stock audit corrections or bin counts.</p>
-            
-            <div className="space-y-1">
-              <label className="block text-[10px] font-bold text-slate-400">Target Item ID: {showAdjustModal}</label>
-              <input 
-                type="text" 
-                inputMode="numeric"
-                pattern="[0-9]*"
-                value={adjustQty || ''}
-                onKeyDown={(e) => {
-                  if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
-                    e.preventDefault();
-                  }
-                }}
-                onChange={e => {
-                  const sanitized = e.target.value.replace(/\D/g, '');
-                  setAdjustQty(sanitized ? parseInt(sanitized, 10) : 0);
-                }}
-                className="w-full border border-slate-200 px-3 py-2 rounded text-xs font-mono focus:ring-1 focus:ring-slate-400"
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 text-xs font-semibold">
-              <button 
-                onClick={() => setShowAdjustModal(null)}
-                className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button 
-                onClick={() => handleAdjustQtySubmit(showAdjustModal)}
-                className="px-3 py-1.5 bg-slate-950 text-white rounded hover:bg-slate-900"
-              >
-                Save Adjustment
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Edit Registered Stock Item Modal (Super Admin) */}
-      {editingStockItem && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <div>
-                <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-                  <Edit className="h-4 w-4 text-indigo-600" /> Edit Registered Item ({editingStockItem.id})
-                </h4>
-                <p className="text-[11px] text-slate-500">Super Admin Item Metadata Overwrite</p>
-              </div>
-              <button 
-                onClick={() => setEditingStockItem(null)}
-                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Part Code</label>
-                <input 
-                  type="text" 
-                  value={editingStockItem.partCode}
-                  onChange={e => setEditingStockItem({ ...editingStockItem, partCode: e.target.value.toUpperCase() })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Material Type</label>
-                <select 
-                  value={editingStockItem.type}
-                  onChange={e => setEditingStockItem({ ...editingStockItem, type: e.target.value as MaterialType })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                >
-                  <option value="RAW">RAW MATERIAL</option>
-                  <option value="PACKAGING">PACKAGING</option>
-                  <option value="CONSUMABLE">CONSUMABLE</option>
-                  <option value="WIP">WIP</option>
-                  <option value="FG">FINISHED GOODS</option>
-                  <option value="SUB_PART">SUB PART</option>
-                </select>
-              </div>
-
-              <div className="col-span-2">
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Item Description</label>
-                <input 
-                  type="text" 
-                  value={editingStockItem.description}
-                  onChange={e => setEditingStockItem({ ...editingStockItem, description: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity</label>
+      <AnimatePresence>
+        {showAdjustModal && (
+          <motion.div
+            key="adjust-modal-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50"
+          >
+            <motion.div
+              key="adjust-modal-content"
+              initial={{ opacity: 0, scale: 0.94, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 16 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
+              className="bg-white rounded-xl shadow-lg border border-slate-200 p-6 max-w-sm w-full space-y-4"
+            >
+              <h4 className="font-bold text-sm text-slate-800">Adjust Inventory Balance</h4>
+              <p className="text-xs text-slate-500">Record physical stock audit corrections or bin counts.</p>
+              
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-400">Target Item ID: {showAdjustModal}</label>
                 <input 
                   type="text" 
                   inputMode="numeric"
                   pattern="[0-9]*"
-                  value={editingStockItem.quantity || ''}
+                  value={adjustQty || ''}
                   onKeyDown={(e) => {
                     if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
                       e.preventDefault();
@@ -856,383 +778,510 @@ export default function StockFIFOControl({
                   }}
                   onChange={e => {
                     const sanitized = e.target.value.replace(/\D/g, '');
-                    setEditingStockItem({ ...editingStockItem, quantity: sanitized ? parseInt(sanitized, 10) : 0 });
+                    setAdjustQty(sanitized ? parseInt(sanitized, 10) : 0);
                   }}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  className="w-full border border-slate-200 px-3 py-2 rounded text-xs font-mono focus:ring-1 focus:ring-slate-400"
                 />
               </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Unit of Measure (UOM)</label>
-                <select 
-                  value={editingStockItem.unit}
-                  onChange={e => setEditingStockItem({ ...editingStockItem, unit: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono font-semibold"
+              <div className="flex justify-end gap-2 text-xs font-semibold">
+                <button 
+                  onClick={() => setShowAdjustModal(null)}
+                  className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded hover:bg-slate-50 cursor-pointer"
                 >
-                  {UOM_OPTIONS.map(u => (
-                    <option key={u} value={u}>{u}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Lot Number</label>
-                <input 
-                  type="text" 
-                  value={editingStockItem.lotNumber}
-                  onChange={e => setEditingStockItem({ ...editingStockItem, lotNumber: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Location / Bin</label>
-                <input 
-                  type="text" 
-                  value={editingStockItem.location}
-                  onChange={e => setEditingStockItem({ ...editingStockItem, location: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">FIFO Color Code</label>
-                <select 
-                  value={editingStockItem.fifoColor}
-                  onChange={e => setEditingStockItem({ ...editingStockItem, fifoColor: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => handleAdjustQtySubmit(showAdjustModal)}
+                  className="px-3 py-1.5 bg-slate-950 text-white rounded hover:bg-slate-900 cursor-pointer"
                 >
-                  {Object.keys(FIFO_COLORS_BY_MONTH).map(color => (
-                    <option key={color} value={color}>{color}</option>
-                  ))}
-                </select>
+                  Save Adjustment
+                </button>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">QC Status</label>
-                <select 
-                  value={editingStockItem.status}
-                  onChange={e => setEditingStockItem({ ...editingStockItem, status: e.target.value as any })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-bold"
-                >
-                  <option value="APPROVED">APPROVED</option>
-                  <option value="QUARANTINE">QUARANTINE</option>
-                  <option value="HOLD">HOLD</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Expiration Date</label>
-                <input 
-                  type="date" 
-                  value={editingStockItem.expirationDate || ''}
-                  onChange={e => setEditingStockItem({ ...editingStockItem, expirationDate: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Assigned Customer</label>
-                <input 
-                  type="text" 
-                  value={editingStockItem.customer || ''}
-                  onChange={e => setEditingStockItem({ ...editingStockItem, customer: e.target.value })}
-                  placeholder="e.g. CISCO Systems"
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 text-xs font-semibold pt-3 border-t border-slate-100">
-              <button 
-                onClick={() => setEditingStockItem(null)}
-                className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button 
-                onClick={() => {
-                  onEditStock?.(editingStockItem);
-                  setEditingStockItem(null);
-                }}
-                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold"
-              >
-                Save Item Changes
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Item Transaction History Modal */}
-      {historyStockItem && (() => {
-        const pCode = (historyStockItem.partCode || '').trim().toLowerCase();
-        const lNum = (historyStockItem.lotNumber || '').trim().toLowerCase();
-
-        // Matching Receivings
-        const matchedReceivings = receiving.filter(r => {
-          const matchCode = (r.partCode || '').trim().toLowerCase() === pCode;
-          const matchLot = !lNum || !r.lotNumber || (r.lotNumber || '').trim().toLowerCase() === lNum;
-          return matchCode && matchLot;
-        });
-
-        // Matching Issuances
-        const matchedIssuances = issuances.filter(i => {
-          const matchCode = (i.partCode || '').trim().toLowerCase() === pCode;
-          const matchLot = !lNum || !i.lotNumber || (i.lotNumber || '').trim().toLowerCase() === lNum;
-          return matchCode && matchLot;
-        });
-
-        // Matching Returns
-        const matchedReturns = returns.filter(ret => {
-          const matchCode = (ret.partCode || '').trim().toLowerCase() === pCode;
-          const matchLot = !lNum || !ret.lotNumber || (ret.lotNumber || '').trim().toLowerCase() === lNum;
-          return matchCode && matchLot;
-        });
-
-        const totalReceivedQty = matchedReceivings.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
-        const totalIssuedQty = matchedIssuances.reduce((sum, i) => sum + (Number(i.quantityIssued) || 0), 0);
-        const totalReturnedQty = matchedReturns.reduce((sum, ret) => sum + (Number(ret.quantity) || 0), 0);
-
-        // Combine into unified history timeline
-        const historyEvents: Array<{
-          id: string;
-          type: 'RECEIVING' | 'ISSUANCE' | 'RETURN';
-          date: string;
-          refNumber: string;
-          qty: number;
-          unit: string;
-          party: string;
-          status: string;
-          details: string;
-        }> = [
-          ...matchedReceivings.map(r => ({
-            id: r.id,
-            type: 'RECEIVING' as const,
-            date: r.receivedDate || r.date,
-            refNumber: r.rrNumber || r.poNumber || r.id,
-            qty: r.quantity,
-            unit: r.unit,
-            party: r.supplierOrDept || r.vendorSupplier || 'External Supplier',
-            status: r.iqcStatus === 'APPROVED_IQC' ? 'IQC APPROVED' : r.iqcStatus === 'REJECTED_IQC' ? 'IQC REJECTED' : r.iqcStatus,
-            details: `Lot: ${r.lotNumber} • Location: ${r.location || 'Warehouse'}`
-          })),
-          ...matchedIssuances.map(i => ({
-            id: i.id,
-            type: 'ISSUANCE' as const,
-            date: i.date,
-            refNumber: i.requisitionNumber || i.id,
-            qty: i.quantityIssued,
-            unit: historyStockItem.unit,
-            party: i.department || 'Production Line',
-            status: i.fifoVerified ? 'FIFO VERIFIED' : 'ISSUED',
-            details: `Issued By: ${i.issuedBy || 'Operator'} → Received By: ${i.receivedBy || 'Dept'}`
-          })),
-          ...matchedReturns.map(ret => ({
-            id: ret.id,
-            type: 'RETURN' as const,
-            date: ret.date,
-            refNumber: ret.returnSlipFormNumber || ret.id,
-            qty: ret.quantity,
-            unit: ret.unit,
-            party: ret.department || 'Department Return',
-            status: ret.status,
-            details: `Condition: ${ret.condition} • Reason: ${ret.reason}`
-          }))
-        ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-        const downloadHistoryCSV = () => {
-          const csvHeaders = ['Transaction Type', 'Date', 'Reference #', 'Quantity', 'Unit', 'Source / Department', 'Status', 'Lot Number', 'Details'];
-          const csvRows = historyEvents.map(e => [
-            `"${e.type}"`,
-            `"${e.date}"`,
-            `"${e.refNumber.replace(/"/g, '""')}"`,
-            e.qty,
-            `"${e.unit}"`,
-            `"${e.party.replace(/"/g, '""')}"`,
-            `"${e.status.replace(/"/g, '""')}"`,
-            `"${historyStockItem.lotNumber}"`,
-            `"${e.details.replace(/"/g, '""')}"`
-          ]);
-
-          const csvData = [
-            `"JUWEI WMS - ITEM TRANSACTION HISTORY"`,
-            `"Part Code","${historyStockItem.partCode}"`,
-            `"Description","${historyStockItem.description}"`,
-            `"Lot Number","${historyStockItem.lotNumber}"`,
-            `"Current Quantity","${historyStockItem.quantity} ${historyStockItem.unit}"`,
-            [],
-            csvHeaders.join(','),
-            ...csvRows.map(r => r.join(','))
-          ].join('\n');
-
-          const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `Transaction_History_${historyStockItem.partCode}_${historyStockItem.lotNumber}_${new Date().toISOString().slice(0, 10)}.csv`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-        };
-
-        return (
-          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-            <div className="bg-white rounded-2xl max-w-4xl w-full shadow-2xl border border-slate-200 overflow-hidden my-8 max-h-[90vh] flex flex-col">
-              
-              {/* Header */}
-              <div className="bg-blue-950 text-white p-5 flex items-start justify-between shrink-0">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 bg-blue-800 text-blue-200 rounded-xl border border-blue-700">
-                    <History className="h-6 w-6" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-lg font-bold font-mono">{historyStockItem.partCode}</h3>
-                      <span className="bg-blue-800 text-blue-100 px-2 py-0.5 rounded text-[10px] font-bold font-mono">
-                        LOT: {historyStockItem.lotNumber}
-                      </span>
-                    </div>
-                    <p className="text-xs text-blue-200 mt-0.5 truncate max-w-lg">
-                      {historyStockItem.description}
-                    </p>
-                  </div>
+      {/* Edit Registered Stock Item Modal (Super Admin) */}
+      <AnimatePresence>
+        {editingStockItem && (
+          <motion.div
+            key="edit-stock-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50"
+          >
+            <motion.div
+              key="edit-stock-content"
+              initial={{ opacity: 0, scale: 0.94, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 16 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
+              className="bg-white rounded-xl shadow-xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto"
+            >
+              <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                <div>
+                  <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                    <Edit className="h-4 w-4 text-indigo-600" /> Edit Registered Item ({editingStockItem.id})
+                  </h4>
+                  <p className="text-[11px] text-slate-500">Super Admin Item Metadata Overwrite</p>
                 </div>
-                <button
-                  onClick={() => setHistoryStockItem(null)}
-                  className="text-blue-300 hover:text-white p-1 rounded-lg hover:bg-blue-900 transition cursor-pointer"
+                <button 
+                  onClick={() => setEditingStockItem(null)}
+                  className="text-slate-400 hover:text-slate-600 text-sm font-bold cursor-pointer"
                 >
-                  <X className="h-5 w-5" />
+                  ✕
                 </button>
               </div>
 
-              {/* Body */}
-              <div className="p-6 overflow-y-auto space-y-5 flex-1">
-                
-                {/* Stats row */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
-                    <span className="text-[10px] font-bold text-slate-400 font-mono uppercase block">Current On-Hand</span>
-                    <span className="text-xl font-bold text-indigo-950">{historyStockItem.quantity} {historyStockItem.unit}</span>
-                    <span className="text-[10px] text-slate-500 block">Bin Location: {historyStockItem.location}</span>
-                  </div>
-                  <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl">
-                    <span className="text-[10px] font-bold text-emerald-600 font-mono uppercase block">Total Received</span>
-                    <span className="text-xl font-bold">{totalReceivedQty} {historyStockItem.unit}</span>
-                    <span className="text-[10px] text-emerald-700 block">{matchedReceivings.length} receiving logs</span>
-                  </div>
-                  <div className="p-3 bg-blue-50 border border-blue-200 text-blue-900 rounded-xl">
-                    <span className="text-[10px] font-bold text-blue-600 font-mono uppercase block">Total Issued</span>
-                    <span className="text-xl font-bold">{totalIssuedQty} {historyStockItem.unit}</span>
-                    <span className="text-[10px] text-blue-700 block">{matchedIssuances.length} issuance logs</span>
-                  </div>
-                  <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl">
-                    <span className="text-[10px] font-bold text-amber-600 font-mono uppercase block">Total Returned</span>
-                    <span className="text-xl font-bold">{totalReturnedQty} {historyStockItem.unit}</span>
-                    <span className="text-[10px] text-amber-700 block">{matchedReturns.length} return logs</span>
-                  </div>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Part Code</label>
+                  <input 
+                    type="text" 
+                    value={editingStockItem.partCode}
+                    onChange={e => setEditingStockItem({ ...editingStockItem, partCode: e.target.value.toUpperCase() })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
                 </div>
 
-                {/* Timeline table */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider font-mono">
-                      Audit Timeline ({historyEvents.length} transactions)
-                    </h4>
-                    <span className="text-[11px] text-slate-500">Sorted by newest date</span>
-                  </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Material Type</label>
+                  <select 
+                    value={editingStockItem.type}
+                    onChange={e => setEditingStockItem({ ...editingStockItem, type: e.target.value as MaterialType })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="RAW">RAW MATERIAL</option>
+                    <option value="PACKAGING">PACKAGING</option>
+                    <option value="CONSUMABLE">CONSUMABLE</option>
+                    <option value="WIP">WIP</option>
+                    <option value="FG">FINISHED GOODS</option>
+                    <option value="SUB_PART">SUB PART</option>
+                  </select>
+                </div>
 
-                  <div className="border border-slate-200 rounded-xl overflow-hidden bg-white text-xs">
-                    <div className="max-h-72 overflow-y-auto">
-                      <table className="w-full text-left border-collapse">
-                        <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[10px] sticky top-0 bg-slate-50">
-                          <tr>
-                            <th className="p-2.5">Type</th>
-                            <th className="p-2.5">Date</th>
-                            <th className="p-2.5">Ref / Form #</th>
-                            <th className="p-2.5 text-right">Qty Transacted</th>
-                            <th className="p-2.5">Source / Recipient</th>
-                            <th className="p-2.5">Status</th>
-                            <th className="p-2.5">Traceability Details</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-                          {historyEvents.length === 0 ? (
-                            <tr>
-                              <td colSpan={7} className="p-8 text-center text-slate-400 italic">
-                                No historical transactions found for Part Code "{historyStockItem.partCode}" and Lot "{historyStockItem.lotNumber}".
-                              </td>
-                            </tr>
-                          ) : (
-                            historyEvents.map(evt => (
-                              <tr key={evt.id} className="hover:bg-slate-50">
-                                <td className="p-2.5">
-                                  {evt.type === 'RECEIVING' && (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                      <ArrowDownLeft className="h-3 w-3" /> RECEIVING
-                                    </span>
-                                  )}
-                                  {evt.type === 'ISSUANCE' && (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200">
-                                      <ArrowUpRight className="h-3 w-3" /> ISSUANCE
-                                    </span>
-                                  )}
-                                  {evt.type === 'RETURN' && (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                                      <RotateCcw className="h-3 w-3" /> RETURN
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="p-2.5 font-mono text-[11px] text-slate-800 font-semibold">{evt.date}</td>
-                                <td className="p-2.5 font-mono text-indigo-900 font-bold">{evt.refNumber}</td>
-                                <td className="p-2.5 text-right font-bold text-slate-900">
-                                  {evt.type === 'ISSUANCE' ? `-${evt.qty}` : `+${evt.qty}`} {evt.unit}
-                                </td>
-                                <td className="p-2.5">{evt.party}</td>
-                                <td className="p-2.5">
-                                  <span className="px-1.5 py-0.5 bg-slate-100 text-slate-700 font-mono text-[10px] rounded font-semibold border border-slate-200">
-                                    {evt.status}
-                                  </span>
-                                </td>
-                                <td className="p-2.5 text-[11px] text-slate-500">{evt.details}</td>
-                              </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
+                <div className="col-span-2">
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Item Description</label>
+                  <input 
+                    type="text" 
+                    value={editingStockItem.description}
+                    onChange={e => setEditingStockItem({ ...editingStockItem, description: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity</label>
+                  <input 
+                    type="text" 
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={editingStockItem.quantity || ''}
+                    onKeyDown={(e) => {
+                      if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
+                        e.preventDefault();
+                      }
+                    }}
+                    onChange={e => {
+                      const sanitized = e.target.value.replace(/\D/g, '');
+                      setEditingStockItem({ ...editingStockItem, quantity: sanitized ? parseInt(sanitized, 10) : 0 });
+                    }}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Unit of Measure (UOM)</label>
+                  <select 
+                    value={editingStockItem.unit}
+                    onChange={e => setEditingStockItem({ ...editingStockItem, unit: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono font-semibold"
+                  >
+                    {UOM_OPTIONS.map(u => (
+                      <option key={u} value={u}>{u}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Lot Number</label>
+                  <input 
+                    type="text" 
+                    value={editingStockItem.lotNumber}
+                    onChange={e => setEditingStockItem({ ...editingStockItem, lotNumber: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Location / Bin</label>
+                  <input 
+                    type="text" 
+                    value={editingStockItem.location}
+                    onChange={e => setEditingStockItem({ ...editingStockItem, location: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">FIFO Color Code</label>
+                  <select 
+                    value={editingStockItem.fifoColor}
+                    onChange={e => setEditingStockItem({ ...editingStockItem, fifoColor: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  >
+                    {Object.keys(FIFO_COLORS_BY_MONTH).map(color => (
+                      <option key={color} value={color}>{color}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">QC Status</label>
+                  <select 
+                    value={editingStockItem.status}
+                    onChange={e => setEditingStockItem({ ...editingStockItem, status: e.target.value as any })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-bold"
+                  >
+                    <option value="APPROVED">APPROVED</option>
+                    <option value="QUARANTINE">QUARANTINE</option>
+                    <option value="HOLD">HOLD</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Expiration Date</label>
+                  <input 
+                    type="date" 
+                    value={editingStockItem.expirationDate || ''}
+                    onChange={e => setEditingStockItem({ ...editingStockItem, expirationDate: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Assigned Customer</label>
+                  <input 
+                    type="text" 
+                    value={editingStockItem.customer || ''}
+                    onChange={e => setEditingStockItem({ ...editingStockItem, customer: e.target.value })}
+                    placeholder="e.g. CISCO Systems"
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 text-xs font-semibold pt-3 border-t border-slate-100">
+                <button 
+                  onClick={() => setEditingStockItem(null)}
+                  className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => {
+                    onEditStock?.(editingStockItem);
+                    setEditingStockItem(null);
+                  }}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold cursor-pointer"
+                >
+                  Save Item Changes
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Item Transaction History Modal */}
+      <AnimatePresence>
+        {historyStockItem && (() => {
+          const pCode = (historyStockItem.partCode || '').trim().toLowerCase();
+          const lNum = (historyStockItem.lotNumber || '').trim().toLowerCase();
+
+          // Matching Receivings
+          const matchedReceivings = receiving.filter(r => {
+            const matchCode = (r.partCode || '').trim().toLowerCase() === pCode;
+            const matchLot = !lNum || !r.lotNumber || (r.lotNumber || '').trim().toLowerCase() === lNum;
+            return matchCode && matchLot;
+          });
+
+          // Matching Issuances
+          const matchedIssuances = issuances.filter(i => {
+            const matchCode = (i.partCode || '').trim().toLowerCase() === pCode;
+            const matchLot = !lNum || !i.lotNumber || (i.lotNumber || '').trim().toLowerCase() === lNum;
+            return matchCode && matchLot;
+          });
+
+          // Matching Returns
+          const matchedReturns = returns.filter(ret => {
+            const matchCode = (ret.partCode || '').trim().toLowerCase() === pCode;
+            const matchLot = !lNum || !ret.lotNumber || (ret.lotNumber || '').trim().toLowerCase() === lNum;
+            return matchCode && matchLot;
+          });
+
+          const totalReceivedQty = matchedReceivings.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
+          const totalIssuedQty = matchedIssuances.reduce((sum, i) => sum + (Number(i.quantityIssued) || 0), 0);
+          const totalReturnedQty = matchedReturns.reduce((sum, ret) => sum + (Number(ret.quantity) || 0), 0);
+
+          // Combine into unified history timeline
+          const historyEvents: Array<{
+            id: string;
+            type: 'RECEIVING' | 'ISSUANCE' | 'RETURN';
+            date: string;
+            refNumber: string;
+            qty: number;
+            unit: string;
+            party: string;
+            status: string;
+            details: string;
+          }> = [
+            ...matchedReceivings.map(r => ({
+              id: r.id,
+              type: 'RECEIVING' as const,
+              date: r.receivedDate || r.date,
+              refNumber: r.rrNumber || r.poNumber || r.id,
+              qty: r.quantity,
+              unit: r.unit,
+              party: r.supplierOrDept || r.vendorSupplier || 'External Supplier',
+              status: r.iqcStatus === 'APPROVED_IQC' ? 'IQC APPROVED' : r.iqcStatus === 'REJECTED_IQC' ? 'IQC REJECTED' : r.iqcStatus,
+              details: `Lot: ${r.lotNumber} • Location: ${r.location || 'Warehouse'}`
+            })),
+            ...matchedIssuances.map(i => ({
+              id: i.id,
+              type: 'ISSUANCE' as const,
+              date: i.date,
+              refNumber: i.requisitionNumber || i.id,
+              qty: i.quantityIssued,
+              unit: historyStockItem.unit,
+              party: i.department || 'Production Line',
+              status: i.fifoVerified ? 'FIFO VERIFIED' : 'ISSUED',
+              details: `Issued By: ${i.issuedBy || 'Operator'} → Received By: ${i.receivedBy || 'Dept'}`
+            })),
+            ...matchedReturns.map(ret => ({
+              id: ret.id,
+              type: 'RETURN' as const,
+              date: ret.date,
+              refNumber: ret.returnSlipFormNumber || ret.id,
+              qty: ret.quantity,
+              unit: ret.unit,
+              party: ret.department || 'Department Return',
+              status: ret.status,
+              details: `Condition: ${ret.condition} • Reason: ${ret.reason}`
+            }))
+          ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+          const downloadHistoryCSV = () => {
+            const csvHeaders = ['Transaction Type', 'Date', 'Reference #', 'Quantity', 'Unit', 'Source / Department', 'Status', 'Lot Number', 'Details'];
+            const csvRows = historyEvents.map(e => [
+              `"${e.type}"`,
+              `"${e.date}"`,
+              `"${e.refNumber.replace(/"/g, '""')}"`,
+              e.qty,
+              `"${e.unit}"`,
+              `"${e.party.replace(/"/g, '""')}"`,
+              `"${e.status.replace(/"/g, '""')}"`,
+              `"${historyStockItem.lotNumber}"`,
+              `"${e.details.replace(/"/g, '""')}"`
+            ]);
+
+            const csvData = [
+              `"JUWEI WMS - ITEM TRANSACTION HISTORY"`,
+              `"Part Code","${historyStockItem.partCode}"`,
+              `"Description","${historyStockItem.description}"`,
+              `"Lot Number","${historyStockItem.lotNumber}"`,
+              `"Current Quantity","${historyStockItem.quantity} ${historyStockItem.unit}"`,
+              [],
+              csvHeaders.join(','),
+              ...csvRows.map(r => r.join(','))
+            ].join('\n');
+
+            const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `Transaction_History_${historyStockItem.partCode}_${historyStockItem.lotNumber}_${new Date().toISOString().slice(0, 10)}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          };
+
+          return (
+            <motion.div
+              key="history-stock-backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+            >
+              <motion.div
+                key="history-stock-content"
+                initial={{ opacity: 0, scale: 0.94, y: 16 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.94, y: 16 }}
+                transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
+                className="bg-white rounded-2xl max-w-4xl w-full shadow-2xl border border-slate-200 overflow-hidden my-8 max-h-[90vh] flex flex-col"
+              >
+                
+                {/* Header */}
+                <div className="bg-blue-950 text-white p-5 flex items-start justify-between shrink-0">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-blue-800 text-blue-200 rounded-xl border border-blue-700">
+                      <History className="h-6 w-6" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-lg font-bold font-mono">{historyStockItem.partCode}</h3>
+                        <span className="bg-blue-800 text-blue-100 px-2 py-0.5 rounded text-[10px] font-bold font-mono">
+                          LOT: {historyStockItem.lotNumber}
+                        </span>
+                      </div>
+                      <p className="text-xs text-blue-200 mt-0.5 truncate max-w-lg">
+                        {historyStockItem.description}
+                      </p>
                     </div>
                   </div>
-                </div>
-
-              </div>
-
-              {/* Footer */}
-              <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
-                <div className="text-xs text-slate-500 font-medium">
-                  Full trace of inventory lifecycle from receiving inspection to production dispatch.
-                </div>
-                <div className="flex items-center gap-2">
                   <button
                     onClick={() => setHistoryStockItem(null)}
-                    className="px-4 py-2 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                    className="text-blue-300 hover:text-white p-1 rounded-lg hover:bg-blue-900 transition cursor-pointer"
                   >
-                    Close
-                  </button>
-                  <button
-                    onClick={downloadHistoryCSV}
-                    className="flex items-center gap-1.5 px-4 py-2 bg-blue-900 hover:bg-blue-950 text-white rounded-lg text-xs font-bold cursor-pointer transition shadow-xs"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                    Export History CSV
+                    <X className="h-5 w-5" />
                   </button>
                 </div>
-              </div>
 
-            </div>
-          </div>
-        );
-      })()}
+                {/* Body */}
+                <div className="p-6 overflow-y-auto space-y-5 flex-1">
+                  
+                  {/* Stats row */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                      <span className="text-[10px] font-bold text-slate-400 font-mono uppercase block">Current On-Hand</span>
+                      <span className="text-xl font-bold text-indigo-950">{historyStockItem.quantity} {historyStockItem.unit}</span>
+                      <span className="text-[10px] text-slate-500 block">Bin Location: {historyStockItem.location}</span>
+                    </div>
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl">
+                      <span className="text-[10px] font-bold text-emerald-600 font-mono uppercase block">Total Received</span>
+                      <span className="text-xl font-bold">{totalReceivedQty} {historyStockItem.unit}</span>
+                      <span className="text-[10px] text-emerald-700 block">{matchedReceivings.length} receiving logs</span>
+                    </div>
+                    <div className="p-3 bg-blue-50 border border-blue-200 text-blue-900 rounded-xl">
+                      <span className="text-[10px] font-bold text-blue-600 font-mono uppercase block">Total Issued</span>
+                      <span className="text-xl font-bold">{totalIssuedQty} {historyStockItem.unit}</span>
+                      <span className="text-[10px] text-blue-700 block">{matchedIssuances.length} issuance logs</span>
+                    </div>
+                    <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl">
+                      <span className="text-[10px] font-bold text-amber-600 font-mono uppercase block">Total Returned</span>
+                      <span className="text-xl font-bold">{totalReturnedQty} {historyStockItem.unit}</span>
+                      <span className="text-[10px] text-amber-700 block">{matchedReturns.length} return logs</span>
+                    </div>
+                  </div>
+
+                  {/* Timeline table */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider font-mono">
+                        Audit Timeline ({historyEvents.length} transactions)
+                      </h4>
+                      <span className="text-[11px] text-slate-500">Sorted by newest date</span>
+                    </div>
+
+                    <div className="border border-slate-200 rounded-xl overflow-hidden bg-white text-xs">
+                      <div className="max-h-72 overflow-y-auto">
+                        <table className="w-full text-left border-collapse">
+                          <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[10px] sticky top-0 bg-slate-50">
+                            <tr>
+                              <th className="p-2.5">Type</th>
+                              <th className="p-2.5">Date</th>
+                              <th className="p-2.5">Ref / Form #</th>
+                              <th className="p-2.5 text-right">Qty Transacted</th>
+                              <th className="p-2.5">Source / Recipient</th>
+                              <th className="p-2.5">Status</th>
+                              <th className="p-2.5">Traceability Details</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
+                            {historyEvents.length === 0 ? (
+                              <tr>
+                                <td colSpan={7} className="p-8 text-center text-slate-400 italic">
+                                  No historical transactions found for Part Code "{historyStockItem.partCode}" and Lot "{historyStockItem.lotNumber}".
+                                </td>
+                              </tr>
+                            ) : (
+                              historyEvents.map(evt => (
+                                <tr key={evt.id} className="hover:bg-slate-50">
+                                  <td className="p-2.5">
+                                    {evt.type === 'RECEIVING' && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                        <ArrowDownLeft className="h-3 w-3" /> RECEIVING
+                                      </span>
+                                    )}
+                                    {evt.type === 'ISSUANCE' && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200">
+                                        <ArrowUpRight className="h-3 w-3" /> ISSUANCE
+                                      </span>
+                                    )}
+                                    {evt.type === 'RETURN' && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                                        <RotateCcw className="h-3 w-3" /> RETURN
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="p-2.5 font-mono text-[11px] text-slate-800 font-semibold">{evt.date}</td>
+                                  <td className="p-2.5 font-mono text-indigo-900 font-bold">{evt.refNumber}</td>
+                                  <td className="p-2.5 text-right font-bold text-slate-900">
+                                    {evt.type === 'ISSUANCE' ? `-${evt.qty}` : `+${evt.qty}`} {evt.unit}
+                                  </td>
+                                  <td className="p-2.5">{evt.party}</td>
+                                  <td className="p-2.5">
+                                    <span className="px-1.5 py-0.5 bg-slate-100 text-slate-700 font-mono text-[10px] rounded font-semibold border border-slate-200">
+                                      {evt.status}
+                                    </span>
+                                  </td>
+                                  <td className="p-2.5 text-[11px] text-slate-500">{evt.details}</td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+
+                {/* Footer */}
+                <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
+                  <div className="text-xs text-slate-500 font-medium">
+                    Full trace of inventory lifecycle from receiving inspection to production dispatch.
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setHistoryStockItem(null)}
+                      className="px-4 py-2 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                    >
+                      Close
+                    </button>
+                    <button
+                      onClick={downloadHistoryCSV}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-blue-900 hover:bg-blue-950 text-white rounded-lg text-xs font-bold cursor-pointer transition shadow-xs"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Export History CSV
+                    </button>
+                  </div>
+                </div>
+
+              </motion.div>
+            </motion.div>
+          );
+        })()}
+      </AnimatePresence>
 
       {/* Reusable Confirmation Modal with YES / NO options */}
       <ConfirmModal config={confirmAction} onClose={() => setConfirmAction(null)} />

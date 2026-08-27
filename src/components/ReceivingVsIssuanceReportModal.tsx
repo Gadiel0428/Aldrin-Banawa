@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { 
   X, 
   Printer, 
@@ -96,8 +97,22 @@ export default function ReceivingVsIssuanceReportModal({
   const issuedPct = totalVolume > 0 ? Math.round((summary.totalIssuedQty / totalVolume) * 100) : 50;
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 print:p-0 print:bg-white print:static">
-      <div className="bg-white w-full max-w-5xl rounded-2xl shadow-2xl border border-slate-200 flex flex-col max-h-[92vh] print:max-h-none print:border-none print:shadow-none print:rounded-none overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+    <motion.div
+      key="receiving-vs-issuance-backdrop"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 print:p-0 print:bg-white print:static"
+    >
+      <motion.div
+        key="receiving-vs-issuance-content"
+        initial={{ opacity: 0, scale: 0.94, y: 16 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.94, y: 16 }}
+        transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
+        className="bg-white w-full max-w-5xl rounded-2xl shadow-2xl border border-slate-200 flex flex-col max-h-[92vh] print:max-h-none print:border-none print:shadow-none print:rounded-none overflow-hidden"
+      >
         
         {/* Modal Header & Navigation (Hidden in Print) */}
         <div className="bg-slate-900 text-white px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 shrink-0 print:hidden">
@@ -626,7 +641,7 @@ export default function ReceivingVsIssuanceReportModal({
           </div>
         </div>
 
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
 import { 
   QrCode, 
@@ -36,15 +37,13 @@ export default function AccountQRBadgeModal({
   const [showPin, setShowPin] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
 
-  if (!isOpen || !account) return null;
-
   // Structured QR Payload containing Username and PIN Code
   const qrPayload = JSON.stringify({
     type: 'JPMP_WMS_LOGIN_PASS',
-    employeeId: account.employeeId,
-    username: account.username,
-    pin: account.pin || '1234',
-    role: account.role
+    employeeId: account?.employeeId || '',
+    username: account?.username || '',
+    pin: account?.pin || '1234',
+    role: account?.role || ''
   });
 
   const handleCopyPayload = () => {
@@ -307,33 +306,49 @@ export default function AccountQRBadgeModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-blue-950/80 backdrop-blur-md animate-fadeIn">
-      <div className="bg-blue-900 border-2 border-blue-700 rounded-2xl max-w-sm w-full shadow-2xl text-white overflow-hidden flex flex-col relative">
-        {/* Top Accent Line */}
-        <div className="h-1.5 bg-blue-500 w-full" />
-
-        {/* Modal Header */}
-        <div className="px-5 py-4 border-b border-blue-800 flex justify-between items-center bg-blue-950">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-blue-800 text-blue-200 rounded-xl border border-blue-600">
-              <QrCode className="h-5 w-5" />
-            </div>
-            <div>
-              <h3 className="font-bold text-sm text-white flex items-center gap-1.5">
-                Operator Login QR Badge
-              </h3>
-              <p className="text-[10px] text-blue-200 font-mono uppercase">
-                Juwei WMS Gateway Pass
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-blue-200 hover:text-white p-1 rounded-lg hover:bg-blue-800 transition cursor-pointer"
+    <AnimatePresence>
+      {isOpen && account && (
+        <motion.div
+          key="qr-badge-backdrop"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.2 }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-blue-950/80 backdrop-blur-md"
+        >
+          <motion.div
+            key="qr-badge-content"
+            initial={{ opacity: 0, scale: 0.94, y: 16 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.94, y: 16 }}
+            transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
+            className="bg-blue-900 border-2 border-blue-700 rounded-2xl max-w-sm w-full shadow-2xl text-white overflow-hidden flex flex-col relative"
           >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
+            {/* Top Accent Line */}
+            <div className="h-1.5 bg-blue-500 w-full" />
+
+            {/* Modal Header */}
+            <div className="px-5 py-4 border-b border-blue-800 flex justify-between items-center bg-blue-950">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-blue-800 text-blue-200 rounded-xl border border-blue-600">
+                  <QrCode className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white flex items-center gap-1.5">
+                    Operator Login QR Badge
+                  </h3>
+                  <p className="text-[10px] text-blue-200 font-mono uppercase">
+                    Juwei WMS Gateway Pass
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={onClose}
+                className="text-blue-200 hover:text-white p-1 rounded-lg hover:bg-blue-800 transition cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
 
         {/* Badge Card Body */}
         <div className="p-5 space-y-4">
@@ -463,7 +478,9 @@ export default function AccountQRBadgeModal({
         <div className="px-5 py-3 border-t border-blue-800 bg-blue-950 text-[10px] text-blue-300 font-mono text-center">
           JUWEI WMS OPERATOR SECURITY SYSTEM • QR VERIFICATION ENABLED
         </div>
-      </div>
-    </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }

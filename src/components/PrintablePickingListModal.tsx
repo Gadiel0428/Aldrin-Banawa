@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion } from 'motion/react';
 import { 
   Printer, 
   X, 
@@ -84,8 +85,22 @@ export default function PrintablePickingListModal({
   const uom = matchedRegistry?.unit || 'PCS';
 
   return (
-    <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xs z-50 flex items-center justify-center p-2 sm:p-6 overflow-y-auto">
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-300 w-full max-w-5xl max-h-[95vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+    <motion.div
+      key="picking-list-backdrop"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className="fixed inset-0 bg-slate-900/80 backdrop-blur-xs z-50 flex items-center justify-center p-2 sm:p-6 overflow-y-auto"
+    >
+      <motion.div
+        key="picking-list-content"
+        initial={{ opacity: 0, scale: 0.94, y: 16 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.94, y: 16 }}
+        transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
+        className="bg-white rounded-2xl shadow-2xl border border-slate-300 w-full max-w-5xl max-h-[95vh] flex flex-col overflow-hidden"
+      >
         
         {/* On-Screen Modal Control Header (Hidden during printing) */}
         <div className="bg-slate-900 text-white px-5 py-3.5 flex flex-wrap items-center justify-between shrink-0 no-print border-b border-slate-800 gap-3">
@@ -933,7 +948,7 @@ export default function PrintablePickingListModal({
           </div>
         </div>
 
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }

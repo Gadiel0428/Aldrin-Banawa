@@ -24,6 +24,7 @@ import {
 import { DeliveryRecord, ForkliftChecklist, MaterialStockItem, MasterRegistryItem } from '../types';
 import PrintablePickingListModal, { DocViewMode } from './PrintablePickingListModal';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
+import { motion, AnimatePresence } from 'motion/react';
 
 interface DeliveryModuleProps {
   deliveries: DeliveryRecord[];
@@ -698,227 +699,259 @@ export default function DeliveryModule({
       )}
 
       {/* Gate Pass Release Modal Dialog */}
-      {showGatePassModal && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-lg border border-slate-200 p-6 max-w-sm w-full space-y-4">
-            <div>
-              <h4 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
-                <FileSignature className="h-4 w-4 text-slate-600" /> Prepare Material Gate Pass Release
-              </h4>
-              <p className="text-[11px] text-slate-500 mt-1">Linking required outbound documents is required prior to physical release.</p>
-            </div>
-
-            <div className="space-y-3 text-xs">
+      <AnimatePresence>
+        {showGatePassModal && (
+          <motion.div
+            key="gate-pass-modal-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50"
+          >
+            <motion.div
+              key="gate-pass-modal-content"
+              initial={{ opacity: 0, scale: 0.94, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 16 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
+              className="bg-white rounded-xl shadow-lg border border-slate-200 p-6 max-w-sm w-full space-y-4"
+            >
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 mb-1">Official Delivery Receipt (DR) # *</label>
-                <input 
-                  type="text" required placeholder="DR-XXXXX" value={drNumber}
-                  onChange={e => setDrNumber(e.target.value)}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:outline-none"
-                />
+                <h4 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+                  <FileSignature className="h-4 w-4 text-slate-600" /> Prepare Material Gate Pass Release
+                </h4>
+                <p className="text-[11px] text-slate-500 mt-1">Linking required outbound documents is required prior to physical release.</p>
               </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 mb-1">Official Sales Invoice (SI) # *</label>
-                <input 
-                  type="text" required placeholder="SI-XXXX" value={salesInvoice}
-                  onChange={e => setSalesInvoice(e.target.value)}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:outline-none"
-                />
+              <div className="space-y-3 text-xs">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1">Official Delivery Receipt (DR) # *</label>
+                  <input 
+                    type="text" required placeholder="DR-XXXXX" value={drNumber}
+                    onChange={e => setDrNumber(e.target.value)}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1">Official Sales Invoice (SI) # *</label>
+                  <input 
+                    type="text" required placeholder="SI-XXXX" value={salesInvoice}
+                    onChange={e => setSalesInvoice(e.target.value)}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1">Transportation Way Bill # *</label>
+                  <input 
+                    type="text" required placeholder="WB-LBC-XXXXX" value={wayBill}
+                    onChange={e => setWayBill(e.target.value)}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:outline-none"
+                  />
+                </div>
               </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 mb-1">Transportation Way Bill # *</label>
-                <input 
-                  type="text" required placeholder="WB-LBC-XXXXX" value={wayBill}
-                  onChange={e => setWayBill(e.target.value)}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:outline-none"
-                />
+              <div className="flex justify-end gap-2 text-xs font-semibold pt-2 border-t border-slate-100">
+                <button 
+                  onClick={() => setShowGatePassModal(null)}
+                  className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => handleGatePassReleaseSubmit(showGatePassModal)}
+                  className="px-3 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700"
+                >
+                  Sign & Authorize Release
+                </button>
               </div>
-            </div>
-
-            <div className="flex justify-end gap-2 text-xs font-semibold pt-2 border-t border-slate-100">
-              <button 
-                onClick={() => setShowGatePassModal(null)}
-                className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button 
-                onClick={() => handleGatePassReleaseSubmit(showGatePassModal)}
-                className="px-3 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700"
-              >
-                Sign & Authorize Release
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Edit Delivery Modal (Super Admin) */}
-      {editingDelivery && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <div>
-                <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-                  <Edit className="h-4 w-4 text-indigo-600" /> Edit Registered Delivery ({editingDelivery.gatePassNumber})
-                </h4>
-                <p className="text-[11px] text-slate-500">Super Admin Record Overwrite</p>
-              </div>
-              <button 
-                onClick={() => setEditingDelivery(null)}
-                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Gate Pass #</label>
-                <input 
-                  type="text" 
-                  value={editingDelivery.gatePassNumber}
-                  onChange={e => setEditingDelivery({ ...editingDelivery, gatePassNumber: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Date</label>
-                <input 
-                  type="date" 
-                  value={editingDelivery.date}
-                  onChange={e => setEditingDelivery({ ...editingDelivery, date: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">DPL / Picking List Ref</label>
-                <input 
-                  type="text" 
-                  value={editingDelivery.pickingListNumber}
-                  onChange={e => setEditingDelivery({ ...editingDelivery, pickingListNumber: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">PO Number</label>
-                <input 
-                  type="text" 
-                  value={editingDelivery.poNumber}
-                  onChange={e => setEditingDelivery({ ...editingDelivery, poNumber: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Part Code</label>
-                <input 
-                  type="text" 
-                  value={editingDelivery.partCode}
-                  onChange={e => setEditingDelivery({ ...editingDelivery, partCode: e.target.value.toUpperCase() })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Model Name</label>
-                <input 
-                  type="text" 
-                  value={editingDelivery.modelName}
-                  onChange={e => setEditingDelivery({ ...editingDelivery, modelName: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity</label>
-                <input 
-                  type="text" 
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  value={editingDelivery.quantity || ''}
-                  onKeyDown={(e) => {
-                    if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
-                      e.preventDefault();
-                    }
-                  }}
-                  onChange={e => {
-                    const sanitized = e.target.value.replace(/\D/g, '');
-                    setEditingDelivery({ ...editingDelivery, quantity: sanitized ? parseInt(sanitized, 10) : 0 });
-                  }}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Status</label>
-                <select 
-                  value={editingDelivery.status}
-                  onChange={e => setEditingDelivery({ ...editingDelivery, status: e.target.value as any })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-bold"
+      <AnimatePresence>
+        {editingDelivery && (
+          <motion.div
+            key="editing-delivery-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50"
+          >
+            <motion.div
+              key="editing-delivery-content"
+              initial={{ opacity: 0, scale: 0.94, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 16 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
+              className="bg-white rounded-xl shadow-xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto"
+            >
+              <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                <div>
+                  <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                    <Edit className="h-4 w-4 text-indigo-600" /> Edit Registered Delivery ({editingDelivery.gatePassNumber})
+                  </h4>
+                  <p className="text-[11px] text-slate-500">Super Admin Record Overwrite</p>
+                </div>
+                <button 
+                  onClick={() => setEditingDelivery(null)}
+                  className="text-slate-400 hover:text-slate-600 text-sm font-bold"
                 >
-                  <option value="PREPARING">PREPARING</option>
-                  <option value="LOADED">LOADED</option>
-                  <option value="RELEASED">RELEASED</option>
-                </select>
+                  ✕
+                </button>
               </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">DR Number</label>
-                <input 
-                  type="text" 
-                  value={editingDelivery.drNumber || ''}
-                  onChange={e => setEditingDelivery({ ...editingDelivery, drNumber: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Gate Pass #</label>
+                  <input 
+                    type="text" 
+                    value={editingDelivery.gatePassNumber}
+                    onChange={e => setEditingDelivery({ ...editingDelivery, gatePassNumber: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Date</label>
+                  <input 
+                    type="date" 
+                    value={editingDelivery.date}
+                    onChange={e => setEditingDelivery({ ...editingDelivery, date: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">DPL / Picking List Ref</label>
+                  <input 
+                    type="text" 
+                    value={editingDelivery.pickingListNumber}
+                    onChange={e => setEditingDelivery({ ...editingDelivery, pickingListNumber: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">PO Number</label>
+                  <input 
+                    type="text" 
+                    value={editingDelivery.poNumber}
+                    onChange={e => setEditingDelivery({ ...editingDelivery, poNumber: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Part Code</label>
+                  <input 
+                    type="text" 
+                    value={editingDelivery.partCode}
+                    onChange={e => setEditingDelivery({ ...editingDelivery, partCode: e.target.value.toUpperCase() })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Model Name</label>
+                  <input 
+                    type="text" 
+                    value={editingDelivery.modelName}
+                    onChange={e => setEditingDelivery({ ...editingDelivery, modelName: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity</label>
+                  <input 
+                    type="text" 
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={editingDelivery.quantity || ''}
+                    onKeyDown={(e) => {
+                      if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
+                        e.preventDefault();
+                      }
+                    }}
+                    onChange={e => {
+                      const sanitized = e.target.value.replace(/\D/g, '');
+                      setEditingDelivery({ ...editingDelivery, quantity: sanitized ? parseInt(sanitized, 10) : 0 });
+                    }}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Status</label>
+                  <select 
+                    value={editingDelivery.status}
+                    onChange={e => setEditingDelivery({ ...editingDelivery, status: e.target.value as any })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-bold"
+                  >
+                    <option value="PREPARING">PREPARING</option>
+                    <option value="LOADED">LOADED</option>
+                    <option value="RELEASED">RELEASED</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">DR Number</label>
+                  <input 
+                    type="text" 
+                    value={editingDelivery.drNumber || ''}
+                    onChange={e => setEditingDelivery({ ...editingDelivery, drNumber: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Sales Invoice</label>
+                  <input 
+                    type="text" 
+                    value={editingDelivery.salesInvoice || ''}
+                    onChange={e => setEditingDelivery({ ...editingDelivery, salesInvoice: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Waybill Number</label>
+                  <input 
+                    type="text" 
+                    value={editingDelivery.wayBill || ''}
+                    onChange={e => setEditingDelivery({ ...editingDelivery, wayBill: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
               </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Sales Invoice</label>
-                <input 
-                  type="text" 
-                  value={editingDelivery.salesInvoice || ''}
-                  onChange={e => setEditingDelivery({ ...editingDelivery, salesInvoice: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
+              <div className="flex justify-end gap-2 text-xs font-semibold pt-3 border-t border-slate-100">
+                <button 
+                  onClick={() => setEditingDelivery(null)}
+                  className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => {
+                    onEditDelivery?.(editingDelivery);
+                    setEditingDelivery(null);
+                  }}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold"
+                >
+                  Save Delivery Changes
+                </button>
               </div>
-
-              <div className="col-span-2">
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Waybill Number</label>
-                <input 
-                  type="text" 
-                  value={editingDelivery.wayBill || ''}
-                  onChange={e => setEditingDelivery({ ...editingDelivery, wayBill: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 text-xs font-semibold pt-3 border-t border-slate-100">
-              <button 
-                onClick={() => setEditingDelivery(null)}
-                className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button 
-                onClick={() => {
-                  onEditDelivery?.(editingDelivery);
-                  setEditingDelivery(null);
-                }}
-                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold"
-              >
-                Save Delivery Changes
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Printable Picking List & Documentation Modal */}
       {selectedPickingDocDelivery && (

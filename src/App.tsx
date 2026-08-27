@@ -1141,11 +1141,11 @@ export default function App() {
     } catch (err) {}
   };
 
-  // Deep equivalency checker that tolerates null/undefined/empty string and numeric/boolean string formats
+  // Deep equivalency checker that tolerates null/undefined/empty string/empty array/empty object and numeric/boolean string formats
   const areValuesEquivalent = (valA: any, valB: any): boolean => {
     if (valA === valB) return true;
-    const isBlankA = valA === null || valA === undefined || valA === '';
-    const isBlankB = valB === null || valB === undefined || valB === '';
+    const isBlankA = valA === null || valA === undefined || valA === '' || (Array.isArray(valA) && valA.length === 0) || (typeof valA === 'object' && valA !== null && Object.keys(valA).length === 0);
+    const isBlankB = valB === null || valB === undefined || valB === '' || (Array.isArray(valB) && valB.length === 0) || (typeof valB === 'object' && valB !== null && Object.keys(valB).length === 0);
     if (isBlankA && isBlankB) return true;
     if (isBlankA !== isBlankB) return false;
 
@@ -1168,7 +1168,21 @@ export default function App() {
 
     // Objects / Arrays comparison
     if (typeof valA === 'object' && valA !== null && typeof valB === 'object' && valB !== null) {
-      return JSON.stringify(valA) === JSON.stringify(valB);
+      if (Array.isArray(valA) && Array.isArray(valB)) {
+        if (valA.length !== valB.length) return false;
+        for (let i = 0; i < valA.length; i++) {
+          if (!areValuesEquivalent(valA[i], valB[i])) return false;
+        }
+        return true;
+      }
+      if (Array.isArray(valA) !== Array.isArray(valB)) return false;
+      const keysA = Object.keys(valA);
+      const keysB = Object.keys(valB);
+      const allKeys = Array.from(new Set([...keysA, ...keysB]));
+      for (const k of allKeys) {
+        if (!areValuesEquivalent(valA[k], valB[k])) return false;
+      }
+      return true;
     }
 
     return false;
@@ -1188,7 +1202,7 @@ export default function App() {
 
       const allKeys = new Set([...Object.keys(itemA), ...Object.keys(itemB)]);
       for (const k of allKeys) {
-        if (k === 'updated_at' || k === 'updatedAt' || k === '_v' || k === 'last_ping' || k === 'connectedAt') continue;
+        if (k === 'updated_at' || k === 'updatedAt' || k === '_v' || k === 'last_ping' || k === 'connectedAt' || k === 'savedAt') continue;
         if (!areValuesEquivalent(itemA[k], itemB[k])) {
           return false;
         }
@@ -1229,13 +1243,11 @@ export default function App() {
       }
     }
 
-    // 2. Preserve any newly-created items on this workstation that the server snapshot hasn't returned yet (within last 15s)
+    // 2. CRITICAL: Preserve ALL valid local records that exist in safeCurrent and are NOT in deletedSet.
+    // Never drop user-encoded records simply because the remote server snapshot hasn't processed them yet!
     for (const localItem of safeCurrent) {
       if (localItem && localItem.id && !deletedSet.has(localItem.id) && !mergedMap.has(localItem.id)) {
-        const lastLocalMut = recentlyMutatedRecords.current.get(localItem.id) || 0;
-        if (now - lastLocalMut < 15000) {
-          mergedMap.set(localItem.id, localItem);
-        }
+        mergedMap.set(localItem.id, localItem);
       }
     }
 
@@ -1298,7 +1310,6 @@ export default function App() {
   const reconcileUsers = (currentUsers: RegisteredAccount[], incomingUsers: any[]): RegisteredAccount[] => {
     const deletedSet = getDeletedUserIds();
     const userMap = new Map<string, RegisteredAccount>();
-    const now = Date.now();
 
     const incomingList = Array.isArray(incomingUsers) ? incomingUsers : [];
     const safeCurrent = Array.isArray(currentUsers) ? currentUsers : [];
@@ -1325,15 +1336,12 @@ export default function App() {
       });
     }
 
-    // 2. Preserve any local user that was created/registered on this terminal within the last 15s but not yet in remote snapshot
+    // 2. CRITICAL: Preserve any local user that was created/registered on this terminal as long as not deleted
     for (const cu of safeCurrent) {
       if (!cu || !cu.employeeId) continue;
       const empId = cu.employeeId.toUpperCase();
       if (!userMap.has(empId) && !deletedSet.has(empId)) {
-        const lastLocalMut = recentlyMutatedRecords.current.get(empId) || 0;
-        if (now - lastLocalMut < 15000) {
-          userMap.set(empId, cu);
-        }
+        userMap.set(empId, cu);
       }
     }
 
@@ -1350,13 +1358,12 @@ export default function App() {
       status: 'ACTIVE'
     });
 
-    // 4. Stable ordering of user accounts
     const orderedUsers: RegisteredAccount[] = [];
     const usedEmpIds = new Set<string>();
 
-    for (const existingUser of safeCurrent) {
-      if (existingUser && existingUser.employeeId) {
-        const empId = existingUser.employeeId.toUpperCase();
+    for (const cu of safeCurrent) {
+      if (cu && cu.employeeId) {
+        const empId = cu.employeeId.toUpperCase();
         if (userMap.has(empId)) {
           orderedUsers.push(userMap.get(empId)!);
           usedEmpIds.add(empId);
@@ -1364,15 +1371,14 @@ export default function App() {
       }
     }
 
-    for (const [empId, user] of userMap.entries()) {
+    for (const [empId, u] of userMap.entries()) {
       if (!usedEmpIds.has(empId)) {
-        orderedUsers.push(user);
+        orderedUsers.push(u);
       }
     }
 
-    // Check if result is identical to currentUsers to avoid re-renders and UI flicker
-    if (Array.isArray(currentUsers) && areUsersEqual(currentUsers, orderedUsers)) {
-      return currentUsers;
+    if (areUsersEqual(safeCurrent, orderedUsers)) {
+      return safeCurrent;
     }
 
     try {

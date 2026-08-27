@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { MasterRegistryItem, RegistryType, PresetSourceType } from '../types';
 import { ConfirmActionConfig } from './ConfirmModal';
+import { motion, AnimatePresence } from 'motion/react';
 
 export const DEFAULT_MASTER_REGISTRIES: MasterRegistryItem[] = [];
 
@@ -469,194 +470,226 @@ export default function MasterRegistryModule({
       </div>
 
       {/* Registration Modal */}
-      {showRegisterModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className={`bg-white rounded-xl shadow-xl border border-slate-200 w-full ${formType === 'BARCODE_PRESET' ? 'max-w-lg' : 'max-w-md'} overflow-hidden animate-in fade-in zoom-in-95 duration-150`}>
-            <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Plus className="h-4 w-4 text-indigo-400" />
-                <h3 className="font-bold text-sm">
-                  {editingItem ? 'Edit Master Registration' : 'Register New Option'}
-                </h3>
-              </div>
-              <button 
-                onClick={() => setShowRegisterModal(false)}
-                className="text-slate-400 hover:text-white text-lg leading-none"
-              >
-                &times;
-              </button>
-            </div>
-
-            <form onSubmit={handleSubmit} className="p-5 space-y-4 max-h-[85vh] overflow-y-auto">
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Registration Target *</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['CUSTOMER', 'SUPPLIER', 'LOCATION'] as RegistryType[]).map(t => (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => setFormType(t)}
-                      className={`px-2.5 py-2 rounded-lg text-xs font-bold border flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                        formType === t 
-                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' 
-                          : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                      }`}
-                    >
-                      {getTypeIcon(t)}
-                      {t === 'CUSTOMER' ? 'Customer' : t === 'SUPPLIER' ? 'Supplier' : 'Location'}
-                    </button>
-                  ))}
+      <AnimatePresence>
+        {showRegisterModal && (
+          <motion.div
+            key="register-modal-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          >
+            <motion.div
+              key="register-modal-content"
+              initial={{ opacity: 0, scale: 0.94, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 16 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
+              className={`bg-white rounded-xl shadow-xl border border-slate-200 w-full ${formType === 'BARCODE_PRESET' ? 'max-w-lg' : 'max-w-md'} overflow-hidden`}
+            >
+              <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Plus className="h-4 w-4 text-indigo-400" />
+                  <h3 className="font-bold text-sm">
+                    {editingItem ? 'Edit Master Registration' : 'Register New Option'}
+                  </h3>
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">
-                  {formType === 'CUSTOMER'
-                    ? 'Customer Code'
-                    : formType === 'SUPPLIER'
-                    ? 'Supplier Code'
-                    : formType === 'LOCATION'
-                    ? 'Location Code'
-                    : 'Code / Short Identifier'}
-                </label>
-                <input 
-                  type="text"
-                  placeholder={
-                    formType === 'CUSTOMER' ? 'e.g. CUST-NIS'
-                    : formType === 'SUPPLIER' ? 'e.g. SUP-APX'
-                    : 'e.g. LOC-ZA'
-                  }
-                  value={formCode}
-                  onChange={e => setFormCode(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono focus:ring-2 focus:ring-indigo-500 focus:outline-none uppercase"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">
-                  {formType === 'CUSTOMER' ? 'Customer Name *'
-                    : formType === 'SUPPLIER' ? 'Supplier / Vendor Name *'
-                    : formType === 'LOCATION' ? 'Location / Zone Name *'
-                    : 'Name / Title *'}
-                </label>
-                <input 
-                  type="text"
-                  required
-                  placeholder={
-                    formType === 'CUSTOMER' ? 'e.g. NISSAN Motors'
-                    : formType === 'SUPPLIER' ? 'e.g. Apex Chemical Corp'
-                    : 'e.g. Zone A - Raw Materials'
-                  }
-                  value={formName}
-                  onChange={e => setFormName(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">
-                  {formType === 'CUSTOMER' ? 'Customer Notes / Address'
-                    : formType === 'SUPPLIER' ? 'Supplier Description / Notes'
-                    : 'Description / Notes'}
-                </label>
-                <textarea 
-                  rows={2}
-                  placeholder={
-                    formType === 'CUSTOMER' ? 'e.g. Automotive molded plastic assemblies & packaging'
-                    : formType === 'SUPPLIER' ? 'e.g. Primary resin & chemical compound supplier'
-                    : 'Optional details, contacts, or specs...'
-                  }
-                  value={formDesc}
-                  onChange={e => setFormDesc(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Status</label>
-                <select 
-                  value={formStatus}
-                  onChange={e => setFormStatus(e.target.value as 'ACTIVE' | 'INACTIVE')}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                >
-                  <option value="ACTIVE">ACTIVE (Visible in selection lists)</option>
-                  <option value="INACTIVE">INACTIVE (Hidden from selection lists)</option>
-                </select>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-                <button
-                  type="button"
+                <button 
                   onClick={() => setShowRegisterModal(false)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
+                  className="text-slate-400 hover:text-white text-lg leading-none"
                 >
-                  Cancel
-                </button>
-
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition shadow-sm"
-                >
-                  {editingItem ? 'Save Changes' : 'Register Item'}
+                  &times;
                 </button>
               </div>
-            </form>
-          </div>
-        </div>
-      )}
+
+              <form onSubmit={handleSubmit} className="p-5 space-y-4 max-h-[85vh] overflow-y-auto">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Registration Target *</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['CUSTOMER', 'SUPPLIER', 'LOCATION'] as RegistryType[]).map(t => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => setFormType(t)}
+                        className={`px-2.5 py-2 rounded-lg text-xs font-bold border flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                          formType === t 
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' 
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        {getTypeIcon(t)}
+                        {t === 'CUSTOMER' ? 'Customer' : t === 'SUPPLIER' ? 'Supplier' : 'Location'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                    {formType === 'CUSTOMER'
+                      ? 'Customer Code'
+                      : formType === 'SUPPLIER'
+                      ? 'Supplier Code'
+                      : formType === 'LOCATION'
+                      ? 'Location Code'
+                      : 'Code / Short Identifier'}
+                  </label>
+                  <input 
+                    type="text"
+                    placeholder={
+                      formType === 'CUSTOMER' ? 'e.g. CUST-NIS'
+                      : formType === 'SUPPLIER' ? 'e.g. SUP-APX'
+                      : 'e.g. LOC-ZA'
+                    }
+                    value={formCode}
+                    onChange={e => setFormCode(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono focus:ring-2 focus:ring-indigo-500 focus:outline-none uppercase"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                    {formType === 'CUSTOMER' ? 'Customer Name *'
+                      : formType === 'SUPPLIER' ? 'Supplier / Vendor Name *'
+                      : formType === 'LOCATION' ? 'Location / Zone Name *'
+                      : 'Name / Title *'}
+                  </label>
+                  <input 
+                    type="text"
+                    required
+                    placeholder={
+                      formType === 'CUSTOMER' ? 'e.g. NISSAN Motors'
+                      : formType === 'SUPPLIER' ? 'e.g. Apex Chemical Corp'
+                      : 'e.g. Zone A - Raw Materials'
+                    }
+                    value={formName}
+                    onChange={e => setFormName(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                    {formType === 'CUSTOMER' ? 'Customer Notes / Address'
+                      : formType === 'SUPPLIER' ? 'Supplier Description / Notes'
+                      : 'Description / Notes'}
+                  </label>
+                  <textarea 
+                    rows={2}
+                    placeholder={
+                      formType === 'CUSTOMER' ? 'e.g. Automotive molded plastic assemblies & packaging'
+                      : formType === 'SUPPLIER' ? 'e.g. Primary resin & chemical compound supplier'
+                      : 'Optional details, contacts, or specs...'
+                    }
+                    value={formDesc}
+                    onChange={e => setFormDesc(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Status</label>
+                  <select 
+                    value={formStatus}
+                    onChange={e => setFormStatus(e.target.value as 'ACTIVE' | 'INACTIVE')}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  >
+                    <option value="ACTIVE">ACTIVE (Visible in selection lists)</option>
+                    <option value="INACTIVE">INACTIVE (Hidden from selection lists)</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setShowRegisterModal(false)}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition shadow-sm"
+                  >
+                    {editingItem ? 'Save Changes' : 'Register Item'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Yes / No Action Confirmation Modal */}
-      {confirmAction && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-amber-400" />
-                <h3 className="font-bold text-sm">{confirmAction.title}</h3>
-              </div>
-              <button 
-                onClick={() => setConfirmAction(null)} 
-                className="text-slate-400 hover:text-white transition"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-4">
-              <p className="text-xs text-slate-600 font-medium leading-relaxed">
-                {confirmAction.message}
-              </p>
-
-              <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg flex items-center gap-2 text-amber-800 text-[11px] font-semibold">
-                <AlertOctagon className="h-4 w-4 text-amber-600 shrink-0" />
-                <span>Please select YES to confirm or NO to cancel this action.</span>
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setConfirmAction(null)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5"
+      <AnimatePresence>
+        {confirmAction && (
+          <motion.div
+            key="confirm-action-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          >
+            <motion.div
+              key="confirm-action-content"
+              initial={{ opacity: 0, scale: 0.94, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 16 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
+              className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden"
+            >
+              <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-5 w-5 text-amber-400" />
+                  <h3 className="font-bold text-sm">{confirmAction.title}</h3>
+                </div>
+                <button 
+                  onClick={() => setConfirmAction(null)} 
+                  className="text-slate-400 hover:text-white transition"
                 >
-                  <XCircle className="h-4 w-4 text-slate-500" />
-                  NO
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    confirmAction.onConfirm();
-                    setConfirmAction(null);
-                  }}
-                  className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
-                >
-                  <CheckCircle2 className="h-4 w-4 text-white" />
-                  {confirmAction.confirmLabel || 'YES'}
+                  <X className="h-5 w-5" />
                 </button>
               </div>
-            </div>
-          </div>
-        </div>
-      )}
+
+              <div className="p-5 space-y-4">
+                <p className="text-xs text-slate-600 font-medium leading-relaxed">
+                  {confirmAction.message}
+                </p>
+
+                <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg flex items-center gap-2 text-amber-800 text-[11px] font-semibold">
+                  <AlertOctagon className="h-4 w-4 text-amber-600 shrink-0" />
+                  <span>Please select YES to confirm or NO to cancel this action.</span>
+                </div>
+
+                <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmAction(null)}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5"
+                  >
+                    <XCircle className="h-4 w-4 text-slate-500" />
+                    NO
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      confirmAction.onConfirm();
+                      setConfirmAction(null);
+                    }}
+                    className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
+                  >
+                    <CheckCircle2 className="h-4 w-4 text-white" />
+                    {confirmAction.confirmLabel || 'YES'}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

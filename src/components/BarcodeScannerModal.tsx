@@ -4,6 +4,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { 
   Barcode, 
@@ -115,14 +116,28 @@ export default function BarcodeScannerModal({
     }
   }, [isOpen, activeTab]);
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md animate-fade-in">
-      {/* Hidden container for Html5Qrcode offline image scanner engine */}
-      <div id={hiddenScannerRegionId} className="hidden" />
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          key="barcode-scanner-backdrop"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.2 }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md"
+        >
+          {/* Hidden container for Html5Qrcode offline image scanner engine */}
+          <div id={hiddenScannerRegionId} className="hidden" />
 
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg shadow-2xl text-slate-100 overflow-hidden flex flex-col max-h-[90vh]">
+          <motion.div
+            key="barcode-scanner-content"
+            initial={{ opacity: 0, scale: 0.94, y: 16 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.94, y: 16 }}
+            transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
+            className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg shadow-2xl text-slate-100 overflow-hidden flex flex-col max-h-[90vh]"
+          >
         {/* Modal Header */}
         <div className="px-5 py-3.5 border-b border-slate-800/80 flex items-center justify-between gap-3 bg-slate-950/40">
           <div className="flex items-center gap-2.5 min-w-0 flex-1">
@@ -325,8 +340,10 @@ export default function BarcodeScannerModal({
           >
             Close
           </button>
-        </div>
-      </div>
-    </div>
+          </div>
+        </motion.div>
+      </motion.div>
+    )}
+  </AnimatePresence>
   );
 }

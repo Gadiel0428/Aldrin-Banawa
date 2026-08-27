@@ -24,6 +24,7 @@ import { MaterialStockItem, IssuanceRecord, MasterRegistryItem } from '../types'
 import BarcodeScannerModal from './BarcodeScannerModal';
 import PrintablePickingListModal, { DocViewMode } from './PrintablePickingListModal';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
+import { motion, AnimatePresence } from 'motion/react';
 
 interface IssuanceModuleProps {
   stocks: MaterialStockItem[];
@@ -49,22 +50,94 @@ export default function IssuanceModule({
   currentUser = ''
 }: IssuanceModuleProps) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [showForm, setShowForm] = useState(false);
   const [showScannerModal, setShowScannerModal] = useState(false);
   const [editingIssuance, setEditingIssuance] = useState<IssuanceRecord | null>(null);
   const [selectedPickingDocIssuance, setSelectedPickingDocIssuance] = useState<IssuanceRecord | null>(null);
   const [printInitialView, setPrintInitialView] = useState<DocViewMode>('OFFICIAL_DOC');
   const [confirmAction, setConfirmAction] = useState<ConfirmActionConfig | null>(null);
 
+  const ISSUANCE_DRAFT_KEY = 'juwei_wms_draft_issuance';
+
+  const loadIssuanceDraft = () => {
+    try {
+      const raw = localStorage.getItem(ISSUANCE_DRAFT_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch (e) {}
+    return null;
+  };
+
+  const initialIssuanceDraft = loadIssuanceDraft();
+
   // Form states
-  const [requisitionNumber, setRequisitionNumber] = useState('');
-  const [department, setDepartment] = useState('Injection Molding Dept');
-  const [selectedPartCode, setSelectedPartCode] = useState('');
-  const [selectedLotNumber, setSelectedLotNumber] = useState('');
-  const [quantityRequested, setQuantityRequested] = useState(0);
-  const [quantityIssued, setQuantityIssued] = useState(0);
-  const [issuedBy, setIssuedBy] = useState(currentUser || 'Warehouse Staff');
-  const [receivedBy, setReceivedBy] = useState('');
+  const [showForm, setShowForm] = useState<boolean>(() => {
+    if (initialIssuanceDraft?.showForm !== undefined) return Boolean(initialIssuanceDraft.showForm);
+    return Boolean(
+      initialIssuanceDraft?.requisitionNumber || 
+      initialIssuanceDraft?.selectedPartCode || 
+      (initialIssuanceDraft?.quantityRequested && initialIssuanceDraft.quantityRequested > 0)
+    );
+  });
+  const [requisitionNumber, setRequisitionNumber] = useState(initialIssuanceDraft?.requisitionNumber || '');
+  const [department, setDepartment] = useState(initialIssuanceDraft?.department || 'Injection Molding Dept');
+  const [selectedPartCode, setSelectedPartCode] = useState(initialIssuanceDraft?.selectedPartCode || '');
+  const [selectedLotNumber, setSelectedLotNumber] = useState(initialIssuanceDraft?.selectedLotNumber || '');
+  const [quantityRequested, setQuantityRequested] = useState<number>(initialIssuanceDraft?.quantityRequested || 0);
+  const [quantityIssued, setQuantityIssued] = useState<number>(initialIssuanceDraft?.quantityIssued || 0);
+  const [issuedBy, setIssuedBy] = useState(initialIssuanceDraft?.issuedBy || (currentUser || 'Warehouse Staff'));
+  const [receivedBy, setReceivedBy] = useState(initialIssuanceDraft?.receivedBy || '');
+
+  // Auto-save issuance draft to localStorage
+  useEffect(() => {
+    const hasContent = Boolean(
+      requisitionNumber ||
+      selectedPartCode ||
+      selectedLotNumber ||
+      quantityRequested > 0 ||
+      quantityIssued > 0 ||
+      receivedBy
+    );
+
+    if (hasContent || showForm) {
+      const draft = {
+        showForm,
+        requisitionNumber,
+        department,
+        selectedPartCode,
+        selectedLotNumber,
+        quantityRequested,
+        quantityIssued,
+        issuedBy,
+        receivedBy,
+        savedAt: Date.now()
+      };
+      try {
+        localStorage.setItem(ISSUANCE_DRAFT_KEY, JSON.stringify(draft));
+      } catch (e) {}
+    }
+  }, [
+    showForm, requisitionNumber, department, selectedPartCode,
+    selectedLotNumber, quantityRequested, quantityIssued, issuedBy, receivedBy
+  ]);
+
+  const clearIssuanceDraft = () => {
+    try {
+      localStorage.removeItem(ISSUANCE_DRAFT_KEY);
+    } catch (e) {}
+  };
+
+  const handleDiscardIssuance = () => {
+    clearIssuanceDraft();
+    setRequisitionNumber('');
+    setSelectedPartCode('');
+    setSelectedLotNumber('');
+    setQuantityRequested(0);
+    setQuantityIssued(0);
+    setReceivedBy('');
+    setShowForm(false);
+  };
 
   // Derived states for stocks and FIFO checks
   const approvedStocks = stocks.filter(item => item.status === 'APPROVED' && item.quantity > 0);
@@ -105,7 +178,9 @@ export default function IssuanceModule({
       const lots = approvedStocks.filter(item => item.partCode === selectedPartCode);
       setAvailableLots(lots);
       if (lots.length > 0) {
-        setSelectedLotNumber(lots[0].lotNumber);
+        if (!selectedLotNumber || !lots.some(l => l.lotNumber === selectedLotNumber)) {
+          setSelectedLotNumber(lots[0].lotNumber);
+        }
       } else {
         setSelectedLotNumber('');
       }
@@ -183,6 +258,7 @@ export default function IssuanceModule({
     };
 
     onAddIssuance(newIssuance);
+    clearIssuanceDraft();
 
     // Reset
     setRequisitionNumber('');
@@ -312,10 +388,21 @@ export default function IssuanceModule({
           id="issuance-form"
         >
           <div className="border-b border-slate-100 pb-3 flex justify-between items-center">
-            <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
-              <FileSpreadsheet className="h-4 w-4 text-slate-500" /> New Material Requisition Fulfill Form (MRS)
-            </h3>
-            <button type="button" onClick={() => setShowForm(false)} className="text-xs text-slate-400">Cancel</button>
+            <div className="flex items-center gap-2.5">
+              <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+                <FileSpreadsheet className="h-4 w-4 text-slate-500" /> New Material Requisition Fulfill Form (MRS)
+              </h3>
+              <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                <CheckCircle2 className="h-3 w-3 text-emerald-600" /> Auto-saved draft
+              </span>
+            </div>
+            <button 
+              type="button" 
+              onClick={handleDiscardIssuance} 
+              className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer"
+            >
+              Cancel
+            </button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -471,14 +558,14 @@ export default function IssuanceModule({
           <div className="flex justify-end gap-1.5 pt-2">
             <button 
               type="button" 
-              onClick={() => setShowForm(false)} 
-              className="px-4 py-2 border border-slate-200 text-slate-600 text-xs font-semibold rounded-lg hover:bg-slate-50"
+              onClick={handleDiscardIssuance} 
+              className="px-4 py-2 border border-slate-200 text-slate-600 text-xs font-semibold rounded-lg hover:bg-slate-50 cursor-pointer"
             >
               Discard
             </button>
             <button 
               type="submit" 
-              className="px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800"
+              className="px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 cursor-pointer"
             >
               Verify, Issue and Update Balance
             </button>
@@ -594,166 +681,182 @@ export default function IssuanceModule({
       </div>
 
       {/* Edit Issuance Modal (Super Admin) */}
-      {editingIssuance && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl shadow-xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <div>
-                <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-                  <Edit className="h-4 w-4 text-indigo-600" /> Edit Registered Issuance ({editingIssuance.id})
-                </h4>
-                <p className="text-[11px] text-slate-500">Super Admin Record Overwrite</p>
-              </div>
-              <button 
-                onClick={() => setEditingIssuance(null)}
-                className="text-slate-400 hover:text-slate-600 text-sm font-bold"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Requisition Number</label>
-                <input 
-                  type="text" 
-                  value={editingIssuance.requisitionNumber}
-                  onChange={e => setEditingIssuance({ ...editingIssuance, requisitionNumber: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Date Issued</label>
-                <input 
-                  type="date" 
-                  value={editingIssuance.date}
-                  onChange={e => setEditingIssuance({ ...editingIssuance, date: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
+      <AnimatePresence>
+        {editingIssuance && (
+          <motion.div
+            key="editing-issuance-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50"
+          >
+            <motion.div
+              key="editing-issuance-content"
+              initial={{ opacity: 0, scale: 0.94, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 16 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
+              className="bg-white rounded-xl shadow-xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto"
+            >
+              <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                <div>
+                  <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                    <Edit className="h-4 w-4 text-indigo-600" /> Edit Registered Issuance ({editingIssuance.id})
+                  </h4>
+                  <p className="text-[11px] text-slate-500">Super Admin Record Overwrite</p>
+                </div>
+                <button 
+                  onClick={() => setEditingIssuance(null)}
+                  className="text-slate-400 hover:text-slate-600 text-sm font-bold"
+                >
+                  ✕
+                </button>
               </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Department</label>
-                <input 
-                  type="text" 
-                  value={editingIssuance.department}
-                  onChange={e => setEditingIssuance({ ...editingIssuance, department: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                />
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Requisition Number</label>
+                  <input 
+                    type="text" 
+                    value={editingIssuance.requisitionNumber}
+                    onChange={e => setEditingIssuance({ ...editingIssuance, requisitionNumber: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Date Issued</label>
+                  <input 
+                    type="date" 
+                    value={editingIssuance.date}
+                    onChange={e => setEditingIssuance({ ...editingIssuance, date: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Department</label>
+                  <input 
+                    type="text" 
+                    value={editingIssuance.department}
+                    onChange={e => setEditingIssuance({ ...editingIssuance, department: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Part Code</label>
+                  <input 
+                    type="text" 
+                    value={editingIssuance.partCode}
+                    onChange={e => setEditingIssuance({ ...editingIssuance, partCode: e.target.value.toUpperCase() })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Description</label>
+                  <input 
+                    type="text" 
+                    value={editingIssuance.description}
+                    onChange={e => setEditingIssuance({ ...editingIssuance, description: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity Requested</label>
+                  <input 
+                    type="text" 
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={editingIssuance.quantityRequested || ''}
+                    onKeyDown={(e) => {
+                      if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
+                        e.preventDefault();
+                      }
+                    }}
+                    onChange={e => {
+                      const sanitized = e.target.value.replace(/\D/g, '');
+                      setEditingIssuance({ ...editingIssuance, quantityRequested: sanitized ? parseInt(sanitized, 10) : 0 });
+                    }}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity Issued</label>
+                  <input 
+                    type="text" 
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={editingIssuance.quantityIssued || ''}
+                    onKeyDown={(e) => {
+                      if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
+                        e.preventDefault();
+                      }
+                    }}
+                    onChange={e => {
+                      const sanitized = e.target.value.replace(/\D/g, '');
+                      setEditingIssuance({ ...editingIssuance, quantityIssued: sanitized ? parseInt(sanitized, 10) : 0 });
+                    }}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Lot Number</label>
+                  <input 
+                    type="text" 
+                    value={editingIssuance.lotNumber}
+                    onChange={e => setEditingIssuance({ ...editingIssuance, lotNumber: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Issued By</label>
+                  <input 
+                    type="text" 
+                    value={editingIssuance.issuedBy}
+                    onChange={e => setEditingIssuance({ ...editingIssuance, issuedBy: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Received By</label>
+                  <input 
+                    type="text" 
+                    value={editingIssuance.receivedBy}
+                    onChange={e => setEditingIssuance({ ...editingIssuance, receivedBy: e.target.value })}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
               </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Part Code</label>
-                <input 
-                  type="text" 
-                  value={editingIssuance.partCode}
-                  onChange={e => setEditingIssuance({ ...editingIssuance, partCode: e.target.value.toUpperCase() })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div className="col-span-2">
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Description</label>
-                <input 
-                  type="text" 
-                  value={editingIssuance.description}
-                  onChange={e => setEditingIssuance({ ...editingIssuance, description: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity Requested</label>
-                <input 
-                  type="text" 
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  value={editingIssuance.quantityRequested || ''}
-                  onKeyDown={(e) => {
-                    if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
-                      e.preventDefault();
-                    }
+              <div className="flex justify-end gap-2 text-xs font-semibold pt-3 border-t border-slate-100">
+                <button 
+                  onClick={() => setEditingIssuance(null)}
+                  className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => {
+                    onEditIssuance?.(editingIssuance);
+                    setEditingIssuance(null);
                   }}
-                  onChange={e => {
-                    const sanitized = e.target.value.replace(/\D/g, '');
-                    setEditingIssuance({ ...editingIssuance, quantityRequested: sanitized ? parseInt(sanitized, 10) : 0 });
-                  }}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold"
+                >
+                  Save Issuance Changes
+                </button>
               </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity Issued</label>
-                <input 
-                  type="text" 
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  value={editingIssuance.quantityIssued || ''}
-                  onKeyDown={(e) => {
-                    if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
-                      e.preventDefault();
-                    }
-                  }}
-                  onChange={e => {
-                    const sanitized = e.target.value.replace(/\D/g, '');
-                    setEditingIssuance({ ...editingIssuance, quantityIssued: sanitized ? parseInt(sanitized, 10) : 0 });
-                  }}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Lot Number</label>
-                <input 
-                  type="text" 
-                  value={editingIssuance.lotNumber}
-                  onChange={e => setEditingIssuance({ ...editingIssuance, lotNumber: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Issued By</label>
-                <input 
-                  type="text" 
-                  value={editingIssuance.issuedBy}
-                  onChange={e => setEditingIssuance({ ...editingIssuance, issuedBy: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div className="col-span-2">
-                <label className="block text-[10px] font-bold text-slate-500 mb-1">Received By</label>
-                <input 
-                  type="text" 
-                  value={editingIssuance.receivedBy}
-                  onChange={e => setEditingIssuance({ ...editingIssuance, receivedBy: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 text-xs font-semibold pt-3 border-t border-slate-100">
-              <button 
-                onClick={() => setEditingIssuance(null)}
-                className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button 
-                onClick={() => {
-                  onEditIssuance?.(editingIssuance);
-                  setEditingIssuance(null);
-                }}
-                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold"
-              >
-                Save Issuance Changes
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {/* Barcode / QR Code Scanner Modal */}
       <BarcodeScannerModal 
         isOpen={showScannerModal}

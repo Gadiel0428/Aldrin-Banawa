@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { 
   Plus, 
   Boxes, 
@@ -823,90 +824,106 @@ export default function EnvironmentalModule({
       )}
 
       {/* Location Registration Modal */}
-      {showLocationModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
-          <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-              <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-                <MapPin className="h-5 w-5 text-indigo-600" />
-                {editingLocation ? 'Edit Storage Location' : 'Register New Storage Location'}
-              </h3>
-              <button 
-                type="button" 
-                onClick={() => setShowLocationModal(false)}
-                className="text-slate-400 hover:text-slate-600 text-xs font-bold px-2 py-1 rounded"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleLocationFormSubmit} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Location Code *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. LOC-ZA, RACK-A01, BIN-B04"
-                  value={locCode}
-                  onChange={e => setLocCode(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono font-semibold focus:ring-1 focus:ring-indigo-500 focus:outline-none uppercase"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Storage Location / Rack Name *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Zone A - Raw Materials Rack 01"
-                  value={locName}
-                  onChange={e => setLocName(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold focus:ring-1 focus:ring-indigo-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Description / Notes (Optional)</label>
-                <textarea
-                  rows={2}
-                  placeholder="e.g. Heavy-duty pallet rack row for resin sacks"
-                  value={locDesc}
-                  onChange={e => setLocDesc(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Status</label>
-                <select
-                  value={locStatus}
-                  onChange={e => setLocStatus(e.target.value as 'ACTIVE' | 'INACTIVE')}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold focus:ring-1 focus:ring-indigo-500 focus:outline-none"
-                >
-                  <option value="ACTIVE">ACTIVE</option>
-                  <option value="INACTIVE">INACTIVE</option>
-                </select>
-              </div>
-
-              <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
-                <button
-                  type="button"
+      <AnimatePresence>
+        {showLocationModal && (
+          <motion.div
+            key="location-modal-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4"
+          >
+            <motion.div
+              key="location-modal-content"
+              initial={{ opacity: 0, scale: 0.94, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 16 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
+              className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4"
+            >
+              <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                  <MapPin className="h-5 w-5 text-indigo-600" />
+                  {editingLocation ? 'Edit Storage Location' : 'Register New Storage Location'}
+                </h3>
+                <button 
+                  type="button" 
                   onClick={() => setShowLocationModal(false)}
-                  className="px-4 py-2 border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-50 transition cursor-pointer"
+                  className="text-slate-400 hover:text-slate-600 text-xs font-bold px-2 py-1 rounded cursor-pointer"
                 >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition shadow-sm cursor-pointer"
-                >
-                  {editingLocation ? 'Save Changes' : 'Register Location'}
+                  ✕
                 </button>
               </div>
-            </form>
-          </div>
-        </div>
-      )}
+
+              <form onSubmit={handleLocationFormSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Location Code *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. LOC-ZA, RACK-A01, BIN-B04"
+                    value={locCode}
+                    onChange={e => setLocCode(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono font-semibold focus:ring-1 focus:ring-indigo-500 focus:outline-none uppercase"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Storage Location / Rack Name *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Zone A - Raw Materials Rack 01"
+                    value={locName}
+                    onChange={e => setLocName(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Description / Notes (Optional)</label>
+                  <textarea
+                    rows={2}
+                    placeholder="e.g. Heavy-duty pallet rack row for resin sacks"
+                    value={locDesc}
+                    onChange={e => setLocDesc(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Status</label>
+                  <select
+                    value={locStatus}
+                    onChange={e => setLocStatus(e.target.value as 'ACTIVE' | 'INACTIVE')}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                  >
+                    <option value="ACTIVE">ACTIVE</option>
+                    <option value="INACTIVE">INACTIVE</option>
+                  </select>
+                </div>
+
+                <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowLocationModal(false)}
+                    className="px-4 py-2 border border-slate-200 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-50 transition cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition shadow-sm cursor-pointer"
+                  >
+                    {editingLocation ? 'Save Changes' : 'Register Location'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
