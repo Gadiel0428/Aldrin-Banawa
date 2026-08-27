@@ -46,7 +46,7 @@ export default function ActiveUsersModal({
   onForceSync,
   isManualSyncing
 }: ActiveUsersModalProps) {
-  const totalOnline = Math.max(activeUsers.length, activePresence.length);
+  const totalOnline = Math.max(1, activePresence.length, activeUsers.length);
 
   return (
     <AnimatePresence>

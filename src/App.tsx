@@ -431,7 +431,7 @@ export default function App() {
     const selfItem: ActivePresenceUser = {
       stationId: myStationId,
       username: currentUser || 'JUWEI OPERATOR',
-      employeeId: currentEmployeeId || 'JPMP-002',
+      employeeId: currentEmployeeId || (currentUser?.toUpperCase().includes('ALDRIN') ? 'JPMP-002' : ''),
       role: currentRole || (currentPermission === 'FULL_ACCESS' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR'),
       activeView: view,
       connectedAt: new Date().toISOString(),
@@ -451,17 +451,23 @@ export default function App() {
 
     for (const item of combined) {
       if (!item || !item.username) continue;
-      // Stale cutoff (45 seconds) for external presences
-      if (item.source !== 'self' && item.lastPing && (now - item.lastPing > 45000)) {
+      
+      // If this item is a remote reflection of the current client tab itself, let selfItem take precedence
+      if (item.stationId === myStationId && item.source !== 'self') {
         continue;
       }
 
-      // Unique deduplication key: stationId > (employeeId + username) > username
-      const key = item.stationId 
-        ? item.stationId 
-        : (item.employeeId ? `${item.employeeId.toUpperCase()}_${item.username.toUpperCase()}` : item.username.toUpperCase());
+      // Check stale cutoff ONLY for broadcast channel / local tabs that haven't pinged in 30s
+      if (item.source === 'local' && item.lastPing && (now - item.lastPing > 30000)) {
+        continue;
+      }
 
-      // If self is in map, don't overwrite with remote copy of self
+      // Unique deduplication key: stationId > (employeeId + username) > username + source
+      const key = item.stationId && item.stationId.trim().length > 0 
+        ? item.stationId.trim().toUpperCase() 
+        : (item.employeeId ? `${item.employeeId.toUpperCase()}_${item.username.toUpperCase()}` : `${item.username.toUpperCase()}_${item.source || 'terminal'}`);
+
+      // If self is already in map, don't overwrite with remote copy of self
       if (map.has(key)) {
         const existing = map.get(key)!;
         if (existing.source === 'self') continue;
@@ -472,8 +478,8 @@ export default function App() {
     const uniqueList = Array.from(map.values());
     setActivePresence(uniqueList);
 
-    const userNames = Array.from(new Set(uniqueList.map(p => p.username.toUpperCase())));
-    setActiveUsers(userNames.length > 0 ? userNames : [selfItem.username.toUpperCase()]);
+    const userNames = Array.from(new Set(uniqueList.map(p => p.username.trim().toUpperCase())));
+    setActiveUsers(userNames.length > 0 ? userNames : [selfItem.username.trim().toUpperCase()]);
   }, [currentUser, currentEmployeeId, currentRole, currentPermission, view, wsPresence, supabasePresence, localTabsPresence]);
 
   useEffect(() => {
@@ -492,6 +498,23 @@ export default function App() {
                 const filtered = prev.filter(p => p.stationId !== payload.presence.stationId);
                 return [...filtered, { ...payload.presence, source: 'local', lastPing: Date.now() }];
               });
+            }
+          } else if (payload.type === 'presence_request') {
+            if (payload.fromStationId !== getStationId()) {
+              try {
+                channel.postMessage({
+                  type: 'presence_heartbeat',
+                  presence: {
+                    stationId: getStationId(),
+                    username: currentUser || 'JUWEI OPERATOR',
+                    employeeId: currentEmployeeId || (currentUser?.toUpperCase().includes('ALDRIN') ? 'JPMP-002' : ''),
+                    role: currentRole || (currentPermission === 'FULL_ACCESS' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR'),
+                    activeView: view,
+                    connectedAt: new Date().toISOString(),
+                    lastPing: Date.now()
+                  }
+                });
+              } catch (e) {}
             }
           } else if (payload.type === 'presence_leave') {
             if (payload.stationId) {
@@ -588,14 +611,20 @@ export default function App() {
           }
         };
 
+        // Request presence from other tabs and broadcast self
+        channel.postMessage({
+          type: 'presence_request',
+          fromStationId: getStationId()
+        });
+
         // Emit initial presence heartbeat
         channel.postMessage({
           type: 'presence_heartbeat',
           presence: {
             stationId: getStationId(),
             username: currentUser || 'JUWEI OPERATOR',
-            employeeId: currentEmployeeId || 'JPMP-002',
-            role: currentRole || 'SUPER ADMINISTRATOR',
+            employeeId: currentEmployeeId || (currentUser?.toUpperCase().includes('ALDRIN') ? 'JPMP-002' : ''),
+            role: currentRole || (currentPermission === 'FULL_ACCESS' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR'),
             activeView: view,
             connectedAt: new Date().toISOString(),
             lastPing: Date.now()
@@ -610,15 +639,15 @@ export default function App() {
               presence: {
                 stationId: getStationId(),
                 username: currentUser || 'JUWEI OPERATOR',
-                employeeId: currentEmployeeId || 'JPMP-002',
-                role: currentRole || 'SUPER ADMINISTRATOR',
+                employeeId: currentEmployeeId || (currentUser?.toUpperCase().includes('ALDRIN') ? 'JPMP-002' : ''),
+                role: currentRole || (currentPermission === 'FULL_ACCESS' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR'),
                 activeView: view,
                 connectedAt: new Date().toISOString(),
                 lastPing: Date.now()
               }
             });
           } catch (e) {}
-        }, 8000);
+        }, 6000);
 
         const handleUnload = () => {
           try {
@@ -1722,8 +1751,9 @@ export default function App() {
         setRegisteredUsers(prev => reconcileUsers(prev, serverUsers));
       }
       if (msgs && Array.isArray(msgs)) setChatMessages(msgs);
-      if (activeUsersList && Array.isArray(activeUsersList)) setActiveUsers(activeUsersList);
-      if (activePresenceList && Array.isArray(activePresenceList)) setActivePresence(activePresenceList);
+      if (activePresenceList && Array.isArray(activePresenceList)) {
+        setWsPresence(activePresenceList);
+      }
     };
 
     const tryFetchSync = async (url: string): Promise<boolean> => {
@@ -2028,9 +2058,6 @@ export default function App() {
               break;
             }
             case 'presence_updated': {
-              if (payload.activeUsers && Array.isArray(payload.activeUsers)) {
-                setActiveUsers(payload.activeUsers);
-              }
               if (payload.activePresence && Array.isArray(payload.activePresence)) {
                 setWsPresence(payload.activePresence);
               }
@@ -4066,7 +4093,7 @@ export default function App() {
               aria-label="Active Workstation Terminals"
             >
               <Users className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
-              <span>{activeUsers.length} ONLINE</span>
+              <span>{Math.max(1, activePresence.length, activeUsers.length)} ONLINE</span>
             </button>
 
             {/* Quick Force Sync Button */}

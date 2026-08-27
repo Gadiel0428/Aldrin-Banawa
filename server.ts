@@ -814,7 +814,8 @@ async function startServer() {
         ...state,
         chatMessages
       },
-      activeUsers: getActiveUsersList()
+      activeUsers: getActiveUsersList(),
+      activePresence: getActivePresenceList()
     });
   });
 
