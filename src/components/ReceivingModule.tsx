@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Plus, 
   Search, 
@@ -13,21 +13,24 @@ import {
   ShieldCheck, 
   Sparkles, 
   Truck, 
-  Warehouse,
-  History,
-  RotateCcw,
-  Trash2,
-  Edit,
-  FolderPlus,
-  ScanLine,
-  Barcode,
-  AlertTriangle,
-  X,
-  CheckCircle2,
-  XCircle,
-  Boxes,
-  Factory,
-  FileText
+  Warehouse, 
+  History, 
+  RotateCcw, 
+  Trash2, 
+  Edit, 
+  FolderPlus, 
+  ScanLine, 
+  Barcode, 
+  AlertTriangle, 
+  X, 
+  CheckCircle2, 
+  XCircle, 
+  Boxes, 
+  Factory, 
+  FileText,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react';
 import { ReceivingRecord, ReturnRecord, MaterialStockItem, getCustomerForPart, UOM_OPTIONS, MasterRegistryItem, RegistryType } from '../types';
 import { FIFO_COLORS_BY_MONTH } from '../data';
@@ -75,6 +78,35 @@ export default function ReceivingModule({
   // States for Editing Modals
   const [editingReceiving, setEditingReceiving] = useState<ReceivingRecord | null>(null);
   const [editingReturn, setEditingReturn] = useState<ReturnRecord | null>(null);
+
+  // Column Sorting States for Arrivals & Returns
+  type ReceivingSortField = 'rrNumber' | 'itemDescription' | 'date' | 'partCode' | 'supplierOrDept' | 'color' | 'quantity' | 'fifoColor' | 'source' | 'poNumber' | 'drNumber' | 'siNumber' | 'iqcStatus';
+  type ReturnSortField = 'returnSlipFormNumber' | 'category' | 'date' | 'department' | 'partCode' | 'quantity' | 'condition' | 'status';
+  type SortDirection = 'asc' | 'desc';
+
+  const [recSortField, setRecSortField] = useState<ReceivingSortField>('date');
+  const [recSortDirection, setRecSortDirection] = useState<SortDirection>('desc');
+
+  const [retSortField, setRetSortField] = useState<ReturnSortField>('date');
+  const [retSortDirection, setRetSortDirection] = useState<SortDirection>('desc');
+
+  const handleRecSort = (field: ReceivingSortField) => {
+    if (recSortField === field) {
+      setRecSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setRecSortField(field);
+      setRecSortDirection('asc');
+    }
+  };
+
+  const handleRetSort = (field: ReturnSortField) => {
+    if (retSortField === field) {
+      setRetSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setRetSortField(field);
+      setRetSortDirection('asc');
+    }
+  };
 
   // Yes / No Confirmation Modal State
   const [confirmAction, setConfirmAction] = useState<{
@@ -675,6 +707,123 @@ export default function ReceivingModule({
     return true;
   });
 
+  // Sorted arrivals list based on current filters and column sort
+  const sortedReceiving = useMemo(() => {
+    return [...filteredReceiving].sort((a, b) => {
+      let result = 0;
+      switch (recSortField) {
+        case 'partCode': {
+          result = (a.partCode || '').localeCompare(b.partCode || '', undefined, { numeric: true, sensitivity: 'base' });
+          break;
+        }
+        case 'itemDescription': {
+          result = (a.itemDescription || '').localeCompare(b.itemDescription || '', undefined, { numeric: true, sensitivity: 'base' });
+          break;
+        }
+        case 'quantity': {
+          result = (Number(a.quantity) || 0) - (Number(b.quantity) || 0);
+          break;
+        }
+        case 'date': {
+          const timeA = a.date ? new Date(a.date).getTime() : 0;
+          const timeB = b.date ? new Date(b.date).getTime() : 0;
+          result = timeA - timeB;
+          break;
+        }
+        case 'rrNumber': {
+          result = (a.rrNumber || a.id || '').localeCompare(b.rrNumber || b.id || '', undefined, { numeric: true, sensitivity: 'base' });
+          break;
+        }
+        case 'supplierOrDept': {
+          result = (a.supplierOrDept || '').localeCompare(b.supplierOrDept || '');
+          break;
+        }
+        case 'color': {
+          result = (a.color || '').localeCompare(b.color || '');
+          break;
+        }
+        case 'fifoColor': {
+          result = (a.fifoColorCode || '').localeCompare(b.fifoColorCode || '');
+          break;
+        }
+        case 'source': {
+          const sourceA = a.vendorSupplier || a.source || '';
+          const sourceB = b.vendorSupplier || b.source || '';
+          result = sourceA.localeCompare(sourceB, undefined, { numeric: true, sensitivity: 'base' });
+          break;
+        }
+        case 'poNumber': {
+          result = (a.poNumber || '').localeCompare(b.poNumber || '', undefined, { numeric: true, sensitivity: 'base' });
+          break;
+        }
+        case 'drNumber': {
+          result = (a.drNumber || '').localeCompare(b.drNumber || '', undefined, { numeric: true, sensitivity: 'base' });
+          break;
+        }
+        case 'siNumber': {
+          result = (a.siNumber || '').localeCompare(b.siNumber || '', undefined, { numeric: true, sensitivity: 'base' });
+          break;
+        }
+        case 'iqcStatus': {
+          result = (a.iqcStatus || '').localeCompare(b.iqcStatus || '');
+          break;
+        }
+        default:
+          result = 0;
+      }
+      return recSortDirection === 'asc' ? result : -result;
+    });
+  }, [filteredReceiving, recSortField, recSortDirection]);
+
+  // Sorted returns list based on current filters and column sort
+  const sortedReturns = useMemo(() => {
+    return [...filteredReturns].sort((a, b) => {
+      let result = 0;
+      switch (retSortField) {
+        case 'partCode': {
+          result = (a.partCode || '').localeCompare(b.partCode || '', undefined, { numeric: true, sensitivity: 'base' });
+          if (result === 0) {
+            result = (a.materialDescription || '').localeCompare(b.materialDescription || '', undefined, { numeric: true, sensitivity: 'base' });
+          }
+          break;
+        }
+        case 'quantity': {
+          result = (Number(a.quantity) || 0) - (Number(b.quantity) || 0);
+          break;
+        }
+        case 'date': {
+          const timeA = a.date ? new Date(a.date).getTime() : 0;
+          const timeB = b.date ? new Date(b.date).getTime() : 0;
+          result = timeA - timeB;
+          break;
+        }
+        case 'returnSlipFormNumber': {
+          result = (a.returnSlipFormNumber || '').localeCompare(b.returnSlipFormNumber || '', undefined, { numeric: true, sensitivity: 'base' });
+          break;
+        }
+        case 'category': {
+          result = (a.category || '').localeCompare(b.category || '');
+          break;
+        }
+        case 'department': {
+          result = (a.department || '').localeCompare(b.department || '');
+          break;
+        }
+        case 'condition': {
+          result = (a.condition || '').localeCompare(b.condition || '');
+          break;
+        }
+        case 'status': {
+          result = (a.status || '').localeCompare(b.status || '');
+          break;
+        }
+        default:
+          result = 0;
+      }
+      return retSortDirection === 'asc' ? result : -result;
+    });
+  }, [filteredReturns, retSortField, retSortDirection]);
+
   return (
     <div className="space-y-6" id="receiving-module">
       {/* Official Header Banner matching Dashboard Overview */}
@@ -1198,34 +1347,210 @@ export default function ReceivingModule({
 
           {/* Receiving Logs Table */}
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Arrival and Verification Records Log</span>
-              <span className="text-xs font-mono text-slate-500 font-semibold">{filteredReceiving.length} logs found</span>
+            <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 bg-slate-50/50">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Arrival and Verification Records Log</span>
+                <span className="bg-slate-200/80 text-slate-700 text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full">
+                  {filteredReceiving.length} logs found
+                </span>
+                <span className="text-[11px] text-slate-500 font-medium hidden md:inline">
+                  &bull; Sorted by <strong className="text-indigo-700 font-semibold">{recSortField}</strong> ({recSortDirection === 'asc' ? 'Ascending' : 'Descending'})
+                </span>
+              </div>
             </div>
             
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
-                  <tr className="bg-slate-100 text-slate-500 font-medium border-b border-slate-200">
-                    <th className="p-4 font-semibold">RR #</th>
-                    <th className="p-4 font-semibold">Internal Code</th>
-                    <th className="p-4 font-semibold">Date Received</th>
-                    <th className="p-4 font-semibold">Item/Part Code</th>
-                    <th className="p-4 font-semibold">Item Type</th>
-                    <th className="p-4 font-semibold">Color</th>
-                    <th className="p-4 font-semibold text-right">Quantity</th>
-                    <th className="p-4 font-semibold">FIFO Tag Color</th>
-                    <th className="p-4 font-semibold">Source</th>
-                    <th className="p-4 font-semibold">PO #</th>
-                    <th className="p-4 font-semibold">DR #</th>
-                    <th className="p-4 font-semibold">SI #</th>
-                    <th className="p-4 font-semibold">SOP Compliance Checks</th>
-                    <th className="p-4 font-semibold">IQC Inspection Status</th>
-                    <th className="p-4 font-semibold">Action</th>
+                  <tr className="bg-slate-100 text-slate-600 font-medium border-b border-slate-200 divide-x divide-slate-200/50">
+                    <th 
+                      onClick={() => handleRecSort('rrNumber')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        recSortField === 'rrNumber' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by RR Number"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>RR #</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {recSortField === 'rrNumber' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleRecSort('itemDescription')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        recSortField === 'itemDescription' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by Internal Code"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Internal Code</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {recSortField === 'itemDescription' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleRecSort('date')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        recSortField === 'date' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by Date Received"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Date Received</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {recSortField === 'date' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleRecSort('partCode')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        recSortField === 'partCode' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by Item / Part Code"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Item/Part Code</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {recSortField === 'partCode' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleRecSort('supplierOrDept')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        recSortField === 'supplierOrDept' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by Item Type"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Item Type</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {recSortField === 'supplierOrDept' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleRecSort('color')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        recSortField === 'color' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by Color"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Color</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {recSortField === 'color' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleRecSort('quantity')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group text-right ${
+                        recSortField === 'quantity' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by Quantity"
+                    >
+                      <div className="flex items-center justify-end gap-1">
+                        <span>Quantity</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {recSortField === 'quantity' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleRecSort('fifoColor')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        recSortField === 'fifoColor' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by FIFO Tag Color"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>FIFO Tag Color</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {recSortField === 'fifoColor' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleRecSort('source')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        recSortField === 'source' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by Source / Supplier"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Source</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {recSortField === 'source' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleRecSort('poNumber')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        recSortField === 'poNumber' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by PO #"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>PO #</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {recSortField === 'poNumber' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleRecSort('drNumber')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        recSortField === 'drNumber' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by DR #"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>DR #</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {recSortField === 'drNumber' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleRecSort('siNumber')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        recSortField === 'siNumber' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by SI #"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>SI #</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {recSortField === 'siNumber' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th className="p-3 font-semibold text-slate-600">SOP Compliance</th>
+                    <th 
+                      onClick={() => handleRecSort('iqcStatus')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        recSortField === 'iqcStatus' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by IQC Inspection Status"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>IQC Status</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {recSortField === 'iqcStatus' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th className="p-3 font-semibold text-slate-600">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredReceiving.map(r => {
+                  {sortedReceiving.map(r => {
                     const pc = r.physicalCondition || {};
                     const isNewSop = pc.receivingInspection !== undefined || pc.materialTraceability !== undefined || pc.quantityAccuracy !== undefined || pc.materialConditionCheck !== undefined || pc.systemRecording !== undefined;
                     const isPassed = isNewSop ? (
@@ -1652,29 +1977,140 @@ export default function ReceivingModule({
 
           {/* Returns Table */}
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Excess Materials Returns Log</span>
-              <span className="text-xs font-mono text-slate-500 font-semibold">{filteredReturns.length} returns logged</span>
+            <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 bg-slate-50/50">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Excess Materials Returns Log</span>
+                <span className="bg-slate-200/80 text-slate-700 text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full">
+                  {filteredReturns.length} returns logged
+                </span>
+                <span className="text-[11px] text-slate-500 font-medium hidden md:inline">
+                  &bull; Sorted by <strong className="text-indigo-700 font-semibold">{retSortField}</strong> ({retSortDirection === 'asc' ? 'Ascending' : 'Descending'})
+                </span>
+              </div>
             </div>
             
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
-                  <tr className="bg-slate-100 text-slate-500 font-medium border-b border-slate-200">
-                    <th className="p-4 font-semibold">Slip Form</th>
-                    <th className="p-4 font-semibold">Category</th>
-                    <th className="p-4 font-semibold">Date Returned</th>
-                    <th className="p-4 font-semibold">Returning Department</th>
-                    <th className="p-4 font-semibold">Material Details</th>
-                    <th className="p-4 font-semibold text-right">Qty</th>
-                    <th className="p-4 font-semibold">Physical Condition</th>
-                    <th className="p-4 font-semibold">Evaluation Status</th>
-                    <th className="p-4 font-semibold">Remarks / Reason</th>
-                    <th className="p-4 font-semibold">Action</th>
+                  <tr className="bg-slate-100 text-slate-600 font-medium border-b border-slate-200 divide-x divide-slate-200/50">
+                    <th 
+                      onClick={() => handleRetSort('returnSlipFormNumber')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        retSortField === 'returnSlipFormNumber' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by Return Slip Form Number"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Slip Form</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {retSortField === 'returnSlipFormNumber' ? (retSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleRetSort('category')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        retSortField === 'category' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by Category"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Category</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {retSortField === 'category' ? (retSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleRetSort('date')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        retSortField === 'date' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by Date Returned"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Date Returned</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {retSortField === 'date' ? (retSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleRetSort('department')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        retSortField === 'department' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by Returning Department"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Department</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {retSortField === 'department' ? (retSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleRetSort('partCode')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        retSortField === 'partCode' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by Material / Part Code"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Material Details</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {retSortField === 'partCode' ? (retSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleRetSort('quantity')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group text-right ${
+                        retSortField === 'quantity' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by Quantity"
+                    >
+                      <div className="flex items-center justify-end gap-1">
+                        <span>Qty</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {retSortField === 'quantity' ? (retSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleRetSort('condition')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        retSortField === 'condition' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by Physical Condition"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Physical Condition</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {retSortField === 'condition' ? (retSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => handleRetSort('status')}
+                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                        retSortField === 'status' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                      }`}
+                      title="Sort by Evaluation Status"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Evaluation Status</span>
+                        <span className="text-slate-400 group-hover:text-slate-700">
+                          {retSortField === 'status' ? (retSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                        </span>
+                      </div>
+                    </th>
+                    <th className="p-3 font-semibold text-slate-600">Remarks / Reason</th>
+                    <th className="p-3 font-semibold text-slate-600">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredReturns.map(r => (
+                  {sortedReturns.map(r => (
                     <tr key={r.id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="p-4 font-mono font-bold text-slate-900">{r.returnSlipFormNumber}</td>
                       <td className="p-4 font-medium text-slate-700">

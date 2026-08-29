@@ -36,19 +36,19 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({ config, onClose }) =
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-md"
+          transition={{ duration: 0.25 }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-2xl"
         >
           <motion.div
             key="confirm-modal-content"
-            initial={{ opacity: 0, scale: 0.94, y: 14 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.94, y: 14 }}
-            transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-            className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 border border-slate-300 text-slate-900"
+            initial={{ opacity: 0, scale: 0.94, y: 14, filter: 'blur(8px)' }}
+            animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
+            exit={{ opacity: 0, scale: 0.94, y: 14, filter: 'blur(8px)' }}
+            transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+            className="frosted-glass-modal-light rounded-3xl shadow-2xl max-w-md w-full p-6 border border-white/80 text-slate-900"
           >
             <div className="flex items-start gap-3.5 mb-4">
-              <div className="p-2.5 rounded-2xl shrink-0 bg-blue-50 text-blue-700 border border-blue-200">
+              <div className="p-2.5 rounded-2xl shrink-0 bg-blue-50/90 text-blue-700 border border-blue-200/80 backdrop-blur-md">
                 {config.confirmVariant === 'danger' ? (
                   <AlertTriangle className="h-6 w-6 text-rose-600" />
                 ) : config.confirmVariant === 'warning' ? (
@@ -63,11 +63,11 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({ config, onClose }) =
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-slate-200">
+            <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-slate-200/80">
               <button
                 type="button"
                 onClick={handleCancel}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer border border-slate-300"
+                className="px-4 py-2 bg-slate-100/90 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border border-slate-300/80 backdrop-blur-md"
               >
                 <XCircle className="h-4 w-4 text-slate-500" />
                 {config.cancelLabel || 'NO'}

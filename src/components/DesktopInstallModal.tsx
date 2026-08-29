@@ -438,31 +438,31 @@ $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-blue-950/80 backdrop-blur-md p-4"
+          transition={{ duration: 0.25 }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-2xl p-4"
         >
           <motion.div
             key="desktop-install-content"
-            initial={{ opacity: 0, scale: 0.94, y: 16 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.94, y: 16 }}
-            transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-            className="bg-blue-900 border-2 border-blue-700 rounded-2xl max-w-xl w-full text-white shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+            animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
+            exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+            transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
+            className="frosted-glass-modal border border-white/20 rounded-3xl max-w-xl w-full text-white shadow-2xl overflow-hidden flex flex-col max-h-[90vh] backdrop-blur-3xl"
           >
             {/* Header */}
-            <div className="p-5 border-b border-blue-800 bg-blue-950 flex items-center justify-between">
+            <div className="p-5 border-b border-white/10 bg-slate-950/40 backdrop-blur-md flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-blue-800 text-blue-200 rounded-xl border border-blue-600">
+                <div className="p-2.5 bg-indigo-500/20 text-indigo-300 rounded-2xl border border-indigo-400/30 backdrop-blur-md">
                   <Monitor className="h-6 w-6" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
                     <h2 className="text-lg font-extrabold tracking-tight text-white">JUWEI WMS Desktop Installer</h2>
-                    <span className="px-2 py-0.5 bg-emerald-700 text-emerald-100 border border-emerald-500 text-[10px] font-mono font-bold rounded-full">
+                    <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono font-bold rounded-full">
                       Windows 10/11 Verified
                     </span>
                   </div>
-                  <p className="text-xs text-blue-200 mt-0.5">
+                  <p className="text-xs text-slate-300 mt-0.5">
                     Install JUWEI Warehouse Management System as a Standalone Windows Application
                   </p>
                 </div>
@@ -470,7 +470,7 @@ $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
 
               <button 
                 onClick={onClose}
-                className="p-1.5 text-blue-200 hover:text-white hover:bg-blue-800 rounded-lg transition cursor-pointer"
+                className="p-1.5 text-slate-400 hover:text-white hover:bg-white/10 rounded-xl transition cursor-pointer"
               >
                 <X className="h-5 w-5" />
               </button>

@@ -313,40 +313,40 @@ export default function AccountQRBadgeModal({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-blue-950/80 backdrop-blur-md"
+          transition={{ duration: 0.25 }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-2xl"
         >
           <motion.div
             key="qr-badge-content"
-            initial={{ opacity: 0, scale: 0.94, y: 16 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.94, y: 16 }}
-            transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-            className="bg-blue-900 border-2 border-blue-700 rounded-2xl max-w-sm w-full shadow-2xl text-white overflow-hidden flex flex-col relative"
+            initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+            animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
+            exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+            transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
+            className="frosted-glass-modal rounded-3xl max-w-sm w-full shadow-2xl text-white overflow-hidden flex flex-col relative border border-white/20"
           >
             {/* Top Accent Line */}
-            <div className="h-1.5 bg-blue-500 w-full" />
+            <div className="h-1 bg-gradient-to-r from-indigo-500 via-sky-400 to-emerald-400 w-full" />
 
             {/* Modal Header */}
-            <div className="px-5 py-4 border-b border-blue-800 flex justify-between items-center bg-blue-950">
+            <div className="px-5 py-4 border-b border-white/10 flex justify-between items-center bg-slate-950/40 backdrop-blur-md">
               <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-blue-800 text-blue-200 rounded-xl border border-blue-600">
+                <div className="p-2 bg-indigo-500/20 text-indigo-300 rounded-2xl border border-indigo-400/30 backdrop-blur-md">
                   <QrCode className="h-5 w-5" />
                 </div>
                 <div>
                   <h3 className="font-bold text-sm text-white flex items-center gap-1.5">
                     Operator Login QR Badge
                   </h3>
-                  <p className="text-[10px] text-blue-200 font-mono uppercase">
+                  <p className="text-[10px] text-indigo-300 font-mono uppercase">
                     Juwei WMS Gateway Pass
                   </p>
                 </div>
               </div>
               <button
                 onClick={onClose}
-                className="text-blue-200 hover:text-white p-1 rounded-lg hover:bg-blue-800 transition cursor-pointer"
+                className="text-slate-400 hover:text-white p-1.5 rounded-xl hover:bg-white/10 transition cursor-pointer"
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
 

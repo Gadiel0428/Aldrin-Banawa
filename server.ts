@@ -121,6 +121,51 @@ async function startServer() {
     registeredUsers: [defaultSuperAdmin],
   };
 
+  // State revision counter to track data version across cluster
+  let stateRevision = 1;
+
+  // Active Device Registry tracking network workstations, tablets, and phones
+  interface ConnectedDevice {
+    deviceId: string;
+    deviceName?: string;
+    employeeId?: string;
+    username?: string;
+    role?: string;
+    ip?: string;
+    userAgent?: string;
+    appVersion?: string;
+    platform?: string;
+    connectedAt: string;
+    lastSeen: number;
+    currentView?: string;
+  }
+  const activeDevices = new Map<string, ConnectedDevice>();
+
+  // Persistent Tombstones to prevent zombie records from resurrecting
+  const deletedRecordTombstones = new Set<string>();
+  const deletedUserTombstones = new Set<string>();
+
+  function markRecordTombstone(id: string) {
+    if (!id) return;
+    deletedRecordTombstones.add(id);
+    if (deletedRecordTombstones.size > 5000) {
+      const first = deletedRecordTombstones.values().next().value;
+      if (first) deletedRecordTombstones.delete(first);
+    }
+  }
+
+  function markUserTombstone(employeeId: string) {
+    if (!employeeId) return;
+    const clean = employeeId.trim().toUpperCase();
+    if (clean === 'JPMP-002') return;
+    deletedUserTombstones.add(clean);
+  }
+
+  function unmarkUserTombstone(employeeId: string) {
+    if (!employeeId) return;
+    deletedUserTombstones.delete(employeeId.trim().toUpperCase());
+  }
+
   interface ChatMessage {
     id: string;
     sender: string;
@@ -159,11 +204,17 @@ async function startServer() {
             }
           });
         }
+        if (parsed && Array.isArray(parsed.deletedRecordTombstones)) {
+          parsed.deletedRecordTombstones.forEach((id: string) => markRecordTombstone(id));
+        }
+        if (parsed && Array.isArray(parsed.deletedUserTombstones)) {
+          parsed.deletedUserTombstones.forEach((id: string) => markUserTombstone(id));
+        }
         if (parsed && Array.isArray(parsed.chatMessages)) {
           chatMessages.length = 0;
           chatMessages.push(...parsed.chatMessages);
         }
-        console.log("JUWEI WMS: Loaded persisted database state from disk.");
+        console.log("JUWEI WMS: Loaded persisted database state and deletion tombstones from disk.");
       }
     } catch (err) {
       console.warn("JUWEI WMS: Non-fatal notice loading data-store.json:", err);
@@ -602,7 +653,12 @@ async function startServer() {
 
   function saveStateToDisk() {
     try {
-      const payload = JSON.stringify({ state, chatMessages }, null, 2);
+      const payload = JSON.stringify({ 
+        state, 
+        deletedRecordTombstones: Array.from(deletedRecordTombstones),
+        deletedUserTombstones: Array.from(deletedUserTombstones),
+        chatMessages 
+      }, null, 2);
       const dir = path.dirname(DATA_FILE);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
@@ -809,6 +865,7 @@ async function startServer() {
     res.setHeader("Expires", "0");
     res.json({
       status: "ok",
+      revision: stateRevision,
       supabaseConnected: Boolean(supabaseServer),
       data: {
         ...state,
@@ -817,6 +874,93 @@ async function startServer() {
       activeUsers: getActiveUsersList(),
       activePresence: getActivePresenceList()
     });
+  });
+
+  // API state summary and digest for rapid lightweight delta checking
+  app.get(["/api/sync/state-summary", "/api/sync/digest"], (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.json({
+      status: "ok",
+      revision: stateRevision,
+      timestamp: new Date().toISOString(),
+      supabaseConnected: Boolean(supabaseServer),
+      accountsCount: state.registeredUsers.length,
+      superAdminPresent: state.registeredUsers.some((u: any) => (u.employeeId || u.employee_id || '').toUpperCase() === 'JPMP-002'),
+      collections: {
+        stocks: state.stocks.length,
+        receiving: state.receiving.length,
+        returns: state.returns.length,
+        recycling: state.recycling.length,
+        issuances: state.issuances.length,
+        deliveries: state.deliveries.length,
+        envLogs: state.envLogs.length,
+        forkliftChecks: state.forkliftChecks.length,
+        registries: state.registries.length,
+        registeredUsers: state.registeredUsers.length,
+        chatMessages: chatMessages.length
+      },
+      tombstones: {
+        records: deletedRecordTombstones.size,
+        users: deletedUserTombstones.size
+      },
+      activeConnectionsCount: activeConnections.size,
+      activeUsers: getActiveUsersList()
+    });
+  });
+
+  // API to query all active workstations & devices across warehouse network
+  app.get("/api/devices", (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    const now = Date.now();
+    // Clean devices not seen in the last 3 minutes
+    for (const [id, dev] of activeDevices.entries()) {
+      if (now - dev.lastSeen > 180000) {
+        activeDevices.delete(id);
+      }
+    }
+    const deviceList = Array.from(activeDevices.values());
+    res.json({
+      status: "ok",
+      count: deviceList.length,
+      devices: deviceList,
+      serverTime: new Date().toISOString()
+    });
+  });
+
+  // API heartbeat registration for workstations / mobile tablets
+  app.post("/api/devices/heartbeat", (req, res) => {
+    try {
+      const { deviceId, deviceName, employeeId, username, role, currentView, appVersion, platform } = req.body;
+      if (!deviceId) return res.status(400).json({ error: "Device ID required" });
+
+      const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'local';
+      const existing = activeDevices.get(deviceId) || { connectedAt: new Date().toISOString() } as ConnectedDevice;
+
+      const deviceRecord: ConnectedDevice = {
+        ...existing,
+        deviceId,
+        deviceName: deviceName || existing.deviceName || 'JUWEI Workstation',
+        employeeId: employeeId || existing.employeeId || '',
+        username: username || existing.username || 'Operator',
+        role: role || existing.role || 'OPERATOR',
+        currentView: currentView || existing.currentView || 'dashboard',
+        appVersion: appVersion || existing.appVersion || '1.0.0',
+        platform: platform || existing.platform || 'web',
+        ip: clientIp,
+        userAgent: req.headers['user-agent'] || '',
+        lastSeen: Date.now()
+      };
+
+      activeDevices.set(deviceId, deviceRecord);
+
+      res.json({
+        success: true,
+        revision: stateRevision,
+        serverTime: Date.now()
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // API endpoint for version check and auto-update prompts
@@ -847,13 +991,9 @@ async function startServer() {
       if (collection === "registeredUsers" && Array.isArray(data)) {
         const userMap = new Map<string, any>();
         userMap.set("JPMP-002", { ...defaultSuperAdmin });
-        (state.registeredUsers || []).forEach((u: any) => {
-          const empId = (u.employeeId || u.employee_id || '').toUpperCase();
-          if (empId) userMap.set(empId, u);
-        });
         data.forEach((u: any) => {
-          const empId = (u.employeeId || u.employee_id || '').toUpperCase();
-          if (empId) {
+          const empId = (u.employeeId || u.employee_id || '').toUpperCase().trim();
+          if (empId && (empId === 'JPMP-002' || !deletedUserTombstones.has(empId))) {
             const existing = userMap.get(empId) || {};
             const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (existing.pin || (empId === 'JPMP-002' ? '0423' : '1234')));
             userMap.set(empId, {
@@ -877,8 +1017,9 @@ async function startServer() {
       }
 
       if (collection && collection in state && Array.isArray(data)) {
-        // Authoritative update: cleanly set state to the updated items array without overlapping old/deleted data
-        (state as any)[collection] = data.filter((item: any) => item && item.id);
+        // Authoritative update: filter out any tombstoned/deleted IDs so they never resurrect
+        (state as any)[collection] = data
+          .filter((item: any) => item && item.id && !deletedRecordTombstones.has(item.id));
         saveStateToDisk();
         persistToSupabase(collection, (state as any)[collection]);
         
@@ -900,6 +1041,9 @@ async function startServer() {
   // Endpoint to reset all encoded database collections and accounts to clean brand-new state (except Super Admin)
   app.post("/api/reset-database", async (req, res) => {
     try {
+      deletedRecordTombstones.clear();
+      deletedUserTombstones.clear();
+
       state.stocks = [];
       state.receiving = [];
       state.returns = [];
@@ -963,6 +1107,166 @@ async function startServer() {
     }
   });
 
+  // Explicit endpoint to register a new operator account across server, disk, Supabase, and live clients
+  app.post("/api/accounts/register", async (req, res) => {
+    try {
+      const { employeeId, username, role, phoneNumber, permission, pin, status } = req.body;
+      if (!employeeId || !username) {
+        return res.status(400).json({ error: "Employee ID and Username are required" });
+      }
+      const cleanId = String(employeeId).trim().toUpperCase();
+      const cleanUsername = String(username).trim().toUpperCase();
+      const cleanRole = String(role || 'WAREHOUSE OPERATOR').trim().toUpperCase();
+      const cleanPin = String(pin || '1234').trim().slice(0, 4);
+
+      unmarkUserTombstone(cleanId);
+
+      const newUser: ServerUser = {
+        employeeId: cleanId,
+        username: cleanUsername,
+        role: cleanRole,
+        phoneNumber: phoneNumber ? String(phoneNumber).trim() : '',
+        permission: permission || (cleanId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
+        pin: cleanPin,
+        status: status || 'ACTIVE',
+        lastActive: new Date().toISOString()
+      };
+
+      state.registeredUsers = [
+        ...state.registeredUsers.filter((u: any) => (u.employeeId || u.employee_id || '').toUpperCase() !== cleanId),
+        newUser
+      ];
+
+      stateRevision++;
+      saveStateToDisk();
+      persistToSupabase("registeredUsers", state.registeredUsers);
+
+      if (supabaseServer) {
+        try {
+          await supabaseServer.from('registered_users').upsert([{
+            employee_id: cleanId,
+            username: cleanUsername,
+            role: cleanRole,
+            phone_number: newUser.phoneNumber || null,
+            permission: newUser.permission,
+            pin_hash: cleanPin,
+            status: newUser.status,
+            updated_at: new Date().toISOString()
+          }]);
+        } catch (sErr) {
+          console.warn("Supabase direct user register warning:", sErr);
+        }
+      }
+
+      broadcast({
+        type: "account_registered",
+        user: newUser,
+        revision: stateRevision
+      });
+
+      broadcast({
+        type: "collection_updated",
+        collection: "registeredUsers",
+        data: state.registeredUsers,
+        revision: stateRevision
+      });
+
+      return res.json({ success: true, user: newUser, revision: stateRevision });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Explicit endpoint to update an existing registered operator account
+  app.post("/api/accounts/update", async (req, res) => {
+    try {
+      const { employeeId, username, role, phoneNumber, permission, pin, status, lastActive } = req.body;
+      if (!employeeId) return res.status(400).json({ error: "Employee ID required" });
+      const cleanId = String(employeeId).trim().toUpperCase();
+
+      const targetIndex = state.registeredUsers.findIndex(
+        (u: any) => (u.employeeId || u.employee_id || '').toUpperCase() === cleanId
+      );
+      if (targetIndex === -1) {
+        return res.status(404).json({ error: `Operator account ${cleanId} not found` });
+      }
+
+      const isAldrin = cleanId === 'JPMP-002';
+      const existing = state.registeredUsers[targetIndex];
+      const cleanUsername = isAldrin ? 'ALDRIN BANAWA' : (username ? String(username).trim().toUpperCase() : existing.username);
+      const cleanRole = isAldrin ? 'SUPER ADMINISTRATOR' : (role ? String(role).trim().toUpperCase() : existing.role);
+      const cleanPermission = isAldrin ? 'FULL_ACCESS' : (permission || existing.permission || 'LIMITED_ACCESS');
+      const cleanPin = pin ? String(pin).trim().slice(0, 4) : (existing.pin || (isAldrin ? '0423' : '1234'));
+
+      const updatedUser: ServerUser = {
+        employeeId: cleanId,
+        username: cleanUsername,
+        role: cleanRole,
+        phoneNumber: phoneNumber !== undefined ? String(phoneNumber).trim() : (existing.phoneNumber || ''),
+        permission: cleanPermission,
+        pin: cleanPin,
+        status: status || existing.status || 'ACTIVE',
+        lastActive: lastActive || new Date().toISOString()
+      };
+
+      state.registeredUsers[targetIndex] = updatedUser;
+      stateRevision++;
+      saveStateToDisk();
+      persistToSupabase("registeredUsers", state.registeredUsers);
+
+      if (supabaseServer) {
+        try {
+          await supabaseServer.from('registered_users').upsert([{
+            employee_id: cleanId,
+            username: cleanUsername,
+            role: cleanRole,
+            phone_number: updatedUser.phoneNumber || null,
+            permission: cleanPermission,
+            pin_hash: cleanPin,
+            status: updatedUser.status,
+            last_active: updatedUser.lastActive,
+            updated_at: new Date().toISOString()
+          }]);
+        } catch (sErr) {
+          console.warn("Supabase user update warning:", sErr);
+        }
+      }
+
+      broadcast({
+        type: "account_updated",
+        user: updatedUser,
+        revision: stateRevision
+      });
+
+      broadcast({
+        type: "collection_updated",
+        collection: "registeredUsers",
+        data: state.registeredUsers,
+        revision: stateRevision
+      });
+
+      return res.json({ success: true, user: updatedUser, revision: stateRevision });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Explicit endpoint to trigger immediate full-cluster re-broadcast to all connected terminals
+  app.post("/api/sync/force-broadcast", (req, res) => {
+    stateRevision++;
+    broadcast({
+      type: "full_sync",
+      data: {
+        ...state,
+        chatMessages
+      },
+      activeUsers: getActiveUsersList(),
+      activePresence: getActivePresenceList(),
+      revision: stateRevision
+    });
+    return res.json({ success: true, revision: stateRevision, clientsNotified: activeConnections.size });
+  });
+
   // Explicit endpoint to permanently delete a registered account across server, disk, and Supabase
   app.post("/api/accounts/delete", async (req, res) => {
     try {
@@ -982,6 +1286,7 @@ async function startServer() {
         return res.status(403).json({ error: "Cannot delete ALDRIN BANAWA super administrator account" });
       }
       
+      markUserTombstone(cleanId);
       state.registeredUsers = state.registeredUsers.filter(
         (u: any) => (u.employeeId || u.employee_id || '').toUpperCase() !== cleanId
       );
@@ -1014,6 +1319,12 @@ async function startServer() {
   // Explicit endpoint to clear all registered operator accounts except the Super Administrator
   app.post("/api/accounts/clear-all-except-super-admin", async (req, res) => {
     try {
+      (state.registeredUsers || []).forEach((u: any) => {
+        const empId = (u.employeeId || u.employee_id || '').toUpperCase();
+        if (empId && empId !== 'JPMP-002') {
+          markUserTombstone(empId);
+        }
+      });
       state.registeredUsers = [{ ...defaultSuperAdmin }];
       saveStateToDisk();
 
@@ -1060,6 +1371,7 @@ async function startServer() {
       if (!collection || !id) return res.status(400).json({ error: "Collection and ID required" });
       
       if (collection in state) {
+        markRecordTombstone(id);
         (state as any)[collection] = ((state as any)[collection] || []).filter((item: any) => item.id !== id);
         saveStateToDisk();
 
@@ -1111,6 +1423,7 @@ async function startServer() {
       }
 
       if (collection in state) {
+        deletedRecordTombstones.delete(record.id);
         const arr = ((state as any)[collection] || []).filter((item: any) => item.id !== record.id);
         arr.unshift(record);
         (state as any)[collection] = arr;
@@ -1153,6 +1466,7 @@ async function startServer() {
         if (!m || !m.collection || !(m.collection in state)) continue;
         
         if (m.type === 'upsert' && m.record && m.record.id) {
+          deletedRecordTombstones.delete(m.record.id);
           const arr = ((state as any)[m.collection] || []).filter((item: any) => item.id !== m.record.id);
           arr.unshift(m.record);
           (state as any)[m.collection] = arr;
@@ -1168,6 +1482,7 @@ async function startServer() {
           });
         } else if (m.type === 'delete' && (m.recordId || m.id)) {
           const delId = m.recordId || m.id;
+          markRecordTombstone(delId);
           (state as any)[m.collection] = ((state as any)[m.collection] || []).filter((item: any) => item.id !== delId);
           processedCount++;
 
@@ -1515,9 +1830,119 @@ async function startServer() {
             break;
           }
 
+          case "request_full_sync": {
+            ws.send(JSON.stringify({
+              type: "full_sync",
+              data: {
+                ...state,
+                chatMessages
+              },
+              activeUsers: getActiveUsersList(),
+              activePresence: getActivePresenceList(),
+              revision: stateRevision
+            }));
+            break;
+          }
+
+          case "register_account": {
+            const { user, author } = payload;
+            if (user && user.employeeId) {
+              const cleanId = String(user.employeeId).trim().toUpperCase();
+              const cleanUsername = String(user.username || 'OPERATOR').trim().toUpperCase();
+              const cleanRole = String(user.role || 'WAREHOUSE OPERATOR').trim().toUpperCase();
+              const cleanPin = String(user.pin || '1234').trim().slice(0, 4);
+
+              unmarkUserTombstone(cleanId);
+              const newUser: ServerUser = {
+                employeeId: cleanId,
+                username: cleanUsername,
+                role: cleanRole,
+                phoneNumber: user.phoneNumber ? String(user.phoneNumber).trim() : '',
+                permission: user.permission || (cleanId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
+                pin: cleanPin,
+                status: user.status || 'ACTIVE',
+                lastActive: new Date().toISOString()
+              };
+
+              state.registeredUsers = [
+                ...state.registeredUsers.filter((u: any) => (u.employeeId || u.employee_id || '').toUpperCase() !== cleanId),
+                newUser
+              ];
+
+              stateRevision++;
+              saveStateToDisk();
+              persistToSupabase("registeredUsers", state.registeredUsers);
+
+              broadcast({
+                type: "account_registered",
+                user: newUser,
+                author: author || "Operator",
+                revision: stateRevision
+              });
+
+              broadcast({
+                type: "collection_updated",
+                collection: "registeredUsers",
+                data: state.registeredUsers,
+                revision: stateRevision
+              });
+            }
+            break;
+          }
+
+          case "update_account": {
+            const { user, author } = payload;
+            if (user && user.employeeId) {
+              const cleanId = String(user.employeeId).trim().toUpperCase();
+              const targetIndex = state.registeredUsers.findIndex(
+                (u: any) => (u.employeeId || u.employee_id || '').toUpperCase() === cleanId
+              );
+              if (targetIndex !== -1) {
+                const isAldrin = cleanId === 'JPMP-002';
+                const existing = state.registeredUsers[targetIndex];
+                const cleanUsername = isAldrin ? 'ALDRIN BANAWA' : (user.username ? String(user.username).trim().toUpperCase() : existing.username);
+                const cleanRole = isAldrin ? 'SUPER ADMINISTRATOR' : (user.role ? String(user.role).trim().toUpperCase() : existing.role);
+                const cleanPermission = isAldrin ? 'FULL_ACCESS' : (user.permission || existing.permission || 'LIMITED_ACCESS');
+                const cleanPin = user.pin ? String(user.pin).trim().slice(0, 4) : (existing.pin || (isAldrin ? '0423' : '1234'));
+
+                const updatedUser: ServerUser = {
+                  employeeId: cleanId,
+                  username: cleanUsername,
+                  role: cleanRole,
+                  phoneNumber: user.phoneNumber !== undefined ? String(user.phoneNumber).trim() : (existing.phoneNumber || ''),
+                  permission: cleanPermission,
+                  pin: cleanPin,
+                  status: user.status || existing.status || 'ACTIVE',
+                  lastActive: user.lastActive || new Date().toISOString()
+                };
+
+                state.registeredUsers[targetIndex] = updatedUser;
+                stateRevision++;
+                saveStateToDisk();
+                persistToSupabase("registeredUsers", state.registeredUsers);
+
+                broadcast({
+                  type: "account_updated",
+                  user: updatedUser,
+                  author: author || "Operator",
+                  revision: stateRevision
+                });
+
+                broadcast({
+                  type: "collection_updated",
+                  collection: "registeredUsers",
+                  data: state.registeredUsers,
+                  revision: stateRevision
+                });
+              }
+            }
+            break;
+          }
+
           case "upsert_record": {
             const { collection, record, author, actionDesc } = payload;
             if (collection && collection in state && record && record.id) {
+              deletedRecordTombstones.delete(record.id);
               const arr = ((state as any)[collection] || []).filter((item: any) => item.id !== record.id);
               arr.unshift(record);
               (state as any)[collection] = arr;
@@ -1531,13 +1956,13 @@ async function startServer() {
                 author: author || "Operator",
                 actionDesc: actionDesc || `Updated ${collection} record`,
                 timestamp: new Date().toISOString()
-              }, ws);
+              });
 
               broadcast({
                 type: "collection_updated",
                 collection,
                 data: (state as any)[collection]
-              }, ws);
+              });
             }
             break;
           }
@@ -1549,7 +1974,7 @@ async function startServer() {
               action: payload.action || "Updated inventory",
               collection: payload.collection || "",
               timestamp: new Date().toISOString()
-            }, ws);
+            });
             break;
           }
 
@@ -1558,13 +1983,9 @@ async function startServer() {
             if (collection === "registeredUsers" && Array.isArray(data)) {
               const userMap = new Map<string, any>();
               userMap.set("JPMP-002", { ...defaultSuperAdmin });
-              (state.registeredUsers || []).forEach((u: any) => {
-                const empId = (u.employeeId || u.employee_id || '').toUpperCase();
-                if (empId) userMap.set(empId, u);
-              });
               data.forEach((u: any) => {
-                const empId = (u.employeeId || u.employee_id || '').toUpperCase();
-                if (empId) {
+                const empId = (u.employeeId || u.employee_id || '').toUpperCase().trim();
+                if (empId && (empId === 'JPMP-002' || !deletedUserTombstones.has(empId))) {
                   const existing = userMap.get(empId) || {};
                   const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (existing.pin || (empId === 'JPMP-002' ? '0423' : '1234')));
                   userMap.set(empId, {
@@ -1583,18 +2004,20 @@ async function startServer() {
                 type: "collection_updated",
                 collection: "registeredUsers",
                 data: state.registeredUsers
-              }, ws);
+              });
             } else if (collection && collection in state && Array.isArray(data)) {
-              (state as any)[collection] = data.filter((item: any) => item && item.id);
+              // Filter out any tombstoned IDs
+              (state as any)[collection] = data
+                .filter((item: any) => item && item.id && !deletedRecordTombstones.has(item.id));
               saveStateToDisk();
               persistToSupabase(collection, (state as any)[collection]);
               
-              // Broadcast the updated collection to all other clients
+              // Broadcast the updated collection to all clients
               broadcast({
                 type: "collection_updated",
                 collection,
                 data: (state as any)[collection]
-              }, ws);
+              });
             }
             break;
           }
@@ -1610,6 +2033,7 @@ async function startServer() {
             ));
 
             if (cleanId && !isAldrin) {
+              markUserTombstone(cleanId);
               state.registeredUsers = state.registeredUsers.filter(
                 (u: any) => (u.employeeId || u.employee_id || '').toUpperCase() !== cleanId
               );
@@ -1637,6 +2061,7 @@ async function startServer() {
           case "delete_record": {
             const { collection, id } = payload;
             if (collection && collection in state && id) {
+              markRecordTombstone(id);
               (state as any)[collection] = ((state as any)[collection] || []).filter((item: any) => item.id !== id);
               saveStateToDisk();
 
@@ -1660,12 +2085,12 @@ async function startServer() {
                 type: "record_deleted",
                 collection,
                 id
-              }, ws);
+              });
               broadcast({
                 type: "collection_updated",
                 collection,
                 data: (state as any)[collection]
-              }, ws);
+              });
             }
             break;
           }

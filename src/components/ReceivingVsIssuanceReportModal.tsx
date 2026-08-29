@@ -102,27 +102,27 @@ export default function ReceivingVsIssuanceReportModal({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
-      className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 print:p-0 print:bg-white print:static"
+      transition={{ duration: 0.25 }}
+      className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/80 backdrop-blur-2xl flex items-center justify-center p-2 sm:p-4 print:p-0 print:bg-white print:static"
     >
       <motion.div
         key="receiving-vs-issuance-content"
-        initial={{ opacity: 0, scale: 0.94, y: 16 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.94, y: 16 }}
-        transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-        className="bg-white w-full max-w-5xl rounded-2xl shadow-2xl border border-slate-200 flex flex-col max-h-[92vh] print:max-h-none print:border-none print:shadow-none print:rounded-none overflow-hidden"
+        initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+        animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
+        exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+        transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
+        className="frosted-glass-modal-light w-full max-w-5xl rounded-3xl shadow-2xl border border-white/80 flex flex-col max-h-[92vh] print:max-h-none print:border-none print:shadow-none print:rounded-none overflow-hidden backdrop-blur-3xl"
       >
         
         {/* Modal Header & Navigation (Hidden in Print) */}
-        <div className="bg-slate-900 text-white px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 shrink-0 print:hidden">
+        <div className="bg-slate-950/90 backdrop-blur-md text-white px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 shrink-0 print:hidden">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-indigo-600 rounded-xl text-white shadow-md">
+            <div className="p-2 bg-indigo-500/20 rounded-2xl text-indigo-300 border border-indigo-400/30 shadow-md backdrop-blur-md">
               <FileText className="h-5 w-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="bg-indigo-500/30 text-indigo-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded border border-indigo-500/40">
+                <span className="bg-indigo-500/30 text-indigo-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded-full border border-indigo-500/40">
                   ISO 9001:2015 WMS REPORT
                 </span>
                 <span className="text-emerald-400 text-[10px] font-bold font-mono flex items-center gap-1">

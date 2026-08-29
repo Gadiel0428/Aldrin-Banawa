@@ -124,24 +124,24 @@ export default function BarcodeScannerModal({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md"
+          transition={{ duration: 0.25 }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-2xl"
         >
           {/* Hidden container for Html5Qrcode offline image scanner engine */}
           <div id={hiddenScannerRegionId} className="hidden" />
 
           <motion.div
             key="barcode-scanner-content"
-            initial={{ opacity: 0, scale: 0.94, y: 16 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.94, y: 16 }}
-            transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-            className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg shadow-2xl text-slate-100 overflow-hidden flex flex-col max-h-[90vh]"
+            initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+            animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
+            exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+            transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
+            className="frosted-glass-modal border border-white/20 rounded-3xl w-full max-w-lg shadow-2xl text-slate-100 overflow-hidden flex flex-col max-h-[90vh] backdrop-blur-3xl"
           >
         {/* Modal Header */}
-        <div className="px-5 py-3.5 border-b border-slate-800/80 flex items-center justify-between gap-3 bg-slate-950/40">
+        <div className="px-5 py-3.5 border-b border-white/10 flex items-center justify-between gap-3 bg-slate-950/40 backdrop-blur-md">
           <div className="flex items-center gap-2.5 min-w-0 flex-1">
-            <div className="p-2 bg-slate-800/80 text-slate-300 rounded-lg border border-slate-700/60 shrink-0">
+            <div className="p-2 bg-indigo-500/20 text-indigo-300 rounded-2xl border border-indigo-400/30 shrink-0 backdrop-blur-md">
               <Barcode className="h-4 w-4" />
             </div>
             <div className="min-w-0 flex-1">
@@ -157,7 +157,7 @@ export default function BarcodeScannerModal({
               type="button"
               onClick={() => setAudioEnabled(!audioEnabled)}
               title={audioEnabled ? "Mute scan sound" : "Enable scan sound"}
-              className={`p-1.5 rounded-lg transition border cursor-pointer ${
+              className={`p-1.5 rounded-xl transition border cursor-pointer ${
                 audioEnabled ? 'bg-slate-800 text-slate-200 border-slate-700' : 'bg-slate-950 text-slate-500 border-slate-800'
               }`}
             >
@@ -166,7 +166,7 @@ export default function BarcodeScannerModal({
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer"
+              className="p-1.5 text-slate-400 hover:text-white hover:bg-white/10 rounded-xl transition cursor-pointer"
             >
               <X className="h-4 w-4" />
             </button>

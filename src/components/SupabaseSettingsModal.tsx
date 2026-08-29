@@ -443,21 +443,21 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.stocks, public.receiving, p
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-md p-4 overflow-y-auto"
+          transition={{ duration: 0.25 }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-2xl p-4 overflow-y-auto"
         >
           <motion.div
             key="supabase-settings-content"
-            initial={{ opacity: 0, scale: 0.94, y: 16 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.94, y: 16 }}
-            transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-            className="bg-white border border-slate-300 rounded-3xl max-w-2xl w-full shadow-2xl overflow-hidden text-slate-900 my-8"
+            initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+            animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
+            exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+            transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
+            className="frosted-glass-modal-light border border-white/80 rounded-3xl max-w-2xl w-full shadow-2xl overflow-hidden text-slate-900 my-8 backdrop-blur-3xl"
           >
             {/* Modal Header */}
-            <div className="flex items-center justify-between px-6 py-4 bg-slate-50 border-b border-slate-200">
+            <div className="flex items-center justify-between px-6 py-4 bg-slate-50/80 border-b border-slate-200/80 backdrop-blur-md">
               <div className="flex items-center space-x-3">
-                <div className="p-2 bg-emerald-100 border border-emerald-300 rounded-xl text-emerald-700 shadow-xs">
+                <div className="p-2.5 bg-emerald-100/90 border border-emerald-300/90 rounded-2xl text-emerald-700 shadow-xs backdrop-blur-md">
                   <Database className="w-5 h-5" />
                 </div>
                 <div>
@@ -467,7 +467,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.stocks, public.receiving, p
               </div>
               <button 
                 onClick={onClose}
-                className="p-1.5 rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-200 transition-colors cursor-pointer"
+                className="p-2 rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-200/80 transition-all cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>

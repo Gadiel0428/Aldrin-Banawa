@@ -33,6 +33,7 @@ import {
   Users,
   Radio,
   FileText,
+  FileSpreadsheet,
   Download,
   Printer,
   ShieldCheck,
@@ -51,6 +52,7 @@ import {
   getCustomerForPart
 } from '../types';
 import ReceivingVsIssuanceReportModal from './ReceivingVsIssuanceReportModal';
+import InventoryReportModal from './InventoryReportModal';
 import { downloadReceivingVsIssuancePDF } from '../utils/reportGenerator';
 
 interface DashboardOverviewProps {
@@ -94,6 +96,7 @@ export default function DashboardOverview({
   const [selectedCustomer, setSelectedCustomer] = useState<string>('');
   const [msgText, setMsgText] = useState('');
   const [showReportModal, setShowReportModal] = useState(false);
+  const [showInventoryReportModal, setShowInventoryReportModal] = useState(false);
   const [isExportingPDF, setIsExportingPDF] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -423,10 +426,22 @@ export default function DashboardOverview({
         </div>
 
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0 w-full sm:w-auto">
-          {/* Quick PDF Export & Summary Action Buttons */}
+          {/* Primary Generate Report Button - Inventory Data PDF / CSV Export */}
+          <button
+            onClick={() => setShowInventoryReportModal(true)}
+            id="btn-generate-inventory-report"
+            className="bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition shadow-sm flex items-center justify-center gap-1.5 cursor-pointer border border-emerald-400/30 hover:shadow-md active:scale-95"
+            title="Compile and export current view's inventory data into formatted PDF or CSV"
+          >
+            <FileSpreadsheet className="h-4 w-4" />
+            <span>Generate Report</span>
+          </button>
+
+          {/* Receiving vs Issuance PDF Export & Summary Action Button */}
           <button
             onClick={() => setShowReportModal(true)}
-            className="bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition shadow-sm flex items-center justify-center gap-1.5 cursor-pointer border border-indigo-400/30"
+            id="btn-receiving-vs-issuance-report"
+            className="bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition shadow-sm flex items-center justify-center gap-1.5 cursor-pointer border border-indigo-400/30 hover:shadow-md active:scale-95"
             title="Generate print-friendly summary and export Receiving vs Issuance PDF"
           >
             <FileText className="h-3.5 w-3.5" />
@@ -1104,12 +1119,22 @@ export default function DashboardOverview({
                 Active material inventory items where current approved stock falls below defined minimum reorder limits (<span className="font-mono font-bold text-rose-700">reorderMin</span>)
               </p>
             </div>
-            <button 
-              onClick={() => setView('stock')}
-              className="text-xs font-semibold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-3 py-1.5 rounded-lg transition flex items-center gap-1 shrink-0 cursor-pointer"
-            >
-              Inventory Registry &rarr;
-            </button>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setShowInventoryReportModal(true)}
+                className="text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                title="Generate and export Low Stock Reorder PDF / CSV audit report"
+              >
+                <FileSpreadsheet className="h-3.5 w-3.5" />
+                <span>Reorder Report</span>
+              </button>
+              <button 
+                onClick={() => setView('stock')}
+                className="text-xs font-semibold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-3 py-1.5 rounded-lg transition flex items-center gap-1 cursor-pointer"
+              >
+                Inventory Registry &rarr;
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
@@ -1387,6 +1412,17 @@ export default function DashboardOverview({
           currentUser={currentUser}
           isSuperAdmin={isSuperAdmin}
           onClose={() => setShowReportModal(false)}
+        />
+      )}
+
+      {/* Comprehensive Inventory Audit & Data Export Modal (PDF / CSV) */}
+      {showInventoryReportModal && (
+        <InventoryReportModal
+          stocks={stocks}
+          currentUser={currentUser}
+          isSuperAdmin={isSuperAdmin}
+          initialCustomerFilter={selectedCustomer || 'ALL'}
+          onClose={() => setShowInventoryReportModal(false)}
         />
       )}
     </div>

@@ -92,21 +92,21 @@ export default function MobileAppDownloadModal({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}
-          className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4"
+          transition={{ duration: 0.25 }}
+          className="fixed inset-0 bg-slate-950/80 backdrop-blur-2xl z-50 flex items-center justify-center p-4"
         >
           <motion.div
             key="mobile-app-download-content"
-            initial={{ opacity: 0, scale: 0.94, y: 16 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.94, y: 16 }}
-            transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-            className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+            animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
+            exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+            transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
+            className="frosted-glass-modal border border-white/20 rounded-3xl max-w-2xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[90vh] backdrop-blur-3xl"
           >
             {/* Header */}
-            <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-gradient-to-r from-slate-900 via-indigo-950/40 to-slate-900">
+            <div className="px-6 py-4 border-b border-white/10 flex items-center justify-between bg-slate-950/40 backdrop-blur-md">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-indigo-400">
+                <div className="p-2.5 bg-indigo-500/20 border border-indigo-400/30 rounded-2xl text-indigo-300 backdrop-blur-md">
                   <Smartphone className="h-6 w-6" />
                 </div>
                 <div>
@@ -114,11 +114,11 @@ export default function MobileAppDownloadModal({
                     <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">
                       JUWEI WMS Mobile APK & App Installation Hub
                     </h3>
-                    <span className="px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold rounded-full font-mono">
+                    <span className="px-2 py-0.5 bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold rounded-full font-mono">
                       ANDROID READY
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-400 font-mono">
+                  <p className="text-[11px] text-slate-300 font-mono">
                     Install as a standalone native-like mobile app on Android phones, tablets & scanners
                   </p>
                 </div>
@@ -126,7 +126,7 @@ export default function MobileAppDownloadModal({
               <button
                 type="button"
                 onClick={onClose}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
               >
                 <X className="h-5 w-5" />
               </button>

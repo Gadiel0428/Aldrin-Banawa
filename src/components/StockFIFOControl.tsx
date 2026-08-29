@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Search, 
@@ -26,7 +26,10 @@ import {
   FileSpreadsheet,
   ArrowDownLeft,
   ArrowUpRight,
-  RotateCcw
+  RotateCcw,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react';
 import { MaterialStockItem, MaterialType, getCustomerForPart, UOM_OPTIONS, ReceivingRecord, IssuanceRecord, ReturnRecord } from '../types';
 import { FIFO_COLORS_BY_MONTH } from '../data';
@@ -61,6 +64,21 @@ export default function StockFIFOControl({
   const [selectedType, setSelectedType] = useState<MaterialType | 'ALL'>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<MaterialStockItem['status'] | 'ALL'>('ALL');
   const [selectedCustomer, setSelectedCustomer] = useState<string>('ALL');
+  
+  // Column Sorting States
+  type StockSortField = 'id' | 'type' | 'partCode' | 'quantity' | 'receivedDate' | 'expirationDate' | 'fifoColor' | 'location' | 'status';
+  type SortDirection = 'asc' | 'desc';
+  const [sortField, setSortField] = useState<StockSortField>('partCode');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+
+  const handleSort = (field: StockSortField) => {
+    if (sortField === field) {
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
   
   // State for Item History Modal
   const [historyStockItem, setHistoryStockItem] = useState<MaterialStockItem | null>(null);
@@ -173,9 +191,64 @@ export default function StockFIFOControl({
     return matchesSearch && matchesType && matchesStatus && matchesCustomer;
   });
 
+  // Sorted stocks based on active column sort
+  const sortedStocks = useMemo(() => {
+    return [...filteredStocks].sort((a, b) => {
+      let result = 0;
+      switch (sortField) {
+        case 'partCode': {
+          result = (a.partCode || '').localeCompare(b.partCode || '', undefined, { numeric: true, sensitivity: 'base' });
+          if (result === 0) {
+            result = (a.description || '').localeCompare(b.description || '', undefined, { numeric: true, sensitivity: 'base' });
+          }
+          break;
+        }
+        case 'quantity': {
+          result = (Number(a.quantity) || 0) - (Number(b.quantity) || 0);
+          break;
+        }
+        case 'receivedDate': {
+          const timeA = a.receivedDate ? new Date(a.receivedDate).getTime() : 0;
+          const timeB = b.receivedDate ? new Date(b.receivedDate).getTime() : 0;
+          result = timeA - timeB;
+          break;
+        }
+        case 'expirationDate': {
+          const timeA = a.expirationDate ? new Date(a.expirationDate).getTime() : 9999999999999;
+          const timeB = b.expirationDate ? new Date(b.expirationDate).getTime() : 9999999999999;
+          result = timeA - timeB;
+          break;
+        }
+        case 'id': {
+          result = (a.id || '').localeCompare(b.id || '', undefined, { numeric: true, sensitivity: 'base' });
+          break;
+        }
+        case 'type': {
+          result = (a.type || '').localeCompare(b.type || '');
+          break;
+        }
+        case 'fifoColor': {
+          result = (a.fifoColor || '').localeCompare(b.fifoColor || '');
+          break;
+        }
+        case 'location': {
+          result = (a.location || '').localeCompare(b.location || '', undefined, { numeric: true, sensitivity: 'base' });
+          break;
+        }
+        case 'status': {
+          result = (a.status || '').localeCompare(b.status || '');
+          break;
+        }
+        default:
+          result = 0;
+      }
+      return sortDirection === 'asc' ? result : -result;
+    });
+  }, [filteredStocks, sortField, sortDirection]);
+
   // Generate printable CSV summary of current stock levels
   const handleDownloadCSV = () => {
-    if (filteredStocks.length === 0) {
+    if (sortedStocks.length === 0) {
       alert('No stock items available in current view to export.');
       return;
     }
@@ -197,7 +270,7 @@ export default function StockFIFOControl({
       'Resin Sack Hazard Risk'
     ];
 
-    const rows = filteredStocks.map(item => [
+    const rows = sortedStocks.map(item => [
       `"${(item.id || '').replace(/"/g, '""')}"`,
       `"${(item.partCode || '').replace(/"/g, '""')}"`,
       `"${(item.description || '').replace(/"/g, '""')}"`,
@@ -530,14 +603,21 @@ export default function StockFIFOControl({
 
       {/* Stock Grid List */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm" id="stock-grid-panel">
-        <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-          <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Active Warehouse Stock & FIFO Bins</span>
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-mono text-slate-500 font-semibold">{filteredStocks.length} records in view</span>
+        <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-slate-50/50">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Active Warehouse Stock & FIFO Bins</span>
+            <span className="bg-slate-200/80 text-slate-700 text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full">
+              {filteredStocks.length} records in view
+            </span>
+            <span className="text-[11px] text-slate-500 font-medium hidden md:inline">
+              &bull; Sorted by <strong className="text-indigo-700 font-semibold">{sortField}</strong> ({sortDirection === 'asc' ? 'Ascending' : 'Descending'})
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
             <button
               onClick={handleDownloadCSV}
-              className="bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold py-1 px-3 rounded-lg flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer"
-              title="Export printable CSV summary of current stock levels"
+              className="bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold py-1.5 px-3 rounded-lg flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer"
+              title="Export printable CSV summary of current stock levels (respects active sort)"
             >
               <Download className="h-3.5 w-3.5" /> Export CSV Summary
             </button>
@@ -547,21 +627,138 @@ export default function StockFIFOControl({
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="bg-slate-100 text-slate-500 font-medium border-b border-slate-200">
-                <th className="p-4 font-semibold">Stock ID</th>
-                <th className="p-4 font-semibold">Classification</th>
-                <th className="p-4 font-semibold">Part Code & Description</th>
-                <th className="p-4 font-semibold text-right">Available Qty</th>
-                <th className="p-4 font-semibold">Lot & Receive Date</th>
-                <th className="p-4 font-semibold">Expiration / FEFO</th>
-                <th className="p-4 font-semibold">FIFO Tag Color</th>
-                <th className="p-4 font-semibold">Warehouse Bin Location</th>
-                <th className="p-4 font-semibold">SOP Status</th>
-                <th className="p-4 font-semibold">Actions</th>
+              <tr className="bg-slate-100 text-slate-600 font-medium border-b border-slate-200 divide-x divide-slate-200/50">
+                <th 
+                  onClick={() => handleSort('id')}
+                  className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                    sortField === 'id' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                  }`}
+                  title="Sort by Stock ID"
+                >
+                  <div className="flex items-center gap-1">
+                    <span>Stock ID</span>
+                    <span className="text-slate-400 group-hover:text-slate-700">
+                      {sortField === 'id' ? (sortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                    </span>
+                  </div>
+                </th>
+                <th 
+                  onClick={() => handleSort('type')}
+                  className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                    sortField === 'type' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                  }`}
+                  title="Sort by Material Classification"
+                >
+                  <div className="flex items-center gap-1">
+                    <span>Classification</span>
+                    <span className="text-slate-400 group-hover:text-slate-700">
+                      {sortField === 'type' ? (sortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                    </span>
+                  </div>
+                </th>
+                <th 
+                  onClick={() => handleSort('partCode')}
+                  className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                    sortField === 'partCode' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                  }`}
+                  title="Sort by Part Code & Description"
+                >
+                  <div className="flex items-center gap-1">
+                    <span>Part Code & Description</span>
+                    <span className="text-slate-400 group-hover:text-slate-700">
+                      {sortField === 'partCode' ? (sortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                    </span>
+                  </div>
+                </th>
+                <th 
+                  onClick={() => handleSort('quantity')}
+                  className={`p-3 font-semibold select-none cursor-pointer transition-colors group text-right ${
+                    sortField === 'quantity' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                  }`}
+                  title="Sort by Available Quantity"
+                >
+                  <div className="flex items-center justify-end gap-1">
+                    <span>Available Qty</span>
+                    <span className="text-slate-400 group-hover:text-slate-700">
+                      {sortField === 'quantity' ? (sortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                    </span>
+                  </div>
+                </th>
+                <th 
+                  onClick={() => handleSort('receivedDate')}
+                  className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                    sortField === 'receivedDate' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                  }`}
+                  title="Sort by Receive Date & Lot"
+                >
+                  <div className="flex items-center gap-1">
+                    <span>Lot & Receive Date</span>
+                    <span className="text-slate-400 group-hover:text-slate-700">
+                      {sortField === 'receivedDate' ? (sortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                    </span>
+                  </div>
+                </th>
+                <th 
+                  onClick={() => handleSort('expirationDate')}
+                  className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                    sortField === 'expirationDate' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                  }`}
+                  title="Sort by Expiration Date (FEFO)"
+                >
+                  <div className="flex items-center gap-1">
+                    <span>Expiration / FEFO</span>
+                    <span className="text-slate-400 group-hover:text-slate-700">
+                      {sortField === 'expirationDate' ? (sortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                    </span>
+                  </div>
+                </th>
+                <th 
+                  onClick={() => handleSort('fifoColor')}
+                  className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                    sortField === 'fifoColor' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                  }`}
+                  title="Sort by FIFO Tag Color"
+                >
+                  <div className="flex items-center gap-1">
+                    <span>FIFO Tag Color</span>
+                    <span className="text-slate-400 group-hover:text-slate-700">
+                      {sortField === 'fifoColor' ? (sortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                    </span>
+                  </div>
+                </th>
+                <th 
+                  onClick={() => handleSort('location')}
+                  className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                    sortField === 'location' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                  }`}
+                  title="Sort by Warehouse Bin Location"
+                >
+                  <div className="flex items-center gap-1">
+                    <span>Warehouse Bin</span>
+                    <span className="text-slate-400 group-hover:text-slate-700">
+                      {sortField === 'location' ? (sortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                    </span>
+                  </div>
+                </th>
+                <th 
+                  onClick={() => handleSort('status')}
+                  className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
+                    sortField === 'status' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                  }`}
+                  title="Sort by SOP Status"
+                >
+                  <div className="flex items-center gap-1">
+                    <span>SOP Status</span>
+                    <span className="text-slate-400 group-hover:text-slate-700">
+                      {sortField === 'status' ? (sortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                    </span>
+                  </div>
+                </th>
+                <th className="p-3 font-semibold text-slate-600">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredStocks.map(item => {
+              {sortedStocks.map(item => {
                 // Calculate expiry
                 let isNearExpiry = false;
                 let daysLeft = null;

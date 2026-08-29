@@ -90,28 +90,28 @@ export default function PrintablePickingListModal({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
-      className="fixed inset-0 bg-slate-900/80 backdrop-blur-xs z-50 flex items-center justify-center p-2 sm:p-6 overflow-y-auto"
+      transition={{ duration: 0.25 }}
+      className="fixed inset-0 bg-slate-950/80 backdrop-blur-2xl z-50 flex items-center justify-center p-2 sm:p-6 overflow-y-auto"
     >
       <motion.div
         key="picking-list-content"
-        initial={{ opacity: 0, scale: 0.94, y: 16 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.94, y: 16 }}
-        transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-        className="bg-white rounded-2xl shadow-2xl border border-slate-300 w-full max-w-5xl max-h-[95vh] flex flex-col overflow-hidden"
+        initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+        animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
+        exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+        transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
+        className="frosted-glass-modal-light rounded-3xl shadow-2xl border border-white/80 w-full max-w-5xl max-h-[95vh] flex flex-col overflow-hidden backdrop-blur-3xl"
       >
         
         {/* On-Screen Modal Control Header (Hidden during printing) */}
-        <div className="bg-slate-900 text-white px-5 py-3.5 flex flex-wrap items-center justify-between shrink-0 no-print border-b border-slate-800 gap-3">
+        <div className="bg-slate-950/90 backdrop-blur-md text-white px-5 py-3.5 flex flex-wrap items-center justify-between shrink-0 no-print border-b border-white/10 gap-3">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-indigo-600/30 border border-indigo-400/30 rounded-xl text-indigo-300 shrink-0">
+            <div className="p-2 bg-indigo-500/20 border border-indigo-400/30 rounded-2xl text-indigo-300 shrink-0 backdrop-blur-md">
               <Printer className="h-5 w-5" />
             </div>
             <div>
               <h3 className="font-bold text-sm sm:text-base flex items-center gap-2">
                 {isDeliveryMode ? 'Official Delivery & Shipping Documentation' : 'Official Material Requisition & Issuance Documentation'}
-                <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded font-mono font-bold uppercase">
+                <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-mono font-bold uppercase">
                   Print Ready
                 </span>
               </h3>
