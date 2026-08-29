@@ -19,7 +19,17 @@ import {
   UserPlus,
   Edit,
   Trash2,
-  Printer
+  Printer,
+  ChevronDown,
+  ChevronRight,
+  PackageCheck,
+  ClipboardList,
+  Check,
+  Layers,
+  Building2,
+  Factory,
+  Tag,
+  ShieldCheck
 } from 'lucide-react';
 import { DeliveryRecord, ForkliftChecklist, MaterialStockItem, MasterRegistryItem } from '../types';
 import PrintablePickingListModal, { DocViewMode } from './PrintablePickingListModal';
@@ -59,6 +69,8 @@ export default function DeliveryModule({
   const [selectedPickingDocDelivery, setSelectedPickingDocDelivery] = useState<DeliveryRecord | null>(null);
   const [printInitialView, setPrintInitialView] = useState<DocViewMode>('OFFICIAL_DOC');
   const [confirmAction, setConfirmAction] = useState<ConfirmActionConfig | null>(null);
+  const [expandedDeliveryId, setExpandedDeliveryId] = useState<string | null>(null);
+  const [expandedForkliftId, setExpandedForkliftId] = useState<string | null>(null);
   
   // Forms states
   const [showPickForm, setShowPickForm] = useState(false);
@@ -417,130 +429,350 @@ export default function DeliveryModule({
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {filteredDeliveries.map(d => {
+                    const isExpanded = expandedDeliveryId === d.id;
                     const isFullyLoaded = d.status === 'LOADED' || d.status === 'RELEASED';
+                    const matchedStock = stocks.find(s => 
+                      (s.partCode || '').trim().toLowerCase() === (d.partCode || '').trim().toLowerCase()
+                    );
+                    const registryItem = registries.find(r => 
+                      (r.code || '').trim().toLowerCase() === (d.partCode || '').trim().toLowerCase()
+                    );
+
                     return (
-                      <tr key={d.id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="p-4 font-mono font-bold text-slate-800">{d.gatePassNumber}</td>
-                        <td className="p-4 text-slate-600 font-mono">{d.date}</td>
-                        <td className="p-4">
-                          <button
-                            type="button"
-                            onClick={() => setSelectedPickingDocDelivery(d)}
-                            className="font-mono font-bold text-indigo-600 hover:text-indigo-800 hover:underline flex items-center gap-1 cursor-pointer"
-                            title="Click to view & print official Picking List (DPL)"
-                          >
-                            <Printer className="h-3 w-3 text-indigo-500 shrink-0" />
-                            <span>{d.pickingListNumber}</span>
-                          </button>
-                        </td>
-                        <td className="p-4 font-mono text-slate-600">{d.poNumber}</td>
-                        <td className="p-4">
-                          <div className="font-mono font-bold text-slate-800">{d.partCode}</div>
-                          <div className="text-slate-500 text-[11px] truncate max-w-[150px]">{d.modelName}</div>
-                        </td>
-                        <td className="p-4 text-right font-mono font-bold text-slate-950">
-                          {d.quantity.toLocaleString()} units
-                        </td>
-                        <td className="p-4 space-y-1">
-                          <div className="flex items-center gap-1 text-[10px] font-medium text-slate-700">
-                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                            Packaging Condition OK
-                          </div>
-                          <div className="flex items-center gap-1 text-[10px] font-medium text-slate-700">
-                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                            FIFO Batch Confirmed
-                          </div>
-                          <div className="flex items-center gap-1 text-[10px] font-medium text-slate-700">
-                            <span className={`h-1.5 w-1.5 rounded-full ${d.forkliftChecklistSigned ? 'bg-emerald-500' : 'bg-amber-400 animate-pulse'}`} />
-                            Forklift Pre-checked
-                          </div>
-                        </td>
-                        <td className="p-4 text-[10px] text-slate-600 space-y-0.5">
-                          {d.drNumber ? (
-                            <div className="font-mono font-semibold">DR: {d.drNumber}</div>
-                          ) : (
-                            <div className="text-slate-400 italic">No DR yet</div>
-                          )}
-                          {d.salesInvoice ? (
-                            <div className="font-mono text-slate-500">SI: {d.salesInvoice}</div>
-                          ) : (
-                            <div className="text-slate-400 italic">No Sales Invoice</div>
-                          )}
-                          {d.wayBill ? (
-                            <div className="font-mono text-slate-400 font-medium">Waybill: {d.wayBill}</div>
-                          ) : (
-                            <div className="text-slate-400 italic">No Waybill assigned</div>
-                          )}
-                        </td>
-                        <td className="p-4">
-                          {d.status === 'PREPARING' ? (
-                            <span className="bg-slate-100 text-slate-700 border border-slate-200 px-2 py-1 rounded font-bold text-[9px]">
-                              PREPARING
-                            </span>
-                          ) : d.status === 'LOADED' ? (
-                            <span className="bg-amber-50 text-amber-700 border border-amber-200 px-2 py-1 rounded font-bold text-[9px] animate-pulse">
-                              LOADED (AWAITING GATE)
-                            </span>
-                          ) : (
-                            <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-1 rounded font-bold text-[9px]">
-                              DISPATCHED & RELEASED
-                            </span>
-                          )}
-                        </td>
-                        <td className="p-4">
-                          {isSuperAdmin ? (
-                            <select
-                              defaultValue=""
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                if (val === 'PRINT_DR') {
-                                  setPrintInitialView('OFFICIAL_DOC');
-                                  setSelectedPickingDocDelivery(d);
-                                } else if (val === 'PRINT_DPL') {
-                                  setPrintInitialView('PICKING_LIST');
-                                  setSelectedPickingDocDelivery(d);
-                                } else if (val === 'LOAD') {
-                                  if (!isForkliftPrechecked) {
-                                    alert('Cannot load pallets! Standard operating procedure requires completing the Daily Forklift Checklist first.');
-                                    e.target.value = '';
-                                    return;
-                                  }
-                                  onUpdateDeliveryStatus(d.id, 'LOADED');
-                                } else if (val === 'GATE_PASS') {
-                                  setShowGatePassModal(d.id);
-                                } else if (val === 'EDIT') {
-                                  setEditingDelivery({ ...d });
-                                } else if (val === 'DELETE') {
-                                  setConfirmAction({
-                                    title: 'Delete Delivery Shipment',
-                                    message: `Are you sure you want to delete delivery shipment ${d.gatePassNumber} (${d.modelName})?`,
-                                    confirmLabel: 'YES, DELETE SHIPMENT',
-                                    confirmVariant: 'danger',
-                                    onConfirm: () => onDeleteDelivery?.(d.id)
-                                  });
-                                }
-                                e.target.value = '';
+                      <React.Fragment key={d.id}>
+                        <tr 
+                          onClick={(e) => {
+                            const target = e.target as HTMLElement;
+                            if (target.closest('button, select, input, a, [data-no-expand="true"]')) return;
+                            setExpandedDeliveryId(prev => prev === d.id ? null : d.id);
+                          }}
+                          className={`cursor-pointer transition-all duration-150 ${
+                            isExpanded 
+                              ? 'bg-indigo-50/70 border-l-4 border-l-indigo-600 shadow-2xs' 
+                              : 'hover:bg-indigo-50/30 hover:border-l-4 hover:border-l-indigo-300'
+                          }`}
+                          title="Click row to expand outbound shipment metadata & compliance checks"
+                        >
+                          <td className="p-4 font-mono font-bold text-slate-800">
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setExpandedDeliveryId(prev => prev === d.id ? null : d.id);
+                                }}
+                                className={`p-1 rounded-md transition-colors ${
+                                  isExpanded ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
+                                }`}
+                                title={isExpanded ? 'Collapse row' : 'Expand row details'}
+                              >
+                                {isExpanded ? (
+                                  <ChevronDown className="h-3.5 w-3.5" />
+                                ) : (
+                                  <ChevronRight className="h-3.5 w-3.5" />
+                                )}
+                              </button>
+                              <span>{d.gatePassNumber}</span>
+                            </div>
+                          </td>
+                          <td className="p-4 text-slate-600 font-mono">{d.date}</td>
+                          <td className="p-4" data-no-expand="true">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPrintInitialView('PICKING_LIST');
+                                setSelectedPickingDocDelivery(d);
                               }}
-                              className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
-                              id={`action-select-del-${d.id}`}
+                              className="font-mono font-bold text-indigo-600 hover:text-indigo-800 hover:underline flex items-center gap-1 cursor-pointer"
+                              title="Click to view & print official Picking List (DPL)"
                             >
-                              <option value="" disabled>Actions...</option>
-                              <option value="PRINT_DR">📄 Print Delivery Receipt & Gate Pass</option>
-                              <option value="PRINT_DPL">📋 Print Picking List (DPL)</option>
-                              {d.status === 'PREPARING' && (
-                                <option value="LOAD">📦 Load Pallets</option>
-                              )}
-                              {d.status === 'LOADED' && (
-                                <option value="GATE_PASS">📄 Gate Release Pass</option>
-                              )}
-                              <option value="EDIT">📝 Edit Shipment</option>
-                              <option value="DELETE">🗑️ Delete Shipment</option>
-                            </select>
-                          ) : (
-                            <span className="text-slate-400 italic text-[10px] font-semibold">Super Admin Action Pending</span>
+                              <Printer className="h-3 w-3 text-indigo-500 shrink-0" />
+                              <span>{d.pickingListNumber}</span>
+                            </button>
+                          </td>
+                          <td className="p-4 font-mono text-slate-600">{d.poNumber}</td>
+                          <td className="p-4">
+                            <div className="font-mono font-bold text-slate-800">{d.partCode}</div>
+                            <div className="text-slate-500 text-[11px] truncate max-w-[150px]">{d.modelName}</div>
+                          </td>
+                          <td className="p-4 text-right font-mono font-bold text-slate-950">
+                            {d.quantity.toLocaleString()} units
+                          </td>
+                          <td className="p-4 space-y-1">
+                            <div className="flex items-center gap-1 text-[10px] font-medium text-slate-700">
+                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                              Packaging Condition OK
+                            </div>
+                            <div className="flex items-center gap-1 text-[10px] font-medium text-slate-700">
+                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                              FIFO Batch Confirmed
+                            </div>
+                            <div className="flex items-center gap-1 text-[10px] font-medium text-slate-700">
+                              <span className={`h-1.5 w-1.5 rounded-full ${d.forkliftChecklistSigned ? 'bg-emerald-500' : 'bg-amber-400 animate-pulse'}`} />
+                              Forklift Pre-checked
+                            </div>
+                          </td>
+                          <td className="p-4 text-[10px] text-slate-600 space-y-0.5">
+                            {d.drNumber ? (
+                              <div className="font-mono font-semibold text-slate-800">DR: {d.drNumber}</div>
+                            ) : (
+                              <div className="text-slate-400 italic">No DR yet</div>
+                            )}
+                            {d.salesInvoice ? (
+                              <div className="font-mono text-slate-500">SI: {d.salesInvoice}</div>
+                            ) : (
+                              <div className="text-slate-400 italic">No Sales Invoice</div>
+                            )}
+                            {d.wayBill ? (
+                              <div className="font-mono text-slate-400 font-medium">Waybill: {d.wayBill}</div>
+                            ) : (
+                              <div className="text-slate-400 italic">No Waybill assigned</div>
+                            )}
+                          </td>
+                          <td className="p-4">
+                            {d.status === 'PREPARING' ? (
+                              <span className="bg-slate-100 text-slate-700 border border-slate-200 px-2 py-1 rounded font-bold text-[9px]">
+                                PREPARING
+                              </span>
+                            ) : d.status === 'LOADED' ? (
+                              <span className="bg-amber-50 text-amber-700 border border-amber-200 px-2 py-1 rounded font-bold text-[9px] animate-pulse">
+                                LOADED (AWAITING GATE)
+                              </span>
+                            ) : (
+                              <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-1 rounded font-bold text-[9px]">
+                                DISPATCHED & RELEASED
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-4" data-no-expand="true">
+                            {isSuperAdmin ? (
+                              <select
+                                defaultValue=""
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (val === 'PRINT_DR') {
+                                    setPrintInitialView('OFFICIAL_DOC');
+                                    setSelectedPickingDocDelivery(d);
+                                  } else if (val === 'PRINT_DPL') {
+                                    setPrintInitialView('PICKING_LIST');
+                                    setSelectedPickingDocDelivery(d);
+                                  } else if (val === 'LOAD') {
+                                    if (!isForkliftPrechecked) {
+                                      alert('Cannot load pallets! Standard operating procedure requires completing the Daily Forklift Checklist first.');
+                                      e.target.value = '';
+                                      return;
+                                    }
+                                    onUpdateDeliveryStatus(d.id, 'LOADED');
+                                  } else if (val === 'GATE_PASS') {
+                                    setShowGatePassModal(d.id);
+                                  } else if (val === 'EDIT') {
+                                    setEditingDelivery({ ...d });
+                                  } else if (val === 'DELETE') {
+                                    setConfirmAction({
+                                      title: 'Delete Delivery Shipment',
+                                      message: `Are you sure you want to delete delivery shipment ${d.gatePassNumber} (${d.modelName})?`,
+                                      confirmLabel: 'YES, DELETE SHIPMENT',
+                                      confirmVariant: 'danger',
+                                      onConfirm: () => onDeleteDelivery?.(d.id)
+                                    });
+                                  }
+                                  e.target.value = '';
+                                }}
+                                className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
+                                id={`action-select-del-${d.id}`}
+                              >
+                                <option value="" disabled>Actions...</option>
+                                <option value="PRINT_DR">📄 Print Delivery Receipt & Gate Pass</option>
+                                <option value="PRINT_DPL">📋 Print Picking List (DPL)</option>
+                                {d.status === 'PREPARING' && (
+                                  <option value="LOAD">📦 Load Pallets</option>
+                                )}
+                                {d.status === 'LOADED' && (
+                                  <option value="GATE_PASS">📄 Gate Release Pass</option>
+                                )}
+                                <option value="EDIT">📝 Edit Shipment</option>
+                                <option value="DELETE">🗑️ Delete Shipment</option>
+                              </select>
+                            ) : (
+                              <span className="text-slate-400 italic text-[10px] font-semibold">Super Admin Action Pending</span>
+                            )}
+                          </td>
+                        </tr>
+
+                        {/* Expandable Card View for Delivery Shipment Record */}
+                        <AnimatePresence>
+                          {isExpanded && (
+                            <tr>
+                              <td colSpan={10} className="p-0 bg-slate-50/80 border-b-2 border-indigo-200">
+                                <motion.div
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: 'auto' }}
+                                  exit={{ opacity: 0, height: 0 }}
+                                  transition={{ duration: 0.2 }}
+                                  className="overflow-hidden"
+                                >
+                                  <div className="p-5 space-y-4">
+                                    {/* Header Summary Ribbon */}
+                                    <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
+                                      <div className="flex items-center gap-3">
+                                        <div className="p-2.5 bg-blue-50 rounded-lg text-blue-600">
+                                          <Truck className="h-5 w-5" />
+                                        </div>
+                                        <div>
+                                          <div className="flex items-center gap-2">
+                                            <span className="text-sm font-bold text-slate-900">
+                                              Gate Pass: <span className="font-mono text-indigo-600">{d.gatePassNumber}</span>
+                                            </span>
+                                            <span className="text-xs text-slate-400 font-mono">({d.id})</span>
+                                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                              d.status === 'RELEASED' 
+                                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                                                : d.status === 'LOADED' 
+                                                ? 'bg-amber-50 text-amber-700 border border-amber-200 animate-pulse'
+                                                : 'bg-slate-100 text-slate-700 border border-slate-200'
+                                            }`}>
+                                              {d.status === 'RELEASED' ? 'DISPATCHED & RELEASED' : d.status === 'LOADED' ? 'LOADED (AWAITING GATE PASS)' : 'PREPARING / STAGING'}
+                                            </span>
+                                          </div>
+                                          <p className="text-xs text-slate-500 mt-0.5">
+                                            Model: <strong className="text-slate-800">{d.modelName}</strong> &bull; Part Code: <strong className="font-mono text-slate-800">{d.partCode}</strong> &bull; PO: <strong className="font-mono text-slate-700">{d.poNumber}</strong>
+                                          </p>
+                                        </div>
+                                      </div>
+
+                                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                                        <span className="bg-slate-100 text-slate-700 font-mono font-semibold px-2.5 py-1 rounded-lg border border-slate-200">
+                                          Date: {d.date}
+                                        </span>
+                                        <span className="bg-blue-50 text-blue-800 font-bold px-2.5 py-1 rounded-lg border border-blue-200 font-mono">
+                                          Quantity: {d.quantity.toLocaleString()} UNITS
+                                        </span>
+                                        {matchedStock && (
+                                          <span className="bg-emerald-50 text-emerald-800 font-bold px-2.5 py-1 rounded-lg border border-emerald-200 font-mono">
+                                            Warehouse Stock: {matchedStock.quantity.toLocaleString()} {matchedStock.unit}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {/* 3-Column Detailed Metadata Grid */}
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                      {/* Col 1: Shipment & Order Specs */}
+                                      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
+                                        <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
+                                          <Factory className="h-4 w-4 text-indigo-500" />
+                                          <span>Shipment & Order Specifications</span>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2 text-xs">
+                                          <div>
+                                            <span className="text-slate-400 text-[11px] block">Client PO #:</span>
+                                            <span className="font-mono font-bold text-slate-800">{d.poNumber}</span>
+                                          </div>
+                                          <div>
+                                            <span className="text-slate-400 text-[11px] block">Picking List (DPL):</span>
+                                            <span className="font-mono font-semibold text-indigo-700">{d.pickingListNumber}</span>
+                                          </div>
+                                          <div>
+                                            <span className="text-slate-400 text-[11px] block">Part Code:</span>
+                                            <span className="font-mono font-bold text-slate-800">{d.partCode}</span>
+                                          </div>
+                                          <div>
+                                            <span className="text-slate-400 text-[11px] block">Product Model:</span>
+                                            <span className="font-semibold text-slate-800">{d.modelName}</span>
+                                          </div>
+                                          <div className="col-span-2 pt-1 border-t border-slate-100 flex justify-between items-center text-slate-500 text-[11px]">
+                                            <span>Category / Group:</span>
+                                            <span className="font-semibold text-slate-700">{registryItem?.category || 'Finished Goods Outbound'}</span>
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {/* Col 2: Official Release Documents */}
+                                      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
+                                        <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
+                                          <FileSignature className="h-4 w-4 text-emerald-600" />
+                                          <span>Official Regulatory Documents</span>
+                                        </div>
+                                        <div className="space-y-2 text-xs">
+                                          <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2.5 rounded-lg border border-slate-150">
+                                            <div>
+                                              <span className="text-slate-400 text-[10px] block">Delivery Receipt (DR):</span>
+                                              <span className="font-mono font-bold text-slate-800 text-[11px]">{d.drNumber || 'Pending Issuance'}</span>
+                                            </div>
+                                            <div>
+                                              <span className="text-slate-400 text-[10px] block">Sales Invoice (SI):</span>
+                                              <span className="font-mono font-bold text-slate-800 text-[11px]">{d.salesInvoice || 'Pending Billing'}</span>
+                                            </div>
+                                            <div className="col-span-2 pt-1 border-t border-slate-200">
+                                              <span className="text-slate-400 text-[10px] block">Transportation Waybill:</span>
+                                              <span className="font-mono font-semibold text-slate-700 text-[11px]">{d.wayBill || 'Pending Carrier Assignment'}</span>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {/* Col 3: Safety & SOP Verification Checks + Quick Action */}
+                                      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
+                                        <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
+                                          <ShieldCheck className="h-4 w-4 text-purple-500" />
+                                          <span>SOP Quality & Forklift Audit</span>
+                                        </div>
+
+                                        <div className="space-y-2 text-xs">
+                                          <div className="space-y-1 bg-slate-50 p-2 rounded-lg border border-slate-150 text-[11px]">
+                                            <div className="flex items-center justify-between">
+                                              <span className="text-slate-600">Packaging Integrity:</span>
+                                              <span className="text-emerald-700 font-bold flex items-center gap-1">
+                                                <Check className="h-3 w-3" /> VERIFIED OK
+                                              </span>
+                                            </div>
+                                            <div className="flex items-center justify-between">
+                                              <span className="text-slate-600">FIFO Batch Integrity:</span>
+                                              <span className="text-emerald-700 font-bold flex items-center gap-1">
+                                                <Check className="h-3 w-3" /> VERIFIED OK
+                                              </span>
+                                            </div>
+                                            <div className="flex items-center justify-between">
+                                              <span className="text-slate-600">Daily Forklift Inspection:</span>
+                                              <span className={`font-bold flex items-center gap-1 ${d.forkliftChecklistSigned ? 'text-emerald-700' : 'text-amber-600'}`}>
+                                                {d.forkliftChecklistSigned ? <Check className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
+                                                {d.forkliftChecklistSigned ? 'COMPLETED' : 'PENDING CHECK'}
+                                              </span>
+                                            </div>
+                                          </div>
+
+                                          <div className="flex gap-2 pt-1" data-no-expand="true">
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                setPrintInitialView('OFFICIAL_DOC');
+                                                setSelectedPickingDocDelivery(d);
+                                              }}
+                                              className="flex-1 px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-bold transition-colors cursor-pointer border border-blue-200 flex items-center justify-center gap-1 shadow-2xs"
+                                            >
+                                              <Printer className="h-3 w-3" /> DR / Gate Pass
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                setPrintInitialView('PICKING_LIST');
+                                                setSelectedPickingDocDelivery(d);
+                                              }}
+                                              className="flex-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-colors cursor-pointer border border-slate-200 flex items-center justify-center gap-1 shadow-2xs"
+                                            >
+                                              <ClipboardList className="h-3 w-3" /> Picking List
+                                            </button>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </motion.div>
+                              </td>
+                            </tr>
                           )}
-                        </td>
-                      </tr>
+                        </AnimatePresence>
+                      </React.Fragment>
                     );
                   })}
                 </tbody>
@@ -663,33 +895,110 @@ export default function DeliveryModule({
 
             <div className="divide-y divide-slate-100 text-xs">
               {forkliftChecks.map(check => {
+                const isExpanded = expandedForkliftId === check.id;
                 const checkPassed = check.brakesOk && check.lightsOk && check.hydraulicOk && check.steeringOk && check.tiresOk && check.batteryFluidOk;
                 return (
-                  <div key={check.id} className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-slate-50/50">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-bold text-slate-800">{check.forkliftId}</span>
-                        <span className="text-slate-400 font-mono">Date: {check.date}</span>
+                  <div key={check.id} className="transition-colors">
+                    <div 
+                      onClick={() => setExpandedForkliftId(prev => prev === check.id ? null : check.id)}
+                      className={`p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 cursor-pointer transition-all ${
+                        isExpanded ? 'bg-indigo-50/60 border-l-4 border-l-indigo-600' : 'hover:bg-slate-50/70 hover:border-l-4 hover:border-l-indigo-300'
+                      }`}
+                      title="Click to view 6-point mechanical safety checklist"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpandedForkliftId(prev => prev === check.id ? null : check.id);
+                            }}
+                            className="p-1 rounded text-slate-400 hover:text-slate-700"
+                          >
+                            {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                          </button>
+                          <span className="font-mono font-bold text-slate-800">{check.forkliftId}</span>
+                          <span className="text-slate-400 font-mono text-[11px]">&bull; Date: {check.date}</span>
+                        </div>
+                        <div className="text-slate-600 font-medium flex items-center gap-1 pl-6">
+                          Signed Operator: <span className="font-semibold text-slate-800">{check.operator}</span>
+                        </div>
+                        {check.remarks && (
+                          <div className="text-[11px] text-slate-400 italic pl-6">Remarks: {check.remarks}</div>
+                        )}
                       </div>
-                      <div className="text-slate-600 font-medium flex items-center gap-1">
-                        Signed Operator: <span className="font-semibold text-slate-800">{check.operator}</span>
+                      
+                      <div className="flex items-center gap-3">
+                        {checkPassed ? (
+                          <span className="bg-emerald-50 text-emerald-700 font-semibold px-2.5 py-1 rounded flex items-center gap-1 border border-emerald-100">
+                            <CheckCircle className="h-4 w-4" /> SAFE TO OPERATE
+                          </span>
+                        ) : (
+                          <span className="bg-rose-50 text-rose-700 font-semibold px-2.5 py-1 rounded flex items-center gap-1 border border-rose-100">
+                            <ShieldAlert className="h-4 w-4" /> HAZARD ACTIVE (HOLD)
+                          </span>
+                        )}
                       </div>
-                      {check.remarks && (
-                        <div className="text-[11px] text-slate-400 italic">Remarks: {check.remarks}</div>
-                      )}
                     </div>
-                    
-                    <div className="flex items-center gap-3">
-                      {checkPassed ? (
-                        <span className="bg-emerald-50 text-emerald-700 font-semibold px-2.5 py-1 rounded flex items-center gap-1 border border-emerald-100">
-                          <CheckCircle className="h-4 w-4" /> SAFE TO OPERATE
-                        </span>
-                      ) : (
-                        <span className="bg-rose-50 text-rose-700 font-semibold px-2.5 py-1 rounded flex items-center gap-1 border border-rose-100">
-                          <ShieldAlert className="h-4 w-4" /> HAZARD ACTIVE (HOLD)
-                        </span>
+
+                    {/* Expandable 6-Point Checklist Breakdown */}
+                    <AnimatePresence>
+                      {isExpanded && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          transition={{ duration: 0.2 }}
+                          className="bg-slate-50 border-t border-slate-100 p-4 overflow-hidden"
+                        >
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2 text-[11px]">
+                            <div className={`p-2.5 rounded-lg border ${check.brakesOk ? 'bg-emerald-50/70 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
+                              <span className="text-[10px] text-slate-500 block">Brakes & Parking:</span>
+                              <span className="font-bold flex items-center gap-1 mt-0.5">
+                                {check.brakesOk ? <Check className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
+                                {check.brakesOk ? 'PASS' : 'FAIL'}
+                              </span>
+                            </div>
+                            <div className={`p-2.5 rounded-lg border ${check.lightsOk ? 'bg-emerald-50/70 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
+                              <span className="text-[10px] text-slate-500 block">Lights & Horn:</span>
+                              <span className="font-bold flex items-center gap-1 mt-0.5">
+                                {check.lightsOk ? <Check className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
+                                {check.lightsOk ? 'PASS' : 'FAIL'}
+                              </span>
+                            </div>
+                            <div className={`p-2.5 rounded-lg border ${check.hydraulicOk ? 'bg-emerald-50/70 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
+                              <span className="text-[10px] text-slate-500 block">Hydraulic Forks:</span>
+                              <span className="font-bold flex items-center gap-1 mt-0.5">
+                                {check.hydraulicOk ? <Check className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
+                                {check.hydraulicOk ? 'PASS' : 'FAIL'}
+                              </span>
+                            </div>
+                            <div className={`p-2.5 rounded-lg border ${check.steeringOk ? 'bg-emerald-50/70 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
+                              <span className="text-[10px] text-slate-500 block">Steering & Turn:</span>
+                              <span className="font-bold flex items-center gap-1 mt-0.5">
+                                {check.steeringOk ? <Check className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
+                                {check.steeringOk ? 'PASS' : 'FAIL'}
+                              </span>
+                            </div>
+                            <div className={`p-2.5 rounded-lg border ${check.tiresOk ? 'bg-emerald-50/70 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
+                              <span className="text-[10px] text-slate-500 block">Tires & Wheels:</span>
+                              <span className="font-bold flex items-center gap-1 mt-0.5">
+                                {check.tiresOk ? <Check className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
+                                {check.tiresOk ? 'PASS' : 'FAIL'}
+                              </span>
+                            </div>
+                            <div className={`p-2.5 rounded-lg border ${check.batteryFluidOk ? 'bg-emerald-50/70 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
+                              <span className="text-[10px] text-slate-500 block">Battery & Fluids:</span>
+                              <span className="font-bold flex items-center gap-1 mt-0.5">
+                                {check.batteryFluidOk ? <Check className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
+                                {check.batteryFluidOk ? 'PASS' : 'FAIL'}
+                              </span>
+                            </div>
+                          </div>
+                        </motion.div>
                       )}
-                    </div>
+                    </AnimatePresence>
                   </div>
                 );
               })}

@@ -30,7 +30,20 @@ import {
   FileText,
   ArrowUpDown,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  ChevronDown,
+  ChevronUp,
+  ChevronRight,
+  ClipboardList,
+  PackageCheck,
+  Tag,
+  MapPin,
+  Calendar,
+  Layers,
+  Activity,
+  Info,
+  Check,
+  ExternalLink
 } from 'lucide-react';
 import { ReceivingRecord, ReturnRecord, MaterialStockItem, getCustomerForPart, UOM_OPTIONS, MasterRegistryItem, RegistryType } from '../types';
 import { FIFO_COLORS_BY_MONTH } from '../data';
@@ -78,6 +91,10 @@ export default function ReceivingModule({
   // States for Editing Modals
   const [editingReceiving, setEditingReceiving] = useState<ReceivingRecord | null>(null);
   const [editingReturn, setEditingReturn] = useState<ReturnRecord | null>(null);
+
+  // States for Row-Hover Expansion
+  const [expandedReceivingId, setExpandedReceivingId] = useState<string | null>(null);
+  const [expandedReturnId, setExpandedReturnId] = useState<string | null>(null);
 
   // Column Sorting States for Arrivals & Returns
   type ReceivingSortField = 'rrNumber' | 'itemDescription' | 'date' | 'partCode' | 'supplierOrDept' | 'color' | 'quantity' | 'fifoColor' | 'source' | 'poNumber' | 'drNumber' | 'siNumber' | 'iqcStatus';
@@ -1566,190 +1583,487 @@ export default function ReceivingModule({
                       (pc.noContamination ?? true)
                     );
                     const totalSopCount = isNewSop ? 5 : 4;
+                    const isExpanded = expandedReceivingId === r.id;
+
+                    const matchedStock = stocks.find(s => 
+                      (s.partCode || '').trim().toLowerCase() === (r.partCode || '').trim().toLowerCase() && 
+                      (!r.lotNumber || (s.lotNumber || '').trim().toLowerCase() === (r.lotNumber || '').trim().toLowerCase())
+                    );
+
                     return (
-                      <tr key={r.id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="p-4 font-mono font-semibold text-slate-900">{r.rrNumber || r.id}</td>
-                        <td className="p-4">
-                          <div className="text-slate-700 font-medium text-xs max-w-[220px]">{r.itemDescription}</div>
-                          {r.bom && r.bom.length > 0 && (
-                            <div className="mt-2 bg-slate-50 border border-slate-250 p-2 rounded-lg max-w-[240px]">
-                              <span className="text-[9px] font-bold text-indigo-700 uppercase block mb-1">BOM Components ({r.bom.length})</span>
-                              <div className="space-y-1 max-h-[100px] overflow-y-auto pr-1">
-                                {r.bom.map((b, idx) => (
-                                  <div key={idx} className="flex justify-between items-center text-[9px] font-mono text-slate-600 leading-tight">
-                                    <span className="truncate max-w-[140px]" title={`${b.partCode}: ${b.description}`}>{b.partCode}</span>
-                                    <span className="font-bold text-slate-800">{b.quantityRequired} {b.unit}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </td>
-                        <td className="p-4 text-slate-600 font-mono">{r.date}</td>
-                        <td className="p-4">
-                          <div className="font-mono font-semibold text-slate-800">
-                            {r.partCode}
-                          </div>
-                        </td>
-                        <td className="p-4">
-                          <span className="bg-slate-100 text-slate-800 border border-slate-200 text-[10px] font-extrabold px-2 py-1 rounded font-sans uppercase tracking-tight inline-block">
-                            {r.supplierOrDept || 'N/A'}
-                          </span>
-                        </td>
-                        <td className="p-4">
-                          {r.color ? (
-                            <span className="bg-purple-50 text-purple-700 text-xs font-bold px-2 py-0.5 rounded border border-purple-200 inline-block font-sans">
-                              {r.color}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400 text-xs">-</span>
-                          )}
-                        </td>
-                        <td className="p-4 text-right font-mono font-bold text-slate-800">{r.quantity.toLocaleString()} {(r.unit || 'PCS').toUpperCase()}</td>
-                        <td className="p-4">
-                          <span className="flex items-center gap-1.5 font-semibold text-slate-700">
-                            <span className={`h-3 w-3 rounded-full border border-slate-200 shadow-sm ${
-                              r.fifoColorCode === 'Magenta' ? 'bg-fuchsia-600' :
-                              r.fifoColorCode === 'Orange' ? 'bg-orange-500' :
-                              r.fifoColorCode === 'Dark Green' ? 'bg-emerald-800' :
-                              r.fifoColorCode === 'Yellow' ? 'bg-yellow-400' :
-                              r.fifoColorCode === 'Navy Blue' ? 'bg-blue-900' :
-                              r.fifoColorCode === 'Brown' ? 'bg-amber-800' :
-                              r.fifoColorCode === 'Pink' ? 'bg-pink-400' :
-                              r.fifoColorCode === 'Violet' ? 'bg-violet-600' :
-                              r.fifoColorCode === 'Black' ? 'bg-stone-900' :
-                              r.fifoColorCode === 'Light Orange' ? 'bg-orange-300' :
-                              r.fifoColorCode === 'Grey' ? 'bg-slate-500' : 'bg-slate-300'
-                            }`} />
-                            {r.fifoColorCode}
-                          </span>
-                        </td>
-                        <td className="p-4">
-                          <div className="text-slate-800 text-xs font-semibold max-w-[160px] truncate" title={r.vendorSupplier || 'N/A'}>
-                            {r.vendorSupplier && r.vendorSupplier !== 'N/A' ? r.vendorSupplier : 'N/A'}
-                          </div>
-                        </td>
-                        <td className="p-4 font-mono text-xs">
-                          {r.poNumber ? (
-                            <span className="font-semibold text-slate-800">{r.poNumber}</span>
-                          ) : r.source === 'INTERNAL' && r.transferFormNumber ? (
-                            <span className="text-[10px] text-blue-600 font-semibold">Slip: {r.transferFormNumber}</span>
-                          ) : (
-                            <span className="text-slate-400">-</span>
-                          )}
-                        </td>
-                        <td className="p-4 font-mono text-xs">
-                          {r.drNumber ? (
-                            <span className="font-semibold text-slate-800">{r.drNumber}</span>
-                          ) : (
-                            <span className="text-slate-400">-</span>
-                          )}
-                        </td>
-                        <td className="p-4 font-mono text-xs">
-                          {r.siNumber ? (
-                            <span className="font-semibold text-slate-800">{r.siNumber}</span>
-                          ) : (
-                            <span className="text-slate-400">-</span>
-                          )}
-                        </td>
-                        <td className="p-4">
-                          {isPassed ? (
-                            <span className="text-emerald-600 font-medium flex items-center gap-1 text-xs">
-                              <ShieldCheck className="h-4 w-4" /> Passed {totalSopCount}/{totalSopCount} Checklist
-                            </span>
-                          ) : (
-                            <div className="text-rose-600 font-medium space-y-0.5">
-                              <div className="flex items-center gap-1 text-xs"><AlertOctagon className="h-3.5 w-3.5" /> Discrepancy spotted</div>
-                              <div className="text-[10px] text-slate-400">
-                                {isNewSop ? (
-                                  [
-                                    pc.receivingInspection === false && 'Inspection failed',
-                                    pc.materialTraceability === false && 'Traceability issue',
-                                    pc.quantityAccuracy === false && 'Qty mismatch',
-                                    pc.materialConditionCheck === false && 'Condition defect',
-                                    pc.systemRecording === false && 'System recording issue'
-                                  ].filter(Boolean).join(', ')
+                      <React.Fragment key={r.id}>
+                        <tr 
+                          onClick={(e) => {
+                            const target = e.target as HTMLElement;
+                            if (target.closest('button, select, input, a, [data-no-expand="true"]')) return;
+                            setExpandedReceivingId(prev => prev === r.id ? null : r.id);
+                          }}
+                          className={`cursor-pointer transition-all duration-150 ${
+                            isExpanded 
+                              ? 'bg-indigo-50/70 border-l-4 border-l-indigo-600 shadow-2xs' 
+                              : 'hover:bg-indigo-50/30 hover:border-l-4 hover:border-l-indigo-300'
+                          }`}
+                          title="Click row to expand receiving details & SOP metadata"
+                        >
+                          <td className="p-4 font-mono font-semibold text-slate-900">
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setExpandedReceivingId(prev => prev === r.id ? null : r.id);
+                                }}
+                                className={`p-1 rounded-md transition-colors ${
+                                  isExpanded ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
+                                }`}
+                                title={isExpanded ? 'Collapse row' : 'Expand row details'}
+                              >
+                                {isExpanded ? (
+                                  <ChevronDown className="h-3.5 w-3.5" />
                                 ) : (
-                                  [
-                                    !pc.boxIntact && 'Box broken',
-                                    !pc.noWaterDamage && 'Water spotted',
-                                    !pc.noPestSign && 'Pest signs',
-                                    !pc.noContamination && 'Contaminated'
-                                  ].filter(Boolean).join(', ')
+                                  <ChevronRight className="h-3.5 w-3.5" />
                                 )}
-                              </div>
+                              </button>
+                              <span>{r.rrNumber || r.id}</span>
                             </div>
-                          )}
-                        </td>
-                        <td className="p-4">
-                          {r.iqcStatus === 'NA' ? (
-                            <span className="text-slate-400 italic">N/A (Internal)</span>
-                          ) : r.iqcStatus === 'PENDING_IQC' ? (
-                            <span className="bg-amber-50 border border-amber-100 text-amber-700 px-2 py-1 rounded font-semibold text-[10px]">
-                              AWAITING IQC
+                          </td>
+                          <td className="p-4">
+                            <div className="text-slate-700 font-medium text-xs max-w-[220px]">{r.itemDescription}</div>
+                            {r.bom && r.bom.length > 0 && (
+                              <div className="mt-1.5 bg-slate-50 border border-slate-200 p-1.5 rounded-lg max-w-[240px]">
+                                <span className="text-[9px] font-bold text-indigo-700 uppercase block mb-1">BOM Components ({r.bom.length})</span>
+                                <div className="space-y-1 max-h-[80px] overflow-y-auto pr-1">
+                                  {r.bom.map((b, idx) => (
+                                    <div key={idx} className="flex justify-between items-center text-[9px] font-mono text-slate-600 leading-tight">
+                                      <span className="truncate max-w-[140px]" title={`${b.partCode}: ${b.description}`}>{b.partCode}</span>
+                                      <span className="font-bold text-slate-800">{b.quantityRequired} {b.unit}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-4 text-slate-600 font-mono">{r.date}</td>
+                          <td className="p-4">
+                            <div className="font-mono font-semibold text-slate-800">
+                              {r.partCode}
+                            </div>
+                          </td>
+                          <td className="p-4">
+                            <span className="bg-slate-100 text-slate-800 border border-slate-200 text-[10px] font-extrabold px-2 py-1 rounded font-sans uppercase tracking-tight inline-block">
+                              {r.supplierOrDept || 'N/A'}
                             </span>
-                          ) : r.iqcStatus === 'APPROVED_IQC' ? (
-                            <span className="bg-emerald-50 border border-emerald-100 text-emerald-700 px-2 py-1 rounded font-semibold text-[10px]">
-                              IQC APPROVED
+                          </td>
+                          <td className="p-4">
+                            {r.color ? (
+                              <span className="bg-purple-50 text-purple-700 text-xs font-bold px-2 py-0.5 rounded border border-purple-200 inline-block font-sans">
+                                {r.color}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 text-xs">-</span>
+                            )}
+                          </td>
+                          <td className="p-4 text-right font-mono font-bold text-slate-800">{r.quantity.toLocaleString()} {(r.unit || 'PCS').toUpperCase()}</td>
+                          <td className="p-4">
+                            <span className="flex items-center gap-1.5 font-semibold text-slate-700">
+                              <span className={`h-3 w-3 rounded-full border border-slate-200 shadow-sm ${
+                                r.fifoColorCode === 'Magenta' ? 'bg-fuchsia-600' :
+                                r.fifoColorCode === 'Orange' ? 'bg-orange-500' :
+                                r.fifoColorCode === 'Dark Green' ? 'bg-emerald-800' :
+                                r.fifoColorCode === 'Yellow' ? 'bg-yellow-400' :
+                                r.fifoColorCode === 'Navy Blue' ? 'bg-blue-900' :
+                                r.fifoColorCode === 'Brown' ? 'bg-amber-800' :
+                                r.fifoColorCode === 'Pink' ? 'bg-pink-400' :
+                                r.fifoColorCode === 'Violet' ? 'bg-violet-600' :
+                                r.fifoColorCode === 'Black' ? 'bg-stone-900' :
+                                r.fifoColorCode === 'Light Orange' ? 'bg-orange-300' :
+                                r.fifoColorCode === 'Grey' ? 'bg-slate-500' : 'bg-slate-300'
+                              }`} />
+                              {r.fifoColorCode}
                             </span>
-                          ) : (
-                            <span className="bg-rose-50 border border-rose-100 text-rose-700 px-2 py-1 rounded font-semibold text-[10px]">
-                              IQC REJECTED (QUARANTINE)
-                            </span>
+                          </td>
+                          <td className="p-4">
+                            <div className="text-slate-800 text-xs font-semibold max-w-[160px] truncate" title={r.vendorSupplier || 'N/A'}>
+                              {r.vendorSupplier && r.vendorSupplier !== 'N/A' ? r.vendorSupplier : 'N/A'}
+                            </div>
+                          </td>
+                          <td className="p-4 font-mono text-xs">
+                            {r.poNumber ? (
+                              <span className="font-semibold text-slate-800">{r.poNumber}</span>
+                            ) : r.source === 'INTERNAL' && r.transferFormNumber ? (
+                              <span className="text-[10px] text-blue-600 font-semibold">Slip: {r.transferFormNumber}</span>
+                            ) : (
+                              <span className="text-slate-400">-</span>
+                            )}
+                          </td>
+                          <td className="p-4 font-mono text-xs">
+                            {r.drNumber ? (
+                              <span className="font-semibold text-slate-800">{r.drNumber}</span>
+                            ) : (
+                              <span className="text-slate-400">-</span>
+                            )}
+                          </td>
+                          <td className="p-4 font-mono text-xs">
+                            {r.siNumber ? (
+                              <span className="font-semibold text-slate-800">{r.siNumber}</span>
+                            ) : (
+                              <span className="text-slate-400">-</span>
+                            )}
+                          </td>
+                          <td className="p-4">
+                            {isPassed ? (
+                              <span className="text-emerald-600 font-medium flex items-center gap-1 text-xs">
+                                <ShieldCheck className="h-4 w-4" /> Passed {totalSopCount}/{totalSopCount} Checklist
+                              </span>
+                            ) : (
+                              <div className="text-rose-600 font-medium space-y-0.5">
+                                <div className="flex items-center gap-1 text-xs"><AlertOctagon className="h-3.5 w-3.5" /> Discrepancy spotted</div>
+                                <div className="text-[10px] text-slate-400">
+                                  {isNewSop ? (
+                                    [
+                                      pc.receivingInspection === false && 'Inspection failed',
+                                      pc.materialTraceability === false && 'Traceability issue',
+                                      pc.quantityAccuracy === false && 'Qty mismatch',
+                                      pc.materialConditionCheck === false && 'Condition defect',
+                                      pc.systemRecording === false && 'System recording issue'
+                                    ].filter(Boolean).join(', ')
+                                  ) : (
+                                    [
+                                      !pc.boxIntact && 'Box broken',
+                                      !pc.noWaterDamage && 'Water spotted',
+                                      !pc.noPestSign && 'Pest signs',
+                                      !pc.noContamination && 'Contaminated'
+                                    ].filter(Boolean).join(', ')
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-4">
+                            {r.iqcStatus === 'NA' ? (
+                              <span className="text-slate-400 italic">N/A (Internal)</span>
+                            ) : r.iqcStatus === 'PENDING_IQC' ? (
+                              <span className="bg-amber-50 border border-amber-100 text-amber-700 px-2 py-1 rounded font-semibold text-[10px]">
+                                AWAITING IQC
+                              </span>
+                            ) : r.iqcStatus === 'APPROVED_IQC' ? (
+                              <span className="bg-emerald-50 border border-emerald-100 text-emerald-700 px-2 py-1 rounded font-semibold text-[10px]">
+                                IQC APPROVED
+                              </span>
+                            ) : (
+                              <span className="bg-rose-50 border border-rose-100 text-rose-700 px-2 py-1 rounded font-semibold text-[10px]">
+                                IQC REJECTED (QUARANTINE)
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-4" data-no-expand="true">
+                            {isSuperAdmin ? (
+                              <select
+                                defaultValue=""
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (val === 'APPROVE') {
+                                    setConfirmAction({
+                                      title: 'Approve IQC Inspection',
+                                      message: `Are you sure you want to APPROVE IQC inspection for record ${r.rrNumber || r.id} (${r.partCode})?`,
+                                      confirmLabel: 'YES, APPROVE IQC',
+                                      confirmVariant: 'primary',
+                                      onConfirm: () => onUpdateIqc(r.id, 'APPROVED_IQC')
+                                    });
+                                  } else if (val === 'REJECT') {
+                                    setConfirmAction({
+                                      title: 'Reject IQC Inspection',
+                                      message: `Are you sure you want to REJECT IQC inspection and route record ${r.rrNumber || r.id} (${r.partCode}) to Quarantine?`,
+                                      confirmLabel: 'YES, REJECT IQC',
+                                      confirmVariant: 'danger',
+                                      onConfirm: () => onUpdateIqc(r.id, 'REJECTED_IQC')
+                                    });
+                                  } else if (val === 'EDIT') setEditingReceiving({ ...r });
+                                  else if (val === 'DELETE') {
+                                    setConfirmAction({
+                                      title: 'Delete Receiving Record',
+                                      message: `Are you sure you want to delete receiving record ${r.rrNumber || r.id} (${r.partCode})?`,
+                                      confirmLabel: 'YES, DELETE',
+                                      confirmVariant: 'danger',
+                                      onConfirm: () => onDeleteReceiving?.(r.id)
+                                    });
+                                  }
+                                  e.target.value = '';
+                                }}
+                                className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
+                                id={`action-select-rec-${r.id}`}
+                              >
+                                <option value="" disabled>Actions...</option>
+                                {r.iqcStatus === 'PENDING_IQC' && (
+                                  <>
+                                    <option value="APPROVE">✅ Approve IQC</option>
+                                    <option value="REJECT">❌ Reject IQC</option>
+                                  </>
+                                )}
+                                <option value="EDIT">📝 Edit Record</option>
+                                <option value="DELETE">🗑️ Delete Record</option>
+                              </select>
+                            ) : (
+                              <span className="text-slate-400 italic font-semibold text-[10px]">Super Admin Only</span>
+                            )}
+                          </td>
+                        </tr>
+
+                        {/* Expandable Card View */}
+                        <AnimatePresence>
+                          {isExpanded && (
+                            <tr>
+                              <td colSpan={15} className="p-0 bg-slate-50/80 border-b-2 border-indigo-200">
+                                <motion.div
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: 'auto' }}
+                                  exit={{ opacity: 0, height: 0 }}
+                                  transition={{ duration: 0.2 }}
+                                  className="overflow-hidden"
+                                >
+                                  <div className="p-5 space-y-4">
+                                    {/* Header Summary Ribbon */}
+                                    <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
+                                      <div className="flex items-center gap-3">
+                                        <div className="p-2.5 bg-indigo-50 rounded-lg text-indigo-600">
+                                          <PackageCheck className="h-5 w-5" />
+                                        </div>
+                                        <div>
+                                          <div className="flex items-center gap-2">
+                                            <span className="text-sm font-bold text-slate-900">
+                                              Receiving Report: <span className="font-mono text-indigo-600">{r.rrNumber || r.id}</span>
+                                            </span>
+                                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                              r.source === 'INTERNAL' 
+                                                ? 'bg-blue-50 text-blue-700 border border-blue-200' 
+                                                : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                            }`}>
+                                              {r.source === 'INTERNAL' ? 'INTERNAL TRANSFER' : 'EXTERNAL SUPPLIER'}
+                                            </span>
+                                          </div>
+                                          <p className="text-xs text-slate-500 mt-0.5">
+                                            Item Code: <strong className="font-mono text-slate-700">{r.itemDescription}</strong> &bull; Part: <strong className="font-mono text-slate-700">{r.partCode}</strong>
+                                          </p>
+                                        </div>
+                                      </div>
+
+                                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                                        <span className="bg-slate-100 text-slate-700 font-mono font-semibold px-2.5 py-1 rounded-lg border border-slate-200">
+                                          Received: {r.date}
+                                        </span>
+                                        <span className="bg-indigo-50 text-indigo-800 font-bold px-2.5 py-1 rounded-lg border border-indigo-200 font-mono">
+                                          Qty: {r.quantity.toLocaleString()} {(r.unit || 'PCS').toUpperCase()}
+                                        </span>
+                                        {matchedStock && (
+                                          <span className="bg-emerald-50 text-emerald-800 font-bold px-2.5 py-1 rounded-lg border border-emerald-200 font-mono">
+                                            Active Stock: {matchedStock.quantity.toLocaleString()} {matchedStock.unit}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {/* 3-Column Detailed Metadata Grid */}
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                      {/* Col 1: Traceability & Shipping Docs */}
+                                      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
+                                        <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
+                                          <FileText className="h-4 w-4 text-indigo-500" />
+                                          <span>Traceability & Documents</span>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2 text-xs">
+                                          <div>
+                                            <span className="text-slate-400 text-[11px] block">PO Number:</span>
+                                            <span className="font-mono font-semibold text-slate-800">{r.poNumber || 'N/A'}</span>
+                                          </div>
+                                          <div>
+                                            <span className="text-slate-400 text-[11px] block">DR Number:</span>
+                                            <span className="font-mono font-semibold text-slate-800">{r.drNumber || 'N/A'}</span>
+                                          </div>
+                                          <div>
+                                            <span className="text-slate-400 text-[11px] block">SI Number:</span>
+                                            <span className="font-mono font-semibold text-slate-800">{r.siNumber || 'N/A'}</span>
+                                          </div>
+                                          <div>
+                                            <span className="text-slate-400 text-[11px] block">Lot / Batch #:</span>
+                                            <span className="font-mono font-bold text-indigo-700">{r.lotNumber || 'N/A'}</span>
+                                          </div>
+                                          <div>
+                                            <span className="text-slate-400 text-[11px] block">Source / Vendor:</span>
+                                            <span className="font-medium text-slate-800 truncate block">{r.vendorSupplier || r.supplierOrDept || 'N/A'}</span>
+                                          </div>
+                                          <div>
+                                            <span className="text-slate-400 text-[11px] block">Location / Aisle:</span>
+                                            <span className="font-mono font-semibold text-slate-800">{r.location || (matchedStock?.location) || 'Main Storage'}</span>
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {/* Col 2: SOP 5-Point Quality Verification */}
+                                      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
+                                        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                                          <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider">
+                                            <ShieldCheck className="h-4 w-4 text-emerald-600" />
+                                            <span>SOP Quality Verification</span>
+                                          </div>
+                                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                                            isPassed ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                                          }`}>
+                                            {isPassed ? 'ALL PASSED' : 'DISCREPANCY'}
+                                          </span>
+                                        </div>
+                                        
+                                        <div className="space-y-1.5 text-xs">
+                                          {isNewSop ? (
+                                            <>
+                                              <div className="flex items-center justify-between">
+                                                <span className="text-slate-600">1. Receiving Inspection:</span>
+                                                <span className={pc.receivingInspection !== false ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
+                                                  {pc.receivingInspection !== false ? '✓ Verified' : '✗ Failed'}
+                                                </span>
+                                              </div>
+                                              <div className="flex items-center justify-between">
+                                                <span className="text-slate-600">2. Material Traceability:</span>
+                                                <span className={pc.materialTraceability !== false ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
+                                                  {pc.materialTraceability !== false ? '✓ Lot Recorded' : '✗ Unverified'}
+                                                </span>
+                                              </div>
+                                              <div className="flex items-center justify-between">
+                                                <span className="text-slate-600">3. Quantity Accuracy:</span>
+                                                <span className={pc.quantityAccuracy !== false ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
+                                                  {pc.quantityAccuracy !== false ? '✓ 100% Match' : '✗ Discrepancy'}
+                                                </span>
+                                              </div>
+                                              <div className="flex items-center justify-between">
+                                                <span className="text-slate-600">4. Material Condition:</span>
+                                                <span className={pc.materialConditionCheck !== false ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
+                                                  {pc.materialConditionCheck !== false ? '✓ Good Condition' : '✗ Defect / Wet'}
+                                                </span>
+                                              </div>
+                                              <div className="flex items-center justify-between">
+                                                <span className="text-slate-600">5. System Recording:</span>
+                                                <span className={pc.systemRecording !== false ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
+                                                  {pc.systemRecording !== false ? '✓ Logged' : '✗ Missing'}
+                                                </span>
+                                              </div>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <div className="flex items-center justify-between">
+                                                <span className="text-slate-600">Packaging Intact:</span>
+                                                <span className={pc.boxIntact ?? true ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
+                                                  {pc.boxIntact ?? true ? '✓ Passed' : '✗ Damaged'}
+                                                </span>
+                                              </div>
+                                              <div className="flex items-center justify-between">
+                                                <span className="text-slate-600">Moisture / Water Free:</span>
+                                                <span className={pc.noWaterDamage ?? true ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
+                                                  {pc.noWaterDamage ?? true ? '✓ Clean' : '✗ Water Spotted'}
+                                                </span>
+                                              </div>
+                                              <div className="flex items-center justify-between">
+                                                <span className="text-slate-600">Pest / Contamination:</span>
+                                                <span className={(pc.noPestSign ?? true) && (pc.noContamination ?? true) ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
+                                                  {(pc.noPestSign ?? true) && (pc.noContamination ?? true) ? '✓ Free' : '✗ Issue Found'}
+                                                </span>
+                                              </div>
+                                            </>
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      {/* Col 3: IQC Quality Decision & FIFO Tags */}
+                                      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
+                                        <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
+                                          <Activity className="h-4 w-4 text-purple-500" />
+                                          <span>IQC & Warehouse Staging</span>
+                                        </div>
+
+                                        <div className="space-y-2 text-xs">
+                                          <div>
+                                            <span className="text-slate-400 text-[11px] block">IQC Inspection Status:</span>
+                                            <div className="mt-0.5">
+                                              {r.iqcStatus === 'NA' ? (
+                                                <span className="text-slate-500 font-semibold">N/A (Internal Production)</span>
+                                              ) : r.iqcStatus === 'PENDING_IQC' ? (
+                                                <span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-bold text-[10px]">
+                                                  AWAITING IQC INSPECTION
+                                                </span>
+                                              ) : r.iqcStatus === 'APPROVED_IQC' ? (
+                                                <span className="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-bold text-[10px]">
+                                                  PASSED IQC & ACCEPTED
+                                                </span>
+                                              ) : (
+                                                <span className="bg-rose-100 text-rose-800 px-2 py-0.5 rounded font-bold text-[10px]">
+                                                  REJECTED (IN QUARANTINE)
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
+
+                                          <div className="pt-1">
+                                            <span className="text-slate-400 text-[11px] block">Assigned FIFO Tag:</span>
+                                            <div className="flex items-center gap-2 mt-1">
+                                              <span className={`h-4 w-4 rounded-full border border-slate-300 shadow-sm ${
+                                                r.fifoColorCode === 'Magenta' ? 'bg-fuchsia-600' :
+                                                r.fifoColorCode === 'Orange' ? 'bg-orange-500' :
+                                                r.fifoColorCode === 'Dark Green' ? 'bg-emerald-800' :
+                                                r.fifoColorCode === 'Yellow' ? 'bg-yellow-400' :
+                                                r.fifoColorCode === 'Navy Blue' ? 'bg-blue-900' :
+                                                r.fifoColorCode === 'Brown' ? 'bg-amber-800' :
+                                                r.fifoColorCode === 'Pink' ? 'bg-pink-400' :
+                                                r.fifoColorCode === 'Violet' ? 'bg-violet-600' :
+                                                r.fifoColorCode === 'Black' ? 'bg-stone-900' :
+                                                r.fifoColorCode === 'Light Orange' ? 'bg-orange-300' :
+                                                r.fifoColorCode === 'Grey' ? 'bg-slate-500' : 'bg-slate-300'
+                                              }`} />
+                                              <span className="font-semibold text-slate-800">{r.fifoColorCode}</span>
+                                            </div>
+                                          </div>
+
+                                          {isSuperAdmin && r.iqcStatus === 'PENDING_IQC' && (
+                                            <div className="pt-2 flex items-center gap-2" data-no-expand="true">
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  setConfirmAction({
+                                                    title: 'Approve IQC Inspection',
+                                                    message: `Are you sure you want to APPROVE IQC inspection for record ${r.rrNumber || r.id} (${r.partCode})?`,
+                                                    confirmLabel: 'YES, APPROVE IQC',
+                                                    confirmVariant: 'primary',
+                                                    onConfirm: () => onUpdateIqc(r.id, 'APPROVED_IQC')
+                                                  });
+                                                }}
+                                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold transition-colors cursor-pointer"
+                                              >
+                                                Approve IQC
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  setConfirmAction({
+                                                    title: 'Reject IQC Inspection',
+                                                    message: `Are you sure you want to REJECT IQC inspection and route record ${r.rrNumber || r.id} (${r.partCode}) to Quarantine?`,
+                                                    confirmLabel: 'YES, REJECT IQC',
+                                                    confirmVariant: 'danger',
+                                                    onConfirm: () => onUpdateIqc(r.id, 'REJECTED_IQC')
+                                                  });
+                                                }}
+                                                className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-[10px] font-bold transition-colors cursor-pointer"
+                                              >
+                                                Reject to Quarantine
+                                              </button>
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </motion.div>
+                              </td>
+                            </tr>
                           )}
-                        </td>
-                        <td className="p-4">
-                          {isSuperAdmin ? (
-                            <select
-                              defaultValue=""
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                if (val === 'APPROVE') {
-                                  setConfirmAction({
-                                    title: 'Approve IQC Inspection',
-                                    message: `Are you sure you want to APPROVE IQC inspection for record ${r.rrNumber || r.id} (${r.partCode})?`,
-                                    confirmLabel: 'YES, APPROVE IQC',
-                                    confirmVariant: 'primary',
-                                    onConfirm: () => onUpdateIqc(r.id, 'APPROVED_IQC')
-                                  });
-                                } else if (val === 'REJECT') {
-                                  setConfirmAction({
-                                    title: 'Reject IQC Inspection',
-                                    message: `Are you sure you want to REJECT IQC inspection and route record ${r.rrNumber || r.id} (${r.partCode}) to Quarantine?`,
-                                    confirmLabel: 'YES, REJECT IQC',
-                                    confirmVariant: 'danger',
-                                    onConfirm: () => onUpdateIqc(r.id, 'REJECTED_IQC')
-                                  });
-                                } else if (val === 'EDIT') setEditingReceiving({ ...r });
-                                else if (val === 'DELETE') {
-                                  setConfirmAction({
-                                    title: 'Delete Receiving Record',
-                                    message: `Are you sure you want to delete receiving record ${r.rrNumber || r.id} (${r.partCode})?`,
-                                    confirmLabel: 'YES, DELETE',
-                                    confirmVariant: 'danger',
-                                    onConfirm: () => onDeleteReceiving?.(r.id)
-                                  });
-                                }
-                                e.target.value = '';
-                              }}
-                              className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
-                              id={`action-select-rec-${r.id}`}
-                            >
-                              <option value="" disabled>Actions...</option>
-                              {r.iqcStatus === 'PENDING_IQC' && (
-                                <>
-                                  <option value="APPROVE">✅ Approve IQC</option>
-                                  <option value="REJECT">❌ Reject IQC</option>
-                                </>
-                              )}
-                              <option value="EDIT">📝 Edit Record</option>
-                              <option value="DELETE">🗑️ Delete Record</option>
-                            </select>
-                          ) : (
-                            <span className="text-slate-400 italic font-semibold text-[10px]">Super Admin Only</span>
-                          )}
-                        </td>
-                      </tr>
+                        </AnimatePresence>
+                      </React.Fragment>
                     );
                   })}
                 </tbody>
@@ -2110,90 +2424,291 @@ export default function ReceivingModule({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {sortedReturns.map(r => (
-                    <tr key={r.id} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="p-4 font-mono font-bold text-slate-900">{r.returnSlipFormNumber}</td>
-                      <td className="p-4 font-medium text-slate-700">
-                        <span className="px-2 py-1 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100 uppercase tracking-wider">
-                          {r.category || 'N/A'}
-                        </span>
-                      </td>
-                      <td className="p-4 text-slate-600 font-mono">{r.date}</td>
-                      <td className="p-4 font-medium text-slate-700">{r.department}</td>
-                      <td className="p-4">
-                        <div className="font-mono font-semibold text-slate-800">{r.partCode}</div>
-                        <div className="text-slate-500 text-[11px]">{r.materialDescription}</div>
-                        <div className="text-[10px] text-slate-400 mt-1">Lot: {r.lotNumber}</div>
-                      </td>
-                      <td className="p-4 text-right font-mono font-bold text-slate-800">{r.quantity.toLocaleString()} {(r.unit || 'PCS').toUpperCase()}</td>
-                      <td className="p-4">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          r.condition === 'Good' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
-                          r.condition === 'Damaged' ? 'bg-rose-50 text-rose-700 border border-rose-100' : 'bg-amber-50 text-amber-700 border border-amber-100'
-                        }`}>
-                          {r.condition}
-                        </span>
-                      </td>
-                      <td className="p-4">
-                        {r.status === 'APPROVED' ? (
-                          <span className="bg-emerald-50 text-emerald-700 px-2 py-1 rounded font-semibold text-[10px] border border-emerald-100">
-                            ACCEPTED TO STOCKS
-                          </span>
-                        ) : (
-                          <span className="bg-rose-50 text-rose-700 px-2 py-1 rounded font-semibold text-[10px] border border-rose-100">
-                            QUARANTINE / RESTRICTED
-                          </span>
-                        )}
-                      </td>
-                      <td className="p-4 max-w-xs">
-                        {r.reason ? (
-                          <span className="text-[11px] text-slate-700 font-medium">{r.reason}</span>
-                        ) : (
-                          <span className="text-[10px] text-slate-400 italic">No remarks</span>
-                        )}
-                      </td>
-                      <td className="p-4">
-                        {isSuperAdmin ? (
-                          <select
-                            defaultValue=""
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              if (val === 'APPROVE') {
-                                setConfirmAction({
-                                  title: 'Pass Quality & Approve Return',
-                                  message: `Are you sure you want to pass quality inspection and approve return record ${r.returnSlipFormNumber} (${r.partCode}) into stocks?`,
-                                  confirmLabel: 'YES, APPROVE RETURN',
-                                  confirmVariant: 'primary',
-                                  onConfirm: () => onUpdateReturnStatus(r.id, 'APPROVED')
-                                });
-                              } else if (val === 'EDIT') setEditingReturn({ ...r });
-                              else if (val === 'DELETE') {
-                                setConfirmAction({
-                                  title: 'Delete Return Record',
-                                  message: `Are you sure you want to delete return record ${r.returnSlipFormNumber} (${r.partCode})?`,
-                                  confirmLabel: 'YES, DELETE',
-                                  confirmVariant: 'danger',
-                                  onConfirm: () => onDeleteReturn?.(r.id)
-                                });
-                              }
-                              e.target.value = '';
-                            }}
-                            className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
-                            id={`action-select-ret-${r.id}`}
-                          >
-                            <option value="" disabled>Actions...</option>
-                            {r.status === 'QUARANTINED' && (
-                              <option value="APPROVE">✅ Pass Quality & Approve</option>
+                  {sortedReturns.map(r => {
+                    const isExpanded = expandedReturnId === r.id;
+                    const matchedStock = stocks.find(s => 
+                      (s.partCode || '').trim().toLowerCase() === (r.partCode || '').trim().toLowerCase() && 
+                      (!r.lotNumber || (s.lotNumber || '').trim().toLowerCase() === (r.lotNumber || '').trim().toLowerCase())
+                    );
+
+                    return (
+                      <React.Fragment key={r.id}>
+                        <tr 
+                          onClick={(e) => {
+                            const target = e.target as HTMLElement;
+                            if (target.closest('button, select, input, a, [data-no-expand="true"]')) return;
+                            setExpandedReturnId(prev => prev === r.id ? null : r.id);
+                          }}
+                          className={`cursor-pointer transition-all duration-150 ${
+                            isExpanded 
+                              ? 'bg-indigo-50/70 border-l-4 border-l-indigo-600 shadow-2xs' 
+                              : 'hover:bg-indigo-50/30 hover:border-l-4 hover:border-l-indigo-300'
+                          }`}
+                          title="Click row to expand return metadata & quality details"
+                        >
+                          <td className="p-4 font-mono font-bold text-slate-900">
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setExpandedReturnId(prev => prev === r.id ? null : r.id);
+                                }}
+                                className={`p-1 rounded-md transition-colors ${
+                                  isExpanded ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
+                                }`}
+                                title={isExpanded ? 'Collapse row' : 'Expand row details'}
+                              >
+                                {isExpanded ? (
+                                  <ChevronDown className="h-3.5 w-3.5" />
+                                ) : (
+                                  <ChevronRight className="h-3.5 w-3.5" />
+                                )}
+                              </button>
+                              <span>{r.returnSlipFormNumber}</span>
+                            </div>
+                          </td>
+                          <td className="p-4 font-medium text-slate-700">
+                            <span className="px-2 py-1 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100 uppercase tracking-wider">
+                              {r.category || 'N/A'}
+                            </span>
+                          </td>
+                          <td className="p-4 text-slate-600 font-mono">{r.date}</td>
+                          <td className="p-4 font-medium text-slate-700">{r.department}</td>
+                          <td className="p-4">
+                            <div className="font-mono font-semibold text-slate-800">{r.partCode}</div>
+                            <div className="text-slate-500 text-[11px]">{r.materialDescription}</div>
+                            <div className="text-[10px] text-slate-400 mt-1">Lot: {r.lotNumber}</div>
+                          </td>
+                          <td className="p-4 text-right font-mono font-bold text-slate-800">{r.quantity.toLocaleString()} {(r.unit || 'PCS').toUpperCase()}</td>
+                          <td className="p-4">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              r.condition === 'Good' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
+                              r.condition === 'Damaged' ? 'bg-rose-50 text-rose-700 border border-rose-100' : 'bg-amber-50 text-amber-700 border border-amber-100'
+                            }`}>
+                              {r.condition}
+                            </span>
+                          </td>
+                          <td className="p-4">
+                            {r.status === 'APPROVED' ? (
+                              <span className="bg-emerald-50 text-emerald-700 px-2 py-1 rounded font-semibold text-[10px] border border-emerald-100">
+                                ACCEPTED TO STOCKS
+                              </span>
+                            ) : (
+                              <span className="bg-rose-50 text-rose-700 px-2 py-1 rounded font-semibold text-[10px] border border-rose-100">
+                                QUARANTINE / RESTRICTED
+                              </span>
                             )}
-                            <option value="EDIT">📝 Edit Record</option>
-                            <option value="DELETE">🗑️ Delete Record</option>
-                          </select>
-                        ) : (
-                          <span className="text-slate-400 italic font-semibold text-[10px]">Super Admin Only</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                          </td>
+                          <td className="p-4 max-w-xs">
+                            {r.reason ? (
+                              <span className="text-[11px] text-slate-700 font-medium">{r.reason}</span>
+                            ) : (
+                              <span className="text-[10px] text-slate-400 italic">No remarks</span>
+                            )}
+                          </td>
+                          <td className="p-4" data-no-expand="true">
+                            {isSuperAdmin ? (
+                              <select
+                                defaultValue=""
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (val === 'APPROVE') {
+                                    setConfirmAction({
+                                      title: 'Pass Quality & Approve Return',
+                                      message: `Are you sure you want to pass quality inspection and approve return record ${r.returnSlipFormNumber} (${r.partCode}) into stocks?`,
+                                      confirmLabel: 'YES, APPROVE RETURN',
+                                      confirmVariant: 'primary',
+                                      onConfirm: () => onUpdateReturnStatus(r.id, 'APPROVED')
+                                    });
+                                  } else if (val === 'EDIT') setEditingReturn({ ...r });
+                                  else if (val === 'DELETE') {
+                                    setConfirmAction({
+                                      title: 'Delete Return Record',
+                                      message: `Are you sure you want to delete return record ${r.returnSlipFormNumber} (${r.partCode})?`,
+                                      confirmLabel: 'YES, DELETE',
+                                      confirmVariant: 'danger',
+                                      onConfirm: () => onDeleteReturn?.(r.id)
+                                    });
+                                  }
+                                  e.target.value = '';
+                                }}
+                                className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
+                                id={`action-select-ret-${r.id}`}
+                              >
+                                <option value="" disabled>Actions...</option>
+                                {r.status === 'QUARANTINED' && (
+                                  <option value="APPROVE">✅ Pass Quality & Approve</option>
+                                )}
+                                <option value="EDIT">📝 Edit Record</option>
+                                <option value="DELETE">🗑️ Delete Record</option>
+                              </select>
+                            ) : (
+                              <span className="text-slate-400 italic font-semibold text-[10px]">Super Admin Only</span>
+                            )}
+                          </td>
+                        </tr>
+
+                        {/* Expandable Card View for Return Record */}
+                        <AnimatePresence>
+                          {isExpanded && (
+                            <tr>
+                              <td colSpan={10} className="p-0 bg-slate-50/80 border-b-2 border-indigo-200">
+                                <motion.div
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: 'auto' }}
+                                  exit={{ opacity: 0, height: 0 }}
+                                  transition={{ duration: 0.2 }}
+                                  className="overflow-hidden"
+                                >
+                                  <div className="p-5 space-y-4">
+                                    {/* Header Summary Ribbon */}
+                                    <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
+                                      <div className="flex items-center gap-3">
+                                        <div className="p-2.5 bg-purple-50 rounded-lg text-purple-600">
+                                          <RotateCcw className="h-5 w-5" />
+                                        </div>
+                                        <div>
+                                          <div className="flex items-center gap-2">
+                                            <span className="text-sm font-bold text-slate-900">
+                                              Return Slip: <span className="font-mono text-indigo-600">{r.returnSlipFormNumber}</span>
+                                            </span>
+                                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                              r.status === 'APPROVED' 
+                                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                                                : 'bg-rose-50 text-rose-700 border border-rose-200'
+                                            }`}>
+                                              {r.status === 'APPROVED' ? 'ACCEPTED IN STOCKS' : 'QUARANTINED / RESTRICTED'}
+                                            </span>
+                                          </div>
+                                          <p className="text-xs text-slate-500 mt-0.5">
+                                            Origin: <strong className="text-slate-700">{r.department}</strong> &bull; Part: <strong className="font-mono text-slate-700">{r.partCode}</strong>
+                                          </p>
+                                        </div>
+                                      </div>
+
+                                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                                        <span className="bg-slate-100 text-slate-700 font-mono font-semibold px-2.5 py-1 rounded-lg border border-slate-200">
+                                          Date: {r.date}
+                                        </span>
+                                        <span className="bg-purple-50 text-purple-800 font-bold px-2.5 py-1 rounded-lg border border-purple-200 font-mono">
+                                          Return Qty: {r.quantity.toLocaleString()} {(r.unit || 'PCS').toUpperCase()}
+                                        </span>
+                                        {matchedStock && (
+                                          <span className="bg-emerald-50 text-emerald-800 font-bold px-2.5 py-1 rounded-lg border border-emerald-200 font-mono">
+                                            Active Stock: {matchedStock.quantity.toLocaleString()} {matchedStock.unit}
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {/* 3-Column Detailed Metadata Grid */}
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                      {/* Col 1: Origin & Batch Information */}
+                                      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
+                                        <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
+                                          <Factory className="h-4 w-4 text-indigo-500" />
+                                          <span>Origin & Batch Info</span>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2 text-xs">
+                                          <div>
+                                            <span className="text-slate-400 text-[11px] block">Department:</span>
+                                            <span className="font-semibold text-slate-800">{r.department}</span>
+                                          </div>
+                                          <div>
+                                            <span className="text-slate-400 text-[11px] block">Category:</span>
+                                            <span className="font-semibold text-indigo-700">{r.category || 'N/A'}</span>
+                                          </div>
+                                          <div>
+                                            <span className="text-slate-400 text-[11px] block">Lot / Batch #:</span>
+                                            <span className="font-mono font-bold text-slate-800">{r.lotNumber || 'N/A'}</span>
+                                          </div>
+                                          <div>
+                                            <span className="text-slate-400 text-[11px] block">Location:</span>
+                                            <span className="font-mono font-semibold text-slate-800">{matchedStock?.location || 'Returns Bay / Shelf'}</span>
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {/* Col 2: Physical Condition & QA Notes */}
+                                      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
+                                        <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
+                                          <ShieldCheck className="h-4 w-4 text-emerald-600" />
+                                          <span>Material Condition & Reason</span>
+                                        </div>
+                                        <div className="space-y-2 text-xs">
+                                          <div>
+                                            <span className="text-slate-400 text-[11px] block">Condition:</span>
+                                            <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold mt-0.5 ${
+                                              r.condition === 'Good' ? 'bg-emerald-100 text-emerald-800' :
+                                              r.condition === 'Damaged' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
+                                            }`}>
+                                              {r.condition}
+                                            </span>
+                                          </div>
+                                          <div>
+                                            <span className="text-slate-400 text-[11px] block">Reason for Return:</span>
+                                            <p className="text-slate-700 bg-slate-50 p-2 rounded-lg border border-slate-150 mt-0.5 text-[11px] leading-relaxed">
+                                              {r.reason || 'Excess production material returned to warehouse.'}
+                                            </p>
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {/* Col 3: Quality Disposition & Approvals */}
+                                      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
+                                        <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
+                                          <Activity className="h-4 w-4 text-purple-500" />
+                                          <span>Quality Disposition</span>
+                                        </div>
+
+                                        <div className="space-y-2 text-xs">
+                                          <div>
+                                            <span className="text-slate-400 text-[11px] block">Current Disposition:</span>
+                                            <div className="mt-0.5">
+                                              {r.status === 'APPROVED' ? (
+                                                <span className="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-bold text-[10px]">
+                                                  PASSED QUALITY & MERGED TO STOCK
+                                                </span>
+                                              ) : (
+                                                <span className="bg-rose-100 text-rose-800 px-2 py-0.5 rounded font-bold text-[10px]">
+                                                  HELD IN QUARANTINE / RESTRICTED
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
+
+                                          {isSuperAdmin && r.status === 'QUARANTINED' && (
+                                            <div className="pt-2" data-no-expand="true">
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  setConfirmAction({
+                                                    title: 'Pass Quality & Approve Return',
+                                                    message: `Are you sure you want to pass quality inspection and approve return record ${r.returnSlipFormNumber} (${r.partCode}) into stocks?`,
+                                                    confirmLabel: 'YES, APPROVE RETURN',
+                                                    confirmVariant: 'primary',
+                                                    onConfirm: () => onUpdateReturnStatus(r.id, 'APPROVED')
+                                                  });
+                                                }}
+                                                className="w-full px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer shadow-2xs flex items-center justify-center gap-1.5"
+                                              >
+                                                <Check className="h-3.5 w-3.5" /> Pass Quality & Merge to Stocks
+                                              </button>
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </motion.div>
+                              </td>
+                            </tr>
+                          )}
+                        </AnimatePresence>
+                      </React.Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

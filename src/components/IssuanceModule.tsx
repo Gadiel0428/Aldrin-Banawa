@@ -18,7 +18,17 @@ import {
   Trash2,
   ScanLine,
   Barcode,
-  Printer
+  Printer,
+  ChevronDown,
+  ChevronRight,
+  PackageCheck,
+  ClipboardList,
+  Layers,
+  Calendar,
+  Building2,
+  Factory,
+  Tag,
+  Check
 } from 'lucide-react';
 import { MaterialStockItem, IssuanceRecord, MasterRegistryItem } from '../types';
 import BarcodeScannerModal from './BarcodeScannerModal';
@@ -55,6 +65,7 @@ export default function IssuanceModule({
   const [selectedPickingDocIssuance, setSelectedPickingDocIssuance] = useState<IssuanceRecord | null>(null);
   const [printInitialView, setPrintInitialView] = useState<DocViewMode>('OFFICIAL_DOC');
   const [confirmAction, setConfirmAction] = useState<ConfirmActionConfig | null>(null);
+  const [expandedIssuanceId, setExpandedIssuanceId] = useState<string | null>(null);
 
   const ISSUANCE_DRAFT_KEY = 'juwei_wms_draft_issuance';
 
@@ -597,84 +608,308 @@ export default function IssuanceModule({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredIssuances.map(iss => (
-                <tr key={iss.id} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="p-4 font-mono font-semibold text-slate-600">{iss.id}</td>
-                  <td className="p-4 text-slate-600 font-mono">{iss.date}</td>
-                  <td className="p-4">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedPickingDocIssuance(iss)}
-                      className="font-mono font-bold text-indigo-600 hover:text-indigo-800 hover:underline flex items-center gap-1 cursor-pointer"
-                      title="Click to view & print official Material Requisition Picking List"
+              {filteredIssuances.map(iss => {
+                const isExpanded = expandedIssuanceId === iss.id;
+                const matchedStock = stocks.find(s => 
+                  (s.partCode || '').trim().toLowerCase() === (iss.partCode || '').trim().toLowerCase() && 
+                  (!iss.lotNumber || (s.lotNumber || '').trim().toLowerCase() === (iss.lotNumber || '').trim().toLowerCase())
+                );
+                const registryItem = registries.find(r => 
+                  (r.code || '').trim().toLowerCase() === (iss.partCode || '').trim().toLowerCase()
+                );
+
+                return (
+                  <React.Fragment key={iss.id}>
+                    <tr 
+                      onClick={(e) => {
+                        const target = e.target as HTMLElement;
+                        if (target.closest('button, select, input, a, [data-no-expand="true"]')) return;
+                        setExpandedIssuanceId(prev => prev === iss.id ? null : iss.id);
+                      }}
+                      className={`cursor-pointer transition-all duration-150 ${
+                        isExpanded 
+                          ? 'bg-indigo-50/70 border-l-4 border-l-indigo-600 shadow-2xs' 
+                          : 'hover:bg-indigo-50/30 hover:border-l-4 hover:border-l-indigo-300'
+                      }`}
+                      title="Click row to expand issuance details & FIFO metadata"
                     >
-                      <Printer className="h-3 w-3 text-indigo-500 shrink-0" />
-                      <span>{iss.requisitionNumber}</span>
-                    </button>
-                  </td>
-                  <td className="p-4 font-medium text-slate-700">{iss.department}</td>
-                  <td className="p-4">
-                    <div className="font-mono font-semibold text-slate-800">{iss.partCode}</div>
-                    <div className="text-slate-500 text-[11px] truncate max-w-[200px]">{iss.description}</div>
-                  </td>
-                  <td className="p-4 text-right font-mono font-bold text-slate-850">
-                    {iss.quantityIssued.toLocaleString()}
-                  </td>
-                  <td className="p-4 font-mono text-slate-700">{iss.lotNumber}</td>
-                  <td className="p-4">
-                    {iss.fifoVerified ? (
-                      <span className="text-emerald-600 font-semibold flex items-center gap-1">
-                        <ShieldCheck className="h-4 w-4" /> Passed FIFO
-                      </span>
-                    ) : (
-                      <span className="text-amber-600 font-semibold flex items-center gap-1" title="Issued out of chronological order">
-                        <ShieldAlert className="h-4 w-4" /> Override Warning
-                      </span>
-                    )}
-                  </td>
-                  <td className="p-4 text-slate-600 space-y-0.5">
-                    <div className="flex items-center gap-1"><User className="h-3 w-3 text-slate-400" /> <span className="text-[10px]">Staff:</span> {iss.issuedBy}</div>
-                    <div className="flex items-center gap-1"><CornerDownRight className="h-3 w-3 text-slate-400" /> <span className="text-[10px]">Recv:</span> {iss.receivedBy}</div>
-                  </td>
-                  <td className="p-4">
-                    {isSuperAdmin ? (
-                      <select
-                        defaultValue=""
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          if (val === 'PRINT_MRS') {
+                      <td className="p-4 font-mono font-semibold text-slate-600">
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpandedIssuanceId(prev => prev === iss.id ? null : iss.id);
+                            }}
+                            className={`p-1 rounded-md transition-colors ${
+                              isExpanded ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
+                            }`}
+                            title={isExpanded ? 'Collapse row' : 'Expand row details'}
+                          >
+                            {isExpanded ? (
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            ) : (
+                              <ChevronRight className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                          <span>{iss.id}</span>
+                        </div>
+                      </td>
+                      <td className="p-4 text-slate-600 font-mono">{iss.date}</td>
+                      <td className="p-4" data-no-expand="true">
+                        <button
+                          type="button"
+                          onClick={() => {
                             setPrintInitialView('OFFICIAL_DOC');
                             setSelectedPickingDocIssuance(iss);
-                          } else if (val === 'PRINT_PL') {
-                            setPrintInitialView('PICKING_LIST');
-                            setSelectedPickingDocIssuance(iss);
-                          } else if (val === 'EDIT') setEditingIssuance({ ...iss });
-                          else if (val === 'DELETE') {
-                            setConfirmAction({
-                              title: 'Delete Issuance Record',
-                              message: `Are you sure you want to delete issuance record ${iss.id} (${iss.requisitionNumber})?`,
-                              confirmLabel: 'YES, DELETE RECORD',
-                              confirmVariant: 'danger',
-                              onConfirm: () => onDeleteIssuance?.(iss.id)
-                            });
-                          }
-                          e.target.value = '';
-                        }}
-                        className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
-                        id={`action-select-iss-${iss.id}`}
-                      >
-                        <option value="" disabled>Actions...</option>
-                        <option value="PRINT_MRS">📄 Print Requisition Slip (MRS)</option>
-                        <option value="PRINT_PL">📋 Print Picking List</option>
-                        <option value="EDIT">📝 Edit Record</option>
-                        <option value="DELETE">🗑️ Delete Record</option>
-                      </select>
-                    ) : (
-                      <span className="text-slate-400 italic text-[10px]">Super Admin Only</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                          }}
+                          className="font-mono font-bold text-indigo-600 hover:text-indigo-800 hover:underline flex items-center gap-1 cursor-pointer"
+                          title="Click to view & print official Material Requisition Slip (MRS)"
+                        >
+                          <Printer className="h-3 w-3 text-indigo-500 shrink-0" />
+                          <span>{iss.requisitionNumber}</span>
+                        </button>
+                      </td>
+                      <td className="p-4 font-medium text-slate-700">{iss.department}</td>
+                      <td className="p-4">
+                        <div className="font-mono font-semibold text-slate-800">{iss.partCode}</div>
+                        <div className="text-slate-500 text-[11px] truncate max-w-[200px]">{iss.description}</div>
+                      </td>
+                      <td className="p-4 text-right font-mono font-bold text-slate-850">
+                        {iss.quantityIssued.toLocaleString()}
+                      </td>
+                      <td className="p-4 font-mono text-slate-700">{iss.lotNumber}</td>
+                      <td className="p-4">
+                        {iss.fifoVerified ? (
+                          <span className="text-emerald-600 font-semibold flex items-center gap-1">
+                            <ShieldCheck className="h-4 w-4" /> Passed FIFO
+                          </span>
+                        ) : (
+                          <span className="text-amber-600 font-semibold flex items-center gap-1" title="Issued out of chronological order">
+                            <ShieldAlert className="h-4 w-4" /> Override Warning
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-4 text-slate-600 space-y-0.5">
+                        <div className="flex items-center gap-1"><User className="h-3 w-3 text-slate-400" /> <span className="text-[10px]">Staff:</span> {iss.issuedBy}</div>
+                        <div className="flex items-center gap-1"><CornerDownRight className="h-3 w-3 text-slate-400" /> <span className="text-[10px]">Recv:</span> {iss.receivedBy}</div>
+                      </td>
+                      <td className="p-4" data-no-expand="true">
+                        {isSuperAdmin ? (
+                          <select
+                            defaultValue=""
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val === 'PRINT_MRS') {
+                                setPrintInitialView('OFFICIAL_DOC');
+                                setSelectedPickingDocIssuance(iss);
+                              } else if (val === 'PRINT_PL') {
+                                setPrintInitialView('PICKING_LIST');
+                                setSelectedPickingDocIssuance(iss);
+                              } else if (val === 'EDIT') setEditingIssuance({ ...iss });
+                              else if (val === 'DELETE') {
+                                setConfirmAction({
+                                  title: 'Delete Issuance Record',
+                                  message: `Are you sure you want to delete issuance record ${iss.id} (${iss.requisitionNumber})?`,
+                                  confirmLabel: 'YES, DELETE RECORD',
+                                  confirmVariant: 'danger',
+                                  onConfirm: () => onDeleteIssuance?.(iss.id)
+                                });
+                              }
+                              e.target.value = '';
+                            }}
+                            className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
+                            id={`action-select-iss-${iss.id}`}
+                          >
+                            <option value="" disabled>Actions...</option>
+                            <option value="PRINT_MRS">📄 Print Requisition Slip (MRS)</option>
+                            <option value="PRINT_PL">📋 Print Picking List</option>
+                            <option value="EDIT">📝 Edit Record</option>
+                            <option value="DELETE">🗑️ Delete Record</option>
+                          </select>
+                        ) : (
+                          <span className="text-slate-400 italic text-[10px]">Super Admin Only</span>
+                        )}
+                      </td>
+                    </tr>
+
+                    {/* Expandable Card View for Issuance Record */}
+                    <AnimatePresence>
+                      {isExpanded && (
+                        <tr>
+                          <td colSpan={10} className="p-0 bg-slate-50/80 border-b-2 border-indigo-200">
+                            <motion.div
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: 'auto' }}
+                              exit={{ opacity: 0, height: 0 }}
+                              transition={{ duration: 0.2 }}
+                              className="overflow-hidden"
+                            >
+                              <div className="p-5 space-y-4">
+                                {/* Header Summary Ribbon */}
+                                <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
+                                  <div className="flex items-center gap-3">
+                                    <div className="p-2.5 bg-indigo-50 rounded-lg text-indigo-600">
+                                      <PackageCheck className="h-5 w-5" />
+                                    </div>
+                                    <div>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-sm font-bold text-slate-900">
+                                          Requisition: <span className="font-mono text-indigo-600">{iss.requisitionNumber}</span>
+                                        </span>
+                                        <span className="font-mono text-xs text-slate-400">({iss.id})</span>
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                          iss.fifoVerified 
+                                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                                            : 'bg-amber-50 text-amber-700 border border-amber-200'
+                                        }`}>
+                                          {iss.fifoVerified ? 'FIFO COMPLIANT' : 'OVERRIDE AUDIT REQUIRED'}
+                                        </span>
+                                      </div>
+                                      <p className="text-xs text-slate-500 mt-0.5">
+                                        Target: <strong className="text-slate-700">{iss.department}</strong> &bull; Part: <strong className="font-mono text-slate-700">{iss.partCode}</strong> - {iss.description}
+                                      </p>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                                    <span className="bg-slate-100 text-slate-700 font-mono font-semibold px-2.5 py-1 rounded-lg border border-slate-200">
+                                      Date: {iss.date}
+                                    </span>
+                                    <span className="bg-indigo-50 text-indigo-800 font-bold px-2.5 py-1 rounded-lg border border-indigo-200 font-mono">
+                                      Issued: {iss.quantityIssued.toLocaleString()} PCS
+                                    </span>
+                                    {matchedStock && (
+                                      <span className="bg-emerald-50 text-emerald-800 font-bold px-2.5 py-1 rounded-lg border border-emerald-200 font-mono">
+                                        Current Stock: {matchedStock.quantity.toLocaleString()} {matchedStock.unit}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* 3-Column Detailed Metadata Grid */}
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                  {/* Col 1: Material & Warehouse Details */}
+                                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
+                                    <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
+                                      <Tag className="h-4 w-4 text-indigo-500" />
+                                      <span>Material & Warehouse Location</span>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-2 text-xs">
+                                      <div>
+                                        <span className="text-slate-400 text-[11px] block">Part Code:</span>
+                                        <span className="font-mono font-bold text-slate-800">{iss.partCode}</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-slate-400 text-[11px] block">Category:</span>
+                                        <span className="font-semibold text-indigo-700">{registryItem?.category || 'Production Material'}</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-slate-400 text-[11px] block">Batch / Lot #:</span>
+                                        <span className="font-mono font-bold text-slate-800">{iss.lotNumber}</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-slate-400 text-[11px] block">Bin Location:</span>
+                                        <span className="font-mono font-semibold text-slate-800">{matchedStock?.location || 'Standard Bay / Shelf'}</span>
+                                      </div>
+                                      <div className="col-span-2 pt-1 border-t border-slate-100 flex justify-between items-center text-slate-500 text-[11px]">
+                                        <span>Unit of Measure:</span>
+                                        <span className="font-mono font-bold text-slate-700">{matchedStock?.unit || registryItem?.unit || 'PCS'}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Col 2: FIFO Compliance & SOP Verification */}
+                                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
+                                    <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
+                                      <ShieldCheck className="h-4 w-4 text-emerald-600" />
+                                      <span>FIFO & SOP Compliance</span>
+                                    </div>
+                                    <div className="space-y-2 text-xs">
+                                      <div>
+                                        <span className="text-slate-400 text-[11px] block">FIFO Status:</span>
+                                        <div className="mt-0.5">
+                                          {iss.fifoVerified ? (
+                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800">
+                                              <Check className="h-3 w-3" /> Strict First-In First-Out Verified
+                                            </span>
+                                          ) : (
+                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-amber-100 text-amber-800">
+                                              <ShieldAlert className="h-3 w-3" /> Manual Out-of-Sequence Override
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <div className="bg-slate-50 p-2 rounded-lg border border-slate-150 text-[11px] text-slate-600 space-y-1">
+                                        <div className="flex justify-between">
+                                          <span>Stock Allocation:</span>
+                                          <strong className="text-slate-800">Deducted from Inventory</strong>
+                                        </div>
+                                        <div className="flex justify-between">
+                                          <span>Requisition Purpose:</span>
+                                          <strong className="text-slate-800">{iss.department} Operations</strong>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Col 3: Signatures & Quick Print Actions */}
+                                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
+                                    <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
+                                      <FileSpreadsheet className="h-4 w-4 text-purple-500" />
+                                      <span>Signatures & Official Documents</span>
+                                    </div>
+
+                                    <div className="space-y-2 text-xs">
+                                      <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2 rounded-lg border border-slate-150">
+                                        <div>
+                                          <span className="text-slate-400 text-[10px] block">Issued By (Warehouse):</span>
+                                          <span className="font-semibold text-slate-800 text-[11px] flex items-center gap-1">
+                                            <User className="h-3 w-3 text-slate-400" /> {iss.issuedBy}
+                                          </span>
+                                        </div>
+                                        <div>
+                                          <span className="text-slate-400 text-[10px] block">Received By (Production):</span>
+                                          <span className="font-semibold text-slate-800 text-[11px] flex items-center gap-1">
+                                            <CornerDownRight className="h-3 w-3 text-slate-400" /> {iss.receivedBy}
+                                          </span>
+                                        </div>
+                                      </div>
+
+                                      <div className="flex gap-2 pt-1" data-no-expand="true">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setPrintInitialView('OFFICIAL_DOC');
+                                            setSelectedPickingDocIssuance(iss);
+                                          }}
+                                          className="flex-1 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold transition-colors cursor-pointer border border-indigo-200 flex items-center justify-center gap-1 shadow-2xs"
+                                        >
+                                          <Printer className="h-3 w-3" /> Requisition Slip
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setPrintInitialView('PICKING_LIST');
+                                            setSelectedPickingDocIssuance(iss);
+                                          }}
+                                          className="flex-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-colors cursor-pointer border border-slate-200 flex items-center justify-center gap-1 shadow-2xs"
+                                        >
+                                          <ClipboardList className="h-3 w-3" /> Picking List
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </motion.div>
+                          </td>
+                        </tr>
+                      )}
+                    </AnimatePresence>
+                  </React.Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>

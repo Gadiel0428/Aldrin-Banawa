@@ -29,7 +29,22 @@ import {
   RotateCcw,
   ArrowUpDown,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  ChevronDown,
+  ChevronUp,
+  ChevronRight,
+  ChevronsUpDown,
+  Eye,
+  Package,
+  Boxes,
+  MapPin,
+  Tag,
+  Activity,
+  Sparkles,
+  CheckCircle2,
+  ShieldAlert,
+  SlidersHorizontal,
+  FileText
 } from 'lucide-react';
 import { MaterialStockItem, MaterialType, getCustomerForPart, UOM_OPTIONS, ReceivingRecord, IssuanceRecord, ReturnRecord } from '../types';
 import { FIFO_COLORS_BY_MONTH } from '../data';
@@ -80,8 +95,10 @@ export default function StockFIFOControl({
     }
   };
   
-  // State for Item History Modal
+  // State for Item History Modal & Inline Row Expansion
   const [historyStockItem, setHistoryStockItem] = useState<MaterialStockItem | null>(null);
+  const [expandedStockId, setExpandedStockId] = useState<string | null>(null);
+  const [inlineHistoryFilter, setInlineHistoryFilter] = useState<'ALL' | 'RECEIVING' | 'ISSUANCE' | 'RETURN'>('ALL');
 
   // States for manual stock additions / adjustment modal
   const [showAdjustModal, setShowAdjustModal] = useState<string | null>(null);
@@ -768,170 +785,568 @@ export default function StockFIFOControl({
                   isNearExpiry = daysLeft <= 30;
                 }
 
+                const isExpanded = expandedStockId === item.id;
+
+                // Match transaction histories for this specific part code & lot
+                const pCode = (item.partCode || '').trim().toLowerCase();
+                const lNum = (item.lotNumber || '').trim().toLowerCase();
+
+                const matchedReceivings = receiving.filter(r => {
+                  const matchCode = (r.partCode || '').trim().toLowerCase() === pCode;
+                  const matchLot = !lNum || !r.lotNumber || (r.lotNumber || '').trim().toLowerCase() === lNum;
+                  return matchCode && matchLot;
+                });
+
+                const matchedIssuances = issuances.filter(i => {
+                  const matchCode = (i.partCode || '').trim().toLowerCase() === pCode;
+                  const matchLot = !lNum || !i.lotNumber || (i.lotNumber || '').trim().toLowerCase() === lNum;
+                  return matchCode && matchLot;
+                });
+
+                const matchedReturns = returns.filter(ret => {
+                  const matchCode = (ret.partCode || '').trim().toLowerCase() === pCode;
+                  const matchLot = !lNum || !ret.lotNumber || (ret.lotNumber || '').trim().toLowerCase() === lNum;
+                  return matchCode && matchLot;
+                });
+
+                const historyEvents = [
+                  ...matchedReceivings.map(r => ({
+                    id: r.id,
+                    type: 'RECEIVING' as const,
+                    date: r.receivedDate || r.date,
+                    refNumber: r.rrNumber || r.poNumber || r.id,
+                    qty: r.quantity,
+                    unit: r.unit || item.unit,
+                    party: r.supplierOrDept || r.vendorSupplier || 'External Supplier',
+                    status: r.iqcStatus === 'APPROVED_IQC' ? 'IQC APPROVED' : r.iqcStatus === 'REJECTED_IQC' ? 'IQC REJECTED' : (r.iqcStatus || 'RECEIVED'),
+                    details: `Lot: ${r.lotNumber || item.lotNumber} • Loc: ${r.location || item.location}`
+                  })),
+                  ...matchedIssuances.map(i => ({
+                    id: i.id,
+                    type: 'ISSUANCE' as const,
+                    date: i.date,
+                    refNumber: i.requisitionNumber || i.id,
+                    qty: i.quantityIssued,
+                    unit: item.unit,
+                    party: i.department || 'Production Line',
+                    status: i.fifoVerified ? 'FIFO COMPLIANT' : 'FIFO OVERRIDE',
+                    details: `Staff: ${i.issuedBy || 'Operator'} → Recv: ${i.receivedBy || 'Dept'}`
+                  })),
+                  ...matchedReturns.map(ret => ({
+                    id: ret.id,
+                    type: 'RETURN' as const,
+                    date: ret.date,
+                    refNumber: ret.returnSlipFormNumber || ret.id,
+                    qty: ret.quantity,
+                    unit: ret.unit || item.unit,
+                    party: ret.department || 'Department Return',
+                    status: ret.status,
+                    details: `Cond: ${ret.condition} • Reason: ${ret.reason || 'Excess Return'}`
+                  }))
+                ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+                const filteredEvents = historyEvents.filter(ev => {
+                  if (inlineHistoryFilter === 'ALL') return true;
+                  return ev.type === inlineHistoryFilter;
+                });
+
+                const totalReceivedQty = matchedReceivings.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
+                const totalIssuedQty = matchedIssuances.reduce((sum, i) => sum + (Number(i.quantityIssued) || 0), 0);
+                const totalReturnedQty = matchedReturns.reduce((sum, ret) => sum + (Number(ret.quantity) || 0), 0);
+
                 return (
-                  <tr key={item.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="p-4 font-mono font-semibold text-slate-600">{item.id}</td>
-                    <td className="p-4">
-                      <span className="px-2 py-0.5 rounded font-mono text-[9px] font-bold bg-slate-150 text-slate-800 uppercase">
-                        {item.type}
-                      </span>
-                    </td>
-                    <td className="p-4">
-                      <div className="font-mono font-bold text-slate-800 flex items-center flex-wrap gap-1.5">
-                        <span>{item.partCode}</span>
-                        {item.resinSackRisk && (
-                          <span className="bg-orange-100 text-orange-800 text-[8px] font-bold px-1 rounded-sm shrink-0" title="Broken sack / mixing danger">
-                            SACK RISK
-                          </span>
-                        )}
-                        <span className="bg-indigo-50 text-indigo-700 text-[8px] font-bold px-1.5 py-0.5 rounded-sm border border-indigo-100 shrink-0 font-sans">
-                          {item.customer || getCustomerForPart(item.partCode, item.description)}
-                        </span>
-                      </div>
-                      <div className="text-slate-500 text-[11px] truncate max-w-[180px]">{item.description}</div>
-                      {item.bom && item.bom.length > 0 && (
-                        <div className="mt-2 bg-slate-50 border border-slate-200 p-2 rounded-lg max-w-[200px]">
-                          <span className="text-[9px] font-bold text-indigo-700 uppercase block mb-1">BOM Components ({item.bom.length})</span>
-                          <div className="space-y-1 max-h-[80px] overflow-y-auto pr-1">
-                            {item.bom.map((b: any, idx: number) => (
-                              <div key={idx} className="flex justify-between items-center text-[9px] font-mono text-slate-600 leading-tight">
-                                <span className="truncate max-w-[110px]" title={`${b.partCode}: ${b.description}`}>{b.partCode}</span>
-                                <span className="font-bold text-slate-800">{b.quantityRequired} {b.unit}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </td>
-                    <td className="p-4 text-right font-mono font-bold text-slate-900">
-                      <div>{item.quantity.toLocaleString()} {(item.unit || 'PCS').toUpperCase()}</div>
-                      {typeof item.reorderMin === 'number' && item.reorderMin > 0 && item.quantity <= item.reorderMin && (
-                        <span className="inline-block bg-rose-100 text-rose-800 text-[9px] font-bold px-1.5 py-0.5 rounded border border-rose-200 mt-1 font-sans">
-                          ⚠️ LOW STOCK (Min: {item.reorderMin})
-                        </span>
-                      )}
-                    </td>
-                    <td className="p-4">
-                      <div className="font-mono font-semibold">{item.lotNumber}</div>
-                      <div className="text-[10px] text-slate-400 font-mono">Rec: {item.receivedDate}</div>
-                    </td>
-                    <td className="p-4">
-                      {item.expirationDate ? (
-                        <div className="space-y-0.5">
-                          <div className={`font-semibold ${isNearExpiry ? 'text-rose-600 animate-pulse font-bold' : 'text-slate-700'}`}>
-                            {item.expirationDate}
-                          </div>
-                          <div className="text-[10px] text-slate-400 font-mono">
-                            {daysLeft !== null && daysLeft <= 0 ? 'Expired' : `${daysLeft} days remaining`}
-                          </div>
-                        </div>
-                      ) : (
-                        <span className="text-slate-400 italic">No shelf limit</span>
-                      )}
-                    </td>
-                    <td className="p-4">
-                      <span className="flex items-center gap-1.5 font-bold text-slate-700 font-mono">
-                        <span className={`h-3 w-3 rounded-full border border-black/5 ${
-                          item.fifoColor === 'Magenta' ? 'bg-fuchsia-600' :
-                          item.fifoColor === 'Orange' ? 'bg-orange-500' :
-                          item.fifoColor === 'Dark Green' ? 'bg-emerald-800' :
-                          item.fifoColor === 'Yellow' ? 'bg-yellow-400' :
-                          item.fifoColor === 'Navy Blue' ? 'bg-blue-900' :
-                          item.fifoColor === 'Brown' ? 'bg-amber-800' :
-                          item.fifoColor === 'Pink' ? 'bg-pink-400' :
-                          item.fifoColor === 'Violet' ? 'bg-violet-600' :
-                          item.fifoColor === 'Black' ? 'bg-stone-900' :
-                          item.fifoColor === 'Light Orange' ? 'bg-orange-300' :
-                          item.fifoColor === 'Grey' ? 'bg-slate-500' : 'bg-slate-300'
-                        }`} />
-                        {item.fifoColor}
-                      </span>
-                    </td>
-                    <td className="p-4 font-medium text-slate-700">{item.location}</td>
-                    <td className="p-4">
-                      {item.status === 'APPROVED' ? (
-                        <span className="bg-emerald-50 text-emerald-700 px-2 py-1 rounded font-bold text-[9px] border border-emerald-100">
-                          APPROVED
-                        </span>
-                      ) : item.status === 'QUARANTINE' ? (
-                        <span className="bg-rose-50 text-rose-700 px-2 py-1 rounded font-bold text-[9px] border border-rose-100">
-                          QUARANTINE
-                        </span>
-                      ) : (
-                        <span className="bg-amber-50 text-amber-700 px-2 py-1 rounded font-bold text-[9px] border border-amber-100">
-                          ON HOLD
-                        </span>
-                      )}
-                    </td>
-                    <td className="p-4">
+                  <React.Fragment key={item.id}>
+                    <tr 
+                      onClick={(e) => {
+                        const target = e.target as HTMLElement;
+                        if (target.closest('button, select, input, a, [data-no-expand="true"]')) return;
+                        setExpandedStockId(prev => prev === item.id ? null : item.id);
+                      }}
+                      className={`cursor-pointer transition-all duration-150 ${
+                        isExpanded 
+                          ? 'bg-indigo-50/70 border-l-4 border-l-indigo-600 shadow-2xs' 
+                          : 'hover:bg-indigo-50/30 hover:border-l-4 hover:border-l-indigo-300'
+                      }`}
+                      title="Click row to expand detailed transaction history & metadata"
+                    >
+                      <td className="p-4 font-mono font-semibold text-slate-600">
                         <div className="flex items-center gap-1.5">
                           <button
                             type="button"
-                            onClick={() => setHistoryStockItem(item)}
-                            className="flex items-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs transition-colors cursor-pointer shrink-0"
-                            title={`View complete transaction history for Part ${item.partCode} (Lot: ${item.lotNumber})`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpandedStockId(prev => prev === item.id ? null : item.id);
+                            }}
+                            className={`p-1 rounded-md transition-colors ${
+                              isExpanded 
+                                ? 'bg-indigo-600 text-white shadow-2xs' 
+                                : 'text-slate-400 hover:text-indigo-600 hover:bg-indigo-100/60'
+                            }`}
+                            title={isExpanded ? 'Collapse card view' : 'Expand detailed card view'}
                           >
-                            <History className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
-                            <span>History</span>
+                            {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                           </button>
-
-                          {isSuperAdmin && (
-                            <select
-                              defaultValue=""
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                if (val === 'HISTORY') {
-                                  setHistoryStockItem(item);
-                                } else if (val === 'ADJUST') {
-                                  setShowAdjustModal(item.id);
-                                  setAdjustQty(item.quantity);
-                                } else if (val === 'EDIT') {
-                                  setEditingStockItem({ ...item });
-                                } else if (val === 'RELEASE') {
-                                  setConfirmAction({
-                                    title: 'Release Stock Item',
-                                    message: `Are you sure you want to release stock item ${item.partCode} (Lot: ${item.lotNumber}) to active inventory?`,
-                                    confirmLabel: 'YES, RELEASE STOCK',
-                                    confirmVariant: 'primary',
-                                    onConfirm: () => onUpdateStockStatus(item.id, 'APPROVED')
-                                  });
-                                } else if (val === 'QUARANTINE') {
-                                  setConfirmAction({
-                                    title: 'Quarantine Stock Item',
-                                    message: `Are you sure you want to place stock item ${item.partCode} (Lot: ${item.lotNumber}) into Quarantine?`,
-                                    confirmLabel: 'YES, QUARANTINE',
-                                    confirmVariant: 'warning',
-                                    onConfirm: () => onUpdateStockStatus(item.id, 'QUARANTINE')
-                                  });
-                                } else if (val === 'DELETE') {
-                                  setConfirmAction({
-                                    title: 'Delete Stock Item',
-                                    message: `Are you sure you want to delete registered stock item ${item.partCode} (Lot: ${item.lotNumber})?`,
-                                    confirmLabel: 'YES, DELETE ITEM',
-                                    confirmVariant: 'danger',
-                                    onConfirm: () => onDeleteStock?.(item.id)
-                                  });
-                                }
-                                e.target.value = '';
-                              }}
-                              className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
-                              id={`action-select-stock-${item.id}`}
-                            >
-                              <option value="" disabled>Actions...</option>
-                              <option value="HISTORY">📜 View History</option>
-                              <option value="ADJUST">✏️ Adjust Quantity</option>
-                              <option value="EDIT">📝 Edit Details</option>
-                              {item.status !== 'APPROVED' ? (
-                                <option value="RELEASE">✅ Release Stock</option>
-                              ) : (
-                                <option value="QUARANTINE">⚠️ Quarantine Stock</option>
-                              )}
-                              <option value="DELETE">🗑️ Delete Item</option>
-                            </select>
-                          )}
+                          <span>{item.id}</span>
                         </div>
                       </td>
-                  </tr>
+                      <td className="p-4">
+                        <span className="px-2 py-0.5 rounded font-mono text-[9px] font-bold bg-slate-150 text-slate-800 uppercase">
+                          {item.type}
+                        </span>
+                      </td>
+                      <td className="p-4">
+                        <div className="font-mono font-bold text-slate-800 flex items-center flex-wrap gap-1.5">
+                          <span>{item.partCode}</span>
+                          {item.resinSackRisk && (
+                            <span className="bg-orange-100 text-orange-800 text-[8px] font-bold px-1 rounded-sm shrink-0" title="Broken sack / mixing danger">
+                              SACK RISK
+                            </span>
+                          )}
+                          <span className="bg-indigo-50 text-indigo-700 text-[8px] font-bold px-1.5 py-0.5 rounded-sm border border-indigo-100 shrink-0 font-sans">
+                            {item.customer || getCustomerForPart(item.partCode, item.description)}
+                          </span>
+                        </div>
+                        <div className="text-slate-500 text-[11px] truncate max-w-[180px]">{item.description}</div>
+                        {item.bom && item.bom.length > 0 && (
+                          <div className="mt-2 bg-slate-50 border border-slate-200 p-2 rounded-lg max-w-[200px]">
+                            <span className="text-[9px] font-bold text-indigo-700 uppercase block mb-1">BOM Components ({item.bom.length})</span>
+                            <div className="space-y-1 max-h-[80px] overflow-y-auto pr-1">
+                              {item.bom.map((b: any, idx: number) => (
+                                <div key={idx} className="flex justify-between items-center text-[9px] font-mono text-slate-600 leading-tight">
+                                  <span className="truncate max-w-[110px]" title={`${b.partCode}: ${b.description}`}>{b.partCode}</span>
+                                  <span className="font-bold text-slate-800">{b.quantityRequired} {b.unit}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </td>
+                      <td className="p-4 text-right font-mono font-bold text-slate-900">
+                        <div>{item.quantity.toLocaleString()} {(item.unit || 'PCS').toUpperCase()}</div>
+                        {typeof item.reorderMin === 'number' && item.reorderMin > 0 && item.quantity <= item.reorderMin && (
+                          <span className="inline-block bg-rose-100 text-rose-800 text-[9px] font-bold px-1.5 py-0.5 rounded border border-rose-200 mt-1 font-sans">
+                            ⚠️ LOW STOCK (Min: {item.reorderMin})
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-4">
+                        <div className="font-mono font-semibold">{item.lotNumber}</div>
+                        <div className="text-[10px] text-slate-400 font-mono">Rec: {item.receivedDate}</div>
+                      </td>
+                      <td className="p-4">
+                        {item.expirationDate ? (
+                          <div className="space-y-0.5">
+                            <div className={`font-semibold ${isNearExpiry ? 'text-rose-600 animate-pulse font-bold' : 'text-slate-700'}`}>
+                              {item.expirationDate}
+                            </div>
+                            <div className="text-[10px] text-slate-400 font-mono">
+                              {daysLeft !== null && daysLeft <= 0 ? 'Expired' : `${daysLeft} days remaining`}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 italic">No shelf limit</span>
+                        )}
+                      </td>
+                      <td className="p-4">
+                        <span className="flex items-center gap-1.5 font-bold text-slate-700 font-mono">
+                          <span className={`h-3 w-3 rounded-full border border-black/5 ${
+                            item.fifoColor === 'Magenta' ? 'bg-fuchsia-600' :
+                            item.fifoColor === 'Orange' ? 'bg-orange-500' :
+                            item.fifoColor === 'Dark Green' ? 'bg-emerald-800' :
+                            item.fifoColor === 'Yellow' ? 'bg-yellow-400' :
+                            item.fifoColor === 'Navy Blue' ? 'bg-blue-900' :
+                            item.fifoColor === 'Brown' ? 'bg-amber-800' :
+                            item.fifoColor === 'Pink' ? 'bg-pink-400' :
+                            item.fifoColor === 'Violet' ? 'bg-violet-600' :
+                            item.fifoColor === 'Black' ? 'bg-stone-900' :
+                            item.fifoColor === 'Light Orange' ? 'bg-orange-300' :
+                            item.fifoColor === 'Grey' ? 'bg-slate-500' : 'bg-slate-300'
+                          }`} />
+                          {item.fifoColor}
+                        </span>
+                      </td>
+                      <td className="p-4 font-medium text-slate-700">{item.location}</td>
+                      <td className="p-4">
+                        {item.status === 'APPROVED' ? (
+                          <span className="bg-emerald-50 text-emerald-700 px-2 py-1 rounded font-bold text-[9px] border border-emerald-100">
+                            APPROVED
+                          </span>
+                        ) : item.status === 'QUARANTINE' ? (
+                          <span className="bg-rose-50 text-rose-700 px-2 py-1 rounded font-bold text-[9px] border border-rose-100">
+                            QUARANTINE
+                          </span>
+                        ) : (
+                          <span className="bg-amber-50 text-amber-700 px-2 py-1 rounded font-bold text-[9px] border border-amber-100">
+                            ON HOLD
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-4">
+                          <div className="flex items-center gap-1.5" data-no-expand="true">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setExpandedStockId(prev => prev === item.id ? null : item.id);
+                              }}
+                              className={`flex items-center gap-1 text-[11px] font-semibold py-1 px-2.5 rounded-lg border transition-colors cursor-pointer shrink-0 ${
+                                isExpanded 
+                                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs' 
+                                  : 'bg-slate-100 hover:bg-indigo-50 text-slate-800 border-slate-300'
+                              }`}
+                              title="Toggle inline transaction & metadata card"
+                            >
+                              <History className="h-3.5 w-3.5 shrink-0" />
+                              <span>{isExpanded ? 'Hide Card' : 'Details'}</span>
+                            </button>
+
+                            {isSuperAdmin && (
+                              <select
+                                defaultValue=""
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  const val = e.target.value;
+                                  if (val === 'HISTORY') {
+                                    setHistoryStockItem(item);
+                                  } else if (val === 'ADJUST') {
+                                    setShowAdjustModal(item.id);
+                                    setAdjustQty(item.quantity);
+                                  } else if (val === 'EDIT') {
+                                    setEditingStockItem({ ...item });
+                                  } else if (val === 'RELEASE') {
+                                    setConfirmAction({
+                                      title: 'Release Stock Item',
+                                      message: `Are you sure you want to release stock item ${item.partCode} (Lot: ${item.lotNumber}) to active inventory?`,
+                                      confirmLabel: 'YES, RELEASE STOCK',
+                                      confirmVariant: 'primary',
+                                      onConfirm: () => onUpdateStockStatus(item.id, 'APPROVED')
+                                    });
+                                  } else if (val === 'QUARANTINE') {
+                                    setConfirmAction({
+                                      title: 'Quarantine Stock Item',
+                                      message: `Are you sure you want to place stock item ${item.partCode} (Lot: ${item.lotNumber}) into Quarantine?`,
+                                      confirmLabel: 'YES, QUARANTINE',
+                                      confirmVariant: 'warning',
+                                      onConfirm: () => onUpdateStockStatus(item.id, 'QUARANTINE')
+                                    });
+                                  } else if (val === 'DELETE') {
+                                    setConfirmAction({
+                                      title: 'Delete Stock Item',
+                                      message: `Are you sure you want to delete registered stock item ${item.partCode} (Lot: ${item.lotNumber})?`,
+                                      confirmLabel: 'YES, DELETE ITEM',
+                                      confirmVariant: 'danger',
+                                      onConfirm: () => onDeleteStock?.(item.id)
+                                    });
+                                  }
+                                  e.target.value = '';
+                                }}
+                                className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
+                                id={`action-select-stock-${item.id}`}
+                              >
+                                <option value="" disabled>Actions...</option>
+                                <option value="HISTORY">📜 Modal View</option>
+                                <option value="ADJUST">✏️ Adjust Quantity</option>
+                                <option value="EDIT">📝 Edit Details</option>
+                                {item.status !== 'APPROVED' ? (
+                                  <option value="RELEASE">✅ Release Stock</option>
+                                ) : (
+                                  <option value="QUARANTINE">⚠️ Quarantine Stock</option>
+                                )}
+                                <option value="DELETE">🗑️ Delete Item</option>
+                              </select>
+                            )}
+                          </div>
+                      </td>
+                    </tr>
+
+                    {/* Inline Expandable Card Row */}
+                    {isExpanded && (
+                      <tr className="bg-slate-50/90 border-b-2 border-indigo-100">
+                        <td colSpan={10} className="p-0">
+                          <motion.div
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: 'auto' }}
+                            exit={{ opacity: 0, height: 0 }}
+                            transition={{ duration: 0.22, ease: 'easeOut' }}
+                            className="p-5 border-l-4 border-l-indigo-600 bg-linear-to-b from-indigo-50/40 via-white to-slate-50/50 space-y-4"
+                          >
+                            {/* Card Header Dossier */}
+                            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200/80">
+                              <div className="flex items-center gap-3">
+                                <div className="p-2.5 rounded-xl bg-indigo-600 text-white shadow-xs">
+                                  <Boxes className="h-5 w-5" />
+                                </div>
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <h4 className="text-sm font-bold text-slate-900 font-mono tracking-tight">{item.partCode}</h4>
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                                      Lot #{item.lotNumber}
+                                    </span>
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-200 text-slate-700 uppercase">
+                                      {item.type}
+                                    </span>
+                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                      {item.customer || getCustomerForPart(item.partCode, item.description)}
+                                    </span>
+                                  </div>
+                                  <p className="text-xs text-slate-600 mt-0.5">{item.description}</p>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                {isSuperAdmin && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setShowAdjustModal(item.id);
+                                        setAdjustQty(item.quantity);
+                                      }}
+                                      className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+                                    >
+                                      <Edit className="h-3.5 w-3.5 text-indigo-600" />
+                                      <span>Adjust Balance</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingStockItem({ ...item })}
+                                      className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+                                    >
+                                      <FileText className="h-3.5 w-3.5 text-slate-600" />
+                                      <span>Edit Specs</span>
+                                    </button>
+                                  </>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => setHistoryStockItem(item)}
+                                  className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+                                >
+                                  <History className="h-3.5 w-3.5 text-indigo-600" />
+                                  <span>Full Modal</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedStockId(null)}
+                                  className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                                  title="Collapse Card"
+                                >
+                                  <X className="h-4 w-4" />
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* 4-Panel Metadata & Summary Metric Grid */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                              {/* Stat 1: Current Balance & Reorder Status */}
+                              <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-2xs space-y-1">
+                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Current Physical Balance</span>
+                                <div className="flex items-baseline gap-1.5">
+                                  <span className="text-xl font-mono font-bold text-slate-900">{item.quantity.toLocaleString()}</span>
+                                  <span className="text-xs font-mono font-semibold text-slate-500">{(item.unit || 'PCS').toUpperCase()}</span>
+                                </div>
+                                <div className="text-[11px] text-slate-500 flex items-center gap-1 pt-1 border-t border-slate-100">
+                                  {typeof item.reorderMin === 'number' && item.reorderMin > 0 ? (
+                                    item.quantity <= item.reorderMin ? (
+                                      <span className="text-rose-600 font-bold flex items-center gap-1">
+                                        <AlertTriangle className="h-3 w-3" /> Below safety min ({item.reorderMin})
+                                      </span>
+                                    ) : (
+                                      <span className="text-emerald-600 font-medium flex items-center gap-1">
+                                        <CheckCircle2 className="h-3 w-3" /> Safe level (Min: {item.reorderMin})
+                                      </span>
+                                    )
+                                  ) : (
+                                    <span className="text-slate-400 italic">No min reorder limit set</span>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Stat 2: Storage Location & FIFO Color Code */}
+                              <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-2xs space-y-1">
+                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Storage Bin & FIFO Month</span>
+                                <div className="flex items-center gap-2">
+                                  <MapPin className="h-4 w-4 text-indigo-600 shrink-0" />
+                                  <span className="text-sm font-bold text-slate-800">{item.location || 'Warehouse Main'}</span>
+                                </div>
+                                <div className="flex items-center gap-2 pt-1 border-t border-slate-100 text-xs font-mono">
+                                  <span className={`h-3 w-3 rounded-full border border-black/10 shrink-0 ${
+                                    item.fifoColor === 'Magenta' ? 'bg-fuchsia-600' :
+                                    item.fifoColor === 'Orange' ? 'bg-orange-500' :
+                                    item.fifoColor === 'Dark Green' ? 'bg-emerald-800' :
+                                    item.fifoColor === 'Yellow' ? 'bg-yellow-400' :
+                                    item.fifoColor === 'Navy Blue' ? 'bg-blue-900' :
+                                    item.fifoColor === 'Brown' ? 'bg-amber-800' :
+                                    item.fifoColor === 'Pink' ? 'bg-pink-400' :
+                                    item.fifoColor === 'Violet' ? 'bg-violet-600' :
+                                    item.fifoColor === 'Black' ? 'bg-stone-900' :
+                                    item.fifoColor === 'Light Orange' ? 'bg-orange-300' :
+                                    item.fifoColor === 'Grey' ? 'bg-slate-500' : 'bg-slate-300'
+                                  }`} />
+                                  <span className="font-bold text-slate-700">{item.fifoColor} Tag</span>
+                                  <span className="text-[10px] text-slate-400">({item.receivedDate ? new Date(item.receivedDate).toLocaleString('default', { month: 'short' }) : 'Month tag'})</span>
+                                </div>
+                              </div>
+
+                              {/* Stat 3: FEFO Shelf Life & Expiry */}
+                              <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-2xs space-y-1">
+                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">FEFO Expiration & Quality</span>
+                                <div className="text-sm font-semibold font-mono text-slate-800">
+                                  {item.expirationDate ? item.expirationDate : 'Non-perishable'}
+                                </div>
+                                <div className="text-[11px] pt-1 border-t border-slate-100 flex items-center justify-between">
+                                  <span className={`font-semibold ${daysLeft !== null && daysLeft <= 0 ? 'text-rose-600' : daysLeft !== null && daysLeft <= 30 ? 'text-amber-600' : 'text-slate-500'}`}>
+                                    {daysLeft !== null ? (daysLeft <= 0 ? '⚠️ Expired' : `${daysLeft} days left`) : 'Permanent'}
+                                  </span>
+                                  <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                                    item.status === 'APPROVED' ? 'bg-emerald-50 text-emerald-700' : item.status === 'QUARANTINE' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-700'
+                                  }`}>
+                                    {item.status}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Stat 4: Total Movement Inflow & Outflow */}
+                              <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-2xs space-y-1">
+                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Historical Movement Flow</span>
+                                <div className="grid grid-cols-3 gap-1 text-center font-mono">
+                                  <div className="bg-emerald-50/70 p-1 rounded border border-emerald-100">
+                                    <div className="text-[9px] text-emerald-700 font-semibold">IN (Recv)</div>
+                                    <div className="text-xs font-bold text-emerald-800">+{totalReceivedQty}</div>
+                                  </div>
+                                  <div className="bg-blue-50/70 p-1 rounded border border-blue-100">
+                                    <div className="text-[9px] text-blue-700 font-semibold">OUT (Issue)</div>
+                                    <div className="text-xs font-bold text-blue-800">-{totalIssuedQty}</div>
+                                  </div>
+                                  <div className="bg-amber-50/70 p-1 rounded border border-amber-100">
+                                    <div className="text-[9px] text-amber-700 font-semibold">RET</div>
+                                    <div className="text-xs font-bold text-amber-800">+{totalReturnedQty}</div>
+                                  </div>
+                                </div>
+                                <div className="text-[10px] text-slate-400 text-right pt-0.5">{historyEvents.length} log transactions</div>
+                              </div>
+                            </div>
+
+                            {/* BOM Hierarchy Section (if BOM components exist) */}
+                            {item.bom && item.bom.length > 0 && (
+                              <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-2xs space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                                    <Layers className="h-3.5 w-3.5 text-indigo-600" />
+                                    Bill of Materials (BOM) Sub-components ({item.bom.length})
+                                  </span>
+                                  <span className="text-[10px] font-mono text-slate-400">Required per finished unit</span>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                                  {item.bom.map((b: any, idx: number) => (
+                                    <div key={idx} className="p-2 bg-slate-50/80 border border-slate-200 rounded-lg text-xs flex justify-between items-center">
+                                      <div>
+                                        <div className="font-mono font-bold text-slate-800">{b.partCode}</div>
+                                        <div className="text-[10px] text-slate-500 truncate max-w-[140px]">{b.description}</div>
+                                      </div>
+                                      <div className="text-right font-mono font-bold text-indigo-700 shrink-0 ml-2">
+                                        {b.quantityRequired} {b.unit}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Embedded Transaction History Table */}
+                            <div className="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden">
+                              <div className="p-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                  <Activity className="h-4 w-4 text-indigo-600" />
+                                  <span className="text-xs font-bold text-slate-800">Transaction History Timeline</span>
+                                  <span className="text-[10px] font-mono font-semibold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">
+                                    {filteredEvents.length} records
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center gap-1.5">
+                                  {/* Filter tabs */}
+                                  <div className="flex bg-slate-200/70 p-0.5 rounded-lg text-[10px] font-semibold text-slate-600">
+                                    {(['ALL', 'RECEIVING', 'ISSUANCE', 'RETURN'] as const).map(tab => (
+                                      <button
+                                        key={tab}
+                                        type="button"
+                                        onClick={() => setInlineHistoryFilter(tab)}
+                                        className={`px-2 py-1 rounded-md transition-colors ${
+                                          inlineHistoryFilter === tab 
+                                            ? 'bg-white text-indigo-700 shadow-2xs font-bold' 
+                                            : 'hover:text-slate-900'
+                                        }`}
+                                      >
+                                        {tab === 'ALL' ? 'All' : tab === 'RECEIVING' ? 'Arrivals' : tab === 'ISSUANCE' ? 'Issuances' : 'Returns'}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {filteredEvents.length === 0 ? (
+                                <div className="p-6 text-center text-xs text-slate-400 italic">
+                                  No transaction logs found matching this item and filter.
+                                </div>
+                              ) : (
+                                <div className="max-h-[220px] overflow-y-auto">
+                                  <table className="w-full text-left border-collapse text-[11px]">
+                                    <thead className="bg-slate-50/80 text-slate-500 font-semibold sticky top-0 border-b border-slate-200">
+                                      <tr>
+                                        <th className="p-2.5">Date</th>
+                                        <th className="p-2.5">Type</th>
+                                        <th className="p-2.5">Reference #</th>
+                                        <th className="p-2.5 text-right">Qty</th>
+                                        <th className="p-2.5">Party / Source</th>
+                                        <th className="p-2.5">Verification</th>
+                                        <th className="p-2.5">Details</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100 font-sans">
+                                      {filteredEvents.map((ev, evIdx) => (
+                                        <tr key={evIdx} className="hover:bg-slate-50/60 transition-colors">
+                                          <td className="p-2.5 font-mono text-slate-600 whitespace-nowrap">{ev.date}</td>
+                                          <td className="p-2.5">
+                                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase inline-flex items-center gap-1 ${
+                                              ev.type === 'RECEIVING' 
+                                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                                                : ev.type === 'ISSUANCE' 
+                                                ? 'bg-blue-50 text-blue-700 border border-blue-200' 
+                                                : 'bg-amber-50 text-amber-700 border border-amber-200'
+                                            }`}>
+                                              {ev.type === 'RECEIVING' && <ArrowDownLeft className="h-2.5 w-2.5" />}
+                                              {ev.type === 'ISSUANCE' && <ArrowUpRight className="h-2.5 w-2.5" />}
+                                              {ev.type === 'RETURN' && <RotateCcw className="h-2.5 w-2.5" />}
+                                              {ev.type}
+                                            </span>
+                                          </td>
+                                          <td className="p-2.5 font-mono font-semibold text-slate-800">{ev.refNumber}</td>
+                                          <td className={`p-2.5 text-right font-mono font-bold ${
+                                            ev.type === 'RECEIVING' ? 'text-emerald-700' : ev.type === 'ISSUANCE' ? 'text-blue-700' : 'text-amber-700'
+                                          }`}>
+                                            {ev.type === 'RECEIVING' || ev.type === 'RETURN' ? '+' : '-'}{ev.qty.toLocaleString()} {ev.unit}
+                                          </td>
+                                          <td className="p-2.5 text-slate-700 font-medium">{ev.party}</td>
+                                          <td className="p-2.5">
+                                            <span className="text-[10px] font-semibold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
+                                              {ev.status}
+                                            </span>
+                                          </td>
+                                          <td className="p-2.5 text-[10px] text-slate-500 font-mono">{ev.details}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </div>
+                          </motion.div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 );
               })}
             </tbody>

@@ -425,6 +425,76 @@ export default function App() {
   // Cross-tab zero-latency synchronization channel
   const syncChannelRef = useRef<BroadcastChannel | null>(null);
 
+  // Helper to check if two presence user lists are meaningfully equal to avoid full UI re-renders
+  const arePresenceListsEqual = (a: ActivePresenceUser[], b: ActivePresenceUser[]): boolean => {
+    if (a === b) return true;
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      const itemA = a[i];
+      const itemB = b[i];
+      if (
+        itemA.stationId !== itemB.stationId ||
+        itemA.username !== itemB.username ||
+        itemA.role !== itemB.role ||
+        itemA.activeView !== itemB.activeView ||
+        itemA.employeeId !== itemB.employeeId
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  // Helper to upsert a single user into active user list safely without dropping other accounts or flickering
+  const upsertUserInState = (prev: RegisteredAccount[], user: any): RegisteredAccount[] => {
+    if (!user) return prev;
+    const rawEmpId = String(user.employeeId || user.employee_id || '').toUpperCase().trim();
+    const empId = rawEmpId.startsWith('JPMP-') ? rawEmpId : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
+    if (!empId) return prev;
+    unmarkUserAsDeleted(empId);
+
+    const safePrev = Array.isArray(prev) ? prev : [superAdminAccount];
+    const existingIdx = safePrev.findIndex(u => (u.employeeId || '').toUpperCase() === empId);
+    const existing = existingIdx >= 0 ? safePrev[existingIdx] : null;
+    const cleanPin = user.pin ? String(user.pin).trim() : (user.pin_hash ? String(user.pin_hash).trim() : (existing?.pin || (empId === 'JPMP-002' ? '0423' : '1234')));
+
+    const formattedUser: RegisteredAccount = {
+      username: (user.username || existing?.username || 'OPERATOR').toUpperCase(),
+      role: (user.role || existing?.role || 'WAREHOUSE CLERK').toUpperCase(),
+      employeeId: empId,
+      phoneNumber: user.phoneNumber || user.phone_number || existing?.phoneNumber || '',
+      permission: user.permission || existing?.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
+      pin: cleanPin,
+      status: user.status || existing?.status || 'ACTIVE',
+      lastActive: user.lastActive || user.last_active || existing?.lastActive || undefined
+    };
+
+    let next: RegisteredAccount[];
+    if (existingIdx >= 0) {
+      if (
+        existing &&
+        existing.username === formattedUser.username &&
+        existing.role === formattedUser.role &&
+        existing.permission === formattedUser.permission &&
+        existing.pin === formattedUser.pin &&
+        existing.status === formattedUser.status &&
+        existing.phoneNumber === formattedUser.phoneNumber
+      ) {
+        return safePrev;
+      }
+      next = [...safePrev];
+      next[existingIdx] = formattedUser;
+    } else {
+      next = [...safePrev, formattedUser];
+    }
+
+    try {
+      localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(next));
+      localStorage.setItem('juwei_wms_cache_registeredUsers', JSON.stringify(next));
+    } catch (e) {}
+    return next;
+  };
+
   // Unified Presence Combiner & Active Terminals Reconciler
   useEffect(() => {
     const myStationId = getStationId();
@@ -476,10 +546,16 @@ export default function App() {
     }
 
     const uniqueList = Array.from(map.values());
-    setActivePresence(uniqueList);
+    setActivePresence(prev => arePresenceListsEqual(prev, uniqueList) ? prev : uniqueList);
 
     const userNames = Array.from(new Set(uniqueList.map(p => p.username.trim().toUpperCase())));
-    setActiveUsers(userNames.length > 0 ? userNames : [selfItem.username.trim().toUpperCase()]);
+    const finalNames = userNames.length > 0 ? userNames : [selfItem.username.trim().toUpperCase()];
+    setActiveUsers(prev => {
+      if (prev.length === finalNames.length && prev.every((name, i) => name === finalNames[i])) {
+        return prev;
+      }
+      return finalNames;
+    });
   }, [currentUser, currentEmployeeId, currentRole, currentPermission, view, wsPresence, supabasePresence, localTabsPresence]);
 
   useEffect(() => {
@@ -593,12 +669,7 @@ export default function App() {
           } else if (payload.type === 'account_registered') {
             const { user, author } = payload;
             if (user && user.employeeId) {
-              unmarkUserAsDeleted(user.employeeId);
-              setRegisteredUsers(prev => {
-                const next = reconcileUsers(prev, [user]);
-                localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(next));
-                return next;
-              });
+              setRegisteredUsers(prev => upsertUserInState(prev, user));
               if (author && author !== (currentUser || '')) {
                 setLiveSyncToast({
                   id: String(Date.now()),
@@ -611,11 +682,7 @@ export default function App() {
           } else if (payload.type === 'account_updated') {
             const { user, author } = payload;
             if (user && user.employeeId) {
-              setRegisteredUsers(prev => {
-                const next = prev.map(u => (u.employeeId || '').toUpperCase() === (user.employeeId || '').toUpperCase() ? { ...u, ...user } : u);
-                localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(next));
-                return next;
-              });
+              setRegisteredUsers(prev => upsertUserInState(prev, user));
               if ((currentEmployeeId || '').toUpperCase() === (user.employeeId || '').toUpperCase()) {
                 if (user.role) setCurrentRole(user.role);
                 if (user.permission) setCurrentPermission(user.permission);
@@ -1339,19 +1406,10 @@ export default function App() {
       }
     }
 
-    // 2. CRITICAL: Preserve local records ONLY if newly mutated locally within the last 10s or currently in pending offline queue.
-    // If a record in safeCurrent was deleted on another client and absent from remote snapshot, do NOT resurrect it!
-    const pendingMutations = getPendingMutations();
-    const pendingIds = new Set(pendingMutations.filter(m => m.collection === colName && m.record?.id).map(m => m.record!.id));
-
+    // 2. Preserve all local records from safeCurrent that have not been explicitly deleted
     for (const localItem of safeCurrent) {
       if (localItem && localItem.id && !deletedSet.has(localItem.id) && !mergedMap.has(localItem.id)) {
-        const lastMut = recentlyMutatedRecords.current.get(localItem.id) || 0;
-        const isLocallyPending = pendingIds.has(localItem.id);
-        const isRecentlyCreatedOrEdited = (now - lastMut) < 10000;
-        if (isLocallyPending || isRecentlyCreatedOrEdited) {
-          mergedMap.set(localItem.id, localItem);
-        }
+        mergedMap.set(localItem.id, localItem);
       }
     }
 
@@ -1417,12 +1475,11 @@ export default function App() {
 
     const incomingList = Array.isArray(incomingUsers) ? incomingUsers : [];
     const safeCurrent = Array.isArray(currentUsers) ? currentUsers : [];
-    const now = Date.now();
 
     // 1. Add all authoritative incoming users
     for (const u of incomingList) {
       if (!u || (!u.employeeId && !u.employee_id)) continue;
-      const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase();
+      const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase().trim();
       const empId = rawEmpId.startsWith('JPMP-') ? rawEmpId : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
       if (deletedSet.has(empId) && empId !== 'JPMP-002') continue;
 
@@ -1441,15 +1498,12 @@ export default function App() {
       });
     }
 
-    // 2. Only preserve from safeCurrent if newly created/registered locally within 10s or if super admin
+    // 2. Preserve all local accounts from safeCurrent that have not been explicitly deleted
     for (const cu of safeCurrent) {
       if (!cu || !cu.employeeId) continue;
-      const empId = cu.employeeId.toUpperCase();
-      if (!userMap.has(empId) && !deletedSet.has(empId)) {
-        const lastMut = recentlyMutatedRecords.current.get(empId) || 0;
-        if (empId === 'JPMP-002' || (now - lastMut < 10000)) {
-          userMap.set(empId, cu);
-        }
+      const empId = cu.employeeId.toUpperCase().trim();
+      if (!userMap.has(empId) && (!deletedSet.has(empId) || empId === 'JPMP-002')) {
+        userMap.set(empId, cu);
       }
     }
 
@@ -1471,7 +1525,7 @@ export default function App() {
 
     for (const cu of safeCurrent) {
       if (cu && cu.employeeId) {
-        const empId = cu.employeeId.toUpperCase();
+        const empId = cu.employeeId.toUpperCase().trim();
         if (userMap.has(empId)) {
           orderedUsers.push(userMap.get(empId)!);
           usedEmpIds.add(empId);
@@ -2140,12 +2194,7 @@ export default function App() {
             case 'account_registered': {
               const { user, author } = payload;
               if (user && user.employeeId) {
-                unmarkUserAsDeleted(user.employeeId);
-                setRegisteredUsers(prev => {
-                  const next = reconcileUsers(prev, [user]);
-                  localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(next));
-                  return next;
-                });
+                setRegisteredUsers(prev => upsertUserInState(prev, user));
                 if (user.username && user.employeeId !== (currentEmployeeId || '')) {
                   setLiveSyncToast({
                     id: String(Date.now()),
@@ -2160,11 +2209,7 @@ export default function App() {
             case 'account_updated': {
               const { user, author } = payload;
               if (user && user.employeeId) {
-                setRegisteredUsers(prev => {
-                  const next = prev.map(u => (u.employeeId || '').toUpperCase() === (user.employeeId || '').toUpperCase() ? { ...u, ...user } : u);
-                  localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(next));
-                  return next;
-                });
+                setRegisteredUsers(prev => upsertUserInState(prev, user));
                 if ((currentEmployeeId || '').toUpperCase() === (user.employeeId || '').toUpperCase()) {
                   if (user.role) setCurrentRole(user.role);
                   if (user.permission) setCurrentPermission(user.permission);
@@ -2490,7 +2535,7 @@ export default function App() {
               case 'forkliftChecks': setForkliftChecks(updateFn); break;
               case 'registries': setRegistries(updateFn); break;
               case 'registeredUsers': {
-                setRegisteredUsers(prev => reconcileUsers(prev, [record]));
+                setRegisteredUsers(prev => upsertUserInState(prev, record));
                 break;
               }
             }
