@@ -926,6 +926,22 @@ export default function App() {
     } catch (e) {}
   }, [registeredUsers]);
 
+  // Real-time multi-tab and desktop window storage listener to sync account changes seamlessly
+  useEffect(() => {
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'juwei_wms_registeredUsers' && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setRegisteredUsers(prev => reconcileUsers(prev, parsed));
+          }
+        } catch (err) {}
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, []);
+
   // Keep active logged-in user's role, permissions, and status in sync with live registered accounts directory
   useEffect(() => {
     if (!isLoggedIn || !currentEmployeeId) return;

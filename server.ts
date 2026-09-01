@@ -991,6 +991,15 @@ async function startServer() {
       if (collection === "registeredUsers" && Array.isArray(data)) {
         const userMap = new Map<string, any>();
         userMap.set("JPMP-002", { ...defaultSuperAdmin });
+        // Preserve all currently known valid registered users in server state
+        if (Array.isArray(state.registeredUsers)) {
+          state.registeredUsers.forEach((u: any) => {
+            const empId = (u.employeeId || u.employee_id || '').toUpperCase().trim();
+            if (empId && (empId === 'JPMP-002' || !deletedUserTombstones.has(empId))) {
+              userMap.set(empId, { ...u, employeeId: empId });
+            }
+          });
+        }
         data.forEach((u: any) => {
           const empId = (u.employeeId || u.employee_id || '').toUpperCase().trim();
           if (empId && (empId === 'JPMP-002' || !deletedUserTombstones.has(empId))) {

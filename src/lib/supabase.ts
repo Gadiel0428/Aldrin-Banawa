@@ -555,11 +555,11 @@ export async function fetchCollectionFromSupabase(collection: string): Promise<a
           const empId = (r.employee_id || r.employeeId || '').toUpperCase();
           const cleanPin = r.pin ? String(r.pin).trim() : (r.pin_hash ? String(r.pin_hash).trim() : (empId === 'JPMP-002' ? '0423' : '1234'));
           return {
-            username: r.username || 'OPERATOR',
-            role: r.role || 'WAREHOUSE CLERK',
+            username: (r.username || (empId === 'JPMP-002' ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
+            role: (r.role || (empId === 'JPMP-002' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE CLERK')).toUpperCase(),
             employeeId: empId,
-            phoneNumber: r.phone_number || r.phoneNumber || '',
-            permission: r.permission || 'LIMITED_ACCESS',
+            phoneNumber: r.phone_number || r.phoneNumber || (empId === 'JPMP-002' ? '+639669858846' : ''),
+            permission: r.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
             pin: cleanPin,
             status: r.status || 'ACTIVE',
             lastActive: r.last_active || r.lastActive || undefined
