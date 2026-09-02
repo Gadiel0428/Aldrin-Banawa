@@ -4,12 +4,16 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Wifi, WifiOff, RefreshCw, AlertCircle, Database, CheckCircle2, ChevronDown, ChevronUp, Clock, Laptop, ShieldCheck } from 'lucide-react';
+import { Wifi, WifiOff, RefreshCw, AlertCircle, Database, CheckCircle2, ChevronDown, ChevronUp, Clock, Laptop, ShieldCheck, Settings2 } from 'lucide-react';
 import { syncManager } from '../sync/syncManager';
 import { OfflineQueue } from '../sync/offlineQueue';
 import { SyncStatusInfo, OfflineQueueItem } from '../types/sync';
 
-export const SyncStatus: React.FC = () => {
+interface SyncStatusProps {
+  onOpenSettings?: () => void;
+}
+
+export const SyncStatus: React.FC<SyncStatusProps> = ({ onOpenSettings }) => {
   const [status, setStatus] = useState<SyncStatusInfo>(syncManager.getStatus());
   const [isOpen, setIsOpen] = useState(false);
   const [queueItems, setQueueItems] = useState<OfflineQueueItem[]>([]);
@@ -71,22 +75,22 @@ export const SyncStatus: React.FC = () => {
 
   return (
     <div className="relative inline-block text-xs font-medium">
-      {/* Status Pill Button */}
+      {/* Status Pill Button - Icon / Logo Only */}
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className={`flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all shadow-xs hover:shadow-md cursor-pointer ${badge.bg}`}
-        title="Click to view Real-time Multi-Device Sync details"
+        className={`inline-flex items-center justify-center w-8 h-8 rounded-xl border transition-all shadow-xs hover:shadow-md cursor-pointer ${badge.bg}`}
+        title={`Sync Status: ${badge.label} (Click for details)`}
+        aria-label={`Sync Status: ${badge.label}`}
       >
-        <span className="flex items-center justify-center">
+        <span className="relative flex items-center justify-center">
           {badge.icon}
+          {status.pendingCount > 0 && (
+            <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-white text-[9px] font-bold rounded-full min-w-3.5 h-3.5 flex items-center justify-center px-0.5">
+              {status.pendingCount}
+            </span>
+          )}
         </span>
-        <span className="font-semibold tracking-wide">{badge.label}</span>
-        {isOpen ? (
-          <ChevronUp className="w-3.5 h-3.5 opacity-70" />
-        ) : (
-          <ChevronDown className="w-3.5 h-3.5 opacity-70" />
-        )}
       </button>
 
       {/* Detail Popover Panel */}
@@ -195,6 +199,22 @@ export const SyncStatus: React.FC = () => {
               </div>
             )}
           </div>
+
+          {onOpenSettings && (
+            <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800 flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsOpen(false);
+                  onOpenSettings();
+                }}
+                className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 transition-colors cursor-pointer"
+              >
+                <Settings2 className="w-3.5 h-3.5" />
+                Configure Database & Credentials
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -4169,17 +4169,17 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col md:flex-row bg-slate-100/80 font-sans relative overflow-x-hidden text-slate-900" id="juwei-app-container">
+    <div className="h-screen w-screen flex flex-col md:flex-row bg-slate-100/80 font-sans relative overflow-hidden text-slate-900" id="juwei-app-container">
       {/* Soft Ambient Floating Glow Orbs for Authentic Frosted Diffusion */}
       <div className="glass-ambient-orb-1" />
       <div className="glass-ambient-orb-2" />
       <div className="glass-ambient-orb-3" />
 
       {/* Sidebar navigation */}
-      <aside className="w-full md:w-64 glass-sidebar text-slate-200 flex flex-col justify-between z-20 shrink-0 relative" id="sidebar-nav">
-        <div>
+      <aside className="w-full md:w-64 h-auto md:h-screen glass-sidebar text-slate-200 flex flex-col justify-between z-20 shrink-0 relative overflow-hidden" id="sidebar-nav">
+        <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
           {/* Logged in Operator badge */}
-          <div className="p-4 bg-slate-950/70 border-b border-slate-800/80 flex flex-col gap-2.5 backdrop-blur-md">
+          <div className="p-4 bg-slate-950/70 border-b border-slate-800/80 flex flex-col gap-2.5 backdrop-blur-md shrink-0">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2.5">
                 <div className="bg-slate-800/90 border border-slate-700/80 p-2 rounded-xl text-indigo-400 shrink-0 shadow-sm">
@@ -4237,7 +4237,7 @@ export default function App() {
           </div>
 
           {/* Navigation Links with Smooth Frosted Highlights */}
-          <nav className="p-3 space-y-1" id="nav-list">
+          <nav className="p-3 space-y-1 flex-1 overflow-y-auto no-scrollbar" id="nav-list">
             <button 
               onClick={() => setView('dashboard')}
               className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all duration-300 cursor-pointer ${
@@ -4436,7 +4436,7 @@ export default function App() {
       </aside>
 
       {/* Main Content Pane */}
-      <main className="flex-1 flex flex-col min-w-0 bg-slate-50/70 z-10 relative">
+      <main className="flex-1 flex flex-col h-full min-w-0 bg-slate-50/70 z-10 relative overflow-hidden">
         {/* Minimalist Frosted Glass Header Bar */}
         <header className="h-16 glass-header px-4 sm:px-6 lg:px-8 flex justify-between items-center shrink-0 z-20 sticky top-0">
           <div className="flex items-center gap-3 min-w-0">
@@ -4447,56 +4447,21 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-2 text-xs font-medium shrink-0">
-            {/* Supabase Centralized Realtime & Offline Sync Engine Status */}
-            <SyncStatus />
+            {/* Unified Centralized Realtime & Offline Sync Engine */}
+            <SyncStatus onOpenSettings={() => setShowSupabaseSettingsModal(true)} />
 
-            {/* Live Real-time Status Pill */}
-            <div 
-              className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 h-8 rounded-xl border font-mono text-[11px] font-semibold backdrop-blur-md ${
-                connectionStatus === 'connected' 
-                  ? 'bg-emerald-50/90 text-emerald-700 border-emerald-200 shadow-xs' 
-                  : 'bg-slate-100/90 text-slate-600 border-slate-200'
-              }`}
-              title={`WebSocket Server: ${connectionStatus.toUpperCase()} ${wsLatency !== null ? `(${wsLatency}ms round-trip latency)` : ''}`}
-            >
-              <Radio className={`h-3.5 w-3.5 shrink-0 ${connectionStatus === 'connected' ? 'text-emerald-500 animate-pulse' : 'text-slate-400'}`} />
-              <span>{connectionStatus === 'connected' ? (wsLatency !== null ? `${wsLatency}ms` : 'LIVE') : 'CONNECTING'}</span>
-            </div>
-
-            {/* Connected Workstations / Active Terminals Pill */}
+            {/* Connected Workstations / Active Terminals Pill - Logo Only with Count */}
             <button
               type="button"
               onClick={() => setShowActiveUsersModal(true)}
-              className="inline-flex items-center justify-center gap-1.5 bg-indigo-50/90 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/90 px-2.5 h-8 rounded-xl text-xs font-semibold font-mono transition-all cursor-pointer shrink-0 shadow-xs backdrop-blur-md"
-              title="Click to view all active connected workstations in this session"
+              className="inline-flex items-center justify-center bg-indigo-50/90 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/90 w-8 h-8 rounded-xl text-xs font-semibold transition-all cursor-pointer shrink-0 shadow-xs backdrop-blur-md relative"
+              title={`Active Workstations: ${Math.max(1, activePresence.length, activeUsers.length)} Online (Click to view)`}
               aria-label="Active Workstation Terminals"
             >
               <Users className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
-              <span>{Math.max(1, activePresence.length, activeUsers.length)} ONLINE</span>
-            </button>
-
-            {/* Quick Force Sync Button */}
-            <button
-              type="button"
-              onClick={handleManualSync}
-              disabled={isManualSyncing}
-              className="inline-flex items-center justify-center bg-white/90 hover:bg-slate-100 text-slate-700 w-8 h-8 rounded-xl text-xs transition-all cursor-pointer shrink-0 disabled:opacity-50 border border-slate-200 shadow-xs backdrop-blur-md"
-              title={isManualSyncing ? "Syncing data across all workstations..." : `Force Instant Sync (Last synced ${lastSyncedTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`}
-              aria-label="Force Instant Sync"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 text-slate-600 ${isManualSyncing ? 'animate-spin text-indigo-600' : ''}`} />
-            </button>
-
-            {/* Supabase PostgreSQL Cloud Sync Badge Button */}
-            <button
-              type="button"
-              onClick={() => setShowSupabaseSettingsModal(true)}
-              className="inline-flex items-center justify-center gap-1.5 bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 hover:border-emerald-500 text-slate-200 hover:text-white px-2.5 h-8 rounded-xl text-xs font-semibold transition-all cursor-pointer shrink-0 shadow-xs backdrop-blur-md"
-              title={`Supabase PostgreSQL Sync: ${supabaseStatus.toUpperCase()} (Click to configure Cloud Database)`}
-              aria-label="Supabase Cloud Database Settings"
-            >
-              <Database className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-              <span className={`w-1.5 h-1.5 rounded-full ${supabaseStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : supabaseStatus === 'connecting' ? 'bg-amber-400 animate-bounce' : 'bg-slate-500'}`} />
+              <span className="absolute -top-1.5 -right-1.5 bg-indigo-600 text-white text-[9px] font-bold rounded-full min-w-3.5 h-3.5 flex items-center justify-center px-0.5 font-mono">
+                {Math.max(1, activePresence.length, activeUsers.length)}
+              </span>
             </button>
 
             {/* Mobile APK / App Install Hub Button */}

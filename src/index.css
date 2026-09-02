@@ -368,5 +368,63 @@ button, a, input, select, textarea, .transition-smooth {
   }
 }
 
+/* ==========================================================================
+   Single Unified Scroll Indicator & Zero-Clutter Scrollbar Controls
+   ========================================================================== */
+
+/* Prevent root and outer windows from creating nested scrollbars */
+html, body, #root {
+  height: 100vh;
+  width: 100vw;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Hide scrollbars on sidebar and secondary sub-containers */
+.no-scrollbar,
+.glass-sidebar,
+#sidebar-nav,
+#nav-list,
+.overflow-hidden-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar,
+.glass-sidebar::-webkit-scrollbar,
+#sidebar-nav::-webkit-scrollbar,
+#nav-list::-webkit-scrollbar,
+.overflow-hidden-scroll::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* Single elegant primary scrollbar indicator for the active viewport */
+#main-content-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(99, 102, 241, 0.4) transparent;
+}
+
+#main-content-viewport::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+#main-content-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#main-content-viewport::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 9999px;
+  transition: background-color 0.2s ease;
+}
+
+#main-content-viewport:hover::-webkit-scrollbar-thumb {
+  background: rgba(99, 102, 241, 0.6);
+}
+
+
 
 
