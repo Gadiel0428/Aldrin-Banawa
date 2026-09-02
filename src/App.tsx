@@ -61,6 +61,12 @@ import { ConfirmModal, ConfirmActionConfig } from './components/ConfirmModal';
 import BarcodeScannerModal from './components/BarcodeScannerModal';
 import SupabaseSettingsModal from './components/SupabaseSettingsModal';
 import ActiveUsersModal from './components/ActiveUsersModal';
+import { SyncStatus } from './components/SyncStatus';
+import { StockMovementView } from './components/StockMovement';
+import { ProductList } from './components/ProductList';
+import { InventoryTable } from './components/InventoryTable';
+import { syncManager } from './sync/syncManager';
+import { createStockMovement } from './database/movements';
 
 import { 
   getStoredSupabaseConfig, 
@@ -3450,6 +3456,19 @@ export default function App() {
     });
     setStocks(nextStocks);
     syncCollection('stocks', nextStocks);
+
+    // Record atomic ledger stock movement with idempotency and database RPC
+    createStockMovement({
+      productId: partCode,
+      warehouseId: 'wh-main',
+      type: 'ADJUSTMENT_OUT',
+      quantity: -quantity,
+      referenceNumber: lotNumber,
+      notes: `Stock deducted for part ${partCode} (Lot: ${lotNumber})`,
+      userName: currentUser,
+      preventNegativeStock: true
+    }).catch((err) => console.warn('Stock movement async record note:', err));
+
     return true;
   };
 
@@ -3776,6 +3795,9 @@ export default function App() {
       case 'dashboard': return 'Operational Control Dashboard';
       case 'receiving': return 'Material Receiving & Returns';
       case 'stock': return 'Stock & FIFO Control';
+      case 'stock-movements': return 'Stock Movements Ledger (Atomic Sync)';
+      case 'products': return 'Products & Items Master Catalog';
+      case 'inventory-matrix': return 'Multi-Warehouse Inventory Matrix';
       case 'recycling': return 'Packaging Recycling';
       case 'issuance': return 'Material Issuance';
       case 'delivery': return 'Outbound & Gate Pass';
@@ -4294,6 +4316,42 @@ export default function App() {
             </button>
 
             <button 
+              onClick={() => setView('stock-movements')}
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all duration-300 cursor-pointer ${
+                view === 'stock-movements' 
+                  ? 'bg-indigo-600/95 text-white font-semibold shadow-lg shadow-indigo-600/25 border border-indigo-400/30 backdrop-blur-md' 
+                  : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
+              }`}
+              id="nav-stock-movements"
+            >
+              <ArrowLeftRight className="h-4 w-4 shrink-0" /> Stock Movements Ledger
+            </button>
+
+            <button 
+              onClick={() => setView('products')}
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all duration-300 cursor-pointer ${
+                view === 'products' 
+                  ? 'bg-indigo-600/95 text-white font-semibold shadow-lg shadow-indigo-600/25 border border-indigo-400/30 backdrop-blur-md' 
+                  : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
+              }`}
+              id="nav-products"
+            >
+              <PackageSearch className="h-4 w-4 shrink-0" /> Products Catalog
+            </button>
+
+            <button 
+              onClick={() => setView('inventory-matrix')}
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all duration-300 cursor-pointer ${
+                view === 'inventory-matrix' 
+                  ? 'bg-indigo-600/95 text-white font-semibold shadow-lg shadow-indigo-600/25 border border-indigo-400/30 backdrop-blur-md' 
+                  : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
+              }`}
+              id="nav-inventory-matrix"
+            >
+              <Boxes className="h-4 w-4 shrink-0" /> Multi-Warehouse Matrix
+            </button>
+
+            <button 
               onClick={() => setView('master-registry')}
               className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all duration-300 cursor-pointer ${
                 view === 'master-registry' 
@@ -4389,6 +4447,9 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-2 text-xs font-medium shrink-0">
+            {/* Supabase Centralized Realtime & Offline Sync Engine Status */}
+            <SyncStatus />
+
             {/* Live Real-time Status Pill */}
             <div 
               className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 h-8 rounded-xl border font-mono text-[11px] font-semibold backdrop-blur-md ${
@@ -4588,6 +4649,22 @@ export default function App() {
                   currentUser={currentUser}
                   isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentRole?.toUpperCase().includes('SUPER') || currentRole?.toUpperCase().includes('SYSTEM')}
                 />
+              )}
+
+              {view === 'stock-movements' && (
+                <StockMovementView 
+                  stocks={stocks}
+                  currentUser={{ id: currentEmployeeId, name: currentUser, username: currentUser }}
+                  onStockUpdated={() => handleManualSync()}
+                />
+              )}
+
+              {view === 'products' && (
+                <ProductList />
+              )}
+
+              {view === 'inventory-matrix' && (
+                <InventoryTable />
               )}
 
               {view === 'master-registry' && (

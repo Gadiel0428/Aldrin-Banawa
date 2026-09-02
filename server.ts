@@ -108,6 +108,7 @@ async function startServer() {
     forkliftChecks: any[];
     registries: any[];
     registeredUsers: ServerUser[];
+    stockMovements: any[];
   } = {
     stocks: [...INITIAL_STOCK],
     receiving: [...INITIAL_RECEIVING],
@@ -119,6 +120,7 @@ async function startServer() {
     forkliftChecks: [...INITIAL_FORKLIFT_CHECKS],
     registries: [],
     registeredUsers: [defaultSuperAdmin],
+    stockMovements: [],
   };
 
   // State revision counter to track data version across cluster
@@ -1460,6 +1462,181 @@ async function startServer() {
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
+  });
+
+  // Atomic Stock Movement Endpoint (Single Source of Truth)
+  // Guarantees atomic row updates, checks negative balance constraints, and prevents client-side overwrite race conditions
+  app.post("/api/stock-movements", async (req, res) => {
+    try {
+      const {
+        productId,
+        warehouseId,
+        type,
+        quantity,
+        delta,
+        referenceId,
+        referenceNumber,
+        notes,
+        userId,
+        userName,
+        deviceId,
+        idempotencyKey,
+        preventNegativeStock = true,
+        lotNumber,
+        location
+      } = req.body;
+
+      if (!productId) {
+        return res.status(400).json({ error: "productId is required" });
+      }
+
+      // Check Idempotency Key
+      if (idempotencyKey && state.stockMovements) {
+        const existing = state.stockMovements.find((m: any) => m.idempotency_key === idempotencyKey || m.idempotencyKey === idempotencyKey);
+        if (existing) {
+          return res.json({
+            success: true,
+            idempotency_replayed: true,
+            movementId: existing.id,
+            productId: existing.product_id || existing.productId,
+            warehouseId: existing.warehouse_id || existing.warehouseId,
+            previousQuantity: existing.previous_quantity || existing.previousQuantity || 0,
+            newQuantity: existing.new_quantity || existing.newQuantity || 0,
+            delta: existing.quantity || existing.delta || 0,
+            timestamp: existing.created_at || existing.timestamp || new Date().toISOString()
+          });
+        }
+      }
+
+      // Calculate signed delta
+      let finalDelta = Number(delta !== undefined ? delta : quantity);
+      if (isNaN(finalDelta)) finalDelta = 0;
+
+      if (['SALE', 'PURCHASE_RETURN', 'ADJUSTMENT_OUT', 'TRANSFER_OUT'].includes(type)) {
+        if (finalDelta > 0) finalDelta = -finalDelta;
+      } else if (['PURCHASE', 'SALE_RETURN', 'ADJUSTMENT_IN', 'TRANSFER_IN'].includes(type)) {
+        if (finalDelta < 0) finalDelta = Math.abs(finalDelta);
+      }
+
+      // Locate stock record in server state
+      let stockItem = state.stocks.find((s: any) => s.id === productId || s.partCode === productId);
+      const prevQty = stockItem ? Number(stockItem.quantity) || 0 : 0;
+      const newQty = prevQty + finalDelta;
+
+      if (preventNegativeStock && newQty < 0) {
+        return res.status(400).json({
+          error: `Insufficient stock. Available: ${prevQty}, Requested Delta: ${finalDelta}`
+        });
+      }
+
+      // Update or create stock record atomically on server
+      if (stockItem) {
+        stockItem.quantity = newQty;
+        if (location) stockItem.location = location;
+        if (lotNumber) stockItem.lotNumber = lotNumber;
+      } else {
+        stockItem = {
+          id: productId,
+          partCode: productId,
+          description: notes || 'Warehouse Item',
+          type: 'RAW',
+          location: location || 'Zone A',
+          quantity: newQty,
+          unit: 'PCS',
+          lotNumber: lotNumber || '',
+          receivedDate: new Date().toISOString().split('T')[0],
+          fifoColor: 'Dark Green',
+          status: 'APPROVED'
+        };
+        state.stocks.push(stockItem);
+      }
+
+      const movementId = `mov-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      const movementRecord = {
+        id: movementId,
+        product_id: productId,
+        warehouse_id: warehouseId || 'wh-main',
+        type: type || 'ADJUSTMENT_IN',
+        quantity: finalDelta,
+        previous_quantity: prevQty,
+        new_quantity: newQty,
+        reference_id: referenceId || null,
+        reference_number: referenceNumber || null,
+        notes: notes || null,
+        user_id: userId || null,
+        user_name: userName || 'Operator',
+        device_id: deviceId || 'UNKNOWN-DEVICE',
+        idempotency_key: idempotencyKey || null,
+        created_at: new Date().toISOString(),
+        product_name: stockItem.description,
+        product_sku: stockItem.partCode,
+        unit: stockItem.unit
+      };
+
+      if (!state.stockMovements) state.stockMovements = [];
+      state.stockMovements.unshift(movementRecord);
+      if (state.stockMovements.length > 500) state.stockMovements.pop();
+
+      stateRevision++;
+      saveStateToDisk();
+
+      // Forward to Supabase PostgreSQL RPC if available
+      if (supabaseServer) {
+        try {
+          Promise.resolve(supabaseServer.rpc('create_stock_movement', {
+            p_product_id: productId,
+            p_warehouse_id: warehouseId || '00000000-0000-0000-0000-000000000001',
+            p_type: type,
+            p_quantity: finalDelta,
+            p_reference_number: referenceNumber || null,
+            p_notes: notes || null,
+            p_user_name: userName || 'Operator',
+            p_device_id: deviceId || 'SERVER',
+            p_idempotency_key: idempotencyKey || null,
+            p_prevent_negative: preventNegativeStock !== false
+          })).catch((err: any) => console.warn('Background Supabase movement RPC note:', err.message));
+        } catch (rpcErr: any) {
+          console.warn('Background Supabase RPC dispatch note:', rpcErr.message);
+        }
+        
+        persistToSupabase('stocks', state.stocks);
+      }
+
+      // Broadcast real-time delta update to all active terminals & mobile devices
+      broadcast({
+        type: "stock_movement_created",
+        movement: movementRecord,
+        stock: stockItem,
+        stocks: state.stocks,
+        stateRevision
+      });
+
+      broadcast({
+        type: "collection_updated",
+        collection: "stocks",
+        data: state.stocks
+      });
+
+      return res.json({
+        success: true,
+        movementId,
+        productId,
+        warehouseId: warehouseId || 'wh-main',
+        previousQuantity: prevQty,
+        newQuantity: newQty,
+        delta: finalDelta,
+        timestamp: movementRecord.created_at
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Query stock movements
+  app.get("/api/stock-movements", (req, res) => {
+    const limit = parseInt(req.query.limit as string) || 100;
+    const list = (state.stockMovements || []).slice(0, limit);
+    res.json(list);
   });
 
   // Batch sync endpoint for offline mutation queue synchronization
