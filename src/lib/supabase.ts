@@ -30,43 +30,17 @@ const STORAGE_KEY_KEY = 'juwei_wms_supabase_key';
 const STORAGE_PENDING_QUEUE = 'juwei_wms_supabase_pending_queue';
 
 export function getStoredSupabaseConfig(): SupabaseConfig {
-  const metaEnv = (import.meta as any).env || {};
-  const envUrl = metaEnv.VITE_SUPABASE_URL || '';
-  const envKey = metaEnv.VITE_SUPABASE_ANON_KEY || '';
-
-  let storedUrl = (localStorage.getItem(STORAGE_KEY_URL) || envUrl || DEFAULT_SUPABASE_URL).trim();
-  let storedKey = (localStorage.getItem(STORAGE_KEY_KEY) || envKey || DEFAULT_SUPABASE_ANON_KEY).trim();
-
-  // If stored URL was previous placeholder or empty, fallback to the configured default
-  if (!storedUrl || storedUrl.toLowerCase().includes('your-project-id')) {
-    storedUrl = DEFAULT_SUPABASE_URL;
-  }
-  if (!storedKey || storedKey.toLowerCase().includes('eyjhbgcioijiuzi1niisinr5cci6ikpxvcj9')) {
-    storedKey = DEFAULT_SUPABASE_ANON_KEY;
-  }
-
-  // Normalize URL protocol
-  if (storedUrl && !storedUrl.startsWith('http://') && !storedUrl.startsWith('https://')) {
-    storedUrl = `https://${storedUrl}`;
-  }
-
   return {
-    url: storedUrl,
-    anonKey: storedKey
+    url: DEFAULT_SUPABASE_URL,
+    anonKey: DEFAULT_SUPABASE_ANON_KEY
   };
 }
 
-export function saveStoredSupabaseConfig(config: SupabaseConfig) {
-  let cleanUrl = config.url ? config.url.trim() : '';
-  if (cleanUrl && !cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
-    cleanUrl = `https://${cleanUrl}`;
-  }
-  let cleanKey = config.anonKey ? config.anonKey.trim() : '';
-
-  if (cleanUrl) localStorage.setItem(STORAGE_KEY_URL, cleanUrl);
-  if (cleanKey) localStorage.setItem(STORAGE_KEY_KEY, cleanKey);
+export function saveStoredSupabaseConfig(config?: Partial<SupabaseConfig>) {
+  // Always enforce the single unified cloud database
+  localStorage.setItem(STORAGE_KEY_URL, DEFAULT_SUPABASE_URL);
+  localStorage.setItem(STORAGE_KEY_KEY, DEFAULT_SUPABASE_ANON_KEY);
   
-  // Reset client instance on config change so next getSupabase() re-initializes
   if (activeRealtimeChannel && typeof activeRealtimeChannel.unsubscribe === 'function') {
     try {
       activeRealtimeChannel.unsubscribe();
@@ -80,10 +54,7 @@ let supabaseClientInstance: SupabaseClient | null = null;
 let activeRealtimeChannel: RealtimeChannel | null = null;
 
 export function isSupabaseConfigured(): boolean {
-  const config = getStoredSupabaseConfig();
-  if (!config || !config.url || !config.anonKey) return false;
-  const isPlaceholder = (config.url || '').toLowerCase().includes('your-project-id') || (config.anonKey || '').toLowerCase().includes('eyjhbgcioijiuzi1niisinr5cci6ikpxvcj9');
-  return Boolean((config.url.includes('supabase.co') || config.url.startsWith('http')) && !isPlaceholder);
+  return true;
 }
 
 export function getSupabase(): SupabaseClient | null {
@@ -827,7 +798,8 @@ export function setupSupabaseRealtimeSubscriptions(
   onStatusChange: (status: 'connected' | 'connecting' | 'disconnected') => void,
   onRecordDelta?: (collection: string, action: 'upsert' | 'delete', record?: any, id?: string) => void,
   onPresenceSync?: (presenceList: any[]) => void,
-  onRemoteForceSync?: (senderStationId?: string) => void
+  onRemoteForceSync?: (senderStationId?: string) => void,
+  onClientInstalled?: (payload: any) => void
 ): RealtimeChannel | null {
   const supabase = getSupabase();
   if (!supabase) {
@@ -987,6 +959,11 @@ export function setupSupabaseRealtimeSubscriptions(
       if (onRemoteForceSync) {
         onRemoteForceSync(eventPayload?.payload?.stationId);
       }
+    })
+    .on('broadcast', { event: 'client_installed' }, (eventPayload: any) => {
+      if (onClientInstalled) {
+        onClientInstalled(eventPayload?.payload);
+      }
     });
 
   channel.subscribe((status, err) => {
@@ -1043,5 +1020,29 @@ export async function broadcastSupabaseForceSync(stationId?: string) {
         payload: { triggeredAt: Date.now(), stationId: stationId || undefined }
       });
     } catch (e) {}
+  }
+}
+
+// Broadcast client fresh install event across all connected Supabase terminals
+export async function broadcastSupabaseInstallation(payload: {
+  stationId: string;
+  installId?: string;
+  username: string;
+  employeeId?: string;
+  platform?: string;
+}) {
+  if (activeRealtimeChannel) {
+    try {
+      await activeRealtimeChannel.send({
+        type: 'broadcast',
+        event: 'client_installed',
+        payload: {
+          ...payload,
+          timestamp: new Date().toISOString()
+        }
+      });
+    } catch (e) {
+      console.warn('broadcastSupabaseInstallation error:', e);
+    }
   }
 }

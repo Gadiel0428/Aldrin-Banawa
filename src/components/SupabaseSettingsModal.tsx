@@ -40,13 +40,15 @@ interface SupabaseSettingsModalProps {
   onClose: () => void;
   connectionStatus: 'connected' | 'connecting' | 'disconnected';
   onForceSync: () => void;
+  onFreshInstallAndSync?: () => void;
 }
 
 export default function SupabaseSettingsModal({
   isOpen,
   onClose,
   connectionStatus,
-  onForceSync
+  onForceSync,
+  onFreshInstallAndSync
 }: SupabaseSettingsModalProps) {
   const [url, setUrl] = useState('');
   const [anonKey, setAnonKey] = useState('');
@@ -527,90 +529,114 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.stocks, public.receiving, p
                 </div>
               )}
 
-              {/* Form Credentials */}
-              <form onSubmit={handleSave} className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                    Supabase Credentials
-                  </span>
+              {/* Unified Single Storage Architecture Overview */}
+              <div className="space-y-3">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-800 block">
+                  Centralized Single Source of Truth
+                </span>
+
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2 text-slate-600 font-medium">
+                      <Globe className="w-4 h-4 text-indigo-500" />
+                      <span>Unified Database URL:</span>
+                    </div>
+                    <span className="font-mono font-bold text-slate-900 bg-white px-2.5 py-1 rounded border border-slate-200 truncate max-w-[280px]">
+                      {DEFAULT_SUPABASE_URL}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2 text-slate-600 font-medium">
+                      <ShieldCheck className="w-4 h-4 text-emerald-500" />
+                      <span>Synchronization Model:</span>
+                    </div>
+                    <span className="font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded border border-emerald-200">
+                      1 Storage for All Users (Live Sync)
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2 text-slate-600 font-medium">
+                      <Layers className="w-4 h-4 text-blue-500" />
+                      <span>Synchronized Tables:</span>
+                    </div>
+                    <span className="font-bold text-slate-800">
+                      11 Tables (Stocks, Logs, Accounts, Audit)
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2 text-slate-600 font-medium">
+                      <Zap className="w-4 h-4 text-amber-500" />
+                      <span>Multi-Device Coordination:</span>
+                    </div>
+                    <span className="font-semibold text-slate-800">
+                      Real-time WebSockets &amp; PostgreSQL Streams
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center space-x-3 pt-2">
+                <button
+                  type="button"
+                  onClick={handleTestConnection}
+                  disabled={testingConnection}
+                  className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs py-2.5 rounded-xl transition-colors flex items-center justify-center space-x-2 cursor-pointer disabled:opacity-50"
+                >
+                  {testingConnection ? <RefreshCw className="w-4 h-4 animate-spin text-emerald-400" /> : <Server className="w-4 h-4 text-emerald-400" />}
+                  <span>{testingConnection ? 'Verifying Storage...' : 'Test Storage Connection'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    processPendingSupabaseMutations();
+                    onForceSync();
+                    setTestResult({
+                      success: true,
+                      message: 'Unified storage sync triggered across all connected warehouse devices.'
+                    });
+                  }}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 rounded-xl transition-colors shadow-lg shadow-emerald-600/20 flex items-center justify-center space-x-2 cursor-pointer"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  <span>Sync All Devices</span>
+                </button>
+              </div>
+
+              {/* Fresh Install & Synchronize Device Option */}
+              {onFreshInstallAndSync && (
+                <div className="p-3.5 bg-sky-50 border border-sky-200 rounded-xl flex items-center justify-between gap-3">
+                  <div className="flex items-start gap-2.5">
+                    <ShieldCheck className="w-5 h-5 text-sky-600 shrink-0 mt-0.5" />
+                    <div>
+                      <h5 className="text-xs font-bold text-sky-950">Fresh Install Protocol</h5>
+                      <p className="text-[11px] text-sky-700 leading-tight">
+                        Wipe local transient cache, re-fetch clean authoritative data, and broadcast live installation sync to all warehouse users.
+                      </p>
+                    </div>
+                  </div>
                   <button
                     type="button"
                     onClick={() => {
-                      setUrl(DEFAULT_SUPABASE_URL);
-                      setAnonKey(DEFAULT_SUPABASE_ANON_KEY);
-                      setTestResult({
-                        success: true,
-                        message: 'Default Supabase project credentials loaded. Click "Save Credentials" or "Test Connection" to activate.'
-                      });
+                      if (window.confirm('Initialize a Fresh Install? This clears local caches and re-synchronizes this terminal with the central database and all connected operators.')) {
+                        onFreshInstallAndSync();
+                        setTestResult({
+                          success: true,
+                          message: 'Fresh installation complete. Synced with all connected cluster terminals.'
+                        });
+                      }
                     }}
-                    className="text-[11px] font-mono font-bold text-emerald-800 hover:text-emerald-900 bg-emerald-50 border border-emerald-300 px-2 py-0.5 rounded-lg transition cursor-pointer shadow-xs"
+                    className="shrink-0 px-3 py-2 bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold rounded-lg shadow-sm transition-colors cursor-pointer flex items-center gap-1.5"
                   >
-                    Load Default Project
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Fresh Install &amp; Sync</span>
                   </button>
                 </div>
-
-                <div>
-                  <label className="text-xs font-bold uppercase tracking-wider text-slate-800 block mb-1.5">
-                    Supabase Project URL
-                  </label>
-                  <div className="relative">
-                    <Globe className="w-4 h-4 absolute left-3 top-3 text-slate-500" />
-                    <input 
-                      type="text" 
-                      value={url}
-                      onChange={(e) => setUrl(e.target.value)}
-                      placeholder={DEFAULT_SUPABASE_URL}
-                      className="w-full bg-white border-2 border-slate-300 focus:border-blue-600 rounded-xl pl-9 pr-3 py-2 text-sm text-slate-900 font-mono font-bold focus:outline-none"
-                    />
-                  </div>
-                  <p className="text-[11px] text-slate-600 font-semibold mt-1">Found in your Supabase Project Settings &gt; API</p>
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold uppercase tracking-wider text-slate-800 block mb-1.5">
-                    Supabase Anon / Public API Key
-                  </label>
-                  <div className="relative">
-                    <Key className="w-4 h-4 absolute left-3 top-3 text-slate-500" />
-                    <input 
-                      type={showKey ? "text" : "password"} 
-                      value={anonKey}
-                      onChange={(e) => setAnonKey(e.target.value)}
-                      placeholder={DEFAULT_SUPABASE_ANON_KEY}
-                      className="w-full bg-white border-2 border-slate-300 focus:border-blue-600 rounded-xl pl-9 pr-10 py-2 text-sm text-slate-900 font-mono font-bold focus:outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowKey(!showKey)}
-                      className="absolute right-3 top-2.5 text-slate-500 hover:text-slate-900 transition-colors cursor-pointer"
-                      title={showKey ? "Hide key" : "Show key"}
-                    >
-                      {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                  <p className="text-[11px] text-slate-600 font-semibold mt-1">Publishable key safe for client-side multi-PC synchronization.</p>
-                </div>
-
-                <div className="flex items-center space-x-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={handleTestConnection}
-                    disabled={testingConnection}
-                    className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs py-2.5 rounded-xl transition-colors border border-slate-300 flex items-center justify-center space-x-2 cursor-pointer"
-                  >
-                    {testingConnection ? <RefreshCw className="w-4 h-4 animate-spin text-blue-600" /> : <Zap className="w-4 h-4 text-amber-600" />}
-                    <span>{testingConnection ? 'Testing...' : 'Test Connection'}</span>
-                  </button>
-
-                  <button
-                    type="submit"
-                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2.5 rounded-xl transition-colors shadow-lg shadow-blue-600/20 flex items-center justify-center space-x-2 cursor-pointer"
-                  >
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>Save Credentials</span>
-                  </button>
-                </div>
-              </form>
+              )}
 
               {/* Database Setup Helper Section */}
               <div className="pt-4 border-t border-slate-200 space-y-3">

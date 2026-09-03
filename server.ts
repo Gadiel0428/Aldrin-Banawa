@@ -1028,9 +1028,25 @@ async function startServer() {
       }
 
       if (collection && collection in state && Array.isArray(data)) {
-        // Authoritative update: filter out any tombstoned/deleted IDs so they never resurrect
-        (state as any)[collection] = data
-          .filter((item: any) => item && item.id && !deletedRecordTombstones.has(item.id));
+        const currentArr: any[] = (state as any)[collection] || [];
+        const recordMap = new Map<string, any>();
+        
+        // Keep existing non-tombstoned records
+        for (const item of currentArr) {
+          if (item && item.id && !deletedRecordTombstones.has(item.id)) {
+            recordMap.set(item.id, item);
+          }
+        }
+        
+        // Merge incoming records
+        for (const item of data) {
+          if (item && item.id && !deletedRecordTombstones.has(item.id)) {
+            recordMap.set(item.id, item);
+          }
+        }
+        
+        (state as any)[collection] = Array.from(recordMap.values());
+        stateRevision++;
         saveStateToDisk();
         persistToSupabase(collection, (state as any)[collection]);
         
@@ -1181,6 +1197,18 @@ async function startServer() {
         data: state.registeredUsers,
         revision: stateRevision
       });
+
+      // Audit message for registered account
+      const regAuditMsg: ChatMessage = {
+        id: `sys-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        sender: "System Audit",
+        text: `NEW USER INSTALLED: Operator ${cleanUsername} (${cleanId}) registered and synchronized to all warehouse terminals.`,
+        timestamp: new Date().toISOString(),
+        isSystem: true
+      };
+      chatMessages.push(regAuditMsg);
+      if (chatMessages.length > 100) chatMessages.shift();
+      broadcast({ type: "chat_broadcast", message: regAuditMsg });
 
       return res.json({ success: true, user: newUser, revision: stateRevision });
     } catch (err: any) {
@@ -1369,6 +1397,55 @@ async function startServer() {
         success: true, 
         message: "All registered operator accounts cleared. Super Administrator preserved.",
         remainingAccounts: state.registeredUsers
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Explicit endpoint to report and handle a fresh client terminal installation
+  app.post("/api/terminal/fresh-install", (req, res) => {
+    try {
+      const { stationId, installId, username, employeeId, platform } = req.body;
+      const cleanStation = String(stationId || "WS-NEW").trim().toUpperCase();
+      const cleanUser = String(username || "New Operator").trim().toUpperCase();
+      const cleanPlatform = String(platform || "Terminal").trim();
+
+      console.log(`[JUWEI-CLUSTER] Fresh installation registered: ${cleanStation} (${cleanUser}) on ${cleanPlatform}`);
+
+      // 1. Audit chat log entry
+      const installAuditMsg: ChatMessage = {
+        id: `sys-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        sender: "System Audit",
+        text: `FRESH INSTALL COMPLETE: ${cleanUser} installed JUWEI WMS on ${cleanStation} (${cleanPlatform}) and synchronized to all cluster terminals.`,
+        timestamp: new Date().toISOString(),
+        isSystem: true
+      };
+      chatMessages.push(installAuditMsg);
+      if (chatMessages.length > 100) chatMessages.shift();
+      broadcast({ type: "chat_broadcast", message: installAuditMsg });
+
+      // 2. Broadcast installation announcement to all other connected terminals
+      broadcast({
+        type: "client_installed_broadcast",
+        stationId: cleanStation,
+        installId: installId || "",
+        username: cleanUser,
+        employeeId: employeeId || "",
+        platform: cleanPlatform,
+        timestamp: new Date().toISOString()
+      });
+
+      // 3. Return full authoritative dataset for instant pure hydration
+      return res.json({
+        success: true,
+        stationId: cleanStation,
+        installId: installId || "",
+        data: {
+          ...state,
+          chatMessages
+        },
+        revision: stateRevision
       });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
@@ -2030,6 +2107,62 @@ async function startServer() {
             break;
           }
 
+          case "client_installed": {
+            const stationId = String(payload.stationId || "WS-NEW").trim().toUpperCase();
+            const installId = payload.installId || "";
+            const username = String(payload.username || payload.currentUser || "New Operator").trim().toUpperCase();
+            const employeeId = String(payload.employeeId || "").trim().toUpperCase();
+            const platform = String(payload.platform || "Web Terminal").trim();
+
+            console.log(`[JUWEI-CLUSTER] Fresh installation WebSocket event: ${stationId} by ${username} (${platform})`);
+
+            // Confirm back to installing client with full authoritative data
+            ws.send(JSON.stringify({
+              type: "init",
+              data: {
+                ...state,
+                chatMessages
+              },
+              activeUsers: getActiveUsersList(),
+              activePresence: getActivePresenceList(),
+              freshInstallConfirmed: true,
+              stationId,
+              installId,
+              revision: stateRevision
+            }));
+
+            // Announce to all other connected clients
+            broadcast({
+              type: "client_installed_broadcast",
+              stationId,
+              installId,
+              username,
+              employeeId,
+              platform,
+              timestamp: new Date().toISOString()
+            });
+
+            // Log in system chat
+            const installAuditMsg: ChatMessage = {
+              id: `sys-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+              sender: "System Audit",
+              text: `FRESH INSTALL COMPLETE: ${username} installed JUWEI WMS on ${stationId} (${platform}) and synchronized to all cluster terminals.`,
+              timestamp: new Date().toISOString(),
+              isSystem: true
+            };
+            chatMessages.push(installAuditMsg);
+            if (chatMessages.length > 100) chatMessages.shift();
+            broadcast({ type: "chat_broadcast", message: installAuditMsg });
+
+            // Refresh presence for all
+            broadcast({
+              type: "presence_updated",
+              activeUsers: getActiveUsersList(),
+              activePresence: getActivePresenceList()
+            });
+            break;
+          }
+
           case "register_account": {
             const { user, author } = payload;
             if (user && user.employeeId) {
@@ -2072,6 +2205,18 @@ async function startServer() {
                 data: state.registeredUsers,
                 revision: stateRevision
               });
+
+              // Audit chat log entry
+              const regAuditMsg: ChatMessage = {
+                id: `sys-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+                sender: "System Audit",
+                text: `NEW USER INSTALLED: Operator ${cleanUsername} (${cleanId}) registered by ${author || 'Admin'} and synchronized to all warehouse terminals.`,
+                timestamp: new Date().toISOString(),
+                isSystem: true
+              };
+              chatMessages.push(regAuditMsg);
+              if (chatMessages.length > 100) chatMessages.shift();
+              broadcast({ type: "chat_broadcast", message: regAuditMsg });
             }
             break;
           }

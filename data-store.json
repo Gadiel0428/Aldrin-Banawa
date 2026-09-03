@@ -1,7 +1,123 @@
 {
   "state": {
-    "stocks": [],
-    "receiving": [],
+    "stocks": [
+      {
+        "id": "STK-6732",
+        "partCode": "2314234231",
+        "description": "23412v3c4214",
+        "type": "CONSUMABLE",
+        "location": "c12342134",
+        "quantity": 421341234,
+        "unit": "KG",
+        "lotNumber": "2134213c4",
+        "color": null,
+        "receivedDate": "2026-09-02",
+        "fifoColor": "Black",
+        "status": "APPROVED",
+        "resinSackRisk": false,
+        "customer": "General / Internal",
+        "reorderMin": 2342314123,
+        "remarks": null,
+        "bom": []
+      },
+      {
+        "id": "STK-5654",
+        "partCode": "12432",
+        "description": "14234r2134c2423",
+        "type": "CONSUMABLE",
+        "location": "21341c2142",
+        "quantity": 214232234,
+        "unit": "KG",
+        "lotNumber": "c1234c`134",
+        "color": "32142",
+        "receivedDate": "2026-09-02",
+        "fifoColor": "Black",
+        "status": "APPROVED",
+        "resinSackRisk": false,
+        "customer": "General / Internal",
+        "reorderMin": 31242,
+        "remarks": null,
+        "bom": []
+      }
+    ],
+    "receiving": [
+      {
+        "id": "42134c2",
+        "date": "2026-09-02",
+        "receivedDate": "2026-09-02",
+        "location": "c12342134",
+        "vendorSupplier": "234234",
+        "reorderMin": 2342314123,
+        "remarks": null,
+        "source": "EXTERNAL",
+        "itemDescription": "23412v3c4214",
+        "partCode": "2314234231",
+        "color": null,
+        "quantity": 421341234,
+        "unit": "KG",
+        "lotNumber": "2134213c4",
+        "physicalCondition": {
+          "boxIntact": true,
+          "noPestSign": true,
+          "noWaterDamage": true,
+          "noContamination": true,
+          "systemRecording": true,
+          "quantityAccuracy": true,
+          "receivingInspection": true,
+          "materialTraceability": true,
+          "materialConditionCheck": true
+        },
+        "rrNumber": "42134c2",
+        "poNumber": "341234c12",
+        "drNumber": "34c234",
+        "siNumber": "23423",
+        "supplierOrDept": "INDIRECT BOM",
+        "iqcStatus": "APPROVED_IQC",
+        "status": "DRAFT",
+        "fifoColorCode": "Black",
+        "bom": [],
+        "autoDeductBom": false,
+        "customer": "General / Internal"
+      },
+      {
+        "id": "12c34124",
+        "date": "2026-09-02",
+        "receivedDate": "2026-09-02",
+        "location": "21341c2142",
+        "vendorSupplier": "3c2412342",
+        "reorderMin": 31242,
+        "remarks": null,
+        "source": "INTERNAL",
+        "itemDescription": "14234r2134c2423",
+        "partCode": "12432",
+        "color": "32142",
+        "quantity": 214232234,
+        "unit": "KG",
+        "lotNumber": "c1234c`134",
+        "physicalCondition": {
+          "boxIntact": true,
+          "noPestSign": true,
+          "noWaterDamage": true,
+          "noContamination": true,
+          "systemRecording": true,
+          "quantityAccuracy": true,
+          "receivingInspection": true,
+          "materialTraceability": true,
+          "materialConditionCheck": true
+        },
+        "rrNumber": "12c34124",
+        "poNumber": "12421",
+        "drNumber": "422",
+        "siNumber": "222142",
+        "supplierOrDept": "RESIN/RAW MATERIALS",
+        "iqcStatus": "NA",
+        "status": "DRAFT",
+        "fifoColorCode": "Black",
+        "bom": [],
+        "autoDeductBom": false,
+        "customer": "General / Internal"
+      }
+    ],
     "returns": [],
     "recycling": [],
     "issuances": [],
@@ -11,24 +127,26 @@
     "registries": [],
     "registeredUsers": [
       {
-        "employeeId": "JPMP-002",
         "username": "ALDRIN BANAWA",
         "role": "SUPER ADMINISTRATOR",
+        "employeeId": "JPMP-002",
         "phoneNumber": "+639669858846",
         "permission": "FULL_ACCESS",
         "pin": "0423",
-        "status": "ACTIVE"
+        "status": "ACTIVE",
+        "pin_hash": "0423"
       }
-    ]
+    ],
+    "stockMovements": []
   },
   "deletedRecordTombstones": [],
   "deletedUserTombstones": [],
   "chatMessages": [
     {
       "id": "sys-init",
-      "sender": "System",
-      "text": "JUWEI WAREHOUSE MANAGEMENT SYSTEM ISO 9001:2015 Real-time Database Initialized.",
-      "timestamp": "2026-08-27T20:00:00.000Z",
+      "sender": "System Audit",
+      "text": "JUWEI WAREHOUSE MANAGEMENT SYSTEM INITIALIZED. SUPER ADMINISTRATOR ALDRIN BANAWA (JPMP-002) ACTIVE.",
+      "timestamp": "2026-09-02T00:00:00.000Z",
       "isSystem": true
     }
   ]

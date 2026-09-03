@@ -24,12 +24,14 @@ interface MobileAppDownloadModalProps {
   isOpen: boolean;
   onClose: () => void;
   serverAddress?: string;
+  onFreshInstallSync?: () => void;
 }
 
 export default function MobileAppDownloadModal({
   isOpen,
   onClose,
-  serverAddress
+  serverAddress,
+  onFreshInstallSync
 }: MobileAppDownloadModalProps) {
   const [activeTab, setActiveTab] = useState<'install' | 'qr' | 'apk' | 'handheld'>('install');
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -37,7 +39,7 @@ export default function MobileAppDownloadModal({
   const [installSuccess, setInstallSuccess] = useState<boolean>(false);
   const [copiedUrl, setCopiedUrl] = useState<boolean>(false);
 
-  // Capture PWA beforeinstallprompt event
+  // Capture PWA beforeinstallprompt and appinstalled events
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: any) => {
       e.preventDefault();
@@ -45,7 +47,17 @@ export default function MobileAppDownloadModal({
       setIsInstallable(true);
     };
 
+    const handleAppInstalled = () => {
+      console.log('[JUWEI WMS] PWA installation confirmed.');
+      setInstallSuccess(true);
+      setIsInstallable(false);
+      if (onFreshInstallSync) {
+        onFreshInstallSync();
+      }
+    };
+
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
 
     // Also check if already in standalone mode
     if (window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone) {
@@ -54,8 +66,9 @@ export default function MobileAppDownloadModal({
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
     };
-  }, []);
+  }, [onFreshInstallSync]);
 
   const currentUrl = typeof window !== 'undefined' ? window.location.origin : '';
   const isHttps = typeof window !== 'undefined' ? window.location.protocol === 'https:' : true;
@@ -73,6 +86,9 @@ export default function MobileAppDownloadModal({
       setInstallSuccess(true);
       setDeferredPrompt(null);
       setIsInstallable(false);
+      if (onFreshInstallSync) {
+        onFreshInstallSync();
+      }
     }
   };
 

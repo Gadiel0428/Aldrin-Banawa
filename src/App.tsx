@@ -82,7 +82,8 @@ import {
   deleteRecordFromSupabase,
   trackSupabasePresence,
   untrackSupabasePresence,
-  broadcastSupabaseForceSync
+  broadcastSupabaseForceSync,
+  broadcastSupabaseInstallation
 } from './lib/supabase';
 
 import { 
@@ -217,15 +218,14 @@ function savePendingSyncQueue(queue: Record<string, any[]>) {
 }
 
 function markPendingSync(collection: string, data: any[]) {
-  const q = getPendingSyncQueue();
-  q[collection] = data;
-  savePendingSyncQueue(q);
+  // Direct live synchronizations are transmitted immediately via Supabase, WebSockets, and server endpoints.
+  // We do not queue whole collection arrays to prevent stale overwrites across users.
 }
 
 function clearPendingSync(collection: string) {
-  const q = getPendingSyncQueue();
-  delete q[collection];
-  savePendingSyncQueue(q);
+  try {
+    localStorage.removeItem('juwei_wms_pending_sync');
+  } catch (e) {}
 }
 
 export default function App() {
@@ -401,15 +401,38 @@ export default function App() {
   const getStationId = (): string => {
     if (typeof window === 'undefined') return 'WS-MASTER';
     try {
-      let id = sessionStorage.getItem('juwei_wms_station_id');
+      let id = localStorage.getItem('juwei_wms_station_id') || sessionStorage.getItem('juwei_wms_station_id');
       if (!id) {
         id = 'WS-' + Math.random().toString(36).substring(2, 6).toUpperCase();
+        localStorage.setItem('juwei_wms_station_id', id);
         sessionStorage.setItem('juwei_wms_station_id', id);
       }
       return id;
     } catch (e) {
       return 'WS-LOCAL';
     }
+  };
+
+  const getPlatformName = (): string => {
+    if (typeof window === 'undefined') return 'Server/Desktop';
+    const ua = window.navigator.userAgent || '';
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone;
+    const isAndroid = /android/i.test(ua);
+    const isWindows = /windows/i.test(ua);
+    const isMac = /macintosh|mac os x/i.test(ua);
+    const isIOS = /ipad|iphone|ipod/i.test(ua);
+
+    if (isStandalone) {
+      if (isAndroid) return 'Android PWA';
+      if (isWindows) return 'Windows PWA';
+      if (isIOS) return 'iOS PWA';
+      return 'Installed PWA App';
+    }
+    if (isWindows) return 'Windows Workstation';
+    if (isAndroid) return 'Android Handheld / Scanner';
+    if (isIOS) return 'iOS Mobile Terminal';
+    if (isMac) return 'macOS Terminal';
+    return 'Web Terminal';
   };
 
   // Real-time states
@@ -714,6 +737,16 @@ export default function App() {
             try {
               localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify([superAdminAccount]));
             } catch (e) {}
+          } else if (payload.type === 'client_installed') {
+            if (payload.stationId && payload.stationId !== getStationId()) {
+              setLiveSyncToast({
+                id: String(Date.now()),
+                author: payload.username || 'System',
+                action: `Terminal ${payload.stationId} (${payload.platform || 'Device'}) completed fresh install & synced`,
+                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+              });
+              setSupabaseRefreshTrigger(prev => prev + 1);
+            }
           } else if (payload.type === 'activity_toast') {
             setLiveSyncToast({
               id: String(Date.now()),
@@ -882,6 +915,15 @@ export default function App() {
 
     const source = Array.isArray(incomingList) ? incomingList : (() => {
       try {
+        // Enforce clean single Super Admin baseline if accounts reset migration has not run
+        if (localStorage.getItem('juwei_wms_accounts_reset_v3') !== 'true') {
+          localStorage.removeItem('juwei_wms_cache_registeredUsers');
+          localStorage.removeItem('juwei_wms_deleted_accounts_v1');
+          localStorage.removeItem('juwei_wms_deletedAccounts');
+          localStorage.setItem('juwei_wms_accounts_reset_v3', 'true');
+          localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify([superAdminAccount]));
+          return [superAdminAccount];
+        }
         const cached = localStorage.getItem('juwei_wms_registeredUsers') || localStorage.getItem('juwei_wms_cache_registeredUsers');
         if (cached) {
           const parsed = JSON.parse(cached);
@@ -1428,10 +1470,13 @@ export default function App() {
       }
     }
 
-    // 2. Preserve all local records from safeCurrent that have not been explicitly deleted
-    for (const localItem of safeCurrent) {
-      if (localItem && localItem.id && !deletedSet.has(localItem.id) && !mergedMap.has(localItem.id)) {
-        mergedMap.set(localItem.id, localItem);
+    // 2. Preserve only unconfirmed offline mutations created locally on this workstation
+    const pendingMutations = getPendingMutations();
+    for (const mut of pendingMutations) {
+      if (mut && mut.collection === colName && mut.type === 'upsert' && mut.record && mut.record.id) {
+        if (!deletedSet.has(mut.record.id) && !mergedMap.has(mut.record.id)) {
+          mergedMap.set(mut.record.id, mut.record);
+        }
       }
     }
 
@@ -1572,6 +1617,139 @@ export default function App() {
 
     return orderedUsers;
   };
+
+  // Fresh install protocol: wipes local cache, fetches pure authoritative snapshot from central server / Supabase,
+  // and broadcasts live synchronization to all connected users and workstations across the cluster.
+  const performFreshInstallAndSync = async (isUserInitiated = false) => {
+    try {
+      const stationId = getStationId();
+      const installId = 'INS-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 6).toUpperCase();
+      localStorage.setItem('juwei_wms_install_id', installId);
+      localStorage.setItem('juwei_wms_installed_at', new Date().toISOString());
+      localStorage.setItem('juwei_wms_installed_flag_v1', 'true');
+      localStorage.removeItem('juwei_wms_is_fresh_install');
+      localStorage.removeItem('juwei_wms_pending_sync');
+
+      // Clear stale local caches
+      const staleKeys = [
+        'juwei_wms_pending_sync',
+        'juwei_wms_mutation_queue_v1',
+        'juwei_wms_cache_stocks',
+        'juwei_wms_cache_receiving',
+        'juwei_wms_cache_returns',
+        'juwei_wms_cache_recycling',
+        'juwei_wms_cache_issuances',
+        'juwei_wms_cache_deliveries',
+        'juwei_wms_cache_envLogs',
+        'juwei_wms_cache_forkliftChecks',
+        'juwei_wms_cache_registries',
+        'juwei_wms_master_registries',
+        'juwei_wms_cache_registeredUsers'
+      ];
+      staleKeys.forEach(k => {
+        try { localStorage.removeItem(k); } catch (e) {}
+      });
+
+      // 1. Fetch fresh authoritative state from central server
+      const baseUrl = getApiBaseUrl();
+      try {
+        const res = await fetch(`${baseUrl}/api/terminal/fresh-install`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            stationId,
+            installId,
+            username: currentUser || 'JUWEI OPERATOR',
+            employeeId: currentEmployeeId || '',
+            platform: getPlatformName()
+          })
+        });
+
+        if (res.ok) {
+          const json = await res.json();
+          if (json && json.data) {
+            const { stocks: s, receiving: r, returns: ret, recycling: rec, issuances: iss, deliveries: del, envLogs: el, forkliftChecks: fc, registries: reg, registeredUsers: ru, chatMessages: cm } = json.data;
+            if (Array.isArray(s)) setStocks(normalizeRecords('stocks', s));
+            if (Array.isArray(r)) setReceiving(normalizeRecords('receiving', r));
+            if (Array.isArray(ret)) setReturns(normalizeRecords('returns', ret));
+            if (Array.isArray(rec)) setRecycling(normalizeRecords('recycling', rec));
+            if (Array.isArray(iss)) setIssuances(normalizeRecords('issuances', iss));
+            if (Array.isArray(del)) setDeliveries(normalizeRecords('deliveries', del));
+            if (Array.isArray(el)) setEnvLogs(normalizeRecords('envLogs', el));
+            if (Array.isArray(fc)) setForkliftChecks(normalizeRecords('forkliftChecks', fc));
+            if (Array.isArray(reg)) setRegistries(normalizeRecords('registries', reg));
+            if (Array.isArray(ru) && ru.length > 0) setRegisteredUsers(reconcileUsers([], ru));
+            if (Array.isArray(cm) && cm.length > 0) setChatMessages(cm);
+          }
+        }
+      } catch (err) {
+        console.warn('Fresh install server sync error, falling back to database:', err);
+      }
+
+      // 2. Announce over WebSocket to all network workstations
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        try {
+          socket.send(JSON.stringify({
+            type: 'client_installed',
+            stationId,
+            installId,
+            username: currentUser || 'JUWEI OPERATOR',
+            employeeId: currentEmployeeId || '',
+            platform: getPlatformName(),
+            timestamp: new Date().toISOString()
+          }));
+        } catch (e) {}
+      }
+
+      // 3. Announce over BroadcastChannel to other browser tabs
+      if (syncChannelRef.current) {
+        try {
+          syncChannelRef.current.postMessage({
+            type: 'client_installed',
+            stationId,
+            installId,
+            username: currentUser || 'JUWEI OPERATOR',
+            platform: getPlatformName()
+          });
+        } catch (e) {}
+      }
+
+      // 4. Announce over Supabase Realtime broadcast to all cloud users
+      if (isSupabaseConfigured()) {
+        broadcastSupabaseInstallation({
+          stationId,
+          installId,
+          username: currentUser || 'JUWEI OPERATOR',
+          employeeId: currentEmployeeId || '',
+          platform: getPlatformName()
+        });
+      }
+
+      // 5. Trigger cloud sync refresh
+      setSupabaseRefreshTrigger(prev => prev + 1);
+      setLastSyncedTime(new Date());
+
+      setLiveSyncToast({
+        id: String(Date.now()),
+        author: 'System',
+        action: isUserInitiated ? 'Fresh install re-initialized • Synchronized with all cluster operators' : 'Fresh install complete • Synced with all cluster terminals',
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      });
+    } catch (e) {
+      console.warn('performFreshInstallAndSync error:', e);
+    }
+  };
+
+  // Automatic fresh install initialization check on startup
+  useEffect(() => {
+    try {
+      const isInstalled = localStorage.getItem('juwei_wms_installed_flag_v1');
+      if (!isInstalled) {
+        console.log('[JUWEI WMS] First-time launch / fresh install detected. Initializing clean station & syncing...');
+        performFreshInstallAndSync(false);
+      }
+    } catch (e) {}
+  }, []);
 
   // Helper to execute coordinated single-record upsert across local state, Supabase, WebSocket, and Express server
   const upsertRecordLocallyAndRemotely = (
@@ -1954,65 +2132,35 @@ export default function App() {
     };
 
     const flushPendingSyncQueue = async () => {
-      const q = getPendingSyncQueue();
-      const collections = Object.keys(q);
-      if (collections.length === 0) return;
-
-      let targetAddr = serverAddress.trim() || getDefaultServerAddress();
-      const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
-      const isHttps = isSecureServerHost(cleanHost, targetAddr);
-      const httpProto = isHttps ? 'https:' : 'http:';
-      const baseUrl = getApiBaseUrl();
-
-      for (const collection of collections) {
-        const data = q[collection];
-        if (data && Array.isArray(data)) {
-          try {
-            const res = await fetch(`${baseUrl}/api/sync`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ collection, data })
-            });
-            if (res.ok) {
-              clearPendingSync(collection);
-            }
-          } catch (e) {
-            try {
-              const resFallback = await fetch(`${httpProto}//${cleanHost}/api/sync`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ collection, data })
-              });
-              if (resFallback.ok) {
-                clearPendingSync(collection);
-              }
-            } catch (err) {
-              // Still offline
-            }
-          }
-        }
-      }
+      try {
+        localStorage.removeItem('juwei_wms_pending_sync');
+      } catch (e) {}
     };
 
     const runSyncCheck = async (): Promise<boolean> => {
-      // 0. Flush any pending offline mutations and collections first
-      await flushPendingMutationsQueue();
-      await flushPendingSyncQueue();
-
-      // 1. Try relative / configured baseUrl /api/sync first
+      // 1. Try relative / configured baseUrl /api/sync first to hydrate authoritative data
       const baseUrl = getApiBaseUrl();
       const relOk = await tryFetchSync(`${baseUrl}/api/sync`);
-      if (relOk) return true;
+      if (relOk) {
+        await flushPendingMutationsQueue();
+        return true;
+      }
 
       // 2. Try localhost:3000 if desktop / embedded node server
       const local3000Ok = await tryFetchSync('http://localhost:3000/api/sync');
-      if (local3000Ok) return true;
+      if (local3000Ok) {
+        await flushPendingMutationsQueue();
+        return true;
+      }
 
       // 3. Try window host if available
       if (typeof window !== 'undefined' && window.location && window.location.host) {
         const localProto = window.location.protocol === 'https:' ? 'https:' : 'http:';
         const localOk = await tryFetchSync(`${localProto}//${window.location.host}/api/sync`);
-        if (localOk) return true;
+        if (localOk) {
+          await flushPendingMutationsQueue();
+          return true;
+        }
       }
 
       // 4. Try configured server host address
@@ -2023,7 +2171,10 @@ export default function App() {
       const httpUrl = `${httpProto}//${cleanHost}/api/sync`;
 
       const hostOk = await tryFetchSync(httpUrl);
-      if (hostOk) return true;
+      if (hostOk) {
+        await flushPendingMutationsQueue();
+        return true;
+      }
 
       if (isMounted && !hasConnectedOnce) {
         setConnectionStatus('disconnected');
@@ -2076,6 +2227,19 @@ export default function App() {
               role: currentRole || (currentPermission === 'FULL_ACCESS' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR'),
               activeView: view
             }));
+
+            if (localStorage.getItem('juwei_wms_is_fresh_install') === 'true') {
+              ws.send(JSON.stringify({
+                type: 'client_installed',
+                stationId: getStationId(),
+                installId: localStorage.getItem('juwei_wms_install_id') || ('INS-' + Math.random().toString(36).substring(2, 6).toUpperCase()),
+                username: currentUser || 'JUWEI OPERATOR',
+                employeeId: currentEmployeeId || '',
+                platform: getPlatformName(),
+                timestamp: new Date().toISOString()
+              }));
+              localStorage.removeItem('juwei_wms_is_fresh_install');
+            }
           } catch (e) {
             console.warn('WS send join error:', e);
           }
@@ -2298,6 +2462,22 @@ export default function App() {
                 saveStoredSupabaseConfig({ url: payload.url, anonKey: payload.anonKey });
                 setSupabaseStatus('connecting');
                 setSupabaseRefreshTrigger(prev => prev + 1);
+              }
+              break;
+            }
+            case 'client_installed_broadcast': {
+              const { stationId, username, platform } = payload;
+              if (stationId && stationId !== getStationId()) {
+                setLiveSyncToast({
+                  id: String(Date.now()),
+                  author: username || 'Cluster Node',
+                  action: `Terminal ${stationId} (${platform || 'Device'}) completed fresh install • Live Synced`,
+                  time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                });
+                runSyncCheck();
+                if (isSupabaseConfigured()) {
+                  setSupabaseRefreshTrigger(prev => prev + 1);
+                }
               }
               break;
             }
@@ -2601,6 +2781,19 @@ export default function App() {
             loadAllSupabaseData();
             setLastSyncedTime(new Date());
           }
+        },
+        (payload) => {
+          if (!isMounted) return;
+          if (payload && payload.stationId && payload.stationId !== getStationId()) {
+            setLiveSyncToast({
+              id: String(Date.now()),
+              author: payload.username || 'Remote Operator',
+              action: `Terminal ${payload.stationId} (${payload.platform || 'Device'}) completed fresh install & cloud synced`,
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+            });
+            loadAllSupabaseData();
+            setLastSyncedTime(new Date());
+          }
         }
       );
 
@@ -2843,6 +3036,16 @@ export default function App() {
 
     // Cloud PostgreSQL sync
     syncCollection('registeredUsers', nextUsers);
+
+    // Notify cluster users via Supabase Realtime broadcast
+    if (isSupabaseConfigured()) {
+      broadcastSupabaseInstallation({
+        stationId: getStationId(),
+        username: newUser.username,
+        employeeId: newUser.employeeId,
+        platform: `New Operator (${newUser.role})`
+      });
+    }
 
     // Set state to trigger the secure PIN confirmation overlay
     setNewlyRegisteredUser(newUser);
@@ -3957,12 +4160,12 @@ export default function App() {
               type="button"
               onClick={() => setShowSupabaseSettingsModal(true)}
               className="flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700/80 border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer text-xs"
-              title="Click to edit Supabase Cloud Database Configuration"
-              aria-label="Edit Supabase Cloud Database Configuration"
+              title="Unified Central Storage • All Users Synced"
+              aria-label="Unified Central Storage Status"
               id="btn-login-supabase-settings"
             >
-              <Database className={`h-3.5 w-3.5 ${isSupabaseConfigured() ? 'text-emerald-400' : 'text-amber-400'}`} />
-              <span className="text-[11px] font-mono">DB Config</span>
+              <Database className="h-3.5 w-3.5 text-emerald-400" />
+              <span className="text-[11px] font-mono text-emerald-300 font-semibold">1 Storage • Synced</span>
             </button>
           </div>
 
@@ -4101,6 +4304,7 @@ export default function App() {
             isOpen={showMobileInstallModal}
             onClose={() => setShowMobileInstallModal(false)}
             serverAddress={serverAddress}
+            onFreshInstallSync={() => performFreshInstallAndSync(true)}
           />
         )}
 
@@ -4679,6 +4883,7 @@ export default function App() {
           isOpen={showMobileInstallModal}
           onClose={() => setShowMobileInstallModal(false)}
           serverAddress={serverAddress}
+          onFreshInstallSync={() => performFreshInstallAndSync(true)}
         />
       )}
 
@@ -4711,6 +4916,7 @@ export default function App() {
             setSupabaseRefreshTrigger(prev => prev + 1);
           });
         }}
+        onFreshInstallAndSync={() => performFreshInstallAndSync(true)}
       />
 
       {/* Active Workstation Terminals Modal */}

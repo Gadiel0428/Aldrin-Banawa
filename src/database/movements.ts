@@ -52,50 +52,28 @@ export async function createStockMovement(input: CreateStockMovementInput): Prom
     p_location: input.location || null,
   };
 
+  // Call the central Express server endpoint for atomic stock movement and real-time broadcast
   try {
-    const client = getSupabaseClient();
-    const { data, error } = await client.rpc('create_stock_movement', payload);
+    const resp = await fetch('/api/stock-movements', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...input,
+        delta,
+        deviceId,
+        idempotencyKey,
+      }),
+    });
 
-    if (error) {
-      console.warn('Supabase RPC create_stock_movement failed, trying fallback API endpoint:', error.message);
-      throw error;
+    if (!resp.ok) {
+      const errorData = await resp.json().catch(() => ({}));
+      throw new Error(errorData.error || `Server failed with status ${resp.status}`);
     }
 
-    const result = typeof data === 'string' ? JSON.parse(data) : data;
-    return {
-      success: true,
-      movementId: result.movement_id,
-      productId: input.productId,
-      warehouseId: input.warehouseId,
-      previousQuantity: Number(result.previous_quantity) || 0,
-      newQuantity: Number(result.new_quantity) || 0,
-      delta,
-      timestamp: result.timestamp || new Date().toISOString(),
-    };
+    const resJson = await resp.json();
+    return resJson;
   } catch (err: any) {
-    // If Supabase RPC is unavailable, call the central Express server endpoint
-    try {
-      const resp = await fetch('/api/stock-movements', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...input,
-          delta,
-          deviceId,
-          idempotencyKey,
-        }),
-      });
-
-      if (!resp.ok) {
-        const errorData = await resp.json().catch(() => ({}));
-        throw new Error(errorData.error || `Server failed with status ${resp.status}`);
-      }
-
-      const resJson = await resp.json();
-      return resJson;
-    } catch (serverErr: any) {
-      throw new Error(`Stock movement failed: ${serverErr.message || err.message}`);
-    }
+    throw new Error(`Stock movement failed: ${err.message}`);
   }
 }
 
