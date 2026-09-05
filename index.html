@@ -40,13 +40,36 @@
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
-      if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('./sw.js').catch(err => {
-            console.log('SW registration failed: ', err);
-          });
-        });
-      }
+      (function() {
+        if ('serviceWorker' in navigator) {
+          // Clean up legacy caches if present
+          if ('caches' in window) {
+            caches.keys().then(function(keys) {
+              keys.forEach(function(k) {
+                if (k.startsWith('juwei-wms-') && k !== 'juwei-wms-v5') {
+                  caches.delete(k);
+                }
+              });
+            });
+          }
+
+          // In dev server environment, unregister service workers to guarantee clean module loading
+          var isDev = window.location.hostname === 'localhost' || window.location.hostname.includes('run.app');
+          if (isDev) {
+            navigator.serviceWorker.getRegistrations().then(function(registrations) {
+              registrations.forEach(function(reg) {
+                reg.unregister();
+              });
+            });
+          } else if (window.location.protocol.startsWith('http')) {
+            window.addEventListener('load', function() {
+              navigator.serviceWorker.register('./sw.js').catch(function(err) {
+                console.log('SW registration notice: ', err);
+              });
+            });
+          }
+        }
+      })();
     </script>
   </body>
 </html>

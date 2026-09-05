@@ -1,5 +1,5 @@
 // JUWEI WMS Mobile & Desktop Service Worker
-const CACHE_NAME = 'juwei-wms-v3';
+const CACHE_NAME = 'juwei-wms-v5';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
@@ -34,14 +34,33 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
-
-  // For API endpoints or WebSocket, bypass SW cache (always network)
-  if (url.pathname.startsWith('/api') || url.pathname.startsWith('/ws')) {
+  // Only handle GET requests
+  if (event.request.method !== 'GET') {
     return;
   }
 
-  // Network-first with cache fallback for HTML pages and app shell
+  const url = new URL(event.request.url);
+
+  // CRITICAL: NEVER cache or intercept dynamic dev modules, Vite chunks, or source files
+  if (
+    url.pathname.startsWith('/api') ||
+    url.pathname.startsWith('/ws') ||
+    url.pathname.startsWith('/src/') ||
+    url.pathname.startsWith('/node_modules/') ||
+    url.pathname.startsWith('/@') ||
+    url.pathname.includes('.vite/') ||
+    url.search.includes('v=') ||
+    url.search.includes('t=') ||
+    url.search.includes('import') ||
+    url.pathname.endsWith('.ts') ||
+    url.pathname.endsWith('.tsx') ||
+    url.pathname.endsWith('.jsx') ||
+    url.pathname.endsWith('.map')
+  ) {
+    return; // Pass through straight to network
+  }
+
+  // Network-first with cache fallback for HTML navigation
   if (event.request.mode === 'navigate') {
     event.respondWith(
       fetch(event.request)
@@ -50,10 +69,10 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Stale-while-revalidate for static assets
+  // Network-first for all other static assets (favicon, manifest, png icons)
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      const fetchPromise = fetch(event.request).then((networkResponse) => {
+    fetch(event.request)
+      .then((networkResponse) => {
         if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
           const responseToCache = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => {
@@ -61,9 +80,7 @@ self.addEventListener('fetch', (event) => {
           });
         }
         return networkResponse;
-      }).catch(() => cachedResponse);
-
-      return cachedResponse || fetchPromise;
-    })
+      })
+      .catch(() => caches.match(event.request))
   );
 });

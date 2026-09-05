@@ -1445,11 +1445,17 @@ export default function App() {
 
   // Helper to reconcile incoming remote collections with local state cleanly without data loss, disappearing records, or flickering
   const reconcileCollection = (colName: string, currentArr: any[], incomingArr: any[]): any[] => {
+    const safeCurrent = Array.isArray(currentArr) ? currentArr : [];
+
+    // If incoming data is invalid or empty while current displayed data exists,
+    // NEVER clear the screen! Preserve existing displayed data intact.
     if (!Array.isArray(incomingArr)) {
-      return Array.isArray(currentArr) ? currentArr : [];
+      return safeCurrent;
+    }
+    if (incomingArr.length === 0 && safeCurrent.length > 0) {
+      return safeCurrent;
     }
 
-    const safeCurrent = Array.isArray(currentArr) ? currentArr : [];
     const deletedSet = getDeletedRecordIds();
     const now = Date.now();
 
@@ -1463,19 +1469,30 @@ export default function App() {
     for (const remoteItem of filteredIncoming) {
       const localItem = safeCurrent.find(it => it && it.id === remoteItem.id);
       if (localItem) {
-        // If modified locally on this workstation within the last 6 seconds, keep local version temporarily to avoid typing jitter
+        // If modified locally on this workstation within the last 30 seconds, keep local version
         const lastLocalMut = recentlyMutatedRecords.current.get(localItem.id) || 0;
-        if (now - lastLocalMut < 6000) {
+        if (now - lastLocalMut < 30000) {
           mergedMap.set(remoteItem.id, localItem);
         } else {
-          mergedMap.set(remoteItem.id, remoteItem);
+          mergedMap.set(remoteItem.id, { ...localItem, ...remoteItem });
         }
       } else {
         mergedMap.set(remoteItem.id, remoteItem);
       }
     }
 
-    // 2. Preserve only unconfirmed offline mutations created locally on this workstation
+    // 2. CRITICAL PRESERVATION OF CURRENT DISPLAYED RECORDS:
+    // Any record currently in safeCurrent that has NOT been explicitly deleted MUST be preserved!
+    // A background fetch, replication lag, or stale poll response must NEVER drop currently displayed records!
+    for (const localItem of safeCurrent) {
+      if (localItem && localItem.id && !deletedSet.has(localItem.id)) {
+        if (!mergedMap.has(localItem.id)) {
+          mergedMap.set(localItem.id, localItem);
+        }
+      }
+    }
+
+    // 3. Preserve any unconfirmed offline mutations created locally on this workstation
     const pendingMutations = getPendingMutations();
     for (const mut of pendingMutations) {
       if (mut && mut.collection === colName && mut.type === 'upsert' && mut.record && mut.record.id) {
@@ -1485,7 +1502,7 @@ export default function App() {
       }
     }
 
-    // 3. Stable Ordering: preserve safeCurrent's exact index order for all existing items, then prepend any new items
+    // 4. Stable Ordering: preserve safeCurrent's exact index order for all existing items, then prepend any new incoming items
     const orderedList: any[] = [];
     const usedIds = new Set<string>();
 
@@ -2125,11 +2142,26 @@ export default function App() {
       }
     };
 
+    let activeSyncAbortCtrl: AbortController | null = null;
+    let syncSequenceId = 0;
+
     const tryFetchSync = async (url: string): Promise<boolean> => {
+      const thisReqId = ++syncSequenceId;
       try {
-        const res = await fetch(url, { method: 'GET', cache: 'no-store', headers: { 'Accept': 'application/json' } });
+        if (activeSyncAbortCtrl) {
+          try { activeSyncAbortCtrl.abort(); } catch (e) {}
+        }
+        activeSyncAbortCtrl = new AbortController();
+        const res = await fetch(url, { 
+          method: 'GET', 
+          cache: 'no-store', 
+          headers: { 'Accept': 'application/json' },
+          signal: activeSyncAbortCtrl.signal
+        });
+        if (thisReqId !== syncSequenceId) return false;
         if (res.ok) {
           const json = await res.json();
+          if (thisReqId !== syncSequenceId) return false;
           if (json.tombstones) {
             if (Array.isArray(json.tombstones.records)) {
               json.tombstones.records.forEach((rid: string) => markRecordAsDeletedLocally(rid));
@@ -2145,7 +2177,8 @@ export default function App() {
           }
           return true;
         }
-      } catch (e) {
+      } catch (e: any) {
+        if (e && e.name === 'AbortError') return false;
         // Fetch failed
       }
       return false;
@@ -2524,10 +2557,15 @@ export default function App() {
       };
     };
 
-    // Re-sync handlers when internet connection is restored or page is focused
+    // Re-sync handlers when internet connection is restored or page is focused (throttled to avoid rapid background re-fetch)
+    let lastFocusSyncTime = 0;
     const handleOnlineOrFocus = () => {
       if (isMounted) {
-        flushPendingSyncQueue().then(() => runSyncCheck());
+        const now = Date.now();
+        if (now - lastFocusSyncTime > 15000) {
+          lastFocusSyncTime = now;
+          flushPendingSyncQueue().then(() => runSyncCheck());
+        }
         if (!ws || (ws.readyState !== WebSocket.OPEN && ws.readyState !== WebSocket.CONNECTING)) {
           connectWebSocket();
         }
@@ -2601,6 +2639,9 @@ export default function App() {
     let isMounted = true;
     let pollInterval: any = null;
 
+    let supabaseSnapshotReqId = 0;
+    const collectionFetchSeq: Record<string, number> = {};
+
     const loadAllSupabaseData = async () => {
       if (!isMounted) return;
       if (!isSupabaseConfigured()) {
@@ -2608,8 +2649,9 @@ export default function App() {
         return;
       }
 
+      const reqId = ++supabaseSnapshotReqId;
       const snapshot = await fetchFullSupabaseSnapshot();
-      if (!isMounted || !snapshot) return;
+      if (!isMounted || supabaseSnapshotReqId !== reqId || !snapshot) return;
 
       let hasSuccess = false;
       const { 
@@ -2698,7 +2740,10 @@ export default function App() {
       channel = setupSupabaseRealtimeSubscriptions(
         async (col) => {
           if (!isMounted) return;
+          const seq = (collectionFetchSeq[col] || 0) + 1;
+          collectionFetchSeq[col] = seq;
           const updatedItems = await fetchCollectionFromSupabase(col);
+          if (!isMounted || collectionFetchSeq[col] !== seq) return;
           if (Array.isArray(updatedItems)) {
             setSupabaseStatus('connected');
             const norm = normalizeRecords(col, updatedItems);
@@ -2736,14 +2781,22 @@ export default function App() {
           if (action === 'upsert' && record && (record.id || record.employeeId)) {
             if (record.id && isRecordDeletedLocally(record.id)) return;
             const updateFn = (prev: any[]) => {
-              const idx = prev.findIndex(it => it.id === record.id);
+              const safePrev = Array.isArray(prev) ? prev : [];
+              const idx = safePrev.findIndex(it => it.id === record.id);
               if (idx >= 0) {
-                if (JSON.stringify(prev[idx]) === JSON.stringify(record)) return prev;
-                const next = [...prev];
-                next[idx] = record;
+                // If recently mutated locally on this terminal within 30s, keep local version
+                const lastLocalMut = recentlyMutatedRecords.current.get(record.id) || 0;
+                if (Date.now() - lastLocalMut < 30000) {
+                  return prev;
+                }
+                const existing = safePrev[idx];
+                const merged = { ...existing, ...record };
+                if (areValuesEquivalent(existing, merged)) return prev;
+                const next = [...safePrev];
+                next[idx] = merged;
                 return next;
               }
-              return [record, ...prev];
+              return [record, ...safePrev];
             };
 
             switch (col) {
@@ -2817,13 +2870,13 @@ export default function App() {
         }
       );
 
-      // Periodic cloud refresh (every 10s) to keep multi-PC data synchronized
+      // Gentle background cloud safety sync (every 60s) to keep multi-PC data synchronized without spamming
       if (pollInterval) clearInterval(pollInterval);
       pollInterval = setInterval(() => {
         if (isMounted && isSupabaseConfigured()) {
           loadAllSupabaseData();
         }
-      }, 10000);
+      }, 60000);
     };
 
     // Auto-discover shared Supabase config from server
