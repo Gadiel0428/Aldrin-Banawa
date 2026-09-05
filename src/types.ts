@@ -195,6 +195,10 @@ export interface RegisteredAccount {
   pin?: string;
   status?: 'ACTIVE' | 'PENDING' | 'INACTIVE';
   lastActive?: string;
+  registeredBy?: string;
+  registeredBySuperAdmin?: boolean;
+  registeredAt?: string;
+  stationId?: string;
 }
 
 export type RegistryType = 'LOCATION' | 'CATEGORY' | 'CUSTOMER' | 'SUPPLIER' | 'BARCODE_PRESET';
@@ -249,3 +253,7 @@ export function getCustomerForPart(partCode?: string, description?: string): str
   
   return 'General / Internal';
 }
+
+// Re-export modular types for single source of truth
+export * from './types/index';
+

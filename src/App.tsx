@@ -83,7 +83,12 @@ import {
   trackSupabasePresence,
   untrackSupabasePresence,
   broadcastSupabaseForceSync,
-  broadcastSupabaseInstallation
+  broadcastSupabaseInstallation,
+  resolveAccountPin,
+  fetchAuthoritativeAccounts,
+  verifyAccountCredentials,
+  saveAccountToSupabase,
+  updateAccountPinInSupabase
 } from './lib/supabase';
 
 import { 
@@ -485,13 +490,13 @@ export default function App() {
     const safePrev = Array.isArray(prev) ? prev : [superAdminAccount];
     const existingIdx = safePrev.findIndex(u => (u.employeeId || '').toUpperCase() === empId);
     const existing = existingIdx >= 0 ? safePrev[existingIdx] : null;
-    const cleanPin = user.pin ? String(user.pin).trim() : (user.pin_hash ? String(user.pin_hash).trim() : (existing?.pin || (empId === 'JPMP-002' ? '0423' : '1234')));
+    const cleanPin = resolveAccountPin({ ...existing, ...user }, empId);
 
     const formattedUser: RegisteredAccount = {
-      username: (user.username || existing?.username || 'OPERATOR').toUpperCase(),
-      role: (user.role || existing?.role || 'WAREHOUSE CLERK').toUpperCase(),
+      username: (user.username || existing?.username || (empId === 'JPMP-002' ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
+      role: (user.role || existing?.role || (empId === 'JPMP-002' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE CLERK')).toUpperCase(),
       employeeId: empId,
-      phoneNumber: user.phoneNumber || user.phone_number || existing?.phoneNumber || '',
+      phoneNumber: user.phoneNumber || user.phone_number || existing?.phoneNumber || (empId === 'JPMP-002' ? '+639669858846' : ''),
       permission: user.permission || existing?.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
       pin: cleanPin,
       status: user.status || existing?.status || 'ACTIVE',
@@ -941,7 +946,7 @@ export default function App() {
       const empId = rawEmpId.startsWith('JPMP-') ? rawEmpId : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
       if (deletedSet.has(empId) && empId !== 'JPMP-002') return;
 
-      const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (empId === 'JPMP-002' ? '0423' : '1234'));
+      const cleanPin = resolveAccountPin(u, empId);
       userMap.set(empId, {
         username: (u.username || 'OPERATOR').toUpperCase(),
         role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
@@ -1543,25 +1548,30 @@ export default function App() {
     const incomingList = Array.isArray(incomingUsers) ? incomingUsers : [];
     const safeCurrent = Array.isArray(currentUsers) ? currentUsers : [];
 
-    // 1. Add all authoritative incoming users
+    // 1. Add all authoritative incoming users (enforcing Super Administrator registration origin)
     for (const u of incomingList) {
       if (!u || (!u.employeeId && !u.employee_id)) continue;
       const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase().trim();
       const empId = rawEmpId.startsWith('JPMP-') ? rawEmpId : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
       if (deletedSet.has(empId) && empId !== 'JPMP-002') continue;
 
+      const isSuper = empId === 'JPMP-002';
       const localUser = safeCurrent.find(cu => (cu.employeeId || '').toUpperCase() === empId);
-      const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (localUser?.pin || (empId === 'JPMP-002' ? '0423' : '1234')));
+      const cleanPin = resolveAccountPin({ ...localUser, ...u }, empId);
 
       userMap.set(empId, {
-        username: (u.username || localUser?.username || 'OPERATOR').toUpperCase(),
-        role: (u.role || localUser?.role || 'WAREHOUSE CLERK').toUpperCase(),
+        username: (u.username || localUser?.username || (isSuper ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
+        role: (u.role || localUser?.role || (isSuper ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE CLERK')).toUpperCase(),
         employeeId: empId,
-        phoneNumber: u.phoneNumber || u.phone_number || localUser?.phoneNumber || '',
-        permission: u.permission || localUser?.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
+        phoneNumber: u.phoneNumber || u.phone_number || localUser?.phoneNumber || (isSuper ? '+639669858846' : ''),
+        permission: u.permission || localUser?.permission || (isSuper ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
         pin: cleanPin,
         status: u.status || localUser?.status || 'ACTIVE',
-        lastActive: u.lastActive || u.last_active || localUser?.lastActive || undefined
+        lastActive: u.lastActive || u.last_active || localUser?.lastActive || undefined,
+        registeredBy: isSuper ? 'ROOT_SUPER_ADMIN (JPMP-002)' : (u.registeredBy || localUser?.registeredBy || 'JPMP-002 (ALDRIN BANAWA)'),
+        registeredBySuperAdmin: true,
+        registeredAt: u.registeredAt || localUser?.registeredAt || u.created_at || undefined,
+        stationId: u.stationId || localUser?.stationId || undefined
       });
     }
 
@@ -1570,12 +1580,20 @@ export default function App() {
       if (!cu || !cu.employeeId) continue;
       const empId = cu.employeeId.toUpperCase().trim();
       if (!userMap.has(empId) && (!deletedSet.has(empId) || empId === 'JPMP-002')) {
-        userMap.set(empId, cu);
+        const pin = resolveAccountPin(cu, empId);
+        const isSuper = empId === 'JPMP-002';
+        userMap.set(empId, { 
+          ...cu, 
+          pin,
+          registeredBy: isSuper ? 'ROOT_SUPER_ADMIN (JPMP-002)' : (cu.registeredBy || 'JPMP-002 (ALDRIN BANAWA)'),
+          registeredBySuperAdmin: true
+        });
       }
     }
 
     // 3. Guarantee Super Admin JPMP-002 is always active, full access, and protected
     const admin = userMap.get('JPMP-002') || superAdminAccount;
+    const adminPin = resolveAccountPin(admin, 'JPMP-002');
     userMap.set('JPMP-002', {
       ...superAdminAccount,
       ...admin,
@@ -1583,8 +1601,10 @@ export default function App() {
       username: admin.username || 'ALDRIN BANAWA',
       role: 'SUPER ADMINISTRATOR',
       permission: 'FULL_ACCESS',
-      pin: admin.pin || '0423',
-      status: 'ACTIVE'
+      pin: adminPin || '0423',
+      status: 'ACTIVE',
+      registeredBy: 'ROOT_SUPER_ADMIN (JPMP-002)',
+      registeredBySuperAdmin: true
     });
 
     const orderedUsers: RegisteredAccount[] = [];
@@ -2713,8 +2733,8 @@ export default function App() {
           setLastSyncedTime(new Date());
           setSupabaseStatus('connected');
 
-          if (action === 'upsert' && record && record.id) {
-            if (isRecordDeletedLocally(record.id)) return;
+          if (action === 'upsert' && record && (record.id || record.employeeId)) {
+            if (record.id && isRecordDeletedLocally(record.id)) return;
             const updateFn = (prev: any[]) => {
               const idx = prev.findIndex(it => it.id === record.id);
               if (idx >= 0) {
@@ -2940,6 +2960,17 @@ export default function App() {
     customPin?: string,
     status?: 'ACTIVE' | 'PENDING' | 'INACTIVE'
   ): RegisteredAccount | null => {
+    // STRICT VALIDATION: Only the accounts registered by Super Administrator in this computer will be authorized for other users and computers
+    const isSuperAdminOperating = 
+      currentEmployeeId === 'JPMP-002' || 
+      (currentUser || '').toUpperCase().includes('ALDRIN') || 
+      currentRole === 'SUPER ADMINISTRATOR';
+
+    if (!isSuperAdminOperating) {
+      alert("AUTHORIZATION RESTRICTION: Only accounts registered by Super Administrator (ALDRIN BANAWA - JPMP-002) in this computer will be authorized for use by other users and computers.");
+      return null;
+    }
+
     const cleanUsername = (username || '').trim().toUpperCase();
     let cleanEmployeeId = (employeeId || '').trim().toUpperCase();
     if (cleanEmployeeId && !cleanEmployeeId.startsWith('JPMP-')) {
@@ -2989,7 +3020,11 @@ export default function App() {
       phoneNumber: phoneNumber ? phoneNumber.trim() : '',
       permission: cleanPermission, 
       pin: finalPin,
-      status: status || 'ACTIVE'
+      status: status || 'ACTIVE',
+      registeredBy: 'JPMP-002 (ALDRIN BANAWA)',
+      registeredBySuperAdmin: true,
+      registeredAt: new Date().toISOString(),
+      stationId: getStationId()
     };
 
     // Remove from deleted tracking if re-registered
@@ -3006,7 +3041,7 @@ export default function App() {
         syncChannelRef.current.postMessage({
           type: 'account_registered',
           user: newUser,
-          author: currentUser || 'Admin'
+          author: currentUser || 'Super Administrator'
         });
       } catch (e) {}
     }
@@ -3017,7 +3052,8 @@ export default function App() {
         socket.send(JSON.stringify({
           type: 'register_account',
           user: newUser,
-          author: currentUser || 'Admin'
+          author: currentUser || 'Super Administrator (Aldrin Banawa)',
+          requesterEmployeeId: currentEmployeeId || 'JPMP-002'
         }));
       } catch (e) {
         console.warn('WS send register_account error:', e);
@@ -3030,11 +3066,17 @@ export default function App() {
       fetch(`${baseUrl}/api/accounts/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newUser)
+        body: JSON.stringify({
+          ...newUser,
+          requesterEmployeeId: currentEmployeeId || 'JPMP-002',
+          requesterUsername: currentUser || 'ALDRIN BANAWA',
+          author: currentUser || 'ALDRIN BANAWA'
+        })
       }).catch(() => {});
     } catch (e) {}
 
-    // Cloud PostgreSQL sync
+    // Single authoritative cloud storage sync
+    saveAccountToSupabase(newUser).catch(() => {});
     syncCollection('registeredUsers', nextUsers);
 
     // Notify cluster users via Supabase Realtime broadcast
@@ -3247,7 +3289,7 @@ export default function App() {
       }
     }
 
-    // Direct HTTP call to /api/accounts/update
+    // Direct HTTP call to /api/accounts/update and /api/accounts/update-pin
     if (targetUpdatedUser) {
       try {
         const baseUrl = getApiBaseUrl();
@@ -3256,13 +3298,23 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(targetUpdatedUser)
         }).catch(() => {});
+
+        fetch(`${baseUrl}/api/accounts/update-pin`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ employeeId: cleanNewId, pin: targetUpdatedUser.pin || '1234' })
+        }).catch(() => {});
       } catch (e) {}
+
+      // Direct single authoritative storage persistence
+      saveAccountToSupabase(targetUpdatedUser).catch(() => {});
+      updateAccountPinInSupabase(cleanNewId, targetUpdatedUser.pin || '1234').catch(() => {});
     }
 
     syncCollection('registeredUsers', nextUsers);
   };
 
-  const handleDirectLogin = (e: React.FormEvent) => {
+  const handleDirectLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
 
@@ -3274,8 +3326,8 @@ export default function App() {
 
     const enteredPin = (loginPin || '').trim();
 
-    // Match by employeeId, raw employeeId, username, or phone number
-    const foundUser = registeredUsers.find(
+    // Match by employeeId, raw employeeId, username, or phone number in local state
+    let foundUser = registeredUsers.find(
       (u) => {
         const uEmpId = (u.employeeId || '').toUpperCase();
         const uUsername = (u.username || '').toUpperCase();
@@ -3289,16 +3341,31 @@ export default function App() {
       }
     );
 
+    // If not found in local memory or PIN was updated on another machine, verify live against single authoritative storage
+    if (!foundUser && enteredPin) {
+      setIsLoggingIn(true);
+      try {
+        const authoritativeUser = await verifyAccountCredentials(rawInput, enteredPin);
+        if (authoritativeUser) {
+          foundUser = authoritativeUser;
+          setRegisteredUsers(prev => upsertUserInState(prev, authoritativeUser));
+        }
+      } catch (authErr) {
+        console.warn("Authoritative login verification error:", authErr);
+      }
+    }
+
     if (foundUser) {
       setIsLoggingIn(true);
       setTimeout(() => {
-        handleLogin(foundUser);
+        handleLogin(foundUser!);
         setLoginEmployeeId('');
         setLoginPin('');
         setLoginError('');
         setIsLoggingIn(false);
-      }, 500);
+      }, 300);
     } else {
+      setIsLoggingIn(false);
       setLoginError('INVALID OPERATIONAL ID NUMBER OR INCORRECT PIN CODE.');
     }
   };
@@ -3337,6 +3404,28 @@ export default function App() {
 
     if (foundUser) {
       if (!searchPin || (foundUser.pin && foundUser.pin.trim() !== searchPin)) {
+        // Check single authoritative storage in case PIN was synced from another terminal
+        if (searchPin) {
+          verifyAccountCredentials(searchEmpId, searchPin).then(verified => {
+            if (verified) {
+              setRegisteredUsers(prev => upsertUserInState(prev, verified));
+              setShowLoginQrScanner(false);
+              setLoginEmployeeId('');
+              setLoginPin('');
+              setLoginError('');
+              setIsLoggingIn(true);
+              setTimeout(() => {
+                handleLogin(verified);
+                setIsLoggingIn(false);
+              }, 300);
+              return;
+            }
+            setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR ${foundUser.username || ''} (${foundUser.employeeId || ''}). ONLY REGISTERED PIN IS AUTHORIZED.`);
+          }).catch(() => {
+            setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR ${foundUser.username || ''} (${foundUser.employeeId || ''}). ONLY REGISTERED PIN IS AUTHORIZED.`);
+          });
+          return;
+        }
         setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR ${foundUser.username || ''} (${foundUser.employeeId || ''}). ONLY REGISTERED PIN IS AUTHORIZED.`);
         return;
       }
@@ -3348,8 +3437,30 @@ export default function App() {
       setTimeout(() => {
         handleLogin(foundUser);
         setIsLoggingIn(false);
-      }, 500);
+      }, 300);
     } else {
+      // Not yet in local memory, check single authoritative cloud storage
+      if (searchPin) {
+        verifyAccountCredentials(searchEmpId, searchPin).then(verified => {
+          if (verified) {
+            setRegisteredUsers(prev => upsertUserInState(prev, verified));
+            setShowLoginQrScanner(false);
+            setLoginEmployeeId('');
+            setLoginPin('');
+            setLoginError('');
+            setIsLoggingIn(true);
+            setTimeout(() => {
+              handleLogin(verified);
+              setIsLoggingIn(false);
+            }, 300);
+            return;
+          }
+          setLoginError(`OPERATOR ID "${searchEmpId}" IS NOT REGISTERED IN JPMP DIRECTORY.`);
+        }).catch(() => {
+          setLoginError(`OPERATOR ID "${searchEmpId}" IS NOT REGISTERED IN JPMP DIRECTORY.`);
+        });
+        return;
+      }
       setLoginError(`OPERATOR ID "${searchEmpId}" IS NOT REGISTERED IN JPMP DIRECTORY.`);
     }
   };

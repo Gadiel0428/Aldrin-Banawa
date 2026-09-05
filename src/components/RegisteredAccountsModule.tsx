@@ -219,6 +219,11 @@ export default function RegisteredAccountsModule({
     e.preventDefault();
     setAddError('');
 
+    if (!isSuperAdmin) {
+      setAddError('AUTHORIZATION RESTRICTION: Only accounts registered by Super Administrator (ALDRIN BANAWA - JPMP-002) in this computer will be authorized for use by other users and computers.');
+      return;
+    }
+
     if (!newUsername.trim() || !newEmployeeId.trim()) {
       setAddError('Please enter Operator Full Name and Employee ID.');
       return;
@@ -333,87 +338,100 @@ export default function RegisteredAccountsModule({
   return (
     <div className="space-y-4" id="registered-accounts-module">
       {/* Top Banner & Metric Badges matching Dashboard Overview */}
-      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 rounded-2xl shadow-md border border-slate-800 p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 text-white">
-        <div>
-          <div className="flex items-center gap-2 mb-1 font-bold text-[11px] uppercase tracking-wider font-mono">
-            <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded border border-indigo-500/30 flex items-center gap-1">
-              <ShieldCheck className="h-3.5 w-3.5" /> JPMP OPERATOR DIRECTORY
-            </span>
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 rounded-2xl shadow-md border border-slate-800 p-5 flex flex-col gap-4 text-white">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 mb-1 font-bold text-[11px] uppercase tracking-wider font-mono">
+              <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded border border-indigo-500/30 flex items-center gap-1">
+                <ShieldCheck className="h-3.5 w-3.5" /> JPMP OPERATOR DIRECTORY
+              </span>
+              <span className="bg-emerald-500/20 text-emerald-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded border border-emerald-500/30 flex items-center gap-1">
+                <Lock className="h-3 w-3" /> SUPER ADMIN MASTER PROVISIONING
+              </span>
+            </div>
+            <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
+              <Users className="h-5 w-5 text-indigo-400" /> JPMP Operator Accounts
+            </h2>
+            <p className="text-xs text-slate-300 mt-0.5">
+              Centralized operator registry, role assignment, active/pending status tracking, and QR PIN security.
+            </p>
           </div>
-          <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
-            <Users className="h-5 w-5 text-indigo-400" /> JPMP Operator Accounts
-          </h2>
-          <p className="text-xs text-slate-300 mt-0.5">
-            Centralized operator registry, role assignment, active/pending status tracking, and QR PIN security.
-          </p>
+
+          <div className="flex items-center gap-2.5 flex-wrap justify-start xl:justify-end shrink-0">
+            {/* Total Badge */}
+            <div className="bg-slate-950/70 border border-slate-700/80 px-3 py-1.5 rounded-xl text-center min-w-[70px]">
+              <span className="block text-[9px] font-bold text-slate-400 uppercase font-mono">Total</span>
+              <span className="text-base font-extrabold text-white font-mono">{accountStats.total}</span>
+            </div>
+
+            {/* Active Badge */}
+            <div className="bg-emerald-950/60 border border-emerald-500/40 px-3 py-1.5 rounded-xl text-center min-w-[70px]">
+              <span className="flex items-center justify-center gap-1 text-[9px] font-bold text-emerald-400 uppercase font-mono">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" /> Active
+              </span>
+              <span className="text-base font-extrabold text-emerald-300 font-mono">{accountStats.active}</span>
+            </div>
+
+            {/* Pending Badge */}
+            <div className="bg-slate-950/70 border border-slate-700/80 px-3 py-1.5 rounded-xl text-center min-w-[70px]">
+              <span className="flex items-center justify-center gap-1 text-[9px] font-bold text-slate-400 uppercase font-mono">
+                <span className="h-1.5 w-1.5 rounded-full bg-slate-400" /> Pending
+              </span>
+              <span className="text-base font-extrabold text-slate-300 font-mono">{accountStats.pending}</span>
+            </div>
+
+            {/* Full Access Badge */}
+            <div className="bg-indigo-950/60 border border-indigo-500/40 px-3 py-1.5 rounded-xl text-center min-w-[76px] hidden sm:block">
+              <span className="block text-[9px] font-bold text-indigo-300 uppercase font-mono">Full Access</span>
+              <span className="text-base font-extrabold text-indigo-200 font-mono">{accountStats.fullAccess}</span>
+            </div>
+
+            {isSuperAdmin && (
+              <div className="flex items-center gap-2">
+                {onClearAllAccounts && (accounts.length > 1 || accounts.some(u => (u.employeeId || '').toUpperCase() !== 'JPMP-002')) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConfirmAction({
+                        title: "PURGE ALL OPERATOR ACCOUNTS",
+                        message: "WARNING: This will permanently remove all registered operator accounts from the system. Only the root Super Administrator (ALDRIN BANAWA / JPMP-002) will remain active. Are you sure?",
+                        confirmVariant: "danger",
+                        confirmLabel: "YES, CLEAR ALL",
+                        onConfirm: () => {
+                          if (onClearAllAccounts) onClearAllAccounts();
+                          setConfirmAction(null);
+                        }
+                      });
+                    }}
+                    className="bg-red-950/60 hover:bg-red-900/80 active:bg-red-800 text-red-300 border border-red-500/40 px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs uppercase font-mono cursor-pointer shrink-0"
+                    id="btn-clear-all-accounts"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span className="whitespace-nowrap">Clear All</span>
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    resetAddForm();
+                    setShowAddModal(true);
+                  }}
+                  className="bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-indigo-950/40 uppercase font-mono cursor-pointer shrink-0 border border-indigo-400/30"
+                  id="btn-add-account"
+                >
+                  <UserPlus className="h-4 w-4" />
+                  <span className="whitespace-nowrap">Register Operator</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
-        <div className="flex items-center gap-2.5 flex-wrap justify-start xl:justify-end shrink-0">
-          {/* Total Badge */}
-          <div className="bg-slate-950/70 border border-slate-700/80 px-3 py-1.5 rounded-xl text-center min-w-[70px]">
-            <span className="block text-[9px] font-bold text-slate-400 uppercase font-mono">Total</span>
-            <span className="text-base font-extrabold text-white font-mono">{accountStats.total}</span>
-          </div>
-
-          {/* Active Badge */}
-          <div className="bg-emerald-950/60 border border-emerald-500/40 px-3 py-1.5 rounded-xl text-center min-w-[70px]">
-            <span className="flex items-center justify-center gap-1 text-[9px] font-bold text-emerald-400 uppercase font-mono">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" /> Active
-            </span>
-            <span className="text-base font-extrabold text-emerald-300 font-mono">{accountStats.active}</span>
-          </div>
-
-          {/* Pending Badge */}
-          <div className="bg-slate-950/70 border border-slate-700/80 px-3 py-1.5 rounded-xl text-center min-w-[70px]">
-            <span className="flex items-center justify-center gap-1 text-[9px] font-bold text-slate-400 uppercase font-mono">
-              <span className="h-1.5 w-1.5 rounded-full bg-slate-400" /> Pending
-            </span>
-            <span className="text-base font-extrabold text-slate-300 font-mono">{accountStats.pending}</span>
-          </div>
-
-          {/* Full Access Badge */}
-          <div className="bg-indigo-950/60 border border-indigo-500/40 px-3 py-1.5 rounded-xl text-center min-w-[76px] hidden sm:block">
-            <span className="block text-[9px] font-bold text-indigo-300 uppercase font-mono">Full Access</span>
-            <span className="text-base font-extrabold text-indigo-200 font-mono">{accountStats.fullAccess}</span>
-          </div>
-
-          {isSuperAdmin && (
-            <div className="flex items-center gap-2">
-              {onClearAllAccounts && (accounts.length > 1 || accounts.some(u => (u.employeeId || '').toUpperCase() !== 'JPMP-002')) && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setConfirmAction({
-                      title: "PURGE ALL OPERATOR ACCOUNTS",
-                      message: "WARNING: This will permanently remove all registered operator accounts from the system. Only the root Super Administrator (ALDRIN BANAWA / JPMP-002) will remain active. Are you sure?",
-                      confirmVariant: "danger",
-                      confirmLabel: "YES, CLEAR ALL",
-                      onConfirm: () => {
-                        if (onClearAllAccounts) onClearAllAccounts();
-                        setConfirmAction(null);
-                      }
-                    });
-                  }}
-                  className="bg-red-950/60 hover:bg-red-900/80 active:bg-red-800 text-red-300 border border-red-500/40 px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs uppercase font-mono cursor-pointer shrink-0"
-                  id="btn-clear-all-accounts"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  <span className="whitespace-nowrap">Clear All</span>
-                </button>
-              )}
-              <button
-                onClick={() => {
-                  resetAddForm();
-                  setShowAddModal(true);
-                }}
-                className="bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-indigo-950/40 uppercase font-mono cursor-pointer shrink-0 border border-indigo-400/30"
-                id="btn-add-account"
-              >
-                <UserPlus className="h-4 w-4" />
-                <span className="whitespace-nowrap">Register Operator</span>
-              </button>
-            </div>
-          )}
+        {/* Master Authority Policy Notice */}
+        <div className="bg-indigo-950/50 border border-indigo-500/30 rounded-xl px-3.5 py-2 flex items-center gap-2.5 text-xs text-indigo-100">
+          <ShieldAlert className="h-4 w-4 text-amber-400 shrink-0" />
+          <span>
+            <strong className="text-amber-300 uppercase font-mono">Master Computer Authority Rule:</strong> Only operator accounts registered by Super Administrator (<span className="text-white font-semibold">ALDRIN BANAWA - JPMP-002</span>) on this computer are authorized for use across all other users and warehouse terminal computers.
+          </span>
         </div>
       </div>
 
@@ -670,6 +688,11 @@ export default function RegisteredAccountsModule({
                                   <Copy className="h-3 w-3" />
                                 )}
                               </button>
+                            </div>
+                            <div className="flex items-center gap-1 mt-0.5">
+                              <span className="inline-flex items-center gap-0.5 text-[8.5px] font-mono font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-1 py-0.2 rounded" title="Registered & authorized by Super Administrator (ALDRIN BANAWA) on master computer">
+                                <ShieldCheck className="h-2.5 w-2.5 text-emerald-600" /> Super Admin Authorized
+                              </span>
                             </div>
                           </div>
                         </div>
@@ -964,6 +987,15 @@ export default function RegisteredAccountsModule({
               >
                 ✕
               </button>
+            </div>
+
+            {/* Master Computer Authority Rule Notice */}
+            <div className="bg-amber-50 border border-amber-200 text-amber-900 text-xs p-3 rounded-xl flex items-start gap-2">
+              <ShieldAlert className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+              <div className="text-[11px] leading-relaxed">
+                <span className="font-bold font-mono uppercase text-amber-950 block">Master Authorization Notice:</span>
+                Accounts registered here by Super Administrator (<strong className="font-semibold text-slate-900">ALDRIN BANAWA - JPMP-002</strong>) will be securely distributed and authorized for sign-in by operators across all other terminals and computers.
+              </div>
             </div>
 
             {/* Error Notification */}

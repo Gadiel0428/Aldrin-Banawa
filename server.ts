@@ -84,6 +84,10 @@ async function startServer() {
     pin: string;
     status?: string;
     lastActive?: string;
+    registeredBy?: string;
+    registeredBySuperAdmin?: boolean;
+    registeredAt?: string;
+    stationId?: string;
   }
 
   const defaultSuperAdmin: ServerUser = { 
@@ -93,7 +97,11 @@ async function startServer() {
     phoneNumber: '+639669858846',
     permission: 'FULL_ACCESS', 
     pin: '0423',
-    status: 'ACTIVE'
+    status: 'ACTIVE',
+    registeredBy: 'ROOT_SUPER_ADMIN (JPMP-002)',
+    registeredBySuperAdmin: true,
+    registeredAt: '2026-01-01T00:00:00.000Z',
+    stationId: 'MASTER_TERMINAL'
   };
 
   // Server-authoritative state
@@ -587,6 +595,20 @@ async function startServer() {
     };
   }
 
+  function resolveAccountPin(r: any, empId?: string): string {
+    const cleanId = (empId || r?.employee_id || r?.employeeId || '').toUpperCase().trim();
+    const defaultPin = cleanId === 'JPMP-002' ? '0423' : '1234';
+    const pinA = r?.pin ? String(r.pin).trim() : '';
+    const pinB = r?.pin_hash ? String(r.pin_hash).trim() : '';
+
+    // Prioritize actual custom PIN: if one is non-empty and not default '1234', that is definitely the user's PIN!
+    if (pinA && pinA !== '1234') return pinA.slice(0, 4);
+    if (pinB && pinB !== '1234') return pinB.slice(0, 4);
+    if (pinA) return pinA.slice(0, 4);
+    if (pinB) return pinB.slice(0, 4);
+    return defaultPin;
+  }
+
   async function loadStateFromSupabase() {
     if (!supabaseServer) return;
     try {
@@ -603,14 +625,14 @@ async function startServer() {
         registeredUsers: {
           table: 'registered_users',
           mapper: (u: any): ServerUser => {
-            const empId = (u.employee_id || u.employeeId || '').toUpperCase();
-            const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (empId === 'JPMP-002' ? '0423' : '1234'));
+            const empId = (u.employee_id || u.employeeId || '').toUpperCase().trim();
+            const cleanPin = resolveAccountPin(u, empId);
             return {
               employeeId: empId,
-              username: u.username || 'OPERATOR',
-              role: u.role || 'WAREHOUSE CLERK',
-              phoneNumber: u.phone_number || u.phoneNumber || '',
-              permission: u.permission || 'LIMITED_ACCESS',
+              username: (u.username || (empId === 'JPMP-002' ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
+              role: (u.role || (empId === 'JPMP-002' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE CLERK')).toUpperCase(),
+              phoneNumber: u.phone_number || u.phoneNumber || (empId === 'JPMP-002' ? '+639669858846' : ''),
+              permission: u.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
               pin: cleanPin,
               status: u.status || 'ACTIVE',
               lastActive: u.last_active || u.lastActive || undefined
@@ -641,6 +663,21 @@ async function startServer() {
               parsedUsers.unshift(defaultSuperAdmin);
             }
             state.registeredUsers = parsedUsers;
+
+            // Auto-heal Supabase table so both pin and pin_hash match cleanPin
+            try {
+              const healedUsers = parsedUsers.map((u: ServerUser) => ({
+                employee_id: u.employeeId,
+                username: u.username,
+                role: u.role,
+                permission: u.permission,
+                pin_hash: u.pin,
+                updated_at: new Date().toISOString()
+              }));
+              await supabaseServer.from('registered_users').upsert(healedUsers);
+            } catch (hErr) {
+              console.warn("Supabase auto-heal users warning:", hErr);
+            }
           } else if (col in state) {
             (state as any)[col] = data.map(config.mapper);
           }
@@ -694,18 +731,14 @@ async function startServer() {
         registeredUsers: {
           table: 'registered_users',
           mapper: (u: any) => {
-            const empId = (u.employeeId || u.employee_id || '').toUpperCase();
-            const cleanPin = u.pin ? String(u.pin).trim() : (empId === 'JPMP-002' ? '0423' : '1234');
+            const empId = (u.employeeId || u.employee_id || '').toUpperCase().trim();
+            const cleanPin = resolveAccountPin(u, empId);
             return {
               employee_id: empId,
-              username: (u.username || 'OPERATOR').toUpperCase(),
-              role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
-              permission: u.permission || 'LIMITED_ACCESS',
-              pin: cleanPin,
+              username: (u.username || (empId === 'JPMP-002' ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
+              role: (u.role || (empId === 'JPMP-002' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE CLERK')).toUpperCase(),
+              permission: u.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
               pin_hash: cleanPin,
-              phone_number: u.phoneNumber || u.phone_number || '',
-              status: u.status || 'ACTIVE',
-              last_active: u.lastActive || null,
               updated_at: new Date().toISOString()
             };
           }
@@ -1006,7 +1039,7 @@ async function startServer() {
           const empId = (u.employeeId || u.employee_id || '').toUpperCase().trim();
           if (empId && (empId === 'JPMP-002' || !deletedUserTombstones.has(empId))) {
             const existing = userMap.get(empId) || {};
-            const cleanPin = u.pin ? String(u.pin).trim() : (u.pin_hash ? String(u.pin_hash).trim() : (existing.pin || (empId === 'JPMP-002' ? '0423' : '1234')));
+            const cleanPin = resolveAccountPin({ ...existing, ...u }, empId);
             userMap.set(empId, {
               ...existing,
               ...u,
@@ -1125,7 +1158,8 @@ async function startServer() {
       broadcast({
         type: "collection_updated",
         collection: "registeredUsers",
-        data: state.registeredUsers
+        data: state.registeredUsers,
+        revision: stateRevision
       });
 
       return res.json({ success: true, message: "All encoded data and operator accounts successfully reset. Super Admin account preserved." });
@@ -1134,13 +1168,272 @@ async function startServer() {
     }
   });
 
+  // Authoritative endpoint to retrieve all registered accounts from single unified storage
+  app.get("/api/accounts", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    try {
+      if (supabaseServer) {
+        try {
+          const { data, error } = await supabaseServer.from('registered_users').select('*');
+          if (!error && Array.isArray(data) && data.length > 0) {
+            const userMap = new Map<string, ServerUser>();
+            data.forEach((r: any) => {
+              const empId = (r.employee_id || r.employeeId || '').toUpperCase().trim();
+              if (empId && (empId === 'JPMP-002' || !deletedUserTombstones.has(empId))) {
+                const cleanPin = resolveAccountPin(r, empId);
+                const isSuper = empId === 'JPMP-002';
+                userMap.set(empId, {
+                  employeeId: empId,
+                  username: (r.username || (isSuper ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
+                  role: (r.role || (isSuper ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE CLERK')).toUpperCase(),
+                  phoneNumber: r.phone_number || r.phoneNumber || (isSuper ? '+639669858846' : ''),
+                  permission: r.permission || (isSuper ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
+                  pin: cleanPin,
+                  status: r.status || 'ACTIVE',
+                  lastActive: r.last_active || r.lastActive || undefined,
+                  registeredBy: isSuper ? 'ROOT_SUPER_ADMIN (JPMP-002)' : 'JPMP-002 (ALDRIN BANAWA)',
+                  registeredBySuperAdmin: true,
+                  registeredAt: r.created_at || '2026-01-01T00:00:00.000Z'
+                });
+              }
+            });
+
+            if (!userMap.has('JPMP-002')) {
+              userMap.set('JPMP-002', { ...defaultSuperAdmin });
+            }
+
+            state.registeredUsers = Array.from(userMap.values());
+            saveStateToDisk();
+          }
+        } catch (sErr) {
+          console.warn("Supabase fetch accounts error in /api/accounts:", sErr);
+        }
+      }
+
+      if (!state.registeredUsers.some((u: any) => (u.employeeId || u.employee_id || '').toUpperCase() === 'JPMP-002')) {
+        state.registeredUsers.unshift({ ...defaultSuperAdmin });
+      }
+
+      // Ensure every distributed account is stamped with Super Administrator master authority
+      state.registeredUsers = state.registeredUsers.map((u: any) => ({
+        ...u,
+        registeredBy: (u.employeeId || '').toUpperCase() === 'JPMP-002' ? 'ROOT_SUPER_ADMIN (JPMP-002)' : (u.registeredBy || 'JPMP-002 (ALDRIN BANAWA)'),
+        registeredBySuperAdmin: true
+      }));
+
+      return res.json({
+        success: true,
+        count: state.registeredUsers.length,
+        accounts: state.registeredUsers,
+        revision: stateRevision
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Authoritative endpoint to verify operational ID and PIN code against central single storage
+  app.post("/api/accounts/verify", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    try {
+      const { identifier, pin } = req.body;
+      const rawInput = String(identifier || '').trim();
+      const enteredPin = String(pin || '').trim();
+
+      if (!rawInput || !enteredPin) {
+        return res.status(400).json({ success: false, error: "Identifier and PIN are required." });
+      }
+
+      let searchId = rawInput.toUpperCase();
+      if (!searchId.startsWith('JPMP-')) {
+        searchId = 'JPMP-' + searchId.replace(/^EMP-/, '');
+      }
+      const inputPhone = rawInput.replace(/\D/g, '');
+
+      // 1. Check in-memory server state
+      let matchedUser = state.registeredUsers.find((u: any) => {
+        const uEmpId = (u.employeeId || u.employee_id || '').toUpperCase().trim();
+        const uUsername = (u.username || '').toUpperCase().trim();
+        const uPhone = (u.phoneNumber || u.phone_number || '').replace(/\D/g, '');
+        const idMatches = uEmpId === searchId || uEmpId === rawInput.toUpperCase() || uUsername === rawInput.toUpperCase() || (inputPhone.length >= 10 && uPhone === inputPhone);
+        const uPin = (u.pin || '').toString().trim();
+        return idMatches && uPin === enteredPin;
+      });
+
+      // 2. Direct Supabase Cloud check if not matched (authoritative sync across workstations)
+      if (!matchedUser && supabaseServer) {
+        try {
+          const { data, error } = await supabaseServer.from('registered_users').select('*');
+          if (!error && Array.isArray(data)) {
+            for (const r of data) {
+              const empId = (r.employee_id || r.employeeId || '').toUpperCase().trim();
+              const username = (r.username || '').toUpperCase().trim();
+              const phone = (r.phone_number || '').replace(/\D/g, '');
+              const idMatches = empId === searchId || empId === rawInput.toUpperCase() || username === rawInput.toUpperCase() || (inputPhone.length >= 10 && phone === inputPhone);
+              if (idMatches) {
+                const resolvedPin = resolveAccountPin(r, empId);
+                if (resolvedPin === enteredPin) {
+                  const isSuper = empId === 'JPMP-002';
+                  matchedUser = {
+                    employeeId: empId,
+                    username: (r.username || (isSuper ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
+                    role: (r.role || (isSuper ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE CLERK')).toUpperCase(),
+                    phoneNumber: r.phone_number || (isSuper ? '+639669858846' : ''),
+                    permission: r.permission || (isSuper ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
+                    pin: resolvedPin,
+                    status: r.status || 'ACTIVE',
+                    lastActive: r.last_active || undefined,
+                    registeredBy: isSuper ? 'ROOT_SUPER_ADMIN (JPMP-002)' : 'JPMP-002 (ALDRIN BANAWA)',
+                    registeredBySuperAdmin: true
+                  };
+                  state.registeredUsers = [
+                    ...state.registeredUsers.filter((u: any) => (u.employeeId || u.employee_id || '').toUpperCase() !== empId),
+                    matchedUser
+                  ];
+                  saveStateToDisk();
+                  break;
+                }
+              }
+            }
+          }
+        } catch (sErr) {
+          console.warn("Supabase account verification check warning:", sErr);
+        }
+      }
+
+      if (matchedUser) {
+        const enrichedUser = {
+          ...matchedUser,
+          registeredBy: (matchedUser.employeeId || '').toUpperCase() === 'JPMP-002' 
+            ? 'ROOT_SUPER_ADMIN (JPMP-002)' 
+            : (matchedUser.registeredBy || 'JPMP-002 (ALDRIN BANAWA)'),
+          registeredBySuperAdmin: true
+        };
+        return res.json({
+          success: true,
+          user: enrichedUser,
+          revision: stateRevision
+        });
+      } else {
+        return res.status(401).json({
+          success: false,
+          error: "INVALID OPERATIONAL ID NUMBER OR INCORRECT PIN CODE."
+        });
+      }
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Authoritative endpoint to update PIN code for an operator and synchronize across all workstations
+  app.post("/api/accounts/update-pin", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    try {
+      const { employeeId, newPin, pin, author } = req.body;
+      const cleanId = String(employeeId || '').trim().toUpperCase();
+      const pinVal = newPin !== undefined ? newPin : (pin !== undefined ? pin : '');
+      const cleanPin = String(pinVal || '').replace(/\D/g, '').slice(0, 4);
+
+      if (!cleanId || cleanPin.length !== 4) {
+        return res.status(400).json({ error: "Valid Employee ID and 4-digit PIN required." });
+      }
+
+      const targetIndex = state.registeredUsers.findIndex(
+        (u: any) => (u.employeeId || u.employee_id || '').toUpperCase() === cleanId
+      );
+
+      let targetUser = targetIndex !== -1 ? state.registeredUsers[targetIndex] : null;
+
+      if (!targetUser) {
+        if (cleanId === 'JPMP-002') {
+          targetUser = { ...defaultSuperAdmin };
+          state.registeredUsers.unshift(targetUser);
+        } else {
+          return res.status(404).json({ error: `Operator account "${cleanId}" not found.` });
+        }
+      }
+
+      const updatedUser: ServerUser = {
+        ...targetUser,
+        pin: cleanPin,
+        lastActive: new Date().toISOString()
+      };
+
+      const finalIdx = state.registeredUsers.findIndex(
+        (u: any) => (u.employeeId || u.employee_id || '').toUpperCase() === cleanId
+      );
+      if (finalIdx !== -1) {
+        state.registeredUsers[finalIdx] = updatedUser;
+      } else {
+        state.registeredUsers.push(updatedUser);
+      }
+
+      stateRevision++;
+      saveStateToDisk();
+      persistToSupabase("registeredUsers", state.registeredUsers);
+
+      if (supabaseServer) {
+        try {
+          await supabaseServer.from('registered_users').upsert([{
+            employee_id: cleanId,
+            username: updatedUser.username,
+            role: updatedUser.role,
+            permission: updatedUser.permission,
+            pin_hash: cleanPin,
+            updated_at: new Date().toISOString()
+          }]);
+        } catch (sErr) {
+          console.warn("Supabase PIN update warning:", sErr);
+        }
+      }
+
+      broadcast({
+        type: "account_updated",
+        user: updatedUser,
+        author: author || "Operator",
+        revision: stateRevision
+      });
+
+      broadcast({
+        type: "collection_updated",
+        collection: "registeredUsers",
+        data: state.registeredUsers,
+        revision: stateRevision
+      });
+
+      return res.json({
+        success: true,
+        message: `PIN updated and synchronized for operator ${updatedUser.username} (${cleanId}) across all computers.`,
+        user: updatedUser,
+        revision: stateRevision
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   // Explicit endpoint to register a new operator account across server, disk, Supabase, and live clients
   app.post("/api/accounts/register", async (req, res) => {
     try {
-      const { employeeId, username, role, phoneNumber, permission, pin, status } = req.body;
+      const { employeeId, username, role, phoneNumber, permission, pin, status, requesterEmployeeId, requesterUsername, author } = req.body;
       if (!employeeId || !username) {
         return res.status(400).json({ error: "Employee ID and Username are required" });
       }
+
+      // STRICT VALIDATION: Only Super Administrator (Aldrin Banawa - JPMP-002) in this master computer is authorized to register accounts
+      const isSuperAdminAuthorized = 
+        requesterEmployeeId === 'JPMP-002' || 
+        (requesterUsername || '').toUpperCase().includes('ALDRIN') ||
+        (author || '').toUpperCase().includes('ALDRIN') ||
+        (req.body.registeredBy || '').toUpperCase().includes('JPMP-002') ||
+        (req.body.role || '').toUpperCase().includes('SUPER ADMINISTRATOR');
+
+      if (!isSuperAdminAuthorized) {
+        return res.status(403).json({ 
+          error: "AUTHORIZATION RESTRICTION: Only accounts registered by Super Administrator (ALDRIN BANAWA - JPMP-002) on the master computer are authorized for use across other users and computers." 
+        });
+      }
+
       const cleanId = String(employeeId).trim().toUpperCase();
       const cleanUsername = String(username).trim().toUpperCase();
       const cleanRole = String(role || 'WAREHOUSE OPERATOR').trim().toUpperCase();
@@ -1156,7 +1449,11 @@ async function startServer() {
         permission: permission || (cleanId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
         pin: cleanPin,
         status: status || 'ACTIVE',
-        lastActive: new Date().toISOString()
+        lastActive: new Date().toISOString(),
+        registeredBy: 'JPMP-002 (ALDRIN BANAWA)',
+        registeredBySuperAdmin: true,
+        registeredAt: new Date().toISOString(),
+        stationId: req.body.stationId || 'MASTER_TERMINAL'
       };
 
       state.registeredUsers = [
@@ -1174,10 +1471,8 @@ async function startServer() {
             employee_id: cleanId,
             username: cleanUsername,
             role: cleanRole,
-            phone_number: newUser.phoneNumber || null,
             permission: newUser.permission,
             pin_hash: cleanPin,
-            status: newUser.status,
             updated_at: new Date().toISOString()
           }]);
         } catch (sErr) {
@@ -1202,7 +1497,7 @@ async function startServer() {
       const regAuditMsg: ChatMessage = {
         id: `sys-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
         sender: "System Audit",
-        text: `NEW USER INSTALLED: Operator ${cleanUsername} (${cleanId}) registered and synchronized to all warehouse terminals.`,
+        text: `NEW USER INSTALLED: Operator ${cleanUsername} (${cleanId}) registered by Super Administrator on master computer and synchronized to all warehouse terminals.`,
         timestamp: new Date().toISOString(),
         isSystem: true
       };
@@ -1219,7 +1514,7 @@ async function startServer() {
   // Explicit endpoint to update an existing registered operator account
   app.post("/api/accounts/update", async (req, res) => {
     try {
-      const { employeeId, username, role, phoneNumber, permission, pin, status, lastActive } = req.body;
+      const { employeeId, username, role, phoneNumber, permission, pin, status, lastActive, requesterEmployeeId, requesterUsername, author } = req.body;
       if (!employeeId) return res.status(400).json({ error: "Employee ID required" });
       const cleanId = String(employeeId).trim().toUpperCase();
 
@@ -1245,7 +1540,10 @@ async function startServer() {
         permission: cleanPermission,
         pin: cleanPin,
         status: status || existing.status || 'ACTIVE',
-        lastActive: lastActive || new Date().toISOString()
+        lastActive: lastActive || new Date().toISOString(),
+        registeredBy: existing.registeredBy || 'JPMP-002 (ALDRIN BANAWA)',
+        registeredBySuperAdmin: true,
+        registeredAt: existing.registeredAt || new Date().toISOString()
       };
 
       state.registeredUsers[targetIndex] = updatedUser;
@@ -1259,11 +1557,8 @@ async function startServer() {
             employee_id: cleanId,
             username: cleanUsername,
             role: cleanRole,
-            phone_number: updatedUser.phoneNumber || null,
             permission: cleanPermission,
             pin_hash: cleanPin,
-            status: updatedUser.status,
-            last_active: updatedUser.lastActive,
             updated_at: new Date().toISOString()
           }]);
         } catch (sErr) {
@@ -1979,7 +2274,7 @@ async function startServer() {
       console.warn("WebSocket client error:", err?.message || err);
     });
 
-    ws.on("message", (messageData: any) => {
+    ws.on("message", async (messageData: any) => {
       ws.isAlive = true;
       try {
         const payload = JSON.parse(messageData.toString());
@@ -2164,7 +2459,19 @@ async function startServer() {
           }
 
           case "register_account": {
-            const { user, author } = payload;
+            const { user, author, requesterEmployeeId } = payload;
+            const isSuper = 
+              requesterEmployeeId === 'JPMP-002' || 
+              (author || '').toUpperCase().includes('ALDRIN') || 
+              (author || '').toUpperCase().includes('SUPER') ||
+              (user?.registeredBy || '').toUpperCase().includes('JPMP-002') ||
+              (user?.role || '').toUpperCase().includes('SUPER ADMINISTRATOR');
+
+            if (!isSuper) {
+              console.warn("Unauthorized WS register_account attempt rejected from non-SuperAdmin:", author);
+              break;
+            }
+
             if (user && user.employeeId) {
               const cleanId = String(user.employeeId).trim().toUpperCase();
               const cleanUsername = String(user.username || 'OPERATOR').trim().toUpperCase();
@@ -2180,7 +2487,11 @@ async function startServer() {
                 permission: user.permission || (cleanId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
                 pin: cleanPin,
                 status: user.status || 'ACTIVE',
-                lastActive: new Date().toISOString()
+                lastActive: new Date().toISOString(),
+                registeredBy: 'JPMP-002 (ALDRIN BANAWA)',
+                registeredBySuperAdmin: true,
+                registeredAt: user.registeredAt || new Date().toISOString(),
+                stationId: user.stationId || 'MASTER_TERMINAL'
               };
 
               state.registeredUsers = [
@@ -2195,7 +2506,7 @@ async function startServer() {
               broadcast({
                 type: "account_registered",
                 user: newUser,
-                author: author || "Operator",
+                author: author || "Super Administrator",
                 revision: stateRevision
               });
 
@@ -2210,7 +2521,7 @@ async function startServer() {
               const regAuditMsg: ChatMessage = {
                 id: `sys-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
                 sender: "System Audit",
-                text: `NEW USER INSTALLED: Operator ${cleanUsername} (${cleanId}) registered by ${author || 'Admin'} and synchronized to all warehouse terminals.`,
+                text: `NEW USER INSTALLED: Operator ${cleanUsername} (${cleanId}) registered by Super Administrator on master computer and synchronized to all warehouse terminals.`,
                 timestamp: new Date().toISOString(),
                 isSystem: true
               };
@@ -2234,7 +2545,7 @@ async function startServer() {
                 const cleanUsername = isAldrin ? 'ALDRIN BANAWA' : (user.username ? String(user.username).trim().toUpperCase() : existing.username);
                 const cleanRole = isAldrin ? 'SUPER ADMINISTRATOR' : (user.role ? String(user.role).trim().toUpperCase() : existing.role);
                 const cleanPermission = isAldrin ? 'FULL_ACCESS' : (user.permission || existing.permission || 'LIMITED_ACCESS');
-                const cleanPin = user.pin ? String(user.pin).trim().slice(0, 4) : (existing.pin || (isAldrin ? '0423' : '1234'));
+                const cleanPin = resolveAccountPin({ ...existing, ...user }, cleanId);
 
                 const updatedUser: ServerUser = {
                   employeeId: cleanId,
@@ -2251,6 +2562,21 @@ async function startServer() {
                 stateRevision++;
                 saveStateToDisk();
                 persistToSupabase("registeredUsers", state.registeredUsers);
+
+                if (supabaseServer) {
+                  try {
+                    await supabaseServer.from('registered_users').upsert([{
+                      employee_id: cleanId,
+                      username: cleanUsername,
+                      role: cleanRole,
+                      permission: cleanPermission,
+                      pin_hash: cleanPin,
+                      updated_at: new Date().toISOString()
+                    }]);
+                  } catch (sErr) {
+                    console.warn("Supabase WebSocket user update warning:", sErr);
+                  }
+                }
 
                 broadcast({
                   type: "account_updated",

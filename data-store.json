@@ -127,26 +127,174 @@
     "registries": [],
     "registeredUsers": [
       {
+        "employeeId": "JPMP-002",
         "username": "ALDRIN BANAWA",
         "role": "SUPER ADMINISTRATOR",
-        "employeeId": "JPMP-002",
         "phoneNumber": "+639669858846",
         "permission": "FULL_ACCESS",
         "pin": "0423",
-        "status": "ACTIVE",
-        "pin_hash": "0423"
+        "status": "ACTIVE"
       }
     ],
     "stockMovements": []
   },
   "deletedRecordTombstones": [],
-  "deletedUserTombstones": [],
+  "deletedUserTombstones": [
+    "JPMP-777"
+  ],
   "chatMessages": [
     {
-      "id": "sys-init",
+      "id": "sys-1787797089772-la90",
       "sender": "System Audit",
-      "text": "JUWEI WAREHOUSE MANAGEMENT SYSTEM INITIALIZED. SUPER ADMINISTRATOR ALDRIN BANAWA (JPMP-002) ACTIVE.",
-      "timestamp": "2026-09-02T00:00:00.000Z",
+      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
+      "timestamp": "2026-08-27T02:18:09.772Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1787797105896-3zhl",
+      "sender": "System Audit",
+      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED OFF.",
+      "timestamp": "2026-08-27T02:18:25.896Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1787797178575-atiz",
+      "sender": "System Audit",
+      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
+      "timestamp": "2026-08-27T02:19:38.575Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1787886522396-ark9",
+      "sender": "System Audit",
+      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
+      "timestamp": "2026-08-28T03:08:42.396Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1787886537297-r3s6",
+      "sender": "System Audit",
+      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
+      "timestamp": "2026-08-28T03:08:57.297Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1787887607275-a86b",
+      "sender": "System Audit",
+      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
+      "timestamp": "2026-08-28T03:26:47.275Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1787887622305-u7vx",
+      "sender": "System Audit",
+      "text": "SUPER ADMIN ALDRIN BANAWA deleted receiving record 1B34q23b.",
+      "timestamp": "2026-08-28T03:27:02.305Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1787887624720-v5v5",
+      "sender": "System Audit",
+      "text": "SUPER ADMIN ALDRIN BANAWA deleted receiving record aebwaeraw.",
+      "timestamp": "2026-08-28T03:27:04.720Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1787887627099-a9gr",
+      "sender": "System Audit",
+      "text": "SUPER ADMIN ALDRIN BANAWA deleted receiving record f1231.",
+      "timestamp": "2026-08-28T03:27:07.099Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1787887637482-kx8l",
+      "sender": "System Audit",
+      "text": "SUPER ADMIN ALDRIN BANAWA deleted stock record STK-6674.",
+      "timestamp": "2026-08-28T03:27:17.482Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1787887640500-nvih",
+      "sender": "System Audit",
+      "text": "SUPER ADMIN ALDRIN BANAWA deleted stock record STK-2007.",
+      "timestamp": "2026-08-28T03:27:20.500Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1787887643694-ca9r",
+      "sender": "System Audit",
+      "text": "SUPER ADMIN ALDRIN BANAWA deleted stock record STK-6140.",
+      "timestamp": "2026-08-28T03:27:23.694Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1787887646899-9ep0",
+      "sender": "System Audit",
+      "text": "SUPER ADMIN ALDRIN BANAWA deleted stock record STK-5035.",
+      "timestamp": "2026-08-28T03:27:26.899Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1787887649983-kogm",
+      "sender": "System Audit",
+      "text": "SUPER ADMIN ALDRIN BANAWA deleted stock record STK-2212.",
+      "timestamp": "2026-08-28T03:27:29.983Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1787966207908-lv7s",
+      "sender": "System Audit",
+      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
+      "timestamp": "2026-08-29T01:16:47.908Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1788327365629-1za6",
+      "sender": "System Audit",
+      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
+      "timestamp": "2026-09-02T05:36:05.629Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1788327715026-ic2v",
+      "sender": "System Audit",
+      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
+      "timestamp": "2026-09-02T05:41:55.026Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1788328195296-occ9",
+      "sender": "System Audit",
+      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
+      "timestamp": "2026-09-02T05:49:55.296Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1788328408611-jqgn",
+      "sender": "System Audit",
+      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
+      "timestamp": "2026-09-02T05:53:28.611Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1788402166717-4zgq",
+      "sender": "System Audit",
+      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
+      "timestamp": "2026-09-03T02:22:46.717Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1788402954964-dx4d",
+      "sender": "System Audit",
+      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
+      "timestamp": "2026-09-03T02:35:54.964Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1788404284196-xtfk",
+      "sender": "System Audit",
+      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
+      "timestamp": "2026-09-03T02:58:04.196Z",
       "isSystem": true
     }
   ]

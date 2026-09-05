@@ -13,8 +13,23 @@ import {
   DeliveryRecord,
   EnvironmentalLog,
   ForkliftChecklist,
-  MasterRegistryItem
+  MasterRegistryItem,
+  RegisteredAccount
 } from '../types';
+
+export function resolveAccountPin(r: any, empId?: string): string {
+  const cleanId = (empId || r?.employee_id || r?.employeeId || '').toUpperCase().trim();
+  const defaultPin = cleanId === 'JPMP-002' ? '0423' : '1234';
+  const pinA = r?.pin ? String(r.pin).trim() : '';
+  const pinB = r?.pin_hash ? String(r.pin_hash).trim() : '';
+
+  // Prioritize user's actual custom PIN if non-empty and not default '1234'
+  if (pinA && pinA !== '1234') return pinA.slice(0, 4);
+  if (pinB && pinB !== '1234') return pinB.slice(0, 4);
+  if (pinA) return pinA.slice(0, 4);
+  if (pinB) return pinB.slice(0, 4);
+  return defaultPin;
+}
 
 export interface SupabaseConfig {
   url: string;
@@ -522,9 +537,9 @@ export async function fetchCollectionFromSupabase(collection: string): Promise<a
       registries: { table: 'registries', mapper: mapRowToRegistry },
       registeredUsers: {
         table: 'registered_users',
-        mapper: (r) => {
-          const empId = (r.employee_id || r.employeeId || '').toUpperCase();
-          const cleanPin = r.pin ? String(r.pin).trim() : (r.pin_hash ? String(r.pin_hash).trim() : (empId === 'JPMP-002' ? '0423' : '1234'));
+        mapper: (r: any): RegisteredAccount => {
+          const empId = (r.employee_id || r.employeeId || '').toUpperCase().trim();
+          const cleanPin = resolveAccountPin(r, empId);
           return {
             username: (r.username || (empId === 'JPMP-002' ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
             role: (r.role || (empId === 'JPMP-002' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE CLERK')).toUpperCase(),
@@ -615,19 +630,15 @@ export async function syncCollectionToSupabase(collection: string, items: any[])
         break;
       case 'registeredUsers':
         tableName = 'registered_users';
-        mappedRows = items.map((u) => {
-          const empId = (u.employeeId || u.employee_id || '').toUpperCase();
-          const cleanPin = u.pin ? String(u.pin).trim() : (empId === 'JPMP-002' ? '0423' : '1234');
+        mappedRows = items.map((u: any) => {
+          const empId = (u.employeeId || u.employee_id || '').toUpperCase().trim();
+          const cleanPin = resolveAccountPin(u, empId);
           return {
             employee_id: empId,
-            username: (u.username || 'OPERATOR').toUpperCase(),
-            role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
-            phone_number: u.phoneNumber || u.phone_number || '',
-            permission: u.permission || 'LIMITED_ACCESS',
-            pin: cleanPin,
+            username: (u.username || (empId === 'JPMP-002' ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
+            role: (u.role || (empId === 'JPMP-002' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE CLERK')).toUpperCase(),
+            permission: u.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
             pin_hash: cleanPin,
-            status: u.status || 'ACTIVE',
-            last_active: u.lastActive || null,
             updated_at: new Date().toISOString()
           };
         });
@@ -716,6 +727,167 @@ export async function deleteAccountFromSupabase(employeeId: string): Promise<boo
     return true;
   } catch (err) {
     console.warn(`Supabase delete account exception for ${employeeId}:`, err);
+    return false;
+  }
+}
+
+// Fetch all registered accounts from single authoritative cloud storage (Supabase PostgreSQL)
+export async function fetchAuthoritativeAccounts(): Promise<RegisteredAccount[] | null> {
+  const supabase = getSupabase();
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase.from('registered_users').select('*');
+    if (error || !Array.isArray(data)) {
+      return null;
+    }
+
+    const accounts: RegisteredAccount[] = data.map((r: any) => {
+      const empId = (r.employee_id || r.employeeId || '').toUpperCase().trim();
+      const cleanPin = resolveAccountPin(r, empId);
+      const isSuper = empId === 'JPMP-002';
+      return {
+        username: (r.username || (isSuper ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
+        role: (r.role || (isSuper ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE CLERK')).toUpperCase(),
+        employeeId: empId,
+        phoneNumber: r.phone_number || r.phoneNumber || (isSuper ? '+639669858846' : ''),
+        permission: r.permission || (isSuper ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
+        pin: cleanPin,
+        status: r.status || 'ACTIVE',
+        lastActive: r.last_active || r.lastActive || undefined,
+        registeredBy: isSuper ? 'ROOT_SUPER_ADMIN (JPMP-002)' : 'JPMP-002 (ALDRIN BANAWA)',
+        registeredBySuperAdmin: true
+      };
+    });
+
+    // Guarantee JPMP-002 Super Admin is always present
+    if (!accounts.some(a => a.employeeId === 'JPMP-002')) {
+      accounts.unshift({
+        username: 'ALDRIN BANAWA',
+        role: 'SUPER ADMINISTRATOR',
+        employeeId: 'JPMP-002',
+        phoneNumber: '+639669858846',
+        permission: 'FULL_ACCESS',
+        pin: '0423',
+        status: 'ACTIVE',
+        registeredBy: 'ROOT_SUPER_ADMIN (JPMP-002)',
+        registeredBySuperAdmin: true
+      });
+    }
+
+    return accounts;
+  } catch (err) {
+    console.warn("fetchAuthoritativeAccounts error:", err);
+    return null;
+  }
+}
+
+// Live authoritative credential verification against central single storage
+export async function verifyAccountCredentials(identifier: string, pin: string): Promise<RegisteredAccount | null> {
+  const cleanInput = String(identifier || '').trim();
+  const enteredPin = String(pin || '').trim();
+  if (!cleanInput || !enteredPin) return null;
+
+  // 1. First attempt central server API verification
+  try {
+    const res = await fetch('/api/accounts/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: cleanInput, pin: enteredPin })
+    });
+    if (res.ok) {
+      const body = await res.json();
+      if (body.success && body.user) {
+        return body.user;
+      }
+    }
+  } catch (apiErr) {
+    console.warn("Server verify endpoint warning:", apiErr);
+  }
+
+  // 2. Direct Supabase Cloud check fallback (for multi-computer setups)
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from('registered_users').select('*');
+      if (!error && Array.isArray(data)) {
+        let searchId = cleanInput.toUpperCase();
+        if (!searchId.startsWith('JPMP-')) {
+          searchId = 'JPMP-' + searchId.replace(/^EMP-/, '');
+        }
+        const phone = cleanInput.replace(/\D/g, '');
+
+        for (const r of data) {
+          const empId = (r.employee_id || r.employeeId || '').toUpperCase().trim();
+          const username = (r.username || '').toUpperCase().trim();
+          const rPhone = (r.phone_number || '').replace(/\D/g, '');
+          const idMatches = empId === searchId || empId === cleanInput.toUpperCase() || username === cleanInput.toUpperCase() || (phone.length >= 10 && rPhone === phone);
+          if (idMatches) {
+            const resolvedPin = resolveAccountPin(r, empId);
+            if (resolvedPin === enteredPin) {
+              const isSuper = empId === 'JPMP-002';
+              return {
+                username: (r.username || (isSuper ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
+                role: (r.role || (isSuper ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE CLERK')).toUpperCase(),
+                employeeId: empId,
+                phoneNumber: r.phone_number || r.phoneNumber || (isSuper ? '+639669858846' : ''),
+                permission: r.permission || (isSuper ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
+                pin: resolvedPin,
+                status: r.status || 'ACTIVE',
+                lastActive: r.last_active || undefined,
+                registeredBy: isSuper ? 'ROOT_SUPER_ADMIN (JPMP-002)' : 'JPMP-002 (ALDRIN BANAWA)',
+                registeredBySuperAdmin: true
+              };
+            }
+          }
+        }
+      }
+    } catch (sErr) {
+      console.warn("Direct Supabase account verify check error:", sErr);
+    }
+  }
+
+  return null;
+}
+
+// Upsert account with unified pin_hash to Supabase Cloud
+export async function saveAccountToSupabase(account: RegisteredAccount): Promise<boolean> {
+  const supabase = getSupabase();
+  if (!supabase) return false;
+  try {
+    const empId = (account.employeeId || '').toUpperCase().trim();
+    const cleanPin = resolveAccountPin(account, empId);
+    const { error } = await supabase.from('registered_users').upsert([{
+      employee_id: empId,
+      username: (account.username || (empId === 'JPMP-002' ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
+      role: (account.role || (empId === 'JPMP-002' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE CLERK')).toUpperCase(),
+      permission: account.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
+      pin_hash: cleanPin,
+      updated_at: new Date().toISOString()
+    }]);
+    return !error;
+  } catch (err) {
+    console.warn("saveAccountToSupabase error:", err);
+    return false;
+  }
+}
+
+// Direct PIN update helper to single cloud storage
+export async function updateAccountPinInSupabase(employeeId: string, newPin: string): Promise<boolean> {
+  const supabase = getSupabase();
+  if (!supabase) return false;
+  try {
+    const cleanId = employeeId.trim().toUpperCase();
+    const cleanPin = newPin.trim().slice(0, 4);
+    const { error } = await supabase
+      .from('registered_users')
+      .update({
+        pin_hash: cleanPin,
+        updated_at: new Date().toISOString()
+      })
+      .eq('employee_id', cleanId);
+    return !error;
+  } catch (err) {
+    console.warn("updateAccountPinInSupabase error:", err);
     return false;
   }
 }
@@ -840,13 +1012,13 @@ export function setupSupabaseRealtimeSubscriptions(
       table: 'registered_users', 
       collection: 'registeredUsers', 
       mapper: (r) => {
-        const empId = (r.employee_id || r.employeeId || '').toUpperCase();
-        const cleanPin = r.pin ? String(r.pin).trim() : (r.pin_hash ? String(r.pin_hash).trim() : (empId === 'JPMP-002' ? '0423' : '1234'));
+        const empId = (r.employee_id || r.employeeId || '').toUpperCase().trim();
+        const cleanPin = resolveAccountPin(r, empId);
         return {
-          username: (r.username || 'OPERATOR').toUpperCase(),
-          role: (r.role || 'WAREHOUSE CLERK').toUpperCase(),
+          username: (r.username || (empId === 'JPMP-002' ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
+          role: (r.role || (empId === 'JPMP-002' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE CLERK')).toUpperCase(),
           employeeId: empId,
-          phoneNumber: r.phone_number || r.phoneNumber || '',
+          phoneNumber: r.phone_number || r.phoneNumber || (empId === 'JPMP-002' ? '+639669858846' : ''),
           permission: r.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
           pin: cleanPin,
           status: r.status || 'ACTIVE',

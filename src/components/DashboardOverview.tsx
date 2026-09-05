@@ -1331,9 +1331,14 @@ export default function DashboardOverview({
                           {currentStatus}
                         </span>
                       </div>
-                      <span className="text-[10px] font-mono font-bold text-indigo-600 block mt-0.5">
-                        {acc.employeeId}
-                      </span>
+                      <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                        <span className="text-[10px] font-mono font-bold text-indigo-600">
+                          {acc.employeeId}
+                        </span>
+                        <span className="text-[8px] font-mono font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1 py-0.2 rounded" title="Master Computer Provisioned by Super Administrator">
+                          ✓ Authorized
+                        </span>
+                      </div>
                     </div>
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border shrink-0 font-mono ${
                       acc.permission === 'FULL_ACCESS' 
