@@ -171,6 +171,11 @@ export class SyncManager {
         OfflineQueue.updateStatus(item.id, 'COMPLETED');
         OfflineQueue.remove(item.id);
       } catch (err: any) {
+        if (err.message && (err.message.includes('STALE_RESET_VERSION') || err.message.includes('hard reset'))) {
+          console.warn('SyncManager: Detected stale reset version. Purging entire offline queue to prevent re-uploading old data.');
+          OfflineQueue.purgeAll();
+          break;
+        }
         const conflict = ConflictResolver.handleMovementError(err);
         if (conflict.accepted) {
           // Idempotent hit, can safely drop

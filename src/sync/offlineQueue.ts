@@ -104,4 +104,22 @@ export class OfflineQueue {
     this.load();
     return this.items.filter((i) => i.status === 'PENDING' || i.status === 'FAILED').length;
   }
+
+  public static purgeAll() {
+    this.items = [];
+    this.loaded = true;
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch (e) {}
+  }
+
+  public static pruneOutdatedResetVersions(currentResetVersion: number) {
+    this.load();
+    if (!currentResetVersion) return;
+    const initialCount = this.items.length;
+    this.items = this.items.filter((i) => !i.reset_version || i.reset_version >= currentResetVersion);
+    if (this.items.length !== initialCount) {
+      this.save();
+    }
+  }
 }

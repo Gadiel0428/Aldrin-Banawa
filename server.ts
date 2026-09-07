@@ -198,6 +198,12 @@ async function startServer() {
   // Disk Persistence File (Fallback)
   const DATA_FILE = getStorageFilePath("data-store.json");
 
+  // Global authoritative reset versioning (Prevents stale cached data resurrection)
+  let systemResetVersion = 1;
+  let systemResetTimestamp = new Date().toISOString();
+  let systemResetId = "RESET-INIT";
+  let systemResetBy = "SUPER ADMINISTRATOR";
+
   function loadStateFromDisk() {
     try {
       let targetFile = DATA_FILE;
@@ -207,6 +213,18 @@ async function startServer() {
       if (fs.existsSync(targetFile)) {
         const raw = fs.readFileSync(targetFile, "utf-8");
         const parsed = JSON.parse(raw);
+        if (parsed && parsed.systemResetVersion) {
+          systemResetVersion = Number(parsed.systemResetVersion) || 1;
+        }
+        if (parsed && parsed.systemResetTimestamp) {
+          systemResetTimestamp = String(parsed.systemResetTimestamp);
+        }
+        if (parsed && parsed.systemResetId) {
+          systemResetId = String(parsed.systemResetId);
+        }
+        if (parsed && parsed.systemResetBy) {
+          systemResetBy = String(parsed.systemResetBy);
+        }
         if (parsed && parsed.state && typeof parsed.state === "object") {
           Object.keys(parsed.state).forEach((key) => {
             if (key in state && Array.isArray(parsed.state[key])) {
@@ -224,7 +242,7 @@ async function startServer() {
           chatMessages.length = 0;
           chatMessages.push(...parsed.chatMessages);
         }
-        console.log("JUWEI WMS: Loaded persisted database state and deletion tombstones from disk.");
+        console.log(`JUWEI WMS: Loaded persisted database state from disk. System Reset Version: ${systemResetVersion} (${systemResetId})`);
       }
     } catch (err) {
       console.warn("JUWEI WMS: Non-fatal notice loading data-store.json:", err);
@@ -693,6 +711,10 @@ async function startServer() {
   function saveStateToDisk() {
     try {
       const payload = JSON.stringify({ 
+        systemResetVersion,
+        systemResetTimestamp,
+        systemResetId,
+        systemResetBy,
         state, 
         deletedRecordTombstones: Array.from(deletedRecordTombstones),
         deletedUserTombstones: Array.from(deletedUserTombstones),
@@ -901,6 +923,10 @@ async function startServer() {
     res.json({
       status: "ok",
       revision: stateRevision,
+      systemResetVersion,
+      systemResetTimestamp,
+      systemResetId,
+      systemResetBy,
       supabaseConnected: Boolean(supabaseServer),
       data: {
         ...state,
@@ -917,6 +943,10 @@ async function startServer() {
     res.json({
       status: "ok",
       revision: stateRevision,
+      systemResetVersion,
+      systemResetTimestamp,
+      systemResetId,
+      systemResetBy,
       timestamp: new Date().toISOString(),
       supabaseConnected: Boolean(supabaseServer),
       accountsCount: state.registeredUsers.length,
@@ -1009,11 +1039,130 @@ async function startServer() {
     });
   });
 
+  // Helper to strictly authenticate Super Admin privileges for destructive actions
+  function isAuthorizedSuperAdmin(req: any): boolean {
+    const empId = (req.body?.employeeId || req.headers['x-user-employee-id'] || '').toString().toUpperCase().trim();
+    const role = (req.body?.role || req.headers['x-user-role'] || '').toString().toUpperCase().trim();
+    const permission = (req.body?.permission || req.headers['x-user-permission'] || '').toString().toUpperCase().trim();
+    const pin = (req.body?.pin || req.headers['x-user-pin'] || '').toString().trim();
+
+    const isSuperAdminId = empId === 'JPMP-002';
+    const isSuperAdminRole = role === 'SUPER ADMINISTRATOR' || role === 'SUPER ADMIN';
+    const isFullAccess = permission === 'FULL_ACCESS';
+    const isSuperPin = pin === '0423';
+
+    // Must be verified Super Admin identity
+    return (isSuperAdminId || isSuperAdminRole) && (isFullAccess || isSuperPin || isSuperAdminId);
+  }
+
+  // Central Authoritative Global Reset Execution
+  function executeServerGlobalReset(author: string, keepUsers = true) {
+    systemResetVersion = Math.max(systemResetVersion + 1, Date.now());
+    systemResetId = `RST-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+    systemResetTimestamp = new Date().toISOString();
+    systemResetBy = author || "ALDRIN BANAWA (SUPER ADMINISTRATOR)";
+
+    deletedRecordTombstones.clear();
+    if (!keepUsers) {
+      deletedUserTombstones.clear();
+    }
+
+    state.stocks = [];
+    state.receiving = [];
+    state.returns = [];
+    state.recycling = [];
+    state.issuances = [];
+    state.deliveries = [];
+    state.envLogs = [];
+    state.forkliftChecks = [];
+    state.registries = [];
+    if ('stockMovements' in state) {
+      (state as any).stockMovements = [];
+    }
+
+    if (!keepUsers) {
+      state.registeredUsers = [{ ...defaultSuperAdmin }];
+    } else {
+      const hasAdmin = state.registeredUsers.some((u: any) => (u.employeeId || u.employee_id || '').toUpperCase() === 'JPMP-002');
+      if (!hasAdmin) {
+        state.registeredUsers.unshift({ ...defaultSuperAdmin });
+      }
+    }
+
+    chatMessages.length = 0;
+    chatMessages.push({
+      id: `sys-reset-${Date.now()}`,
+      sender: "System Audit",
+      text: `CENTRAL DATABASE HARD RESET: All encoded warehouse records cleared from central database by Super Administrator (${systemResetBy}). Reset Version: ${systemResetVersion}, Reset ID: ${systemResetId}.`,
+      timestamp: systemResetTimestamp,
+      isSystem: true
+    });
+
+    stateRevision++;
+    saveStateToDisk();
+
+    if (supabaseServer) {
+      const collections = ['stocks', 'receiving', 'returns', 'recycling', 'issuances', 'deliveries', 'env_logs', 'forklift_checks', 'registries', 'chat_messages', 'stock_movements'];
+      for (const table of collections) {
+        try {
+          supabaseServer.from(table).delete().neq('id', '___NEVER___').then();
+        } catch (e) {}
+      }
+      if (!keepUsers) {
+        try {
+          supabaseServer.from('registered_users').delete().neq('employee_id', 'JPMP-002').then();
+        } catch (e) {}
+      }
+    }
+
+    // Broadcast authoritative GLOBAL_RESET WebSocket event to all connected sessions
+    broadcast({
+      type: "GLOBAL_RESET",
+      systemResetVersion,
+      systemResetTimestamp,
+      systemResetId,
+      resetBy: systemResetBy,
+      data: {
+        ...state,
+        chatMessages
+      },
+      activeUsers: getActiveUsersList(),
+      revision: stateRevision
+    });
+
+    console.log(`[GLOBAL RESET] Central Database wiped. System Reset Version: ${systemResetVersion} (${systemResetId}) by ${systemResetBy}`);
+
+    return {
+      success: true,
+      systemResetVersion,
+      systemResetTimestamp,
+      systemResetId,
+      resetBy: systemResetBy,
+      data: {
+        ...state,
+        chatMessages
+      },
+      message: "Central database successfully reset. Global reset broadcast sent to all connected clients."
+    };
+  }
+
   // API update collection endpoint for HTTP clients / fallback
   app.post("/api/sync", (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     try {
       const { collection, data } = req.body;
+      const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version']);
+      
+      // Reject stale uploads from clients using an outdated reset version
+      if (clientResetVersion && clientResetVersion < systemResetVersion) {
+        return res.status(409).json({
+          error: "OUTDATED_RESET_VERSION: Stale data from previous reset version cannot overwrite central database.",
+          systemResetVersion,
+          systemResetTimestamp,
+          systemResetId
+        });
+      }
+
       if (collection === "chatMessages" && Array.isArray(data)) {
         chatMessages.length = 0;
         chatMessages.push(...data);
@@ -1061,6 +1210,21 @@ async function startServer() {
       }
 
       if (collection && collection in state && Array.isArray(data)) {
+        // If client sends empty array (e.g. after a reset or clear), clear the collection
+        if (data.length === 0) {
+          (state as any)[collection] = [];
+          stateRevision++;
+          saveStateToDisk();
+          persistToSupabase(collection, []);
+          broadcast({
+            type: "collection_updated",
+            collection,
+            data: [],
+            systemResetVersion
+          });
+          return res.json({ success: true, collection, updatedCount: 0, systemResetVersion });
+        }
+
         const currentArr: any[] = (state as any)[collection] || [];
         const recordMap = new Map<string, any>();
         
@@ -1075,6 +1239,11 @@ async function startServer() {
         const serverTime = new Date().toISOString();
         for (const item of data) {
           if (item && item.id && !deletedRecordTombstones.has(item.id)) {
+            // Drop records stamped with older reset_version
+            if (item.reset_version && Number(item.reset_version) < systemResetVersion) {
+              continue;
+            }
+
             const existing = recordMap.get(item.id);
             if (existing) {
               const existingTs = existing.updated_at ? new Date(existing.updated_at).getTime() : 0;
@@ -1083,6 +1252,7 @@ async function startServer() {
                 recordMap.set(item.id, {
                   ...existing,
                   ...item,
+                  reset_version: systemResetVersion,
                   version: (Number(existing.version) || 1) + 1,
                   updated_at: serverTime
                 });
@@ -1090,6 +1260,7 @@ async function startServer() {
             } else {
               recordMap.set(item.id, {
                 ...item,
+                reset_version: systemResetVersion,
                 version: 1,
                 created_at: item.created_at || serverTime,
                 updated_at: serverTime
@@ -1107,10 +1278,11 @@ async function startServer() {
         broadcast({
           type: "collection_updated",
           collection,
-          data: (state as any)[collection]
+          data: (state as any)[collection],
+          systemResetVersion
         });
 
-        return res.json({ success: true, collection, updatedCount: (state as any)[collection].length });
+        return res.json({ success: true, collection, updatedCount: (state as any)[collection].length, systemResetVersion });
       }
       res.status(400).json({ error: "Invalid collection" });
     } catch (err: any) {
@@ -1118,71 +1290,25 @@ async function startServer() {
     }
   });
 
-  // Endpoint to reset all encoded database collections and accounts to clean brand-new state (except Super Admin)
-  app.post("/api/reset-database", async (req, res) => {
+  // Dedicated Super Admin Reset Endpoint: Complete Global Database Reset
+  app.post(["/api/reset-everything", "/api/reset-database"], async (req, res) => {
     try {
-      deletedRecordTombstones.clear();
-      deletedUserTombstones.clear();
-
-      state.stocks = [];
-      state.receiving = [];
-      state.returns = [];
-      state.recycling = [];
-      state.issuances = [];
-      state.deliveries = [];
-      state.envLogs = [];
-      state.forkliftChecks = [];
-      state.registries = [];
-      state.registeredUsers = [{ ...defaultSuperAdmin }];
-
-      chatMessages.length = 0;
-      chatMessages.push({
-        id: "sys-init",
-        sender: "System",
-        text: "JUWEI WAREHOUSE MANAGEMENT SYSTEM ISO 9001:2015 Real-time Database Initialized.",
-        timestamp: new Date().toISOString(),
-        isSystem: true,
-      });
-
-      saveStateToDisk();
-
-      if (supabaseServer) {
-        const collections = ['stocks', 'receiving', 'returns', 'recycling', 'issuances', 'deliveries', 'env_logs', 'forklift_checks', 'registries', 'chat_messages'];
-        for (const table of collections) {
-          try {
-            await supabaseServer.from(table).delete().neq('id', '___NEVER___');
-          } catch (e) {}
-        }
-        try {
-          await supabaseServer.from('registered_users').delete().neq('employee_id', 'JPMP-002');
-          await supabaseServer.from('registered_users').upsert([{
-            employee_id: 'JPMP-002',
-            username: 'ALDRIN BANAWA',
-            role: 'SUPER ADMINISTRATOR',
-            permission: 'FULL_ACCESS',
-            pin_hash: '0423',
-            updated_at: new Date().toISOString()
-          }]);
-        } catch (e) {}
+      if (!req.body?.confirmed) {
+        return res.status(400).json({ 
+          error: "CONFIRMATION_REQUIRED: Global reset requires explicit 'confirmed: true'." 
+        });
       }
 
-      broadcast({
-        type: "init",
-        data: {
-          ...state,
-          chatMessages
-        },
-        activeUsers: getActiveUsersList()
-      });
+      if (!isAuthorizedSuperAdmin(req)) {
+        return res.status(403).json({ 
+          error: "PERMISSION_DENIED: Only the Super Administrator (JPMP-002) is authorized to execute a complete global database reset." 
+        });
+      }
 
-      broadcast({
-        type: "collection_updated",
-        collection: "registeredUsers",
-        data: state.registeredUsers,
-        revision: stateRevision
-      });
-
-      return res.json({ success: true, message: "All encoded data and operator accounts successfully reset. Super Admin account preserved." });
+      const author = req.body?.author || "ALDRIN BANAWA (SUPER ADMINISTRATOR)";
+      const keepUsers = req.body?.keepUsers !== false;
+      const result = executeServerGlobalReset(author, keepUsers);
+      return res.json(result);
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
@@ -1772,7 +1898,15 @@ async function startServer() {
     try {
       const { collection, id, author, employeeId } = req.body;
       const userPermission = (req.body.permission || req.headers['x-user-permission'] || '').toString().toUpperCase();
+      const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version']);
       
+      if (clientResetVersion && clientResetVersion < systemResetVersion) {
+        return res.status(409).json({ 
+          error: "STALE_RESET_VERSION: Central database was reset. Stale delete operation rejected.",
+          systemResetVersion 
+        });
+      }
+
       if (!collection || !id) return res.status(400).json({ error: "Collection and ID required" });
 
       // Permission check: VIEW_ONLY accounts are strictly forbidden from deleting
@@ -1812,15 +1946,17 @@ async function startServer() {
           collection,
           id,
           author: author || employeeId || "Operator",
-          timestamp: serverTime
+          timestamp: serverTime,
+          systemResetVersion
         });
         broadcast({
           type: "collection_updated",
           collection,
-          data: (state as any)[collection]
+          data: (state as any)[collection],
+          systemResetVersion
         });
 
-        return res.json({ success: true, collection, id });
+        return res.json({ success: true, collection, id, systemResetVersion });
       }
       return res.status(400).json({ error: "Invalid collection" });
     } catch (err: any) {
@@ -1833,6 +1969,14 @@ async function startServer() {
     try {
       const { collection, record, author, employeeId, actionDesc, expectedVersion } = req.body;
       const userPermission = (req.body.permission || req.headers['x-user-permission'] || '').toString().toUpperCase();
+      const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version'] || record?.reset_version);
+
+      if (clientResetVersion && clientResetVersion < systemResetVersion) {
+        return res.status(409).json({
+          error: "STALE_RESET_VERSION: The central database has been reset. Encoded data from previous reset versions cannot be uploaded or restored.",
+          systemResetVersion
+        });
+      }
 
       if (!collection || !record || !record.id) {
         return res.status(400).json({ error: "Collection and record with valid ID required" });
@@ -1856,7 +2000,8 @@ async function startServer() {
             if (record.updated_at && existingRecord.updated_at && new Date(record.updated_at).getTime() < new Date(existingRecord.updated_at).getTime()) {
               return res.status(409).json({
                 error: "STALE_DATA_DETECTED: A newer revision already exists in the centralized database.",
-                currentRecord: existingRecord
+                currentRecord: existingRecord,
+                systemResetVersion
               });
             }
           }
@@ -1866,6 +2011,7 @@ async function startServer() {
             ...existingRecord,
             ...record,
             id: record.id,
+            reset_version: systemResetVersion,
             created_at: existingRecord.created_at || existingRecord.date || record.created_at || serverTime,
             created_by: existingRecord.created_by || existingRecord.author || record.created_by || author || 'Operator',
             updated_at: serverTime,
@@ -1877,6 +2023,7 @@ async function startServer() {
           confirmedRecord = {
             ...record,
             id: record.id,
+            reset_version: systemResetVersion,
             created_at: record.created_at || serverTime,
             created_by: record.created_by || author || employeeId || 'Operator',
             updated_at: serverTime,
@@ -1899,13 +2046,15 @@ async function startServer() {
           author: author || employeeId || "Operator",
           actionDesc: actionDesc || `Updated ${collection} record ${confirmedRecord.id}`,
           timestamp: serverTime,
-          version: confirmedRecord.version
+          version: confirmedRecord.version,
+          systemResetVersion
         });
 
         broadcast({
           type: "collection_updated",
           collection,
-          data: (state as any)[collection]
+          data: (state as any)[collection],
+          systemResetVersion
         });
 
         return res.json({
@@ -1914,6 +2063,7 @@ async function startServer() {
           id: confirmedRecord.id,
           record: confirmedRecord,
           version: confirmedRecord.version,
+          systemResetVersion,
           count: (state as any)[collection].length
         });
       }
@@ -1927,6 +2077,13 @@ async function startServer() {
   // Guarantees atomic row updates, checks negative balance constraints, and prevents client-side overwrite race conditions
   app.post("/api/stock-movements", async (req, res) => {
     try {
+      const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version']);
+      if (clientResetVersion && clientResetVersion < systemResetVersion) {
+        return res.status(409).json({
+          error: "STALE_RESET_VERSION: Central database was reset. Movement rejected.",
+          systemResetVersion
+        });
+      }
       const {
         productId,
         warehouseId,
@@ -2101,9 +2258,17 @@ async function startServer() {
   // Batch sync endpoint for offline mutation queue synchronization with server-authoritative timestamps & concurrency checks
   app.post("/api/sync/batch", async (req, res) => {
     try {
+      const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version']);
+      if (clientResetVersion && clientResetVersion < systemResetVersion) {
+        return res.status(409).json({
+          error: "OUTDATED_RESET_VERSION: Central database was reset. Stale offline batch rejected.",
+          systemResetVersion
+        });
+      }
+
       const { mutations } = req.body;
       if (!Array.isArray(mutations) || mutations.length === 0) {
-        return res.json({ success: true, processedCount: 0, state });
+        return res.json({ success: true, processedCount: 0, systemResetVersion, state });
       }
 
       let processedCount = 0;
@@ -2112,6 +2277,14 @@ async function startServer() {
 
       for (const m of mutations) {
         if (!m || !m.collection || !(m.collection in state)) continue;
+
+        // Skip mutations stamped with an outdated reset version
+        if (m.reset_version && Number(m.reset_version) < systemResetVersion) {
+          continue;
+        }
+        if (m.record?.reset_version && Number(m.record.reset_version) < systemResetVersion) {
+          continue;
+        }
 
         // Skip if account only has VIEW_ONLY privileges
         if (m.permission && String(m.permission).toUpperCase() === 'VIEW_ONLY') {
@@ -2144,6 +2317,7 @@ async function startServer() {
             ...(existingRecord || {}),
             ...m.record,
             id: m.record.id,
+            reset_version: systemResetVersion,
             created_at: (existingRecord && existingRecord.created_at) || m.record.created_at || serverTime,
             created_by: (existingRecord && existingRecord.created_by) || m.record.created_by || m.author || 'Operator',
             updated_at: serverTime,
@@ -2168,7 +2342,8 @@ async function startServer() {
             author: m.author || "Operator",
             actionDesc: m.actionDesc || `Batch-synced ${m.collection} record`,
             timestamp: serverTime,
-            version: confirmed.version
+            version: confirmed.version,
+            systemResetVersion
           });
         } else if (m.type === 'delete' && (m.recordId || m.id)) {
           const delId = m.recordId || m.id;
@@ -2412,6 +2587,10 @@ async function startServer() {
     try {
       ws.send(JSON.stringify({
         type: "init",
+        systemResetVersion,
+        systemResetTimestamp,
+        systemResetId,
+        systemResetBy,
         data: {
           ...state,
           chatMessages
@@ -2464,6 +2643,10 @@ async function startServer() {
             // Re-send initial complete state and updated active users list
             ws.send(JSON.stringify({
               type: "init",
+              systemResetVersion,
+              systemResetTimestamp,
+              systemResetId,
+              systemResetBy,
               data: {
                 ...state,
                 chatMessages
@@ -2544,6 +2727,10 @@ async function startServer() {
           case "request_full_sync": {
             ws.send(JSON.stringify({
               type: "full_sync",
+              systemResetVersion,
+              systemResetTimestamp,
+              systemResetId,
+              systemResetBy,
               data: {
                 ...state,
                 chatMessages
@@ -2567,6 +2754,10 @@ async function startServer() {
             // Confirm back to installing client with full authoritative data
             ws.send(JSON.stringify({
               type: "init",
+              systemResetVersion,
+              systemResetTimestamp,
+              systemResetId,
+              systemResetBy,
               data: {
                 ...state,
                 chatMessages
@@ -2751,6 +2942,12 @@ async function startServer() {
 
           case "upsert_record": {
             const { collection, record, author, employeeId, permission, actionDesc } = payload;
+            const clientResetVersion = Number(payload.reset_version || record?.reset_version);
+            if (clientResetVersion && clientResetVersion < systemResetVersion) {
+              console.warn(`[WS] Rejected stale upsert from reset_version ${clientResetVersion} (current: ${systemResetVersion})`);
+              break;
+            }
+
             if (permission && String(permission).toUpperCase() === 'VIEW_ONLY') {
               console.warn(`[WS] Denied upsert from VIEW_ONLY user ${employeeId || author}`);
               break;
@@ -2768,6 +2965,7 @@ async function startServer() {
                   ...existingRecord,
                   ...record,
                   id: record.id,
+                  reset_version: systemResetVersion,
                   created_at: existingRecord.created_at || existingRecord.date || record.created_at || serverTime,
                   created_by: existingRecord.created_by || existingRecord.author || record.created_by || author || 'Operator',
                   updated_at: serverTime,
@@ -2779,6 +2977,7 @@ async function startServer() {
                 confirmedRecord = {
                   ...record,
                   id: record.id,
+                  reset_version: systemResetVersion,
                   created_at: record.created_at || serverTime,
                   created_by: record.created_by || author || employeeId || 'Operator',
                   updated_at: serverTime,
@@ -2801,13 +3000,15 @@ async function startServer() {
                 author: author || employeeId || "Operator",
                 actionDesc: actionDesc || `Updated ${collection} record`,
                 timestamp: serverTime,
-                version: confirmedRecord.version
+                version: confirmedRecord.version,
+                systemResetVersion
               });
 
               broadcast({
                 type: "collection_updated",
                 collection,
-                data: (state as any)[collection]
+                data: (state as any)[collection],
+                systemResetVersion
               });
             }
             break;
@@ -2815,6 +3016,12 @@ async function startServer() {
 
           case "delete_record": {
             const { collection, id, author, employeeId, permission } = payload;
+            const clientResetVersion = Number(payload.reset_version);
+            if (clientResetVersion && clientResetVersion < systemResetVersion) {
+              console.warn(`[WS] Rejected stale delete from reset_version ${clientResetVersion} (current: ${systemResetVersion})`);
+              break;
+            }
+
             if (permission && String(permission).toUpperCase() === 'VIEW_ONLY') {
               console.warn(`[WS] Denied delete from VIEW_ONLY user ${employeeId || author}`);
               break;
@@ -2849,13 +3056,15 @@ async function startServer() {
                 collection,
                 id,
                 author: author || employeeId || "Operator",
-                timestamp: serverTime
+                timestamp: serverTime,
+                systemResetVersion
               });
 
               broadcast({
                 type: "collection_updated",
                 collection,
-                data: (state as any)[collection]
+                data: (state as any)[collection],
+                systemResetVersion
               });
             }
             break;
@@ -2874,6 +3083,12 @@ async function startServer() {
 
           case "update_collection": {
             const { collection, data, permission } = payload;
+            const clientResetVersion = Number(payload.reset_version);
+            if (clientResetVersion && clientResetVersion < systemResetVersion) {
+              console.warn(`[WS] Rejected stale collection update from reset_version ${clientResetVersion} (current: ${systemResetVersion})`);
+              break;
+            }
+
             if (permission && String(permission).toUpperCase() === 'VIEW_ONLY') {
               break;
             }
@@ -2903,6 +3118,21 @@ async function startServer() {
                 data: state.registeredUsers
               });
             } else if (collection && collection in state && Array.isArray(data)) {
+              // If empty array received, wipe collection on server
+              if (data.length === 0) {
+                (state as any)[collection] = [];
+                stateRevision++;
+                saveStateToDisk();
+                persistToSupabase(collection, []);
+                broadcast({
+                  type: "collection_updated",
+                  collection,
+                  data: [],
+                  systemResetVersion
+                });
+                break;
+              }
+
               // Server-authoritative record merge by ID: NEVER destroy server records!
               const currentArr: any[] = (state as any)[collection] || [];
               const recordMap = new Map<string, any>();
@@ -2915,6 +3145,11 @@ async function startServer() {
               const serverTime = new Date().toISOString();
               for (const incoming of data) {
                 if (!incoming || !incoming.id || deletedRecordTombstones.has(incoming.id)) continue;
+                // Ignore stale records with older reset_version
+                if (incoming.reset_version && Number(incoming.reset_version) < systemResetVersion) {
+                  continue;
+                }
+
                 const existing = recordMap.get(incoming.id);
                 if (existing) {
                   // Only update if incoming has newer updated_at or higher version
@@ -2924,6 +3159,7 @@ async function startServer() {
                     recordMap.set(incoming.id, {
                       ...existing,
                       ...incoming,
+                      reset_version: systemResetVersion,
                       version: (Number(existing.version) || 1) + 1,
                       updated_at: serverTime
                     });
@@ -2931,6 +3167,7 @@ async function startServer() {
                 } else {
                   recordMap.set(incoming.id, {
                     ...incoming,
+                    reset_version: systemResetVersion,
                     version: 1,
                     created_at: incoming.created_at || serverTime,
                     updated_at: serverTime
@@ -2947,8 +3184,26 @@ async function startServer() {
               broadcast({
                 type: "collection_updated",
                 collection,
-                data: (state as any)[collection]
+                data: (state as any)[collection],
+                systemResetVersion
               });
+            }
+            break;
+          }
+
+          case "reset_everything": {
+            const empId = (payload.employeeId || '').toString().toUpperCase().trim();
+            const role = (payload.role || '').toString().toUpperCase().trim();
+            const isAldrin = empId === 'JPMP-002' || role.includes('SUPER');
+            if (isAldrin && payload.confirmed) {
+              const author = payload.author || payload.username || "ALDRIN BANAWA (SUPER ADMINISTRATOR)";
+              const keepUsers = payload.keepUsers !== false;
+              executeServerGlobalReset(author, keepUsers);
+            } else {
+              ws.send(JSON.stringify({
+                type: "error",
+                message: "PERMISSION_DENIED: Only Super Administrator can perform RESET EVERYTHING."
+              }));
             }
             break;
           }

@@ -20,6 +20,7 @@ export interface OfflineQueueItem {
   status: QueueItemStatus;
   lastError?: string;
   deviceId: string;
+  reset_version?: number;
 }
 
 export interface SyncStatusInfo {

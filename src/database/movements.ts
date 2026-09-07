@@ -54,6 +54,10 @@ export async function createStockMovement(input: CreateStockMovementInput): Prom
 
   // Call the central Express server endpoint for atomic stock movement and real-time broadcast
   try {
+    const localResetVersion = typeof window !== 'undefined' 
+      ? (Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0)
+      : 0;
+
     const resp = await fetch('/api/stock-movements', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -62,11 +66,18 @@ export async function createStockMovement(input: CreateStockMovementInput): Prom
         delta,
         deviceId,
         idempotencyKey,
+        reset_version: localResetVersion,
       }),
     });
 
     if (!resp.ok) {
       const errorData = await resp.json().catch(() => ({}));
+      if (resp.status === 409 || errorData.error === 'STALE_RESET_VERSION') {
+        if (typeof window !== 'undefined' && errorData.systemResetVersion) {
+          localStorage.setItem('juwei_wms_system_reset_version', String(errorData.systemResetVersion));
+        }
+        throw new Error(`STALE_RESET_VERSION: Central database was reset. Stale offline transaction rejected.`);
+      }
       throw new Error(errorData.error || `Server failed with status ${resp.status}`);
     }
 

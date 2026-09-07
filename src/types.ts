@@ -29,6 +29,14 @@ export interface BaseRecordAudit {
   created_by?: string;
   updated_by?: string;
   version?: number;
+  reset_version?: number;
+}
+
+export interface SystemResetInfo {
+  systemResetVersion: number;
+  systemResetTimestamp: string;
+  systemResetId: string;
+  resetBy?: string;
 }
 
 export interface MaterialStockItem extends BaseRecordAudit {
@@ -247,6 +255,7 @@ export interface QueuedMutation {
   author?: string;
   actionDesc?: string;
   timestamp: number;
+  reset_version?: number;
 }
 
 export function getCustomerForPart(partCode?: string, description?: string): string {

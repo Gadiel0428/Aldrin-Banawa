@@ -66,6 +66,7 @@ import { StockMovementView } from './components/StockMovement';
 import { ProductList } from './components/ProductList';
 import { InventoryTable } from './components/InventoryTable';
 import { syncManager } from './sync/syncManager';
+import { OfflineQueue } from './sync/offlineQueue';
 import { createStockMovement } from './database/movements';
 
 import { 
@@ -738,6 +739,25 @@ export default function App() {
               markUserAsDeleted(employeeId);
               setRegisteredUsers(prev => prev.filter(u => u.employeeId.toUpperCase() !== employeeId.toUpperCase()));
             }
+          } else if (payload.type === 'GLOBAL_RESET') {
+            const ver = Number(payload.systemResetVersion) || Date.now();
+            purgeAllLocalOfflineCachesAndQueues(ver);
+            setStocks([]);
+            setReceiving([]);
+            setReturns([]);
+            setRecycling([]);
+            setIssuances([]);
+            setDeliveries([]);
+            setEnvLogs([]);
+            setForkliftChecks([]);
+            setRegistries([]);
+            setLiveSyncToast({
+              id: String(Date.now()),
+              author: payload.resetBy || 'Super Administrator',
+              action: `GLOBAL RESET: Central database cleared`,
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+            });
+            setLastSyncedTime(new Date());
           } else if (payload.type === 'all_accounts_cleared') {
             setRegisteredUsers([superAdminAccount]);
             try {
@@ -1024,44 +1044,20 @@ export default function App() {
 
   // Initialize standard fallback state
   const resetStateToDefaults = () => {
-    setStocks([]);
-    setReceiving([]);
-    setReturns([]);
-    setRecycling([]);
-    setIssuances([]);
-    setDeliveries([]);
-    setEnvLogs([]);
-    setForkliftChecks([]);
-    setRegistries([]);
-
-    // Clear local storage cache
-    const collectionsToClear = [
-      'stocks', 'receiving', 'returns', 'recycling', 'issuances', 
-      'deliveries', 'envLogs', 'forkliftChecks', 'registries'
-    ];
-    collectionsToClear.forEach(col => {
-      try {
-        localStorage.removeItem(`juwei_wms_cache_${col}`);
-      } catch (e) {}
-    });
-    try {
-      localStorage.removeItem('juwei_wms_master_registries');
-    } catch (e) {}
-
-    // Call server reset endpoint
-    const baseUrl = getApiBaseUrl();
-    fetch(`${baseUrl}/api/reset-database`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
-    }).catch(() => {});
-
-    // Sync clean empty collections across peers and Supabase
-    collectionsToClear.forEach(col => {
-      syncCollection(col, []);
-    });
+    executeSuperAdminGlobalReset();
   };
 
   const resetAccountsToDefaults = () => {
+    const isSuperAdminOperating = 
+      currentEmployeeId === 'JPMP-002' || 
+      (currentUser || '').toUpperCase().includes('ALDRIN') || 
+      currentRole === 'SUPER ADMINISTRATOR';
+
+    if (!isSuperAdminOperating) {
+      alert("UNAUTHORIZED: Only Super Administrator (JPMP-002) is authorized to wipe operator accounts.");
+      return;
+    }
+
     const defaultAccounts = [
       superAdminAccount
     ];
@@ -1074,7 +1070,22 @@ export default function App() {
     const baseUrl = getApiBaseUrl();
     fetch(`${baseUrl}/api/reset-database`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 
+        'Content-Type': 'application/json',
+        'x-user-employee-id': currentEmployeeId || 'JPMP-002',
+        'x-user-role': currentRole || 'SUPER ADMINISTRATOR',
+        'x-user-permission': currentPermission || 'FULL_ACCESS',
+        'x-user-pin': '0423'
+      },
+      body: JSON.stringify({
+        employeeId: currentEmployeeId || 'JPMP-002',
+        role: currentRole || 'SUPER ADMINISTRATOR',
+        permission: currentPermission || 'FULL_ACCESS',
+        pin: '0423',
+        confirmed: true,
+        author: `${currentUser || 'ALDRIN BANAWA'} (${currentEmployeeId || 'JPMP-002'})`,
+        wipeUsers: true
+      })
     }).catch(() => {});
     // Also log out any active session if we reset the accounts
     handleLogout();
@@ -1330,10 +1341,12 @@ export default function App() {
   };
 
   const queueOfflineMutation = (mutation: Omit<QueuedMutation, 'id' | 'timestamp'>) => {
+    const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
     const item: QueuedMutation = {
       ...mutation,
       id: `MUT-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      reset_version: currentResetVer
     };
     const list = getPendingMutations();
     list.push(item);
@@ -1341,7 +1354,13 @@ export default function App() {
   };
 
   const flushPendingMutationsQueue = async () => {
-    const mutations = getPendingMutations();
+    const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
+    const allMutations = getPendingMutations();
+    // Drop any mutation created under an older reset version
+    const mutations = allMutations.filter(m => !m.reset_version || m.reset_version >= currentResetVer);
+    if (mutations.length !== allMutations.length) {
+      savePendingMutations(mutations);
+    }
     if (mutations.length === 0) return;
 
     let targetAddr = serverAddress.trim() || getDefaultServerAddress();
@@ -1354,8 +1373,16 @@ export default function App() {
       const res = await fetch(`${baseUrl}/api/sync/batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mutations })
+        body: JSON.stringify({ mutations, reset_version: currentResetVer })
       });
+      if (res.status === 409) {
+        const errJson = await res.json().catch(() => ({}));
+        const newVer = Number(errJson.systemResetVersion) || Date.now();
+        console.warn(`[JUWEI WMS] Batch sync rejected with 409 STALE_RESET_VERSION. Purging offline queues.`);
+        purgeAllLocalOfflineCachesAndQueues(newVer);
+        handleManualSync();
+        return;
+      }
       if (res.ok) {
         localStorage.removeItem(PENDING_MUTATIONS_KEY);
         return;
@@ -1366,12 +1393,171 @@ export default function App() {
       const resFallback = await fetch(`${httpProto}//${cleanHost}/api/sync/batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mutations })
+        body: JSON.stringify({ mutations, reset_version: currentResetVer })
       });
+      if (resFallback.status === 409) {
+        const errJson = await resFallback.json().catch(() => ({}));
+        const newVer = Number(errJson.systemResetVersion) || Date.now();
+        purgeAllLocalOfflineCachesAndQueues(newVer);
+        handleManualSync();
+        return;
+      }
       if (resFallback.ok) {
         localStorage.removeItem(PENDING_MUTATIONS_KEY);
       }
     } catch (err) {}
+  };
+
+  // Completely wipes all cached tables, pending queues, tombstones, and synchronizes reset version
+  const purgeAllLocalOfflineCachesAndQueues = (newResetVersion: number) => {
+    try {
+      if (newResetVersion > 0) {
+        localStorage.setItem('juwei_wms_system_reset_version', String(newResetVersion));
+      }
+      const collectionsToClear = [
+        'stocks', 'receiving', 'returns', 'recycling', 'issuances', 
+        'deliveries', 'envLogs', 'forkliftChecks', 'registries'
+      ];
+      collectionsToClear.forEach(col => {
+        localStorage.removeItem(`juwei_wms_cache_${col}`);
+      });
+      localStorage.removeItem('juwei_wms_master_registries');
+      localStorage.removeItem('juwei_wms_pending_sync');
+      localStorage.removeItem(PENDING_MUTATIONS_KEY);
+      localStorage.removeItem('juwei_wms_offline_queue_v1');
+      localStorage.removeItem('juwei_wms_deleted_records_v1');
+    } catch (e) {}
+
+    try {
+      OfflineQueue.purgeAll();
+    } catch (e) {}
+
+    deletedRecordIds.current.clear();
+    recentlyMutatedRecords.current.clear();
+  };
+
+  // Directly sets in-memory state to pure authoritative central database data without merging stale leftovers
+  const applyAuthoritativeResetState = (dataPayload: any, activeUsersList?: string[], activePresenceList?: ActivePresenceUser[]) => {
+    if (!dataPayload) {
+      setStocks([]);
+      setReceiving([]);
+      setReturns([]);
+      setRecycling([]);
+      setIssuances([]);
+      setDeliveries([]);
+      setEnvLogs([]);
+      setForkliftChecks([]);
+      setRegistries([]);
+      return;
+    }
+    const { 
+      stocks: s, 
+      receiving: rc, 
+      returns: rt, 
+      recycling: cy, 
+      issuances: is, 
+      deliveries: d, 
+      envLogs: e, 
+      forkliftChecks: f, 
+      registries: reg, 
+      registeredUsers: serverUsers, 
+      chatMessages: msgs 
+    } = dataPayload;
+
+    setStocks(normalizeRecords('stocks', Array.isArray(s) ? s : []));
+    setReceiving(normalizeRecords('receiving', Array.isArray(rc) ? rc : []));
+    setReturns(normalizeRecords('returns', Array.isArray(rt) ? rt : []));
+    setRecycling(normalizeRecords('recycling', Array.isArray(cy) ? cy : []));
+    setIssuances(normalizeRecords('issuances', Array.isArray(is) ? is : []));
+    setDeliveries(normalizeRecords('deliveries', Array.isArray(d) ? d : []));
+    setEnvLogs(normalizeRecords('envLogs', Array.isArray(e) ? e : []));
+    setForkliftChecks(normalizeRecords('forkliftChecks', Array.isArray(f) ? f : []));
+    setRegistries(normalizeRecords('registries', Array.isArray(reg) ? reg : []));
+
+    if (Array.isArray(serverUsers) && serverUsers.length > 0) {
+      setRegisteredUsers(reconcileUsers([], serverUsers));
+    }
+    if (Array.isArray(msgs)) setChatMessages(msgs);
+    if (activePresenceList && Array.isArray(activePresenceList)) {
+      setWsPresence(activePresenceList);
+    }
+  };
+
+  // Super Admin Exclusive Global Reset: Authoritatively clears central database across all stations
+  const executeSuperAdminGlobalReset = async () => {
+    const isSuperAdminOperating = 
+      currentEmployeeId === 'JPMP-002' || 
+      (currentUser || '').toUpperCase().includes('ALDRIN') || 
+      currentRole === 'SUPER ADMINISTRATOR';
+
+    if (!isSuperAdminOperating) {
+      alert("UNAUTHORIZED: Only Super Administrator (JPMP-002) is authorized to execute a complete global database reset.");
+      return;
+    }
+
+    const baseUrl = getApiBaseUrl();
+    const cleanAuthor = `${currentUser || 'ALDRIN BANAWA'} (${currentEmployeeId || 'JPMP-002'})`;
+
+    let resetVer = Date.now();
+    try {
+      const res = await fetch(`${baseUrl}/api/reset-database`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-employee-id': currentEmployeeId || 'JPMP-002',
+          'x-user-role': currentRole || 'SUPER ADMINISTRATOR',
+          'x-user-permission': currentPermission || 'FULL_ACCESS',
+          'x-user-pin': '0423'
+        },
+        body: JSON.stringify({
+          employeeId: currentEmployeeId || 'JPMP-002',
+          role: currentRole || 'SUPER ADMINISTRATOR',
+          permission: currentPermission || 'FULL_ACCESS',
+          pin: '0423',
+          confirmed: true,
+          author: cleanAuthor,
+          keepUsers: true
+        })
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.systemResetVersion) {
+          resetVer = Number(json.systemResetVersion);
+        }
+      }
+    } catch (e) {
+      console.warn('Server reset call error:', e);
+    }
+
+    purgeAllLocalOfflineCachesAndQueues(resetVer);
+
+    setStocks([]);
+    setReceiving([]);
+    setReturns([]);
+    setRecycling([]);
+    setIssuances([]);
+    setDeliveries([]);
+    setEnvLogs([]);
+    setForkliftChecks([]);
+    setRegistries([]);
+
+    if (syncChannelRef.current) {
+      try {
+        syncChannelRef.current.postMessage({
+          type: 'GLOBAL_RESET',
+          systemResetVersion: resetVer,
+          resetBy: cleanAuthor
+        });
+      } catch (e) {}
+    }
+
+    setLiveSyncToast({
+      id: String(Date.now()),
+      author: cleanAuthor,
+      action: `GLOBAL RESET COMPLETE: Central database cleared`,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    });
+    setLastSyncedTime(new Date());
   };
 
   // Deep equivalency checker that tolerates null/undefined/empty string/empty array/empty object and numeric/boolean string formats
@@ -1444,24 +1630,41 @@ export default function App() {
     return true;
   };
 
-  // Helper to reconcile incoming remote collections with local state cleanly without data loss, disappearing records, or flickering
+  // Helper to reconcile incoming remote collections with local state cleanly without data loss, disappearing records, or resurrection of reset data
   const reconcileCollection = (colName: string, currentArr: any[], incomingArr: any[]): any[] => {
     const safeCurrent = Array.isArray(currentArr) ? currentArr : [];
 
-    // If incoming data is invalid or empty while current displayed data exists,
-    // NEVER clear the screen! Preserve existing displayed data intact.
     if (!Array.isArray(incomingArr)) {
       return safeCurrent;
     }
-    if (incomingArr.length === 0 && safeCurrent.length > 0) {
-      return safeCurrent;
-    }
 
+    const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
     const deletedSet = getDeletedRecordIds();
     const now = Date.now();
 
-    // Filter incoming records from server/Supabase to exclude locally deleted IDs
-    const filteredIncoming = incomingArr.filter(item => item && item.id && !deletedSet.has(item.id));
+    // Check for active unconfirmed local mutations with valid reset version
+    const pendingMutations = getPendingMutations().filter(
+      mut => mut && mut.collection === colName && (!mut.reset_version || mut.reset_version >= currentResetVer)
+    );
+
+    // If incoming is empty and there are no active pending local mutations
+    if (incomingArr.length === 0) {
+      const activePendingUpserts = pendingMutations.filter(m => m.type === 'upsert' && m.record && m.record.id && !deletedSet.has(m.record.id));
+      if (activePendingUpserts.length === 0) {
+        try {
+          localStorage.removeItem(`juwei_wms_cache_${colName}`);
+        } catch (e) {}
+        return [];
+      }
+    }
+
+    // Filter incoming records from server/Supabase to exclude locally deleted IDs and stale reset versions
+    const filteredIncoming = incomingArr.filter(item => {
+      if (!item || !item.id) return false;
+      if (deletedSet.has(item.id)) return false;
+      if (item.reset_version && currentResetVer > 0 && Number(item.reset_version) < currentResetVer) return false;
+      return true;
+    });
 
     // Build merged map starting with authoritative incoming items
     const mergedMap = new Map<string, any>();
@@ -1483,7 +1686,7 @@ export default function App() {
         } else {
           // If locally mutated very recently, preserve local until server confirms
           const lastLocalMut = recentlyMutatedRecords.current.get(localItem.id) || 0;
-          if (now - lastLocalMut < 10000 && localTs > remoteTs) {
+          if (now - lastLocalMut < 5000 && localTs > remoteTs) {
             mergedMap.set(remoteItem.id, localItem);
           } else {
             mergedMap.set(remoteItem.id, remoteItem);
@@ -1494,21 +1697,22 @@ export default function App() {
       }
     }
 
-    // 2. CRITICAL PRESERVATION OF CURRENT DISPLAYED RECORDS:
-    // Any record currently in safeCurrent that has NOT been explicitly deleted MUST be preserved!
-    // A background fetch, replication lag, or stale poll response must NEVER drop currently displayed records!
+    // 2. Only preserve local items from safeCurrent IF they were mutated locally on this workstation within the last 5 seconds.
+    // (Prevents deleted or globally reset server records from being resurrected by local client state!)
     for (const localItem of safeCurrent) {
       if (localItem && localItem.id && !deletedSet.has(localItem.id)) {
         if (!mergedMap.has(localItem.id)) {
-          mergedMap.set(localItem.id, localItem);
+          const lastLocalMut = recentlyMutatedRecords.current.get(localItem.id) || 0;
+          if (now - lastLocalMut < 5000) {
+            mergedMap.set(localItem.id, localItem);
+          }
         }
       }
     }
 
-    // 3. Preserve any unconfirmed offline mutations created locally on this workstation
-    const pendingMutations = getPendingMutations();
+    // 3. Preserve any unconfirmed offline mutations created locally on this workstation with valid reset version
     for (const mut of pendingMutations) {
-      if (mut && mut.collection === colName && mut.type === 'upsert' && mut.record && mut.record.id) {
+      if (mut && mut.type === 'upsert' && mut.record && mut.record.id) {
         if (!deletedSet.has(mut.record.id) && !mergedMap.has(mut.record.id)) {
           mergedMap.set(mut.record.id, mut.record);
         }
@@ -2002,6 +2206,19 @@ export default function App() {
         const res = await fetch(`${baseUrl}/api/sync`, { cache: 'no-store', headers: { 'Accept': 'application/json' } });
         if (res.ok) {
           const json = await res.json();
+          if (json.systemResetVersion) {
+            const serverResetVer = Number(json.systemResetVersion) || 0;
+            const localResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
+            if (serverResetVer > localResetVer) {
+              console.log(`[JUWEI WMS] Manual sync detected hard reset (${serverResetVer} > ${localResetVer})`);
+              purgeAllLocalOfflineCachesAndQueues(serverResetVer);
+              applyAuthoritativeResetState(json.data, json.activeUsers, json.activePresence);
+              setConnectionStatus('connected');
+              return;
+            } else if (serverResetVer > 0 && localResetVer === 0) {
+              localStorage.setItem('juwei_wms_system_reset_version', String(serverResetVer));
+            }
+          }
           if (json.tombstones) {
             if (Array.isArray(json.tombstones.records)) {
               json.tombstones.records.forEach((rid: string) => markRecordAsDeletedLocally(rid));
@@ -2034,6 +2251,18 @@ export default function App() {
           const resFallback = await fetch(`${httpProto}//${cleanHost}/api/sync`, { cache: 'no-store', headers: { 'Accept': 'application/json' } });
           if (resFallback.ok) {
             const json = await resFallback.json();
+            if (json.systemResetVersion) {
+              const serverResetVer = Number(json.systemResetVersion) || 0;
+              const localResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
+              if (serverResetVer > localResetVer) {
+                purgeAllLocalOfflineCachesAndQueues(serverResetVer);
+                applyAuthoritativeResetState(json.data, json.activeUsers, json.activePresence);
+                setConnectionStatus('connected');
+                return;
+              } else if (serverResetVer > 0 && localResetVer === 0) {
+                localStorage.setItem('juwei_wms_system_reset_version', String(serverResetVer));
+              }
+            }
             if (json.tombstones) {
               if (Array.isArray(json.tombstones.records)) {
                 json.tombstones.records.forEach((rid: string) => markRecordAsDeletedLocally(rid));
@@ -2175,6 +2404,22 @@ export default function App() {
         if (res.ok) {
           const json = await res.json();
           if (thisReqId !== syncSequenceId) return false;
+          if (json.systemResetVersion) {
+            const serverResetVer = Number(json.systemResetVersion) || 0;
+            const localResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
+            if (serverResetVer > localResetVer) {
+              console.log(`[JUWEI WMS] Hard reset detected from tryFetchSync (${serverResetVer} > ${localResetVer}). Purging local cache.`);
+              purgeAllLocalOfflineCachesAndQueues(serverResetVer);
+              if (isMounted) {
+                hasConnectedOnce = true;
+                setConnectionStatus('connected');
+                applyAuthoritativeResetState(json.data, json.activeUsers, json.activePresence);
+              }
+              return true;
+            } else if (serverResetVer > 0 && localResetVer === 0) {
+              localStorage.setItem('juwei_wms_system_reset_version', String(serverResetVer));
+            }
+          }
           if (json.tombstones) {
             if (Array.isArray(json.tombstones.records)) {
               json.tombstones.records.forEach((rid: string) => markRecordAsDeletedLocally(rid));
@@ -2349,10 +2594,58 @@ export default function App() {
               missedPongs = 0;
               setConnectionStatus('connected');
               setLastSyncedTime(new Date());
-              applyStatePayload(payload.data, payload.activeUsers, payload.activePresence);
+
+              const serverResetVer = Number(payload.systemResetVersion) || 0;
+              const localResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
+
+              if (serverResetVer > localResetVer) {
+                console.log(`[JUWEI WMS] Server reset version ${serverResetVer} > local ${localResetVer}. Hard purging local stale data.`);
+                purgeAllLocalOfflineCachesAndQueues(serverResetVer);
+                applyAuthoritativeResetState(payload.data, payload.activeUsers, payload.activePresence);
+              } else {
+                if (serverResetVer > 0 && localResetVer === 0) {
+                  localStorage.setItem('juwei_wms_system_reset_version', String(serverResetVer));
+                }
+                applyStatePayload(payload.data, payload.activeUsers, payload.activePresence);
+              }
               if (payload.activePresence && Array.isArray(payload.activePresence)) {
                 setWsPresence(payload.activePresence);
               }
+              break;
+            }
+            case 'GLOBAL_RESET': {
+              const { systemResetVersion: newVer, systemResetId: newId, resetBy: author, data } = payload;
+              const resetVerNum = Number(newVer) || Date.now();
+              console.log(`[JUWEI WMS] Received authoritative GLOBAL_RESET (Version: ${resetVerNum}, ID: ${newId}) by ${author}`);
+              
+              purgeAllLocalOfflineCachesAndQueues(resetVerNum);
+              applyAuthoritativeResetState(data, payload.activeUsers, payload.activePresence);
+              
+              if (syncChannelRef.current) {
+                try {
+                  syncChannelRef.current.postMessage({
+                    type: 'GLOBAL_RESET',
+                    systemResetVersion: resetVerNum,
+                    systemResetId: newId,
+                    resetBy: author
+                  });
+                } catch (e) {}
+              }
+
+              setLiveSyncToast({
+                id: String(Date.now()),
+                author: author || 'Super Administrator',
+                action: `GLOBAL RESET COMPLETE: Central database cleared`,
+                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+              });
+              setLastSyncedTime(new Date());
+              break;
+            }
+            case 'STALE_RESET_VERSION': {
+              const resetVerNum = Number(payload.systemResetVersion) || Date.now();
+              console.warn(`[JUWEI WMS] Received STALE_RESET_VERSION from server. Purging local queues and refetching fresh state.`);
+              purgeAllLocalOfflineCachesAndQueues(resetVerNum);
+              handleManualSync();
               break;
             }
             case 'record_upserted': {
