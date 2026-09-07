@@ -35,6 +35,7 @@ import BarcodeScannerModal from './BarcodeScannerModal';
 import PrintablePickingListModal, { DocViewMode } from './PrintablePickingListModal';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { motion, AnimatePresence } from 'motion/react';
+import { generateAuthoritativeId } from '../lib/idGenerator';
 
 interface IssuanceModuleProps {
   stocks: MaterialStockItem[];
@@ -254,7 +255,7 @@ export default function IssuanceModule({
     const itemDesc = selectedItem ? selectedItem.description : 'Unknown Item';
 
     const newIssuance: IssuanceRecord = {
-      id: `ISS-${Date.now().toString().slice(-4)}`,
+      id: generateAuthoritativeId('ISS'),
       date: new Date().toISOString().split('T')[0],
       requisitionNumber,
       department,

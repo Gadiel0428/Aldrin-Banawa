@@ -23,7 +23,15 @@ export interface BOMItem {
   unit: string;
 }
 
-export interface MaterialStockItem {
+export interface BaseRecordAudit {
+  created_at?: string;
+  updated_at?: string;
+  created_by?: string;
+  updated_by?: string;
+  version?: number;
+}
+
+export interface MaterialStockItem extends BaseRecordAudit {
   id: string;
   partCode: string;
   description: string;
@@ -55,7 +63,7 @@ export type PresetSourceType =
   | 'EXTERNAL'
   | 'INTERNAL';
 
-export interface ReceivingRecord {
+export interface ReceivingRecord extends BaseRecordAudit {
   id: string;
   date: string;
   receivedDate?: string;
@@ -97,7 +105,7 @@ export interface ReceivingRecord {
   customer?: string;
 }
 
-export interface ReturnRecord {
+export interface ReturnRecord extends BaseRecordAudit {
   id: string;
   date: string;
   category?: string;
@@ -114,7 +122,7 @@ export interface ReturnRecord {
   returnSlipFormNumber: string;
 }
 
-export interface RecyclingRecord {
+export interface RecyclingRecord extends BaseRecordAudit {
   id: string;
   date: string;
   itemType: 'Carton Box' | 'Pallet' | 'Partition';
@@ -125,7 +133,7 @@ export interface RecyclingRecord {
   logSheetNumber: string;
 }
 
-export interface IssuanceRecord {
+export interface IssuanceRecord extends BaseRecordAudit {
   id: string;
   date: string;
   requisitionNumber: string;
@@ -140,7 +148,7 @@ export interface IssuanceRecord {
   receivedBy: string;
 }
 
-export interface DeliveryRecord {
+export interface DeliveryRecord extends BaseRecordAudit {
   id: string;
   date: string;
   pickingListNumber: string;
@@ -160,7 +168,7 @@ export interface DeliveryRecord {
   loadedBy?: string;
 }
 
-export interface EnvironmentalLog {
+export interface EnvironmentalLog extends BaseRecordAudit {
   id: string;
   timestamp: string;
   zone: StorageZone;
@@ -172,7 +180,7 @@ export interface EnvironmentalLog {
   recordedBy: string;
 }
 
-export interface ForkliftChecklist {
+export interface ForkliftChecklist extends BaseRecordAudit {
   id: string;
   date: string;
   operator: string;
@@ -203,7 +211,7 @@ export interface RegisteredAccount {
 
 export type RegistryType = 'LOCATION' | 'CATEGORY' | 'CUSTOMER' | 'SUPPLIER' | 'BARCODE_PRESET';
 
-export interface MasterRegistryItem {
+export interface MasterRegistryItem extends BaseRecordAudit {
   id: string;
   type: RegistryType;
   code: string;

@@ -49,6 +49,7 @@ import { ReceivingRecord, ReturnRecord, MaterialStockItem, getCustomerForPart, U
 import { FIFO_COLORS_BY_MONTH } from '../data';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import { motion, AnimatePresence } from 'motion/react';
+import { generateAuthoritativeId } from '../lib/idGenerator';
 
 interface ReceivingModuleProps {
   receiving: ReceivingRecord[];
@@ -556,7 +557,7 @@ export default function ReceivingModule({
       !sopMaterialCondition || 
       !sopSystemRecording;
 
-    const generatedRrId = rrNumber.trim() || `RR-${Date.now().toString().slice(-4)}`;
+    const generatedRrId = rrNumber.trim() || generateAuthoritativeId('RR');
 
     const newRecord: ReceivingRecord = {
       id: generatedRrId,
@@ -574,7 +575,7 @@ export default function ReceivingModule({
       color: isRawCategory ? color.trim() || undefined : undefined,
       quantity,
       unit,
-      lotNumber: lotNumber || `LOT-${Date.now().toString().slice(-4)}`,
+      lotNumber: lotNumber || generateAuthoritativeId('LOT'),
       physicalCondition: {
         receivingInspection: sopReceivingInspection,
         materialTraceability: sopMaterialTraceability,
@@ -651,7 +652,7 @@ export default function ReceivingModule({
     }
 
     const newReturn: ReturnRecord = {
-      id: `RET-${Date.now().toString().slice(-4)}`,
+      id: generateAuthoritativeId('RET'),
       date: new Date().toISOString().split('T')[0],
       category: retCategory,
       materialDescription: retDesc,

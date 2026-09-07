@@ -1071,10 +1071,30 @@ async function startServer() {
           }
         }
         
-        // Merge incoming records
+        // Merge incoming records with version and timestamp conflict protection
+        const serverTime = new Date().toISOString();
         for (const item of data) {
           if (item && item.id && !deletedRecordTombstones.has(item.id)) {
-            recordMap.set(item.id, item);
+            const existing = recordMap.get(item.id);
+            if (existing) {
+              const existingTs = existing.updated_at ? new Date(existing.updated_at).getTime() : 0;
+              const incomingTs = item.updated_at ? new Date(item.updated_at).getTime() : 0;
+              if (incomingTs >= existingTs) {
+                recordMap.set(item.id, {
+                  ...existing,
+                  ...item,
+                  version: (Number(existing.version) || 1) + 1,
+                  updated_at: serverTime
+                });
+              }
+            } else {
+              recordMap.set(item.id, {
+                ...item,
+                version: 1,
+                created_at: item.created_at || serverTime,
+                updated_at: serverTime
+              });
+            }
           }
         }
         
@@ -1750,12 +1770,20 @@ async function startServer() {
   // Explicit endpoint to permanently delete a collection record across server, disk, and Supabase
   app.post("/api/records/delete", async (req, res) => {
     try {
-      const { collection, id } = req.body;
-      if (!collection || !id) return res.status(400).json({ error: "Collection and ID required" });
+      const { collection, id, author, employeeId } = req.body;
+      const userPermission = (req.body.permission || req.headers['x-user-permission'] || '').toString().toUpperCase();
       
+      if (!collection || !id) return res.status(400).json({ error: "Collection and ID required" });
+
+      // Permission check: VIEW_ONLY accounts are strictly forbidden from deleting
+      if (userPermission === 'VIEW_ONLY') {
+        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges. Record deletion is strictly prohibited." });
+      }
+
       if (collection in state) {
         markRecordTombstone(id);
         (state as any)[collection] = ((state as any)[collection] || []).filter((item: any) => item.id !== id);
+        stateRevision++;
         saveStateToDisk();
 
         if (supabaseServer) {
@@ -1778,10 +1806,13 @@ async function startServer() {
           }
         }
 
+        const serverTime = new Date().toISOString();
         broadcast({
           type: "record_deleted",
           collection,
-          id
+          id,
+          author: author || employeeId || "Operator",
+          timestamp: serverTime
         });
         broadcast({
           type: "collection_updated",
@@ -1797,29 +1828,78 @@ async function startServer() {
     }
   });
 
-  // Explicit endpoint to upsert single or batch records with real-time multi-client broadcast
+  // Explicit endpoint to upsert single or batch records with real-time multi-client broadcast, server-authoritative timestamps, and concurrency checking
   app.post("/api/records/upsert", async (req, res) => {
     try {
-      const { collection, record, author, actionDesc } = req.body;
+      const { collection, record, author, employeeId, actionDesc, expectedVersion } = req.body;
+      const userPermission = (req.body.permission || req.headers['x-user-permission'] || '').toString().toUpperCase();
+
       if (!collection || !record || !record.id) {
         return res.status(400).json({ error: "Collection and record with valid ID required" });
       }
 
+      // Permission check: VIEW_ONLY accounts are strictly forbidden from creating or updating
+      if (userPermission === 'VIEW_ONLY') {
+        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges. Create and update operations are strictly prohibited." });
+      }
+
       if (collection in state) {
+        const serverTime = new Date().toISOString();
+        const currentArr: any[] = (state as any)[collection] || [];
+        const existingIndex = currentArr.findIndex((item: any) => item && item.id === record.id);
+        const existingRecord = existingIndex >= 0 ? currentArr[existingIndex] : null;
+
+        let confirmedRecord: any;
+        if (existingRecord) {
+          // Optimistic concurrency check: if client sent expectedVersion and server has advanced
+          if (expectedVersion !== undefined && existingRecord.version && existingRecord.version > expectedVersion) {
+            if (record.updated_at && existingRecord.updated_at && new Date(record.updated_at).getTime() < new Date(existingRecord.updated_at).getTime()) {
+              return res.status(409).json({
+                error: "STALE_DATA_DETECTED: A newer revision already exists in the centralized database.",
+                currentRecord: existingRecord
+              });
+            }
+          }
+
+          const nextVersion = (Number(existingRecord.version) || 1) + 1;
+          confirmedRecord = {
+            ...existingRecord,
+            ...record,
+            id: record.id,
+            created_at: existingRecord.created_at || existingRecord.date || record.created_at || serverTime,
+            created_by: existingRecord.created_by || existingRecord.author || record.created_by || author || 'Operator',
+            updated_at: serverTime,
+            updated_by: author || employeeId || 'Operator',
+            version: nextVersion
+          };
+          currentArr[existingIndex] = confirmedRecord;
+        } else {
+          confirmedRecord = {
+            ...record,
+            id: record.id,
+            created_at: record.created_at || serverTime,
+            created_by: record.created_by || author || employeeId || 'Operator',
+            updated_at: serverTime,
+            updated_by: author || employeeId || 'Operator',
+            version: 1
+          };
+          currentArr.unshift(confirmedRecord);
+        }
+
         deletedRecordTombstones.delete(record.id);
-        const arr = ((state as any)[collection] || []).filter((item: any) => item.id !== record.id);
-        arr.unshift(record);
-        (state as any)[collection] = arr;
+        (state as any)[collection] = currentArr;
+        stateRevision++;
         saveStateToDisk();
-        persistToSupabase(collection, [record]);
+        persistToSupabase(collection, [confirmedRecord]);
 
         broadcast({
           type: "record_upserted",
           collection,
-          record,
-          author: author || "Operator",
-          actionDesc: actionDesc || `Updated ${collection} record`,
-          timestamp: new Date().toISOString()
+          record: confirmedRecord,
+          author: author || employeeId || "Operator",
+          actionDesc: actionDesc || `Updated ${collection} record ${confirmedRecord.id}`,
+          timestamp: serverTime,
+          version: confirmedRecord.version
         });
 
         broadcast({
@@ -1828,7 +1908,14 @@ async function startServer() {
           data: (state as any)[collection]
         });
 
-        return res.json({ success: true, collection, id: record.id, count: (state as any)[collection].length });
+        return res.json({
+          success: true,
+          collection,
+          id: confirmedRecord.id,
+          record: confirmedRecord,
+          version: confirmedRecord.version,
+          count: (state as any)[collection].length
+        });
       }
       return res.status(400).json({ error: "Invalid collection" });
     } catch (err: any) {
@@ -2011,7 +2098,7 @@ async function startServer() {
     res.json(list);
   });
 
-  // Batch sync endpoint for offline mutation queue synchronization
+  // Batch sync endpoint for offline mutation queue synchronization with server-authoritative timestamps & concurrency checks
   app.post("/api/sync/batch", async (req, res) => {
     try {
       const { mutations } = req.body;
@@ -2020,23 +2107,68 @@ async function startServer() {
       }
 
       let processedCount = 0;
+      const confirmedRecords: any[] = [];
+      const serverTime = new Date().toISOString();
+
       for (const m of mutations) {
         if (!m || !m.collection || !(m.collection in state)) continue;
+
+        // Skip if account only has VIEW_ONLY privileges
+        if (m.permission && String(m.permission).toUpperCase() === 'VIEW_ONLY') {
+          continue;
+        }
         
         if (m.type === 'upsert' && m.record && m.record.id) {
-          deletedRecordTombstones.delete(m.record.id);
-          const arr = ((state as any)[m.collection] || []).filter((item: any) => item.id !== m.record.id);
-          arr.unshift(m.record);
-          (state as any)[m.collection] = arr;
+          // If already deleted in tombstones, do not resurrect
+          if (deletedRecordTombstones.has(m.record.id)) {
+            continue;
+          }
+
+          const currentArr = ((state as any)[m.collection] || []) as any[];
+          const existingIndex = currentArr.findIndex((item: any) => item && item.id === m.record.id);
+          const existingRecord = existingIndex >= 0 ? currentArr[existingIndex] : null;
+
+          // Prevent stale offline data from overwriting newer server data
+          if (existingRecord && existingRecord.updated_at && m.record.updated_at) {
+            const serverMillis = new Date(existingRecord.updated_at).getTime();
+            const clientMillis = new Date(m.record.updated_at).getTime();
+            if (serverMillis > clientMillis) {
+              // Server record is newer; preserve authoritative server record
+              confirmedRecords.push({ collection: m.collection, record: existingRecord });
+              continue;
+            }
+          }
+
+          const nextVersion = existingRecord ? (Number(existingRecord.version) || 1) + 1 : 1;
+          const confirmed: any = {
+            ...(existingRecord || {}),
+            ...m.record,
+            id: m.record.id,
+            created_at: (existingRecord && existingRecord.created_at) || m.record.created_at || serverTime,
+            created_by: (existingRecord && existingRecord.created_by) || m.record.created_by || m.author || 'Operator',
+            updated_at: serverTime,
+            updated_by: m.author || m.employeeId || 'Operator',
+            version: nextVersion
+          };
+
+          if (existingIndex >= 0) {
+            currentArr[existingIndex] = confirmed;
+          } else {
+            currentArr.unshift(confirmed);
+          }
+
+          (state as any)[m.collection] = currentArr;
           processedCount++;
+          confirmedRecords.push({ collection: m.collection, record: confirmed });
 
           broadcast({
             type: "record_upserted",
             collection: m.collection,
-            record: m.record,
+            record: confirmed,
             author: m.author || "Operator",
-            actionDesc: m.actionDesc || `Synced ${m.collection} record`,
-            timestamp: new Date().toISOString()
+            actionDesc: m.actionDesc || `Batch-synced ${m.collection} record`,
+            timestamp: serverTime,
+            version: confirmed.version
           });
         } else if (m.type === 'delete' && (m.recordId || m.id)) {
           const delId = m.recordId || m.id;
@@ -2044,15 +2176,36 @@ async function startServer() {
           (state as any)[m.collection] = ((state as any)[m.collection] || []).filter((item: any) => item.id !== delId);
           processedCount++;
 
+          if (supabaseServer) {
+            const tableMap: Record<string, string> = {
+              stocks: 'stocks',
+              receiving: 'receiving',
+              returns: 'returns',
+              recycling: 'recycling',
+              issuances: 'issuances',
+              deliveries: 'deliveries',
+              envLogs: 'env_logs',
+              forkliftChecks: 'forklift_checks',
+              registries: 'registries'
+            };
+            const table = tableMap[m.collection] || m.collection;
+            try {
+              supabaseServer.from(table).delete().eq('id', delId).then();
+            } catch (e) {}
+          }
+
           broadcast({
             type: "record_deleted",
             collection: m.collection,
-            id: delId
+            id: delId,
+            author: m.author || "Operator",
+            timestamp: serverTime
           });
         }
       }
 
       if (processedCount > 0) {
+        stateRevision++;
         saveStateToDisk();
         for (const col of Object.keys(state)) {
           if (Array.isArray((state as any)[col])) {
@@ -2061,7 +2214,7 @@ async function startServer() {
         }
       }
 
-      return res.json({ success: true, processedCount, state });
+      return res.json({ success: true, processedCount, confirmedRecords, stateRevision });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
@@ -2597,22 +2750,106 @@ async function startServer() {
           }
 
           case "upsert_record": {
-            const { collection, record, author, actionDesc } = payload;
+            const { collection, record, author, employeeId, permission, actionDesc } = payload;
+            if (permission && String(permission).toUpperCase() === 'VIEW_ONLY') {
+              console.warn(`[WS] Denied upsert from VIEW_ONLY user ${employeeId || author}`);
+              break;
+            }
             if (collection && collection in state && record && record.id) {
+              const serverTime = new Date().toISOString();
+              const currentArr: any[] = (state as any)[collection] || [];
+              const existingIndex = currentArr.findIndex((item: any) => item && item.id === record.id);
+              const existingRecord = existingIndex >= 0 ? currentArr[existingIndex] : null;
+
+              let confirmedRecord: any;
+              if (existingRecord) {
+                const nextVersion = (Number(existingRecord.version) || 1) + 1;
+                confirmedRecord = {
+                  ...existingRecord,
+                  ...record,
+                  id: record.id,
+                  created_at: existingRecord.created_at || existingRecord.date || record.created_at || serverTime,
+                  created_by: existingRecord.created_by || existingRecord.author || record.created_by || author || 'Operator',
+                  updated_at: serverTime,
+                  updated_by: author || employeeId || 'Operator',
+                  version: nextVersion
+                };
+                currentArr[existingIndex] = confirmedRecord;
+              } else {
+                confirmedRecord = {
+                  ...record,
+                  id: record.id,
+                  created_at: record.created_at || serverTime,
+                  created_by: record.created_by || author || employeeId || 'Operator',
+                  updated_at: serverTime,
+                  updated_by: author || employeeId || 'Operator',
+                  version: 1
+                };
+                currentArr.unshift(confirmedRecord);
+              }
+
               deletedRecordTombstones.delete(record.id);
-              const arr = ((state as any)[collection] || []).filter((item: any) => item.id !== record.id);
-              arr.unshift(record);
-              (state as any)[collection] = arr;
+              (state as any)[collection] = currentArr;
+              stateRevision++;
               saveStateToDisk();
-              persistToSupabase(collection, [record]);
+              persistToSupabase(collection, [confirmedRecord]);
 
               broadcast({
                 type: "record_upserted",
                 collection,
-                record,
-                author: author || "Operator",
+                record: confirmedRecord,
+                author: author || employeeId || "Operator",
                 actionDesc: actionDesc || `Updated ${collection} record`,
-                timestamp: new Date().toISOString()
+                timestamp: serverTime,
+                version: confirmedRecord.version
+              });
+
+              broadcast({
+                type: "collection_updated",
+                collection,
+                data: (state as any)[collection]
+              });
+            }
+            break;
+          }
+
+          case "delete_record": {
+            const { collection, id, author, employeeId, permission } = payload;
+            if (permission && String(permission).toUpperCase() === 'VIEW_ONLY') {
+              console.warn(`[WS] Denied delete from VIEW_ONLY user ${employeeId || author}`);
+              break;
+            }
+            if (collection && collection in state && id) {
+              markRecordTombstone(id);
+              (state as any)[collection] = ((state as any)[collection] || []).filter((item: any) => item.id !== id);
+              stateRevision++;
+              saveStateToDisk();
+
+              if (supabaseServer) {
+                const tableMap: Record<string, string> = {
+                  stocks: 'stocks',
+                  receiving: 'receiving',
+                  returns: 'returns',
+                  recycling: 'recycling',
+                  issuances: 'issuances',
+                  deliveries: 'deliveries',
+                  envLogs: 'env_logs',
+                  forkliftChecks: 'forklift_checks',
+                  registries: 'registries'
+                };
+                const table = tableMap[collection] || collection;
+                try {
+                  supabaseServer.from(table).delete().eq('id', id).then();
+                } catch (e) {}
+              }
+
+              const serverTime = new Date().toISOString();
+              broadcast({
+                type: "record_deleted",
+                collection,
+                id,
+                author: author || employeeId || "Operator",
+                timestamp: serverTime
               });
 
               broadcast({
@@ -2636,7 +2873,10 @@ async function startServer() {
           }
 
           case "update_collection": {
-            const { collection, data } = payload;
+            const { collection, data, permission } = payload;
+            if (permission && String(permission).toUpperCase() === 'VIEW_ONLY') {
+              break;
+            }
             if (collection === "registeredUsers" && Array.isArray(data)) {
               const userMap = new Map<string, any>();
               userMap.set("JPMP-002", { ...defaultSuperAdmin });
@@ -2663,9 +2903,43 @@ async function startServer() {
                 data: state.registeredUsers
               });
             } else if (collection && collection in state && Array.isArray(data)) {
-              // Filter out any tombstoned IDs
-              (state as any)[collection] = data
-                .filter((item: any) => item && item.id && !deletedRecordTombstones.has(item.id));
+              // Server-authoritative record merge by ID: NEVER destroy server records!
+              const currentArr: any[] = (state as any)[collection] || [];
+              const recordMap = new Map<string, any>();
+              for (const existing of currentArr) {
+                if (existing && existing.id && !deletedRecordTombstones.has(existing.id)) {
+                  recordMap.set(existing.id, existing);
+                }
+              }
+
+              const serverTime = new Date().toISOString();
+              for (const incoming of data) {
+                if (!incoming || !incoming.id || deletedRecordTombstones.has(incoming.id)) continue;
+                const existing = recordMap.get(incoming.id);
+                if (existing) {
+                  // Only update if incoming has newer updated_at or higher version
+                  const existingTs = existing.updated_at ? new Date(existing.updated_at).getTime() : 0;
+                  const incomingTs = incoming.updated_at ? new Date(incoming.updated_at).getTime() : 0;
+                  if (incomingTs >= existingTs) {
+                    recordMap.set(incoming.id, {
+                      ...existing,
+                      ...incoming,
+                      version: (Number(existing.version) || 1) + 1,
+                      updated_at: serverTime
+                    });
+                  }
+                } else {
+                  recordMap.set(incoming.id, {
+                    ...incoming,
+                    version: 1,
+                    created_at: incoming.created_at || serverTime,
+                    updated_at: serverTime
+                  });
+                }
+              }
+
+              (state as any)[collection] = Array.from(recordMap.values());
+              stateRevision++;
               saveStateToDisk();
               persistToSupabase(collection, (state as any)[collection]);
               

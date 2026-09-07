@@ -49,6 +49,7 @@ import {
 import { MaterialStockItem, MaterialType, getCustomerForPart, UOM_OPTIONS, ReceivingRecord, IssuanceRecord, ReturnRecord } from '../types';
 import { FIFO_COLORS_BY_MONTH } from '../data';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
+import { generateAuthoritativeId } from '../lib/idGenerator';
 
 interface StockFIFOControlProps {
   stocks: MaterialStockItem[];
@@ -138,7 +139,7 @@ export default function StockFIFOControl({
     const fifoColor = FIFO_COLORS_BY_MONTH[currentMonth]?.name || 'Silver';
 
     const newItem: MaterialStockItem = {
-      id: `STK-${Date.now().toString().slice(-3)}`,
+      id: generateAuthoritativeId('STK'),
       partCode: newPartCode,
       description: newDesc,
       type: newType,

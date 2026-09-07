@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { EnvironmentalLog, StorageZone, MasterRegistryItem } from '../types';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
+import { generateAuthoritativeId } from '../lib/idGenerator';
 
 interface EnvironmentalModuleProps {
   envLogs: EnvironmentalLog[];
@@ -144,7 +145,7 @@ export default function EnvironmentalModule({
       });
     } else {
       const newItem: MasterRegistryItem = {
-        id: `REG-LOC-${Date.now().toString().slice(-4)}`,
+        id: generateAuthoritativeId('REG-LOC'),
         type: 'LOCATION',
         code: locCode.trim().toUpperCase(),
         name: locName.trim(),
@@ -178,7 +179,7 @@ export default function EnvironmentalModule({
     }
 
     const newLog: EnvironmentalLog = {
-      id: `SPC-${Date.now().toString().slice(-4)}`,
+      id: generateAuthoritativeId('SPC'),
       timestamp: new Date().toISOString(),
       zone,
       occupiedSlots,

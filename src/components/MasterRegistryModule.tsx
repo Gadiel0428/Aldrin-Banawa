@@ -31,6 +31,7 @@ import {
 import { MasterRegistryItem, RegistryType, PresetSourceType } from '../types';
 import { ConfirmActionConfig } from './ConfirmModal';
 import { motion, AnimatePresence } from 'motion/react';
+import { generateAuthoritativeId } from '../lib/idGenerator';
 
 export const DEFAULT_MASTER_REGISTRIES: MasterRegistryItem[] = [];
 
@@ -143,9 +144,9 @@ export default function MasterRegistryModule({
     } else {
       const typePrefix = formType === 'BARCODE_PRESET' ? 'BCP' : formType.slice(0,3);
       const newItem: MasterRegistryItem = {
-        id: `REG-${typePrefix}-${Date.now().toString().slice(-4)}`,
+        id: generateAuthoritativeId(`REG-${typePrefix}`),
         type: formType,
-        code: formCode.trim() ? formCode.trim().toUpperCase() : `REG-${Date.now().toString().slice(-3)}`,
+        code: formCode.trim() ? formCode.trim().toUpperCase() : generateAuthoritativeId(`REG-${typePrefix}`),
         name: formName.trim(),
         description: formDesc.trim() || undefined,
         status: formStatus,

@@ -106,6 +106,7 @@ import {
   ActivePresenceUser,
   QueuedMutation
 } from './types';
+import { generateAuthoritativeId } from './lib/idGenerator';
 
 import { 
   INITIAL_STOCK, 
@@ -1465,16 +1466,28 @@ export default function App() {
     // Build merged map starting with authoritative incoming items
     const mergedMap = new Map<string, any>();
 
-    // 1. Process all incoming records
+    // 1. Process all incoming records with server-authoritative version and timestamp precedence
     for (const remoteItem of filteredIncoming) {
       const localItem = safeCurrent.find(it => it && it.id === remoteItem.id);
       if (localItem) {
-        // If modified locally on this workstation within the last 30 seconds, keep local version
-        const lastLocalMut = recentlyMutatedRecords.current.get(localItem.id) || 0;
-        if (now - lastLocalMut < 30000) {
-          mergedMap.set(remoteItem.id, localItem);
-        } else {
+        const remoteVer = Number(remoteItem.version) || 0;
+        const localVer = Number(localItem.version) || 0;
+        const remoteTs = remoteItem.updated_at ? new Date(remoteItem.updated_at).getTime() : 0;
+        const localTs = localItem.updated_at ? new Date(localItem.updated_at).getTime() : 0;
+
+        // Server authoritative record wins if higher version or newer updated_at
+        if (remoteVer > localVer || remoteTs > localTs) {
+          mergedMap.set(remoteItem.id, remoteItem);
+        } else if (remoteVer === localVer && remoteTs === localTs) {
           mergedMap.set(remoteItem.id, { ...localItem, ...remoteItem });
+        } else {
+          // If locally mutated very recently, preserve local until server confirms
+          const lastLocalMut = recentlyMutatedRecords.current.get(localItem.id) || 0;
+          if (now - lastLocalMut < 10000 && localTs > remoteTs) {
+            mergedMap.set(remoteItem.id, localItem);
+          } else {
+            mergedMap.set(remoteItem.id, remoteItem);
+          }
         }
       } else {
         mergedMap.set(remoteItem.id, remoteItem);
@@ -3621,7 +3634,7 @@ export default function App() {
     syncCollection('receiving', nextReceiving);
 
     const newStockItem: MaterialStockItem = {
-      id: `STK-${Date.now().toString().slice(-4)}`,
+      id: generateAuthoritativeId('STK'),
       partCode: record.partCode,
       description: record.itemDescription,
       modelName: record.modelName,
@@ -3664,13 +3677,17 @@ export default function App() {
           remainingToDeduct -= deductAmount;
 
           // Update the stock item's quantity in nextStocks
-          nextStocks = nextStocks.map(s => s.id === stockItem.id ? { ...s, quantity: s.quantity - deductAmount } : s);
+          const updatedStock = { ...stockItem, quantity: stockItem.quantity - deductAmount };
+          nextStocks = nextStocks.map(s => s.id === stockItem.id ? updatedStock : s);
+          upsertRecordLocallyAndRemotely('stocks', updatedStock, `Auto-deducted ${deductAmount} from ${stockItem.partCode}`);
         });
       });
     }
 
     setStocks(nextStocks);
     syncCollection('stocks', nextStocks);
+    upsertRecordLocallyAndRemotely('receiving', record, `Received ${record.quantity} of ${record.partCode}`);
+    upsertRecordLocallyAndRemotely('stocks', newStockItem, `Created stock item for ${record.partCode}`);
 
     if (isInternal && record.bom && record.bom.length > 0 && record.autoDeductBom) {
       const deductedSummary = record.bom.map(b => `${b.quantityRequired} ${(b.unit || 'PCS').toUpperCase()} of ${b.partCode}`).join(', ');
@@ -3685,19 +3702,25 @@ export default function App() {
       alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
       return;
     }
+    const updatedReceivingRecord = receiving.find(r => r.id === id);
     const nextReceiving: ReceivingRecord[] = receiving.map(r => r.id === id ? { ...r, iqcStatus, status: (iqcStatus === 'APPROVED_IQC' ? 'VERIFIED' : 'QUARANTINED') as ReceivingRecord['status'] } : r);
     setReceiving(nextReceiving);
     syncCollection('receiving', nextReceiving);
+    if (updatedReceivingRecord) {
+      upsertRecordLocallyAndRemotely('receiving', { ...updatedReceivingRecord, iqcStatus, status: (iqcStatus === 'APPROVED_IQC' ? 'VERIFIED' : 'QUARANTINED') as ReceivingRecord['status'] }, `Updated IQC status to ${iqcStatus}`);
+    }
 
     const targetRec = receiving.find(r => r.id === id);
     if (targetRec) {
       const nextStocks: MaterialStockItem[] = stocks.map(s => {
         if (s.lotNumber === targetRec.lotNumber && s.partCode === targetRec.partCode) {
-          return {
+          const updatedStock = {
             ...s,
             status: (iqcStatus === 'APPROVED_IQC' ? 'APPROVED' : 'QUARANTINE') as MaterialStockItem['status'],
             location: iqcStatus === 'APPROVED_IQC' ? 'Designated Storage Bin' : 'Quarantine Area'
           };
+          upsertRecordLocallyAndRemotely('stocks', updatedStock, `Updated stock status for ${targetRec.partCode}`);
+          return updatedStock;
         }
         return s;
       });
@@ -3717,6 +3740,7 @@ export default function App() {
     const nextReturns = [record, ...returns];
     setReturns(nextReturns);
     syncCollection('returns', nextReturns);
+    upsertRecordLocallyAndRemotely('returns', record, `Returned ${record.quantity} of ${record.partCode}`);
     
     const catUpper = (record.category || '').toUpperCase();
     let derivedStockType: MaterialType = 'RAW';
@@ -3727,7 +3751,7 @@ export default function App() {
     else if ((record.partCode || '').startsWith('RM')) derivedStockType = 'RAW';
 
     const newStockItem: MaterialStockItem = {
-      id: `STK-${Date.now().toString().slice(-4)}`,
+      id: generateAuthoritativeId('STK'),
       partCode: record.partCode,
       description: record.materialDescription,
       type: derivedStockType,
@@ -3742,6 +3766,7 @@ export default function App() {
     const nextStocks = [newStockItem, ...stocks];
     setStocks(nextStocks);
     syncCollection('stocks', nextStocks);
+    upsertRecordLocallyAndRemotely('stocks', newStockItem, `Created stock item from return for ${record.partCode}`);
 
     sendSystemActivity(`${currentUser} registered shop-floor return for ${record.partCode} (Lot: ${record.lotNumber}).`);
   };
@@ -3779,6 +3804,7 @@ export default function App() {
     const nextRecycling = [record, ...recycling];
     setRecycling(nextRecycling);
     syncCollection('recycling', nextRecycling);
+    upsertRecordLocallyAndRemotely('recycling', record, `Recycled ${record.quantity} ${record.itemType}(s)`);
 
     sendSystemActivity(`${currentUser} recorded recycling of ${record.quantity} ${record.itemType}(s) under Log Sheet: ${record.logSheetNumber}.`);
   };
@@ -3802,6 +3828,7 @@ export default function App() {
     const nextIssuances = [record, ...issuances];
     setIssuances(nextIssuances);
     syncCollection('issuances', nextIssuances);
+    upsertRecordLocallyAndRemotely('issuances', record, `Issued ${record.quantityIssued} units for Requisition: ${record.requisitionNumber}`);
 
     sendSystemActivity(`${currentUser} logged materials issuance of ${record.quantityIssued} units for Requisition: ${record.requisitionNumber}.`);
   };
@@ -3815,14 +3842,16 @@ export default function App() {
     if (stockIdx === -1 || stocks[stockIdx].quantity < quantity) {
       return false;
     }
+    const updatedItem = { ...stocks[stockIdx], quantity: stocks[stockIdx].quantity - quantity };
     const nextStocks = stocks.map((s, idx) => {
       if (idx === stockIdx) {
-        return { ...s, quantity: s.quantity - quantity };
+        return updatedItem;
       }
       return s;
     });
     setStocks(nextStocks);
     syncCollection('stocks', nextStocks);
+    upsertRecordLocallyAndRemotely('stocks', updatedItem, `Deducted ${quantity} from stock ${partCode} (Lot: ${lotNumber})`);
 
     // Record atomic ledger stock movement with idempotency and database RPC
     createStockMovement({
@@ -3847,6 +3876,7 @@ export default function App() {
     const nextDeliveries = [record, ...deliveries];
     setDeliveries(nextDeliveries);
     syncCollection('deliveries', nextDeliveries);
+    upsertRecordLocallyAndRemotely('deliveries', record, `Created delivery request ${record.id}`);
 
     sendSystemActivity(`${currentUser} created Delivery request ${record.id} for model ${record.modelName} (Qty: ${record.quantity}).`);
   };
@@ -3856,25 +3886,32 @@ export default function App() {
       alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
       return;
     }
+    let updatedRecord: DeliveryRecord | null = null;
     const nextDeliveries = deliveries.map(d => {
       if (d.id === id) {
-        return { 
+        updatedRecord = { 
           ...d, 
           status, 
           ...extDoc 
         };
+        return updatedRecord;
       }
       return d;
     });
     setDeliveries(nextDeliveries);
     syncCollection('deliveries', nextDeliveries);
+    if (updatedRecord) {
+      upsertRecordLocallyAndRemotely('deliveries', updatedRecord, `Updated delivery status to ${status}`);
+    }
 
     if (status === 'RELEASED') {
       const targetDel = deliveries.find(d => d.id === id);
       if (targetDel) {
         const nextStocks = stocks.map(s => {
           if (s.partCode === targetDel.partCode && s.status === 'APPROVED' && s.quantity >= targetDel.quantity) {
-            return { ...s, quantity: s.quantity - targetDel.quantity };
+            const updatedStock = { ...s, quantity: s.quantity - targetDel.quantity };
+            upsertRecordLocallyAndRemotely('stocks', updatedStock, `Released delivery quantity ${targetDel.quantity}`);
+            return updatedStock;
           }
           return s;
         });
@@ -3896,6 +3933,7 @@ export default function App() {
     const nextEnvLogs = [...envLogs, log];
     setEnvLogs(nextEnvLogs);
     syncCollection('envLogs', nextEnvLogs);
+    upsertRecordLocallyAndRemotely('envLogs', log, `Logged space utilization for ${log.zone}`);
 
     const pct = ((log.occupiedSlots / log.totalSlots) * 100).toFixed(1);
     sendSystemActivity(`${currentUser} logged space utilization audit for ${log.zone}: ${log.occupiedSlots}/${log.totalSlots} slots occupied (${pct}%).`);
@@ -3953,6 +3991,7 @@ export default function App() {
     const next = [item, ...stocks];
     setStocks(next);
     syncCollection('stocks', next);
+    upsertRecordLocallyAndRemotely('stocks', item, `Added stock batch ${item.partCode}`);
     sendSystemActivity(`${currentUser} added stock batch ${item.partCode} (${item.quantity} ${item.unit}).`);
   };
 
@@ -3961,9 +4000,19 @@ export default function App() {
       alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
       return;
     }
-    const next = stocks.map(s => s.id === id ? { ...s, quantity: qty } : s);
+    let updatedItem: MaterialStockItem | null = null;
+    const next = stocks.map(s => {
+      if (s.id === id) {
+        updatedItem = { ...s, quantity: qty };
+        return updatedItem;
+      }
+      return s;
+    });
     setStocks(next);
     syncCollection('stocks', next);
+    if (updatedItem) {
+      upsertRecordLocallyAndRemotely('stocks', updatedItem, `Updated stock ${id} quantity to ${qty}`);
+    }
     sendSystemActivity(`${currentUser} updated stock ${id} quantity to ${qty}.`);
   };
 
@@ -3972,9 +4021,19 @@ export default function App() {
       alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
       return;
     }
-    const next = stocks.map(s => s.id === id ? { ...s, status } : s);
+    let updatedItem: MaterialStockItem | null = null;
+    const next = stocks.map(s => {
+      if (s.id === id) {
+        updatedItem = { ...s, status };
+        return updatedItem;
+      }
+      return s;
+    });
     setStocks(next);
     syncCollection('stocks', next);
+    if (updatedItem) {
+      upsertRecordLocallyAndRemotely('stocks', updatedItem, `Updated stock ${id} status to ${status}`);
+    }
     sendSystemActivity(`${currentUser} updated stock ${id} status to ${status}.`);
   };
 
@@ -3986,6 +4045,7 @@ export default function App() {
     const next = stocks.map(s => s.id === item.id ? item : s);
     setStocks(next);
     syncCollection('stocks', next);
+    upsertRecordLocallyAndRemotely('stocks', item, `Updated stock record ${item.id}`);
     const actorRole = currentPermission === 'FULL_ACCESS' ? 'SUPER ADMIN' : 'OPERATOR';
     sendSystemActivity(`${actorRole} ${currentUser} updated stock record ${item.id} (${item.partCode}).`);
   };
@@ -4010,6 +4070,7 @@ export default function App() {
     const next = receiving.map(r => r.id === record.id ? record : r);
     setReceiving(next);
     syncCollection('receiving', next);
+    upsertRecordLocallyAndRemotely('receiving', record, `Updated receiving record ${record.id}`);
     const actorRole = currentPermission === 'FULL_ACCESS' ? 'SUPER ADMIN' : 'OPERATOR';
     sendSystemActivity(`${actorRole} ${currentUser} updated receiving record ${record.id} (${record.partCode}).`);
   };
@@ -4034,6 +4095,7 @@ export default function App() {
     const next = returns.map(r => r.id === record.id ? record : r);
     setReturns(next);
     syncCollection('returns', next);
+    upsertRecordLocallyAndRemotely('returns', record, `Updated return record ${record.id}`);
     const actorRole = currentPermission === 'FULL_ACCESS' ? 'SUPER ADMIN' : 'OPERATOR';
     sendSystemActivity(`${actorRole} ${currentUser} updated return record ${record.id} (${record.partCode}).`);
   };
@@ -4058,6 +4120,7 @@ export default function App() {
     const next = issuances.map(i => i.id === record.id ? record : i);
     setIssuances(next);
     syncCollection('issuances', next);
+    upsertRecordLocallyAndRemotely('issuances', record, `Updated issuance record ${record.id}`);
     const actorRole = currentPermission === 'FULL_ACCESS' ? 'SUPER ADMIN' : 'OPERATOR';
     sendSystemActivity(`${actorRole} ${currentUser} updated issuance record ${record.id} (${record.partCode}).`);
   };
@@ -4082,6 +4145,7 @@ export default function App() {
     const next = deliveries.map(d => d.id === record.id ? record : d);
     setDeliveries(next);
     syncCollection('deliveries', next);
+    upsertRecordLocallyAndRemotely('deliveries', record, `Updated delivery record ${record.id}`);
     const actorRole = currentPermission === 'FULL_ACCESS' ? 'SUPER ADMIN' : 'OPERATOR';
     sendSystemActivity(`${actorRole} ${currentUser} updated delivery record ${record.id} (${record.gatePassNumber}).`);
   };
@@ -4137,12 +4201,14 @@ export default function App() {
     const next = [item, ...registries];
     setRegistries(next);
     syncCollection('registries', next);
+    upsertRecordLocallyAndRemotely('registries', item, `Registered master item ${item.name} (${item.code})`);
   };
 
   const handleUpdateMasterItem = (item: MasterRegistryItem) => {
     const next = registries.map(r => r.id === item.id ? item : r);
     setRegistries(next);
     syncCollection('registries', next);
+    upsertRecordLocallyAndRemotely('registries', item, `Updated master item ${item.name} (${item.code})`);
   };
 
   const handleDeleteMasterItem = (id: string) => {

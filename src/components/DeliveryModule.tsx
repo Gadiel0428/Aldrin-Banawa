@@ -35,6 +35,7 @@ import { DeliveryRecord, ForkliftChecklist, MaterialStockItem, MasterRegistryIte
 import PrintablePickingListModal, { DocViewMode } from './PrintablePickingListModal';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { motion, AnimatePresence } from 'motion/react';
+import { generateAuthoritativeId } from '../lib/idGenerator';
 
 interface DeliveryModuleProps {
   deliveries: DeliveryRecord[];
@@ -110,7 +111,7 @@ export default function DeliveryModule({
     }
 
     const newDelivery: DeliveryRecord = {
-      id: `DEL-${Date.now().toString().slice(-4)}`,
+      id: generateAuthoritativeId('DEL'),
       date: todayStr,
       pickingListNumber,
       poNumber,
@@ -120,7 +121,7 @@ export default function DeliveryModule({
       packagingConditionOk: true,
       fifoVerified: true,
       forkliftChecklistSigned: isForkliftPrechecked,
-      gatePassNumber: `MGP-2026-${Date.now().toString().slice(-4)}`,
+      gatePassNumber: `MGP-2026-${generateAuthoritativeId('GP')}`,
       status: 'PREPARING',
       preparedBy: 'Aldrin Clerk'
     };
@@ -144,7 +145,7 @@ export default function DeliveryModule({
     }
 
     const newCheck: ForkliftChecklist = {
-      id: `FLK-${Date.now().toString().slice(-3)}`,
+      id: generateAuthoritativeId('FLK'),
       date: todayStr,
       operator,
       forkliftId,

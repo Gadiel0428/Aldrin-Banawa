@@ -24,6 +24,7 @@ import { subscribeToStockMovements } from '../database/realtime';
 import { syncManager } from '../sync/syncManager';
 import { StockMovement, StockMovementType } from '../types/movement';
 import { MaterialStockItem } from '../types';
+import { generateAuthoritativeId } from '../lib/idGenerator';
 
 interface StockMovementProps {
   stocks: MaterialStockItem[];
@@ -94,7 +95,7 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
         warehouseId: 'wh-main',
         type: movementType,
         quantity: Number(quantity),
-        referenceNumber: refNumber || `ADJ-${Date.now().toString().slice(-6)}`,
+        referenceNumber: refNumber || generateAuthoritativeId('ADJ'),
         notes: notes || `Manual ${movementType} recorded by ${currentUser?.name || 'Operator'}`,
         userId: currentUser?.id,
         userName: currentUser?.name || currentUser?.username || 'Operator',

@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { RecyclingRecord } from '../types';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
+import { generateAuthoritativeId } from '../lib/idGenerator';
 
 interface RecyclingModuleProps {
   recycling: RecyclingRecord[];
@@ -50,7 +51,7 @@ export default function RecyclingModule({
     }
 
     const newRecord: RecyclingRecord = {
-      id: `RCY-${Date.now().toString().slice(-4)}`,
+      id: generateAuthoritativeId('RCY'),
       date: new Date().toISOString().split('T')[0],
       itemType,
       quantity,
