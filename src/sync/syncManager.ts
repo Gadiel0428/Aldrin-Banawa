@@ -3,66 +3,47 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { SyncState, SyncStatusInfo } from '../types/sync';
+import { SyncStatusInfo } from '../types/sync';
+import { CreateStockMovementInput, StockMovementResult } from '../types/movement';
+import { createStockMovement } from '../database/movements';
 import { OfflineQueue } from './offlineQueue';
-import { createStockMovement, getDeviceId } from '../database/movements';
-import { ConflictResolver } from './conflictResolver';
 
-type StatusListener = (status: SyncStatusInfo) => void;
+type Listener = (status: SyncStatusInfo) => void;
 
-export class SyncManager {
-  private static instance: SyncManager;
-  private state: SyncState = 'ONLINE';
-  private isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
-  private isSyncing = false;
-  private lastSyncTimestamp: number | null = Date.now();
-  private listeners: Set<StatusListener> = new Set();
-  private timer: any = null;
-  private deviceId: string;
+class SyncManager {
+  private listeners: Set<Listener> = new Set();
+  private status: SyncStatusInfo = {
+    state: typeof navigator !== 'undefined' && navigator.onLine ? 'ONLINE' : 'OFFLINE',
+    isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
+    pendingCount: 0,
+    lastSyncTimestamp: Date.now(),
+    deviceId: typeof window !== 'undefined' ? (localStorage.getItem('juwei_wms_station_id') || 'DEV-STATION') : 'DEV-STATION',
+    activeProvider: 'SERVER_SOCKET',
+  };
 
-  private constructor() {
-    this.deviceId = getDeviceId();
-    this.initNetworkListeners();
-    this.startPeriodicSync();
-  }
-
-  public static getInstance(): SyncManager {
-    if (!this.instance) {
-      this.instance = new SyncManager();
-    }
-    return this.instance;
-  }
-
-  private initNetworkListeners() {
+  constructor() {
     if (typeof window !== 'undefined') {
-      window.addEventListener('online', () => {
-        console.log('🌐 Network online detected by SyncManager');
-        this.isOnline = true;
-        this.state = 'ONLINE';
-        this.notify();
-        this.syncPendingQueue();
-      });
-
-      window.addEventListener('offline', () => {
-        console.log('⚠️ Network offline detected by SyncManager');
-        this.isOnline = false;
-        this.state = 'OFFLINE';
-        this.notify();
-      });
+      window.addEventListener('online', () => this.handleNetworkChange(true));
+      window.addEventListener('offline', () => this.handleNetworkChange(false));
+      this.status.pendingCount = OfflineQueue.getAll().filter((i) => i.status === 'PENDING').length;
     }
   }
 
-  private startPeriodicSync() {
-    // Check every 15 seconds for pending queue items
-    if (this.timer) clearInterval(this.timer);
-    this.timer = setInterval(() => {
-      if (this.isOnline && !this.isSyncing && OfflineQueue.getPendingCount() > 0) {
-        this.syncPendingQueue();
-      }
-    }, 15000);
+  private handleNetworkChange(online: boolean) {
+    this.status.isOnline = online;
+    this.status.state = online ? 'ONLINE' : 'OFFLINE';
+    this.notify();
+    if (online) {
+      this.forceSyncNow().catch(() => {});
+    }
   }
 
-  public subscribe(listener: StatusListener): () => void {
+  public getStatus(): SyncStatusInfo {
+    this.status.pendingCount = OfflineQueue.getAll().filter((i) => i.status === 'PENDING').length;
+    return { ...this.status };
+  }
+
+  public subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
     listener(this.getStatus());
     return () => {
@@ -71,131 +52,79 @@ export class SyncManager {
   }
 
   private notify() {
-    const status = this.getStatus();
-    this.listeners.forEach((fn) => {
+    this.status.pendingCount = OfflineQueue.getAll().filter((i) => i.status === 'PENDING').length;
+    const snap = { ...this.status };
+    this.listeners.forEach((cb) => {
       try {
-        fn(status);
-      } catch (err) {
-        console.error('Error in sync listener:', err);
-      }
+        cb(snap);
+      } catch {}
     });
   }
 
-  public getStatus(): SyncStatusInfo {
-    return {
-      state: this.state,
-      isOnline: this.isOnline,
-      pendingCount: OfflineQueue.getPendingCount(),
-      lastSyncTimestamp: this.lastSyncTimestamp,
-      deviceId: this.deviceId,
-      activeProvider: this.isOnline ? 'SUPABASE' : 'LOCAL_OFFLINE',
-    };
-  }
-
-  /**
-   * Dispatches a transaction. If online, executes atomically. If offline or failed, enqueues to offline queue.
-   */
-  public async executeMovement(input: any): Promise<any> {
-    const idempotencyKey = input.idempotencyKey || `IDEM-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-    const fullInput = {
-      ...input,
-      idempotencyKey,
-      deviceId: this.deviceId,
-    };
-
-    if (!this.isOnline) {
-      console.warn('Device offline: Queuing stock movement locally');
-      const queueItem = OfflineQueue.enqueue('STOCK_MOVEMENT', fullInput, idempotencyKey);
-      this.notify();
-      return {
-        success: true,
-        queuedLocally: true,
-        queueId: queueItem.id,
-        idempotencyKey,
-        delta: input.quantity,
-      };
-    }
-
+  public async forceSyncNow(): Promise<void> {
+    this.status.state = 'SYNCING';
+    this.notify();
     try {
-      this.state = 'SYNCING';
-      this.notify();
-      const result = await createStockMovement(fullInput);
-      this.state = 'ONLINE';
-      this.lastSyncTimestamp = Date.now();
-      this.notify();
-      return result;
-    } catch (err: any) {
-      const conflict = ConflictResolver.handleMovementError(err);
-      if (conflict.reason === 'INSUFFICIENT_STOCK') {
-        this.state = 'ERROR';
-        this.notify();
-        throw new Error(conflict.message);
-      }
-
-      // If transient network or server error, enqueue offline for auto-retry
-      console.warn('Network / Server error during atomic movement. Enqueuing for background retry:', err);
-      const queueItem = OfflineQueue.enqueue('STOCK_MOVEMENT', fullInput, idempotencyKey);
-      this.state = 'OFFLINE';
-      this.notify();
-      return {
-        success: true,
-        queuedLocally: true,
-        queueId: queueItem.id,
-        idempotencyKey,
-        delta: input.quantity,
-        note: 'Saved locally. Will sync when server is reachable.',
-      };
-    }
-  }
-
-  /**
-   * Flushes and processes pending offline items
-   */
-  public async syncPendingQueue(): Promise<void> {
-    if (this.isSyncing) return;
-    const pending = OfflineQueue.getPending();
-    if (pending.length === 0) return;
-
-    this.isSyncing = true;
-    this.state = 'SYNCING';
-    this.notify();
-
-    console.log(`🔄 SyncManager: Flushing ${pending.length} pending offline transactions...`);
-
-    for (const item of pending) {
-      OfflineQueue.updateStatus(item.id, 'SYNCING');
-      try {
+      const items = OfflineQueue.getAll().filter((i) => i.status === 'PENDING');
+      for (const item of items) {
         if (item.type === 'STOCK_MOVEMENT') {
-          await createStockMovement(item.payload as any);
-        }
-        OfflineQueue.updateStatus(item.id, 'COMPLETED');
-        OfflineQueue.remove(item.id);
-      } catch (err: any) {
-        if (err.message && (err.message.includes('STALE_RESET_VERSION') || err.message.includes('hard reset'))) {
-          console.warn('SyncManager: Detected stale reset version. Purging entire offline queue to prevent re-uploading old data.');
-          OfflineQueue.purgeAll();
-          break;
-        }
-        const conflict = ConflictResolver.handleMovementError(err);
-        if (conflict.accepted) {
-          // Idempotent hit, can safely drop
-          OfflineQueue.remove(item.id);
-        } else {
-          console.error(`Failed to sync queued item ${item.id}:`, err);
-          OfflineQueue.updateStatus(item.id, 'FAILED', err.message);
+          try {
+            OfflineQueue.updateStatus(item.id, 'SYNCING');
+            const res = await createStockMovement(item.payload as CreateStockMovementInput);
+            if (res.success) {
+              OfflineQueue.updateStatus(item.id, 'COMPLETED');
+            } else {
+              OfflineQueue.updateStatus(item.id, 'FAILED', res.error);
+            }
+          } catch (e: any) {
+            OfflineQueue.updateStatus(item.id, 'FAILED', e?.message || 'Sync failed');
+          }
         }
       }
+      this.status.state = 'ONLINE';
+      this.status.lastSyncTimestamp = Date.now();
+    } catch {
+      this.status.state = 'ERROR';
+    } finally {
+      this.notify();
     }
-
-    this.isSyncing = false;
-    this.lastSyncTimestamp = Date.now();
-    this.state = this.isOnline ? 'ONLINE' : 'OFFLINE';
-    this.notify();
   }
 
-  public forceSyncNow(): Promise<void> {
-    return this.syncPendingQueue();
+  public async executeMovement(input: CreateStockMovementInput): Promise<StockMovementResult> {
+    try {
+      const result = await createStockMovement(input);
+      if (result.success) {
+        this.status.lastSyncTimestamp = Date.now();
+        this.notify();
+        return result;
+      }
+      // If movement rejected due to business logic or error, throw error
+      throw new Error(result.error || 'Stock movement rejected by central authority');
+    } catch (err: any) {
+      // If offline or network unreachable, queue offline
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        OfflineQueue.add({
+          idempotencyKey: input.idempotencyKey || ('MOV-' + Date.now()),
+          type: 'STOCK_MOVEMENT',
+          payload: input,
+          maxRetries: 5,
+          deviceId: input.deviceId || this.status.deviceId,
+        });
+        this.notify();
+        return {
+          success: true,
+          movementId: 'OFFLINE-' + Date.now(),
+          productId: input.productId,
+          warehouseId: input.warehouseId,
+          previousQuantity: 0,
+          newQuantity: input.quantity,
+          delta: input.quantity,
+          timestamp: new Date().toISOString(),
+        };
+      }
+      throw err;
+    }
   }
 }
 
-export const syncManager = SyncManager.getInstance();
+export const syncManager = new SyncManager();

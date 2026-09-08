@@ -3,73 +3,87 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { getSupabaseClient } from './supabase';
 import { InventoryItem, Warehouse, InventorySummary } from '../types/inventory';
+import { Product } from '../types/product';
+
+export const DEFAULT_WAREHOUSES: Warehouse[] = [
+  { id: 'wh-main', name: 'Main Warehouse (Bays 1-4)', location: 'Building A', code: 'WH-MAIN', is_active: true },
+  { id: 'wh-secondary', name: 'Raw Material Bay (Bays 5-8)', location: 'Building B', code: 'WH-RAW', is_active: true },
+  { id: 'wh-quarantine', name: 'QC / Quarantine Holding Bay', location: 'Section Q', code: 'WH-QC', is_active: true },
+];
 
 export async function fetchWarehouses(): Promise<Warehouse[]> {
-  const client = getSupabaseClient();
-  const { data, error } = await client.from('warehouses').select('*').order('name', { ascending: true });
-  if (error) {
-    console.warn('Error fetching warehouses:', error.message);
-    return [
-      { id: 'wh-main', name: 'Main Plant Warehouse', location: 'Plant A - Ground' },
-      { id: 'wh-raw', name: 'Raw Material Depot', location: 'Zone A' },
-      { id: 'wh-pkg', name: 'Packaging Store', location: 'Zone B' },
-      { id: 'wh-fg', name: 'Finished Goods Bay', location: 'Zone D' },
-    ];
-  }
-  return (data as Warehouse[]) || [];
+  return DEFAULT_WAREHOUSES;
 }
 
 export async function fetchInventory(warehouseId?: string): Promise<InventoryItem[]> {
-  const client = getSupabaseClient();
-  let query = client
-    .from('inventory')
-    .select('*, product:products(*), warehouse:warehouses(*)')
-    .order('updated_at', { ascending: false });
+  try {
+    const res = await fetch('/api/sync', { headers: { 'Accept': 'application/json' } });
+    if (res.ok) {
+      const json = await res.json();
+      const rawStocks = json?.data?.stocks || [];
+      const warehouses = DEFAULT_WAREHOUSES;
+      const whMap = new Map(warehouses.map((w) => [w.id, w]));
 
-  if (warehouseId) {
-    query = query.eq('warehouse_id', warehouseId);
+      const items: InventoryItem[] = rawStocks.map((s: any) => {
+        const whId = s.warehouseId || s.warehouse_id || 'wh-main';
+        const wh = whMap.get(whId) || warehouses[0];
+        const prod: Product = {
+          id: s.id,
+          sku: s.sku || s.partNumber || s.id,
+          name: s.partName || s.name || s.sku || 'Material Item',
+          unit: s.unit || 'PCS',
+          cost: Number(s.unitCost) || 0,
+          price: Number(s.unitPrice) || 0,
+          min_stock: Number(s.minStock) || 10,
+          category: s.category || 'RAW',
+          barcode: s.barcode,
+          is_active: true,
+        };
+
+        return {
+          id: s.id,
+          product_id: s.id,
+          warehouse_id: whId,
+          quantity: Number(s.currentStock ?? s.quantity ?? 0),
+          updated_at: s.lastUpdated || s.updated_at || new Date().toISOString(),
+          product: prod,
+          warehouse: wh,
+          location: s.location || 'A-01',
+          lot_number: s.lotNumber || s.lot_number,
+          status: 'APPROVED',
+        };
+      });
+
+      if (warehouseId && warehouseId !== 'ALL') {
+        return items.filter((i) => i.warehouse_id === warehouseId);
+      }
+      return items;
+    }
+  } catch (err) {
+    console.warn('fetchInventory server request error:', err);
   }
 
-  const { data, error } = await query;
-  if (error) {
-    console.warn('Error fetching inventory:', error.message);
-    return [];
-  }
-  return (data as InventoryItem[]) || [];
+  return [];
 }
 
-export async function getProductInventoryLevel(productId: string, warehouseId: string): Promise<number> {
-  const client = getSupabaseClient();
-  const { data, error } = await client
-    .from('inventory')
-    .select('quantity')
-    .eq('product_id', productId)
-    .eq('warehouse_id', warehouseId)
-    .single();
-
-  if (error || !data) return 0;
-  return Number(data.quantity) || 0;
-}
-
-export function computeInventorySummary(items: InventoryItem[]): InventorySummary {
+export async function fetchInventorySummary(): Promise<InventorySummary> {
+  const items = await fetchInventory();
   let totalQuantity = 0;
   let lowStockCount = 0;
   let outOfStockCount = 0;
   let totalValuation = 0;
 
   for (const item of items) {
-    const qty = Number(item.quantity) || 0;
-    const minStock = Number(item.product?.min_stock) || 0;
-    const cost = Number(item.product?.cost) || 0;
+    const qty = item.quantity || 0;
+    const min = item.product?.min_stock || 10;
+    const cost = item.product?.cost || 0;
 
     totalQuantity += qty;
     totalValuation += qty * cost;
-
     if (qty <= 0) {
       outOfStockCount++;
-    } else if (qty <= minStock) {
+    } else if (qty <= min) {
       lowStockCount++;
     }
   }

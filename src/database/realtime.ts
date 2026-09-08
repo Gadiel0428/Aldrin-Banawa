@@ -3,109 +3,72 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { getSupabaseClient } from './supabase';
+import { StockMovement } from '../types/movement';
 
-/**
- * Subscribes to real-time inventory modifications for instant cross-device updates.
- */
 export function subscribeToInventory(
-  warehouseId?: string,
-  onChange?: (payload: any) => void
-) {
-  const client = getSupabaseClient();
-  const channelName = warehouseId ? `realtime-inv-${warehouseId}` : `realtime-inv-all`;
+  _warehouseId?: string,
+  callback?: () => void
+): () => void {
+  if (typeof window === 'undefined' || !callback) return () => {};
 
-  const filterConfig = warehouseId
-    ? {
-        event: '*',
-        schema: 'public',
-        table: 'inventory',
-        filter: `warehouse_id=eq.${warehouseId}`,
-      }
-    : {
-        event: '*',
-        schema: 'public',
-        table: 'inventory',
-      };
+  const handleUpdate = () => {
+    try {
+      callback();
+    } catch (e) {
+      console.warn('Realtime inventory callback error:', e);
+    }
+  };
 
-  const channel = client
-    .channel(channelName)
-    .on('postgres_changes', filterConfig as any, (payload) => {
-      if (onChange) onChange(payload);
-    })
-    .subscribe();
+  window.addEventListener('stock_movement_created', handleUpdate);
+  window.addEventListener('inventory_updated', handleUpdate);
+  window.addEventListener('storage', handleUpdate);
 
   return () => {
-    client.removeChannel(channel);
+    window.removeEventListener('stock_movement_created', handleUpdate);
+    window.removeEventListener('inventory_updated', handleUpdate);
+    window.removeEventListener('storage', handleUpdate);
   };
 }
 
-/**
- * Subscribes to new stock movements stream across all connected computers/tablets.
- */
+export function subscribeToProducts(callback: () => void): () => void {
+  if (typeof window === 'undefined' || !callback) return () => {};
+
+  const handleUpdate = () => {
+    try {
+      callback();
+    } catch (e) {
+      console.warn('Realtime product callback error:', e);
+    }
+  };
+
+  window.addEventListener('products_updated', handleUpdate);
+  window.addEventListener('storage', handleUpdate);
+
+  return () => {
+    window.removeEventListener('products_updated', handleUpdate);
+    window.removeEventListener('storage', handleUpdate);
+  };
+}
+
 export function subscribeToStockMovements(
-  onMovement: (movement: any) => void
-) {
-  const client = getSupabaseClient();
-  const channel = client
-    .channel('realtime-stock-movements')
-    .on(
-      'postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'stock_movements',
-      },
-      (payload) => {
-        onMovement(payload.new);
+  callback: (movement: StockMovement) => void
+): () => void {
+  if (typeof window === 'undefined' || !callback) return () => {};
+
+  const handleMovement = (e: Event) => {
+    try {
+      const customEvent = e as CustomEvent<StockMovement>;
+      if (customEvent.detail) {
+        callback(customEvent.detail);
       }
-    )
-    .subscribe();
-
-  return () => {
-    client.removeChannel(channel);
+    } catch (err) {
+      console.warn('Realtime stock movement callback error:', err);
+    }
   };
-}
 
-/**
- * Subscribes to products catalog modifications.
- */
-export function subscribeToProducts(onChange: () => void) {
-  const client = getSupabaseClient();
-  const channel = client
-    .channel('realtime-products')
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'products',
-      },
-      () => {
-        onChange();
-      }
-    )
-    .subscribe();
+  window.addEventListener('stock_movement_created', handleMovement);
 
   return () => {
-    client.removeChannel(channel);
-  };
-}
-
-/**
- * Master multi-table subscriber for global synchronization.
- */
-export function subscribeToAllChanges(onSyncEvent: (table: string, payload: any) => void) {
-  const client = getSupabaseClient();
-  const channel = client
-    .channel('realtime-master-sync')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory' }, (p) => onSyncEvent('inventory', p))
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_movements' }, (p) => onSyncEvent('stock_movements', p))
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, (p) => onSyncEvent('products', p))
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'warehouses' }, (p) => onSyncEvent('warehouses', p))
-    .subscribe();
-
-  return () => {
-    client.removeChannel(channel);
+    window.removeEventListener('stock_movement_created', handleMovement);
   };
 }

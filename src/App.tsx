@@ -65,8 +65,6 @@ import { SyncStatus } from './components/SyncStatus';
 import { StockMovementView } from './components/StockMovement';
 import { ProductList } from './components/ProductList';
 import { InventoryTable } from './components/InventoryTable';
-import { syncManager } from './sync/syncManager';
-import { OfflineQueue } from './sync/offlineQueue';
 import { createStockMovement } from './database/movements';
 
 import { 
@@ -422,11 +420,6 @@ export default function App() {
     } else {
       next = [...safePrev, formattedUser];
     }
-
-    try {
-      localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(next));
-      localStorage.setItem('juwei_wms_cache_registeredUsers', JSON.stringify(next));
-    } catch (e) {}
     return next;
   };
 
@@ -659,9 +652,6 @@ export default function App() {
             setLastSyncedTime(new Date());
           } else if (payload.type === 'all_accounts_cleared') {
             setRegisteredUsers([superAdminAccount]);
-            try {
-              localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify([superAdminAccount]));
-            } catch (e) {}
           } else if (payload.type === 'client_installed') {
             if (payload.stationId && payload.stationId !== getStationId()) {
               setLiveSyncToast({
@@ -838,25 +828,7 @@ export default function App() {
     const userMap = new Map<string, RegisteredAccount>();
     userMap.set('JPMP-002', { ...superAdminAccount });
 
-    const source = Array.isArray(incomingList) ? incomingList : (() => {
-      try {
-        // Enforce clean single Super Admin baseline if accounts reset migration has not run
-        if (localStorage.getItem('juwei_wms_accounts_reset_v3') !== 'true') {
-          localStorage.removeItem('juwei_wms_cache_registeredUsers');
-          localStorage.removeItem('juwei_wms_deleted_accounts_v1');
-          localStorage.removeItem('juwei_wms_deletedAccounts');
-          localStorage.setItem('juwei_wms_accounts_reset_v3', 'true');
-          localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify([superAdminAccount]));
-          return [superAdminAccount];
-        }
-        const cached = localStorage.getItem('juwei_wms_registeredUsers') || localStorage.getItem('juwei_wms_cache_registeredUsers');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-        }
-      } catch (e) {}
-      return [superAdminAccount];
-    })();
+    const source = Array.isArray(incomingList) ? incomingList : [];
 
     const deletedSet = getDeletedUserIds();
 
@@ -882,38 +854,10 @@ export default function App() {
     // Guarantee Super Admin
     userMap.set('JPMP-002', { ...superAdminAccount });
 
-    const result = Array.from(userMap.values());
-    try {
-      localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(result));
-    } catch (e) {}
-    return result;
+    return Array.from(userMap.values());
   };
 
-  const [registeredUsers, setRegisteredUsers] = useState<RegisteredAccount[]>(() => {
-    return sanitizeUsersList();
-  });
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(registeredUsers));
-    } catch (e) {}
-  }, [registeredUsers]);
-
-  // Real-time multi-tab and desktop window storage listener to sync account changes seamlessly
-  useEffect(() => {
-    const handleStorage = (e: StorageEvent) => {
-      if (e.key === 'juwei_wms_registeredUsers' && e.newValue) {
-        try {
-          const parsed = JSON.parse(e.newValue);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setRegisteredUsers(prev => reconcileUsers(prev, parsed));
-          }
-        } catch (err) {}
-      }
-    };
-    window.addEventListener('storage', handleStorage);
-    return () => window.removeEventListener('storage', handleStorage);
-  }, []);
+  const [registeredUsers, setRegisteredUsers] = useState<RegisteredAccount[]>([superAdminAccount]);
 
   // Keep active logged-in user's role, permissions, and status in sync with live registered accounts directory
   useEffect(() => {
@@ -962,7 +906,6 @@ export default function App() {
     ];
     setRegisteredUsers(defaultAccounts);
     try {
-      localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(defaultAccounts));
       localStorage.removeItem('juwei_wms_deleted_accounts');
     } catch (e) {}
     syncCollection('registeredUsers', defaultAccounts);
@@ -1330,26 +1273,13 @@ export default function App() {
       localStorage.removeItem('juwei_wms_draft_issuance');
     } catch (e) {}
 
-    try {
-      OfflineQueue.purgeAll();
-    } catch (e) {}
-
     deletedRecordIds.current.clear();
     recentlyMutatedRecords.current.clear();
   };
 
   // Directly sets in-memory state to pure authoritative central database data without merging stale leftovers
   const applyAuthoritativeResetState = (dataPayload: any, activeUsersList?: string[], activePresenceList?: ActivePresenceUser[]) => {
-    if (!dataPayload) {
-      setStocks([]);
-      setReceiving([]);
-      setReturns([]);
-      setRecycling([]);
-      setIssuances([]);
-      setDeliveries([]);
-      setEnvLogs([]);
-      setForkliftChecks([]);
-      setRegistries([]);
+    if (!dataPayload || typeof dataPayload !== 'object') {
       return;
     }
     const { 
@@ -1761,11 +1691,6 @@ export default function App() {
     if (areUsersEqual(safeCurrent, orderedUsers)) {
       return safeCurrent;
     }
-
-    try {
-      localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(orderedUsers));
-      localStorage.setItem('juwei_wms_cache_registeredUsers', JSON.stringify(orderedUsers));
-    } catch (e) {}
 
     return orderedUsers;
   };
@@ -2708,18 +2633,21 @@ export default function App() {
               if (empId && empId !== 'JPMP-002') {
                 markUserAsDeleted(empId);
                 setRegisteredUsers(prev => {
-                  const next = prev.filter(u => u.employeeId.toUpperCase() !== empId);
-                  localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(next));
-                  return next;
+                  return prev.filter(u => u.employeeId.toUpperCase() !== empId);
                 });
               }
               break;
             }
             case 'all_accounts_cleared': {
               setRegisteredUsers([superAdminAccount]);
-              try {
-                localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify([superAdminAccount]));
-              } catch (e) {}
+              break;
+            }
+            case 'stock_movement_created': {
+              if (payload.stocks) {
+                setStocks(payload.stocks);
+              }
+              window.dispatchEvent(new CustomEvent('stock_movement_created', { detail: payload.movement }));
+              window.dispatchEvent(new CustomEvent('inventory_updated'));
               break;
             }
             case 'chat_broadcast': {
@@ -3053,7 +2981,6 @@ export default function App() {
 
     const nextUsers = [...registeredUsers.filter(u => (u.employeeId || '').toUpperCase() !== cleanEmployeeId), newUser];
     setRegisteredUsers(nextUsers);
-    localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(nextUsers));
     
     // Cross-tab BroadcastChannel
     if (syncChannelRef.current) {
@@ -3095,20 +3022,6 @@ export default function App() {
       }).catch(() => {});
     } catch (e) {}
 
-    // Single authoritative cloud storage sync
-    saveAccountToSupabase(newUser).catch(() => {});
-    syncCollection('registeredUsers', nextUsers);
-
-    // Notify cluster users via Supabase Realtime broadcast
-    if (isSupabaseConfigured()) {
-      broadcastSupabaseInstallation({
-        stationId: getStationId(),
-        username: newUser.username,
-        employeeId: newUser.employeeId,
-        platform: `New Operator (${newUser.role})`
-      });
-    }
-
     // Set state to trigger the secure PIN confirmation overlay
     setNewlyRegisteredUser(newUser);
     return newUser;
@@ -3131,10 +3044,9 @@ export default function App() {
     // 1. Mark in permanent deleted accounts blacklist
     markUserAsDeleted(cleanId);
 
-    // 2. Update local state and cache
+    // 2. Update local state
     const nextUsers = registeredUsers.filter(u => (u.employeeId || '').toUpperCase() !== cleanId);
     setRegisteredUsers(nextUsers);
-    localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(nextUsers));
 
     // Cross-tab BroadcastChannel
     if (syncChannelRef.current) {
@@ -3146,10 +3058,7 @@ export default function App() {
       } catch (e) {}
     }
 
-    // 3. Purge from cloud PostgreSQL (Supabase) immediately
-    deleteAccountFromSupabase(cleanId).catch(() => {});
-
-    // 4. Send deletion request to server endpoint to purge memory, disk, and Supabase
+    // 3. Send deletion request to server endpoint to commit to central database and broadcast
     const baseUrl = getApiBaseUrl();
     fetch(`${baseUrl}/api/accounts/delete`, {
       method: 'POST',
@@ -3157,7 +3066,7 @@ export default function App() {
       body: JSON.stringify({ employeeId: cleanId })
     }).catch(() => {});
 
-    // 5. Broadcast deletion over WebSocket
+    // 4. Broadcast deletion over WebSocket
     if (socket && socket.readyState === WebSocket.OPEN) {
       try {
         socket.send(JSON.stringify({
@@ -3168,17 +3077,11 @@ export default function App() {
         console.warn('WS send delete error:', e);
       }
     }
-
-    // 6. Sync updated collection
-    syncCollection('registeredUsers', nextUsers);
   };
 
   const handleClearAllAccountsExceptSuperAdmin = () => {
     const onlySuperAdmin = [superAdminAccount];
     setRegisteredUsers(onlySuperAdmin);
-    try {
-      localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(onlySuperAdmin));
-    } catch (e) {}
 
     // Cross-tab BroadcastChannel
     if (syncChannelRef.current) {
@@ -3189,38 +3092,14 @@ export default function App() {
       } catch (e) {}
     }
 
-    // 1. Supabase deletion
-    if (isSupabaseConfigured()) {
-      try {
-        const client = getSupabase();
-        if (client) {
-          Promise.resolve(client.from('registered_users').delete().neq('employee_id', 'JPMP-002'))
-            .then(() => {
-              syncCollectionToSupabase('registeredUsers', onlySuperAdmin);
-            })
-            .catch(() => {});
-        }
-      } catch (e) {}
-    }
-
-    // 2. Server reset
+    // Server reset
     const baseUrl = getApiBaseUrl();
     fetch(`${baseUrl}/api/accounts/clear-all-except-super-admin`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     }).catch(() => {});
 
-    // 3. Broadcast channel
-    if (syncChannelRef.current) {
-      try {
-        syncChannelRef.current.postMessage({
-          type: 'all_accounts_cleared',
-          data: onlySuperAdmin
-        });
-      } catch (e) {}
-    }
-
-    // 4. WebSocket broadcast
+    // WebSocket broadcast
     if (socket && socket.readyState === WebSocket.OPEN) {
       try {
         socket.send(JSON.stringify({
@@ -3229,9 +3108,6 @@ export default function App() {
         }));
       } catch (e) {}
     }
-
-    // 5. Sync collection
-    syncCollection('registeredUsers', onlySuperAdmin);
   };
 
   const handleUpdateAccount = (oldEmpId: string, updated: RegisteredAccount) => {
