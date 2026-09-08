@@ -243,137 +243,36 @@ export default function App() {
   // Optimistic local mutation timestamp tracker to prevent in-flight clobbering / race conditions
   const lastMutationTimes = useRef<{ [col: string]: number }>({});
 
-  // Core state arrays - initialize from local storage cache for instant, zero-flicker UI
-  const [stocks, setStocks] = useState<MaterialStockItem[]>(() => {
-    try {
-      const c = localStorage.getItem('juwei_wms_cache_stocks');
-      if (c) {
-        const p = JSON.parse(c);
-        if (Array.isArray(p)) return p;
-      }
-    } catch (e) {}
-    return [];
-  });
-  const [receiving, setReceiving] = useState<ReceivingRecord[]>(() => {
-    try {
-      const c = localStorage.getItem('juwei_wms_cache_receiving');
-      if (c) {
-        const p = JSON.parse(c);
-        if (Array.isArray(p)) return p;
-      }
-    } catch (e) {}
-    return [];
-  });
-  const [returns, setReturns] = useState<ReturnRecord[]>(() => {
-    try {
-      const c = localStorage.getItem('juwei_wms_cache_returns');
-      if (c) {
-        const p = JSON.parse(c);
-        if (Array.isArray(p)) return p;
-      }
-    } catch (e) {}
-    return [];
-  });
-  const [recycling, setRecycling] = useState<RecyclingRecord[]>(() => {
-    try {
-      const c = localStorage.getItem('juwei_wms_cache_recycling');
-      if (c) {
-        const p = JSON.parse(c);
-        if (Array.isArray(p)) return p;
-      }
-    } catch (e) {}
-    return [];
-  });
-  const [issuances, setIssuances] = useState<IssuanceRecord[]>(() => {
-    try {
-      const c = localStorage.getItem('juwei_wms_cache_issuances');
-      if (c) {
-        const p = JSON.parse(c);
-        if (Array.isArray(p)) return p;
-      }
-    } catch (e) {}
-    return [];
-  });
-  const [deliveries, setDeliveries] = useState<DeliveryRecord[]>(() => {
-    try {
-      const c = localStorage.getItem('juwei_wms_cache_deliveries');
-      if (c) {
-        const p = JSON.parse(c);
-        if (Array.isArray(p)) return p;
-      }
-    } catch (e) {}
-    return [];
-  });
-  const [envLogs, setEnvLogs] = useState<EnvironmentalLog[]>(() => {
-    try {
-      const c = localStorage.getItem('juwei_wms_cache_envLogs');
-      if (c) {
-        const p = JSON.parse(c);
-        if (Array.isArray(p)) return p;
-      }
-    } catch (e) {}
-    return [];
-  });
-  const [forkliftChecks, setForkliftChecks] = useState<ForkliftChecklist[]>(() => {
-    try {
-      const c = localStorage.getItem('juwei_wms_cache_forkliftChecks');
-      if (c) {
-        const p = JSON.parse(c);
-        if (Array.isArray(p)) return p;
-      }
-    } catch (e) {}
-    return [];
-  });
-  const [registries, setRegistries] = useState<MasterRegistryItem[]>(() => {
-    try {
-      const c = localStorage.getItem('juwei_wms_cache_registries') || localStorage.getItem('juwei_wms_master_registries');
-      if (c) {
-        const p = JSON.parse(c);
-        if (Array.isArray(p)) return p;
-      }
-    } catch (e) {}
-    return [];
-  });
+  // Central Database is the single source of truth - state is pure in-memory populated from server
+  const [stocks, setStocks] = useState<MaterialStockItem[]>([]);
+  const [receiving, setReceiving] = useState<ReceivingRecord[]>([]);
+  const [returns, setReturns] = useState<ReturnRecord[]>([]);
+  const [recycling, setRecycling] = useState<RecyclingRecord[]>([]);
+  const [issuances, setIssuances] = useState<IssuanceRecord[]>([]);
+  const [deliveries, setDeliveries] = useState<DeliveryRecord[]>([]);
+  const [envLogs, setEnvLogs] = useState<EnvironmentalLog[]>([]);
+  const [forkliftChecks, setForkliftChecks] = useState<ForkliftChecklist[]>([]);
+  const [registries, setRegistries] = useState<MasterRegistryItem[]>([]);
 
-  // Automatically keep local storage offline caches synchronized whenever active state updates
-  useEffect(() => {
-    try { localStorage.setItem('juwei_wms_cache_stocks', JSON.stringify(stocks)); } catch (e) {}
-  }, [stocks]);
-
-  useEffect(() => {
-    try { localStorage.setItem('juwei_wms_cache_receiving', JSON.stringify(receiving)); } catch (e) {}
-  }, [receiving]);
-
-  useEffect(() => {
-    try { localStorage.setItem('juwei_wms_cache_returns', JSON.stringify(returns)); } catch (e) {}
-  }, [returns]);
-
-  useEffect(() => {
-    try { localStorage.setItem('juwei_wms_cache_recycling', JSON.stringify(recycling)); } catch (e) {}
-  }, [recycling]);
-
-  useEffect(() => {
-    try { localStorage.setItem('juwei_wms_cache_issuances', JSON.stringify(issuances)); } catch (e) {}
-  }, [issuances]);
-
-  useEffect(() => {
-    try { localStorage.setItem('juwei_wms_cache_deliveries', JSON.stringify(deliveries)); } catch (e) {}
-  }, [deliveries]);
-
-  useEffect(() => {
-    try { localStorage.setItem('juwei_wms_cache_envLogs', JSON.stringify(envLogs)); } catch (e) {}
-  }, [envLogs]);
-
-  useEffect(() => {
-    try { localStorage.setItem('juwei_wms_cache_forkliftChecks', JSON.stringify(forkliftChecks)); } catch (e) {}
-  }, [forkliftChecks]);
-
+  // Startup cleanup: Purge any legacy stale client-side caches to prevent resurrection
   useEffect(() => {
     try {
-      localStorage.setItem('juwei_wms_cache_registries', JSON.stringify(registries));
-      localStorage.setItem('juwei_wms_master_registries', JSON.stringify(registries));
+      const keysToClean = [
+        'juwei_wms_cache_stocks',
+        'juwei_wms_cache_receiving',
+        'juwei_wms_cache_returns',
+        'juwei_wms_cache_recycling',
+        'juwei_wms_cache_issuances',
+        'juwei_wms_cache_deliveries',
+        'juwei_wms_cache_envLogs',
+        'juwei_wms_cache_forkliftChecks',
+        'juwei_wms_cache_registries',
+        'juwei_wms_master_registries',
+        'juwei_wms_pending_sync'
+      ];
+      keysToClean.forEach(key => localStorage.removeItem(key));
     } catch (e) {}
-  }, [registries]);
+  }, []);
 
   // User Authentication / Registration states - Persist login state reliably across page focus and reloads
   const [currentUser, setCurrentUser] = useState<string>(() => {
@@ -1426,6 +1325,9 @@ export default function App() {
       localStorage.removeItem(PENDING_MUTATIONS_KEY);
       localStorage.removeItem('juwei_wms_offline_queue_v1');
       localStorage.removeItem('juwei_wms_deleted_records_v1');
+      localStorage.removeItem('juwei_wms_draft_receiving');
+      localStorage.removeItem('juwei_wms_draft_receiving_return');
+      localStorage.removeItem('juwei_wms_draft_issuance');
     } catch (e) {}
 
     try {
@@ -1631,11 +1533,15 @@ export default function App() {
   };
 
   // Helper to reconcile incoming remote collections with local state cleanly without data loss, disappearing records, or resurrection of reset data
-  const reconcileCollection = (colName: string, currentArr: any[], incomingArr: any[]): any[] => {
+  const reconcileCollection = (colName: string, currentArr: any[], incomingArr: any[], forceOverwrite = false): any[] => {
     const safeCurrent = Array.isArray(currentArr) ? currentArr : [];
 
     if (!Array.isArray(incomingArr)) {
       return safeCurrent;
+    }
+
+    if (forceOverwrite) {
+      return incomingArr;
     }
 
     const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
@@ -1651,14 +1557,11 @@ export default function App() {
     if (incomingArr.length === 0) {
       const activePendingUpserts = pendingMutations.filter(m => m.type === 'upsert' && m.record && m.record.id && !deletedSet.has(m.record.id));
       if (activePendingUpserts.length === 0) {
-        try {
-          localStorage.removeItem(`juwei_wms_cache_${colName}`);
-        } catch (e) {}
         return [];
       }
     }
 
-    // Filter incoming records from server/Supabase to exclude locally deleted IDs and stale reset versions
+    // Filter incoming records from server to exclude locally deleted IDs and stale reset versions
     const filteredIncoming = incomingArr.filter(item => {
       if (!item || !item.id) return false;
       if (deletedSet.has(item.id)) return false;
@@ -1740,11 +1643,6 @@ export default function App() {
     if (areCollectionsEqual(safeCurrent, orderedList)) {
       return safeCurrent;
     }
-
-    // Persist merged data to local cache immediately
-    try {
-      localStorage.setItem(`juwei_wms_cache_${colName}`, JSON.stringify(orderedList));
-    } catch (e) {}
 
     return orderedList;
   };
@@ -1922,6 +1820,12 @@ export default function App() {
         if (res.ok) {
           const json = await res.json();
           if (json && json.data) {
+            if (json.systemResetVersion) {
+              localStorage.setItem('juwei_wms_system_reset_version', String(json.systemResetVersion));
+            }
+            if (json.globalResetId) {
+              localStorage.setItem('juwei_wms_global_reset_id', String(json.globalResetId));
+            }
             const { stocks: s, receiving: r, returns: ret, recycling: rec, issuances: iss, deliveries: del, envLogs: el, forkliftChecks: fc, registries: reg, registeredUsers: ru, chatMessages: cm } = json.data;
             if (Array.isArray(s)) setStocks(normalizeRecords('stocks', s));
             if (Array.isArray(r)) setReceiving(normalizeRecords('receiving', r));
@@ -2034,17 +1938,15 @@ export default function App() {
           collection,
           record,
           author: currentUser || 'Operator',
-          actionDesc
+          actionDesc,
+          reset_version: Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0
         });
       } catch (e) {}
     }
 
-    // 1. Supabase direct write
-    if (isSupabaseConfigured()) {
-      syncCollectionToSupabase(collection, [record]);
-    }
+    const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
 
-    // 2. WebSocket targeted delta broadcast
+    // 1. WebSocket targeted delta broadcast to central server
     if (wsOpen(socket)) {
       try {
         socket!.send(JSON.stringify({
@@ -2052,12 +1954,14 @@ export default function App() {
           collection,
           record,
           author: currentUser || 'Operator',
-          actionDesc
+          actionDesc,
+          reset_version: currentResetVer,
+          record_id: record.id || record.record_id
         }));
       } catch (e) {}
     }
 
-    // 3. HTTP REST upsert endpoint
+    // 2. HTTP REST upsert endpoint
     let targetAddr = serverAddress.trim() || getDefaultServerAddress();
     const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
     const isHttps = isSecureServerHost(cleanHost, targetAddr);
@@ -2071,10 +1975,19 @@ export default function App() {
         collection,
         record,
         author: currentUser || 'Operator',
-        actionDesc
+        actionDesc,
+        reset_version: currentResetVer,
+        record_id: record.id || record.record_id
       })
     })
-    .then(res => {
+    .then(async res => {
+      if (res.status === 409) {
+        const errJson = await res.json().catch(() => ({}));
+        const serverVer = Number(errJson.serverResetVersion) || currentResetVer + 1;
+        purgeAllLocalOfflineCachesAndQueues(serverVer);
+        handleManualSync();
+        return;
+      }
       if (res.ok) flushPendingMutationsQueue();
     })
     .catch(() => {
@@ -2085,24 +1998,38 @@ export default function App() {
           collection,
           record,
           author: currentUser || 'Operator',
-          actionDesc
+          actionDesc,
+          reset_version: currentResetVer,
+          record_id: record.id || record.record_id
         })
-      }).catch(() => {});
+      })
+      .then(async res => {
+        if (res.status === 409) {
+          const errJson = await res.json().catch(() => ({}));
+          const serverVer = Number(errJson.serverResetVersion) || currentResetVer + 1;
+          purgeAllLocalOfflineCachesAndQueues(serverVer);
+          handleManualSync();
+        }
+      })
+      .catch(() => {});
     });
   };
 
-  // Helper to execute coordinated deletion across local state, Supabase, WebSocket, and Express server
+  // Helper to execute coordinated deletion across local state, WebSocket, and Express server
   const deleteRecordLocallyAndRemotely = (collection: string, id: string) => {
     if (!id || !collection) return;
     markRecordAsDeletedLocally(id);
     setLastSyncedTime(new Date());
+
+    const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
 
     // Queue for offline resilience
     queueOfflineMutation({
       type: 'delete',
       collection,
       recordId: id,
-      author: currentUser || 'Operator'
+      author: currentUser || 'Operator',
+      reset_version: currentResetVer
     });
 
     // 0. Cross-tab BroadcastChannel
@@ -2111,28 +2038,25 @@ export default function App() {
         syncChannelRef.current.postMessage({
           type: 'delete_record',
           collection,
-          id
+          id,
+          reset_version: currentResetVer
         });
       } catch (e) {}
     }
-    
-    // 1. Supabase deletion
-    if (isSupabaseConfigured()) {
-      deleteRecordFromSupabase(collection, id);
-    }
 
-    // 2. WebSocket deletion
+    // 1. WebSocket deletion to central database
     if (wsOpen(socket)) {
       try {
         socket!.send(JSON.stringify({
           type: 'delete_record',
           collection,
-          id
+          id,
+          reset_version: currentResetVer
         }));
       } catch (e) {}
     }
 
-    // 3. HTTP REST deletion
+    // 2. HTTP REST deletion
     let targetAddr = serverAddress.trim() || getDefaultServerAddress();
     const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
     const isHttps = isSecureServerHost(cleanHost, targetAddr);
@@ -2142,17 +2066,33 @@ export default function App() {
     fetch(`${baseUrl}/api/records/delete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ collection, id })
+      body: JSON.stringify({ collection, id, reset_version: currentResetVer })
     })
-    .then(res => {
+    .then(async res => {
+      if (res.status === 409) {
+        const errJson = await res.json().catch(() => ({}));
+        const serverVer = Number(errJson.serverResetVersion) || currentResetVer + 1;
+        purgeAllLocalOfflineCachesAndQueues(serverVer);
+        handleManualSync();
+        return;
+      }
       if (res.ok) flushPendingMutationsQueue();
     })
     .catch(() => {
       fetch(`${httpProto}//${cleanHost}/api/records/delete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ collection, id })
-      }).catch(() => {});
+        body: JSON.stringify({ collection, id, reset_version: currentResetVer })
+      })
+      .then(async res => {
+        if (res.status === 409) {
+          const errJson = await res.json().catch(() => ({}));
+          const serverVer = Number(errJson.serverResetVersion) || currentResetVer + 1;
+          purgeAllLocalOfflineCachesAndQueues(serverVer);
+          handleManualSync();
+        }
+      })
+      .catch(() => {});
     });
   };
 
@@ -2291,28 +2231,6 @@ export default function App() {
             }
           }
         } catch (e2) {}
-      }
-
-      if (isSupabaseConfigured()) {
-        const snap = await fetchFullSupabaseSnapshot();
-        if (snap) {
-          if (Array.isArray(snap.stocks)) setStocks(prev => reconcileCollection('stocks', prev, normalizeRecords('stocks', snap.stocks!)));
-          if (Array.isArray(snap.receiving)) setReceiving(prev => reconcileCollection('receiving', prev, normalizeRecords('receiving', snap.receiving!)));
-          if (Array.isArray(snap.returns)) setReturns(prev => reconcileCollection('returns', prev, normalizeRecords('returns', snap.returns!)));
-          if (Array.isArray(snap.recycling)) setRecycling(prev => reconcileCollection('recycling', prev, normalizeRecords('recycling', snap.recycling!)));
-          if (Array.isArray(snap.issuances)) setIssuances(prev => reconcileCollection('issuances', prev, normalizeRecords('issuances', snap.issuances!)));
-          if (Array.isArray(snap.deliveries)) setDeliveries(prev => reconcileCollection('deliveries', prev, normalizeRecords('deliveries', snap.deliveries!)));
-          if (Array.isArray(snap.envLogs)) setEnvLogs(prev => reconcileCollection('envLogs', prev, normalizeRecords('envLogs', snap.envLogs!)));
-          if (Array.isArray(snap.forkliftChecks)) setForkliftChecks(prev => reconcileCollection('forkliftChecks', prev, normalizeRecords('forkliftChecks', snap.forkliftChecks!)));
-          if (Array.isArray(snap.registries)) setRegistries(prev => reconcileCollection('registries', prev, normalizeRecords('registries', snap.registries!)));
-          if (Array.isArray(snap.registeredUsers)) {
-            setRegisteredUsers(prev => reconcileUsers(prev, snap.registeredUsers!));
-          }
-          if (Array.isArray(snap.chatMessages) && snap.chatMessages.length > 0) {
-            setChatMessages(snap.chatMessages);
-          }
-          setSupabaseStatus('connected');
-        }
       }
 
       setLastSyncedTime(new Date());
@@ -2641,14 +2559,22 @@ export default function App() {
               setLastSyncedTime(new Date());
               break;
             }
+            case 'SYNC_REQUIRED':
             case 'STALE_RESET_VERSION': {
               const resetVerNum = Number(payload.systemResetVersion) || Date.now();
-              console.warn(`[JUWEI WMS] Received STALE_RESET_VERSION from server. Purging local queues and refetching fresh state.`);
+              console.warn(`[JUWEI WMS] Received ${payload.type} from server. Purging local queues and refetching fresh state.`);
               purgeAllLocalOfflineCachesAndQueues(resetVerNum);
               handleManualSync();
               break;
             }
+            case 'RECORD_CREATED':
+            case 'RECORD_UPDATED':
             case 'record_upserted': {
+              const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
+              if (payload.systemResetVersion && Number(payload.systemResetVersion) < currentResetVer) {
+                console.warn(`[JUWEI WMS] Discarding stale upsert from reset_version ${payload.systemResetVersion}`);
+                break;
+              }
               const { collection, record, author, actionDesc } = payload;
               if (record && record.id && collection) {
                 setLastSyncedTime(new Date());
@@ -2696,7 +2622,13 @@ export default function App() {
               }
               break;
             }
+            case 'RECORD_DELETED':
             case 'record_deleted': {
+              const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
+              if (payload.systemResetVersion && Number(payload.systemResetVersion) < currentResetVer) {
+                console.warn(`[JUWEI WMS] Discarding stale delete from reset_version ${payload.systemResetVersion}`);
+                break;
+              }
               const { collection, id } = payload;
               if (id && collection) {
                 markRecordAsDeletedLocally(id);
@@ -2939,293 +2871,16 @@ export default function App() {
     }
   }, [currentUser, currentEmployeeId, currentRole, currentPermission, view, socket]);
 
-  // Supabase PostgreSQL Realtime Subscription, Auto-Config & Cloud Sync Engine
+  // Central Database Connection Status Monitor
   useEffect(() => {
-    let channel: any = null;
-    let isMounted = true;
-    let pollInterval: any = null;
-
-    let supabaseSnapshotReqId = 0;
-    const collectionFetchSeq: Record<string, number> = {};
-
-    const loadAllSupabaseData = async () => {
-      if (!isMounted) return;
-      if (!isSupabaseConfigured()) {
-        setSupabaseStatus('disconnected');
-        return;
-      }
-
-      const reqId = ++supabaseSnapshotReqId;
-      const snapshot = await fetchFullSupabaseSnapshot();
-      if (!isMounted || supabaseSnapshotReqId !== reqId || !snapshot) return;
-
-      let hasSuccess = false;
-      const { 
-        stocks: s, 
-        receiving: rc, 
-        returns: rt, 
-        recycling: cy, 
-        issuances: is, 
-        deliveries: d, 
-        envLogs: e, 
-        forkliftChecks: f, 
-        registries: reg, 
-        registeredUsers: ru, 
-        chatMessages: cm 
-      } = snapshot;
-
-      if (Array.isArray(s)) { 
-        hasSuccess = true; 
-        const norm = normalizeRecords('stocks', s);
-        setStocks(prev => reconcileCollection('stocks', prev, norm)); 
-      }
-      if (Array.isArray(rc)) { 
-        hasSuccess = true; 
-        const norm = normalizeRecords('receiving', rc);
-        setReceiving(prev => reconcileCollection('receiving', prev, norm)); 
-      }
-      if (Array.isArray(rt)) { 
-        hasSuccess = true; 
-        const norm = normalizeRecords('returns', rt);
-        setReturns(prev => reconcileCollection('returns', prev, norm)); 
-      }
-      if (Array.isArray(cy)) { 
-        hasSuccess = true; 
-        const norm = normalizeRecords('recycling', cy);
-        setRecycling(prev => reconcileCollection('recycling', prev, norm)); 
-      }
-      if (Array.isArray(is)) { 
-        hasSuccess = true; 
-        const norm = normalizeRecords('issuances', is);
-        setIssuances(prev => reconcileCollection('issuances', prev, norm)); 
-      }
-      if (Array.isArray(d)) { 
-        hasSuccess = true; 
-        const norm = normalizeRecords('deliveries', d);
-        setDeliveries(prev => reconcileCollection('deliveries', prev, norm)); 
-      }
-      if (Array.isArray(e)) { 
-        hasSuccess = true; 
-        const norm = normalizeRecords('envLogs', e);
-        setEnvLogs(prev => reconcileCollection('envLogs', prev, norm)); 
-      }
-      if (Array.isArray(f)) { 
-        hasSuccess = true; 
-        const norm = normalizeRecords('forkliftChecks', f);
-        setForkliftChecks(prev => reconcileCollection('forkliftChecks', prev, norm)); 
-      }
-      if (Array.isArray(reg)) { 
-        hasSuccess = true; 
-        const norm = normalizeRecords('registries', reg);
-        setRegistries(prev => reconcileCollection('registries', prev, norm)); 
-      }
-      if (Array.isArray(ru) && ru.length > 0) {
-        hasSuccess = true;
-        setRegisteredUsers(prev => reconcileUsers(prev, ru));
-      }
-      if (Array.isArray(cm) && cm.length > 0) {
-        hasSuccess = true;
-        setChatMessages(cm);
-      }
-
-      if (isMounted) {
-        if (hasSuccess) {
-          setSupabaseStatus('connected');
-        } else if (!isSupabaseConfigured()) {
-          setSupabaseStatus('disconnected');
-        }
-      }
-    };
-
-    const startSupabaseSync = () => {
-      if (!isMounted) return;
-
-      loadAllSupabaseData();
-
-      // Setup Realtime subscription for PostgreSQL events with granular delta sync & presence tracking
-      channel = setupSupabaseRealtimeSubscriptions(
-        async (col) => {
-          if (!isMounted) return;
-          const seq = (collectionFetchSeq[col] || 0) + 1;
-          collectionFetchSeq[col] = seq;
-          const updatedItems = await fetchCollectionFromSupabase(col);
-          if (!isMounted || collectionFetchSeq[col] !== seq) return;
-          if (Array.isArray(updatedItems)) {
-            setSupabaseStatus('connected');
-            const norm = normalizeRecords(col, updatedItems);
-            if (col === 'stocks') setStocks(prev => reconcileCollection('stocks', prev, norm));
-            else if (col === 'receiving') setReceiving(prev => reconcileCollection('receiving', prev, norm));
-            else if (col === 'returns') setReturns(prev => reconcileCollection('returns', prev, norm));
-            else if (col === 'recycling') setRecycling(prev => reconcileCollection('recycling', prev, norm));
-            else if (col === 'issuances') setIssuances(prev => reconcileCollection('issuances', prev, norm));
-            else if (col === 'deliveries') setDeliveries(prev => reconcileCollection('deliveries', prev, norm));
-            else if (col === 'envLogs') setEnvLogs(prev => reconcileCollection('envLogs', prev, norm));
-            else if (col === 'forkliftChecks') setForkliftChecks(prev => reconcileCollection('forkliftChecks', prev, norm));
-            else if (col === 'registries') setRegistries(prev => reconcileCollection('registries', prev, norm));
-            else if (col === 'registeredUsers') {
-              setRegisteredUsers(prev => reconcileUsers(prev, updatedItems));
-            }
-          }
-        },
-        (msg) => {
-          if (!isMounted) return;
-          setChatMessages(prev => {
-            if (prev.some(m => m.id === msg.id)) return prev;
-            return [...prev, msg];
-          });
-        },
-        (status) => {
-          if (isMounted) {
-            setSupabaseStatus(status);
-          }
-        },
-        (col, action, record, id) => {
-          if (!isMounted) return;
-          setLastSyncedTime(new Date());
-          setSupabaseStatus('connected');
-
-          if (action === 'upsert' && record && (record.id || record.employeeId)) {
-            if (record.id && isRecordDeletedLocally(record.id)) return;
-            const updateFn = (prev: any[]) => {
-              const safePrev = Array.isArray(prev) ? prev : [];
-              const idx = safePrev.findIndex(it => it.id === record.id);
-              if (idx >= 0) {
-                // If recently mutated locally on this terminal within 30s, keep local version
-                const lastLocalMut = recentlyMutatedRecords.current.get(record.id) || 0;
-                if (Date.now() - lastLocalMut < 30000) {
-                  return prev;
-                }
-                const existing = safePrev[idx];
-                const merged = { ...existing, ...record };
-                if (areValuesEquivalent(existing, merged)) return prev;
-                const next = [...safePrev];
-                next[idx] = merged;
-                return next;
-              }
-              return [record, ...safePrev];
-            };
-
-            switch (col) {
-              case 'stocks': setStocks(updateFn); break;
-              case 'receiving': setReceiving(updateFn); break;
-              case 'returns': setReturns(updateFn); break;
-              case 'recycling': setRecycling(updateFn); break;
-              case 'issuances': setIssuances(updateFn); break;
-              case 'deliveries': setDeliveries(updateFn); break;
-              case 'envLogs': setEnvLogs(updateFn); break;
-              case 'forkliftChecks': setForkliftChecks(updateFn); break;
-              case 'registries': setRegistries(updateFn); break;
-              case 'registeredUsers': {
-                setRegisteredUsers(prev => upsertUserInState(prev, record));
-                break;
-              }
-            }
-          } else if (action === 'delete' && id) {
-            markRecordAsDeletedLocally(id);
-            const filterFn = (prev: any[]) => prev.filter(it => it.id !== id);
-            switch (col) {
-              case 'stocks': setStocks(filterFn); break;
-              case 'receiving': setReceiving(filterFn); break;
-              case 'returns': setReturns(filterFn); break;
-              case 'recycling': setRecycling(filterFn); break;
-              case 'issuances': setIssuances(filterFn); break;
-              case 'deliveries': setDeliveries(filterFn); break;
-              case 'envLogs': setEnvLogs(filterFn); break;
-              case 'forkliftChecks': setForkliftChecks(filterFn); break;
-              case 'registries': setRegistries(filterFn); break;
-              case 'registeredUsers': {
-                const cleanId = id.toUpperCase();
-                if (cleanId !== 'JPMP-002') {
-                  markUserAsDeleted(cleanId);
-                  setRegisteredUsers(prev => prev.filter(u => u.employeeId.toUpperCase() !== cleanId));
-                }
-                break;
-              }
-            }
-          }
-        },
-        (presences) => {
-          if (!isMounted) return;
-          setSupabasePresence(presences || []);
-        },
-        (senderStationId) => {
-          if (!isMounted) return;
-          if (senderStationId && senderStationId !== getStationId()) {
-            setLiveSyncToast({
-              id: String(Date.now()),
-              author: 'Remote Terminal',
-              action: 'Dispatched cloud synchronization request',
-              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-            });
-            loadAllSupabaseData();
-            setLastSyncedTime(new Date());
-          }
-        },
-        (payload) => {
-          if (!isMounted) return;
-          if (payload && payload.stationId && payload.stationId !== getStationId()) {
-            setLiveSyncToast({
-              id: String(Date.now()),
-              author: payload.username || 'Remote Operator',
-              action: `Terminal ${payload.stationId} (${payload.platform || 'Device'}) completed fresh install & cloud synced`,
-              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-            });
-            loadAllSupabaseData();
-            setLastSyncedTime(new Date());
-          }
-        }
-      );
-
-      // Gentle background cloud safety sync (every 60s) to keep multi-PC data synchronized without spamming
-      if (pollInterval) clearInterval(pollInterval);
-      pollInterval = setInterval(() => {
-        if (isMounted && isSupabaseConfigured()) {
-          loadAllSupabaseData();
-        }
-      }, 60000);
-    };
-
-    // Auto-discover shared Supabase config from server
-    let targetAddr = serverAddress.trim() || getDefaultServerAddress();
-    const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
-    const isHttps = isSecureServerHost(cleanHost, targetAddr);
-    const httpProto = isHttps ? 'https:' : 'http:';
-
-    const checkConfig = async () => {
-      const baseUrl = getApiBaseUrl();
-      try {
-        let res = await fetch(`${baseUrl}/api/supabase-config`);
-        if (!res.ok) {
-          res = await fetch(`${httpProto}//${cleanHost}/api/supabase-config`);
-        }
-        if (res.ok) {
-          const cfg = await res.json();
-          if (cfg && cfg.configured && cfg.url && cfg.anonKey) {
-            const current = getStoredSupabaseConfig();
-            if (current.url !== cfg.url || current.anonKey !== cfg.anonKey) {
-              saveStoredSupabaseConfig({ url: cfg.url, anonKey: cfg.anonKey });
-            }
-          }
-        }
-      } catch (e) {}
-
-      if (isSupabaseConfigured()) {
-        startSupabaseSync();
-      } else {
-        if (isMounted) setSupabaseStatus('disconnected');
-      }
-    };
-
-    checkConfig();
-
-    return () => {
-      isMounted = false;
-      if (pollInterval) clearInterval(pollInterval);
-      if (channel && typeof channel.unsubscribe === 'function') {
-        channel.unsubscribe();
-      }
-    };
-  }, [supabaseRefreshTrigger, serverAddress]);
+    if (connectionStatus === 'connected') {
+      setSupabaseStatus('connected');
+    } else if (connectionStatus === 'connecting') {
+      setSupabaseStatus('connecting');
+    } else {
+      setSupabaseStatus('disconnected');
+    }
+  }, [connectionStatus]);
 
   // Sync state helpers (supports Supabase PostgreSQL, WebSocket, and HTTP POST REST)
   const syncCollection = (collection: string, data: any[]) => {
@@ -3239,10 +2894,7 @@ export default function App() {
       });
     }
 
-    // Save to local cache
-    try {
-      localStorage.setItem(`juwei_wms_cache_${collection}`, JSON.stringify(data));
-    } catch (e) {}
+    const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
 
     // Mark as pending before network request
     markPendingSync(collection, data);
@@ -3253,32 +2905,27 @@ export default function App() {
         syncChannelRef.current.postMessage({
           type: 'sync_collection',
           collection,
-          data
+          data,
+          reset_version: currentResetVer
         });
       } catch (e) {}
     }
 
-    // 1. Direct Supabase Cloud PostgreSQL Sync
-    if (isSupabaseConfigured()) {
-      syncCollectionToSupabase(collection, data).then((ok) => {
-        if (ok) clearPendingSync(collection);
-      });
-    }
-
-    // 2. Send via WebSocket if active
+    // 1. Send via WebSocket if active
     if (wsOpen(socket)) {
       try {
         socket!.send(JSON.stringify({
           type: 'update_collection',
           collection,
-          data
+          data,
+          reset_version: currentResetVer
         }));
       } catch (e) {
         console.warn('WS send error:', e);
       }
     }
     
-    // 3. Dual-send via HTTP POST REST to guarantee server disk persistence & update
+    // 2. Dual-send via HTTP POST REST to Central Database
     let targetAddr = serverAddress.trim() || getDefaultServerAddress();
     const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
     const isHttps = isSecureServerHost(cleanHost, targetAddr);
@@ -3288,9 +2935,16 @@ export default function App() {
     fetch(`${baseUrl}/api/sync`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ collection, data })
+      body: JSON.stringify({ collection, data, reset_version: currentResetVer })
     })
-    .then(res => {
+    .then(async res => {
+      if (res.status === 409) {
+        const errJson = await res.json().catch(() => ({}));
+        const serverVer = Number(errJson.serverResetVersion) || currentResetVer + 1;
+        purgeAllLocalOfflineCachesAndQueues(serverVer);
+        handleManualSync();
+        return;
+      }
       if (res.ok) {
         clearPendingSync(collection);
       }
@@ -3299,9 +2953,16 @@ export default function App() {
       fetch(`${httpProto}//${cleanHost}/api/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ collection, data })
+        body: JSON.stringify({ collection, data, reset_version: currentResetVer })
       })
-      .then(res => {
+      .then(async res => {
+        if (res.status === 409) {
+          const errJson = await res.json().catch(() => ({}));
+          const serverVer = Number(errJson.serverResetVersion) || currentResetVer + 1;
+          purgeAllLocalOfflineCachesAndQueues(serverVer);
+          handleManualSync();
+          return;
+        }
         if (res.ok) {
           clearPendingSync(collection);
         }
@@ -5424,20 +5085,7 @@ export default function App() {
         onClose={() => setShowSupabaseSettingsModal(false)}
         connectionStatus={supabaseStatus}
         onForceSync={() => {
-          const collections = ['stocks', 'receiving', 'returns', 'recycling', 'issuances', 'deliveries', 'envLogs', 'forkliftChecks', 'registries', 'registeredUsers'];
-          Promise.all(collections.map(async (col) => {
-            const cached = localStorage.getItem(`juwei_wms_cache_${col}`) || (col === 'registeredUsers' ? localStorage.getItem('juwei_wms_registeredUsers') : null);
-            if (cached) {
-              try {
-                const parsed = JSON.parse(cached);
-                if (Array.isArray(parsed) && parsed.length > 0) {
-                  await syncCollectionToSupabase(col, parsed);
-                }
-              } catch (e) {}
-            }
-          })).then(() => {
-            setSupabaseRefreshTrigger(prev => prev + 1);
-          });
+          handleManualSync();
         }}
         onFreshInstallAndSync={() => performFreshInstallAndSync(true)}
       />

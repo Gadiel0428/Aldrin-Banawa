@@ -1046,13 +1046,24 @@ async function startServer() {
     const permission = (req.body?.permission || req.headers['x-user-permission'] || '').toString().toUpperCase().trim();
     const pin = (req.body?.pin || req.headers['x-user-pin'] || '').toString().trim();
 
-    const isSuperAdminId = empId === 'JPMP-002';
-    const isSuperAdminRole = role === 'SUPER ADMINISTRATOR' || role === 'SUPER ADMIN';
-    const isFullAccess = permission === 'FULL_ACCESS';
-    const isSuperPin = pin === '0423';
+    // Explicitly reject normal Admin, Clerk, or User accounts
+    if (role === 'ADMIN' || role === 'USER' || role === 'WAREHOUSE CLERK' || role === 'OPERATOR' || role === 'AUDITOR') {
+      return false;
+    }
 
-    // Must be verified Super Admin identity
-    return (isSuperAdminId || isSuperAdminRole) && (isFullAccess || isSuperPin || isSuperAdminId);
+    const isSuperAdminId = empId === 'JPMP-002';
+    const isSuperAdminRole = role === 'SUPER ADMINISTRATOR' || role === 'SUPER ADMIN' || role === 'SUPER_ADMIN';
+
+    if (!isSuperAdminId && !isSuperAdminRole) {
+      return false;
+    }
+
+    // Must have matching PIN or full access permission
+    if (pin === '0423' || permission === 'FULL_ACCESS' || isSuperAdminId) {
+      return true;
+    }
+
+    return false;
   }
 
   // Central Authoritative Global Reset Execution
@@ -1067,6 +1078,7 @@ async function startServer() {
       deletedUserTombstones.clear();
     }
 
+    // Completely wipe all encoded warehouse records across all collections
     state.stocks = [];
     state.receiving = [];
     state.returns = [];
@@ -1103,11 +1115,9 @@ async function startServer() {
 
     if (supabaseServer) {
       const collections = ['stocks', 'receiving', 'returns', 'recycling', 'issuances', 'deliveries', 'env_logs', 'forklift_checks', 'registries', 'chat_messages', 'stock_movements'];
-      for (const table of collections) {
-        try {
-          supabaseServer.from(table).delete().neq('id', '___NEVER___').then();
-        } catch (e) {}
-      }
+      Promise.all(collections.map(table => {
+        return supabaseServer!.from(table).delete().neq('id', '___NEVER___');
+      })).catch(e => console.warn("Supabase reset delete error:", e));
       if (!keepUsers) {
         try {
           supabaseServer.from('registered_users').delete().neq('employee_id', 'JPMP-002').then();
@@ -1153,10 +1163,10 @@ async function startServer() {
       const { collection, data } = req.body;
       const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version']);
       
-      // Reject stale uploads from clients using an outdated reset version
-      if (clientResetVersion && clientResetVersion < systemResetVersion) {
+      // Reject stale uploads from clients using an outdated reset version (or missing reset version)
+      if (!clientResetVersion || clientResetVersion < systemResetVersion) {
         return res.status(409).json({
-          error: "OUTDATED_RESET_VERSION: Stale data from previous reset version cannot overwrite central database.",
+          error: "STALE_RESET_VERSION: Central database was reset or client reset version is stale. Encoded data from older reset versions is strictly rejected.",
           systemResetVersion,
           systemResetTimestamp,
           systemResetId
@@ -1886,7 +1896,9 @@ async function startServer() {
           ...state,
           chatMessages
         },
-        revision: stateRevision
+        revision: stateRevision,
+        systemResetVersion: systemResetVersion,
+        globalResetId: systemResetId
       });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
@@ -1900,10 +1912,11 @@ async function startServer() {
       const userPermission = (req.body.permission || req.headers['x-user-permission'] || '').toString().toUpperCase();
       const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version']);
       
-      if (clientResetVersion && clientResetVersion < systemResetVersion) {
+      if (!clientResetVersion || clientResetVersion < systemResetVersion) {
         return res.status(409).json({ 
           error: "STALE_RESET_VERSION: Central database was reset. Stale delete operation rejected.",
-          systemResetVersion 
+          systemResetVersion,
+          systemResetId
         });
       }
 
@@ -1942,6 +1955,15 @@ async function startServer() {
 
         const serverTime = new Date().toISOString();
         broadcast({
+          type: "RECORD_DELETED",
+          collection,
+          id,
+          author: author || employeeId || "Operator",
+          timestamp: serverTime,
+          systemResetVersion,
+          systemResetId
+        });
+        broadcast({
           type: "record_deleted",
           collection,
           id,
@@ -1971,10 +1993,11 @@ async function startServer() {
       const userPermission = (req.body.permission || req.headers['x-user-permission'] || '').toString().toUpperCase();
       const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version'] || record?.reset_version);
 
-      if (clientResetVersion && clientResetVersion < systemResetVersion) {
+      if (!clientResetVersion || clientResetVersion < systemResetVersion) {
         return res.status(409).json({
           error: "STALE_RESET_VERSION: The central database has been reset. Encoded data from previous reset versions cannot be uploaded or restored.",
-          systemResetVersion
+          systemResetVersion,
+          systemResetId
         });
       }
 
@@ -1994,6 +2017,7 @@ async function startServer() {
         const existingRecord = existingIndex >= 0 ? currentArr[existingIndex] : null;
 
         let confirmedRecord: any;
+        let isCreation = false;
         if (existingRecord) {
           // Optimistic concurrency check: if client sent expectedVersion and server has advanced
           if (expectedVersion !== undefined && existingRecord.version && existingRecord.version > expectedVersion) {
@@ -2011,6 +2035,7 @@ async function startServer() {
             ...existingRecord,
             ...record,
             id: record.id,
+            record_id: record.record_id || record.id,
             reset_version: systemResetVersion,
             created_at: existingRecord.created_at || existingRecord.date || record.created_at || serverTime,
             created_by: existingRecord.created_by || existingRecord.author || record.created_by || author || 'Operator',
@@ -2020,9 +2045,11 @@ async function startServer() {
           };
           currentArr[existingIndex] = confirmedRecord;
         } else {
+          isCreation = true;
           confirmedRecord = {
             ...record,
             id: record.id,
+            record_id: record.record_id || record.id,
             reset_version: systemResetVersion,
             created_at: record.created_at || serverTime,
             created_by: record.created_by || author || employeeId || 'Operator',
@@ -2039,12 +2066,25 @@ async function startServer() {
         saveStateToDisk();
         persistToSupabase(collection, [confirmedRecord]);
 
+        const eventType = isCreation ? "RECORD_CREATED" : "RECORD_UPDATED";
+        broadcast({
+          type: eventType,
+          collection,
+          record: confirmedRecord,
+          author: author || employeeId || "Operator",
+          actionDesc: actionDesc || `${isCreation ? 'Created' : 'Updated'} ${collection} record ${confirmedRecord.id}`,
+          timestamp: serverTime,
+          version: confirmedRecord.version,
+          systemResetVersion,
+          systemResetId
+        });
+
         broadcast({
           type: "record_upserted",
           collection,
           record: confirmedRecord,
           author: author || employeeId || "Operator",
-          actionDesc: actionDesc || `Updated ${collection} record ${confirmedRecord.id}`,
+          actionDesc: actionDesc || `${isCreation ? 'Created' : 'Updated'} ${collection} record ${confirmedRecord.id}`,
           timestamp: serverTime,
           version: confirmedRecord.version,
           systemResetVersion
@@ -2259,10 +2299,11 @@ async function startServer() {
   app.post("/api/sync/batch", async (req, res) => {
     try {
       const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version']);
-      if (clientResetVersion && clientResetVersion < systemResetVersion) {
+      if (!clientResetVersion || clientResetVersion < systemResetVersion) {
         return res.status(409).json({
-          error: "OUTDATED_RESET_VERSION: Central database was reset. Stale offline batch rejected.",
-          systemResetVersion
+          error: "STALE_RESET_VERSION: Central database was reset. Stale offline batch rejected.",
+          systemResetVersion,
+          systemResetId
         });
       }
 
@@ -2943,8 +2984,16 @@ async function startServer() {
           case "upsert_record": {
             const { collection, record, author, employeeId, permission, actionDesc } = payload;
             const clientResetVersion = Number(payload.reset_version || record?.reset_version);
-            if (clientResetVersion && clientResetVersion < systemResetVersion) {
+            if (!clientResetVersion || clientResetVersion < systemResetVersion) {
               console.warn(`[WS] Rejected stale upsert from reset_version ${clientResetVersion} (current: ${systemResetVersion})`);
+              try {
+                ws.send(JSON.stringify({
+                  type: "SYNC_REQUIRED",
+                  error: "STALE_RESET_VERSION",
+                  systemResetVersion,
+                  systemResetId
+                }));
+              } catch (e) {}
               break;
             }
 
@@ -2959,12 +3008,14 @@ async function startServer() {
               const existingRecord = existingIndex >= 0 ? currentArr[existingIndex] : null;
 
               let confirmedRecord: any;
+              let isCreation = false;
               if (existingRecord) {
                 const nextVersion = (Number(existingRecord.version) || 1) + 1;
                 confirmedRecord = {
                   ...existingRecord,
                   ...record,
                   id: record.id,
+                  record_id: record.record_id || record.id,
                   reset_version: systemResetVersion,
                   created_at: existingRecord.created_at || existingRecord.date || record.created_at || serverTime,
                   created_by: existingRecord.created_by || existingRecord.author || record.created_by || author || 'Operator',
@@ -2974,9 +3025,11 @@ async function startServer() {
                 };
                 currentArr[existingIndex] = confirmedRecord;
               } else {
+                isCreation = true;
                 confirmedRecord = {
                   ...record,
                   id: record.id,
+                  record_id: record.record_id || record.id,
                   reset_version: systemResetVersion,
                   created_at: record.created_at || serverTime,
                   created_by: record.created_by || author || employeeId || 'Operator',
@@ -2993,12 +3046,25 @@ async function startServer() {
               saveStateToDisk();
               persistToSupabase(collection, [confirmedRecord]);
 
+              const eventType = isCreation ? "RECORD_CREATED" : "RECORD_UPDATED";
+              broadcast({
+                type: eventType,
+                collection,
+                record: confirmedRecord,
+                author: author || employeeId || "Operator",
+                actionDesc: actionDesc || `${isCreation ? 'Created' : 'Updated'} ${collection} record`,
+                timestamp: serverTime,
+                version: confirmedRecord.version,
+                systemResetVersion,
+                systemResetId
+              });
+
               broadcast({
                 type: "record_upserted",
                 collection,
                 record: confirmedRecord,
                 author: author || employeeId || "Operator",
-                actionDesc: actionDesc || `Updated ${collection} record`,
+                actionDesc: actionDesc || `${isCreation ? 'Created' : 'Updated'} ${collection} record`,
                 timestamp: serverTime,
                 version: confirmedRecord.version,
                 systemResetVersion
@@ -3017,8 +3083,16 @@ async function startServer() {
           case "delete_record": {
             const { collection, id, author, employeeId, permission } = payload;
             const clientResetVersion = Number(payload.reset_version);
-            if (clientResetVersion && clientResetVersion < systemResetVersion) {
+            if (!clientResetVersion || clientResetVersion < systemResetVersion) {
               console.warn(`[WS] Rejected stale delete from reset_version ${clientResetVersion} (current: ${systemResetVersion})`);
+              try {
+                ws.send(JSON.stringify({
+                  type: "SYNC_REQUIRED",
+                  error: "STALE_RESET_VERSION",
+                  systemResetVersion,
+                  systemResetId
+                }));
+              } catch (e) {}
               break;
             }
 
@@ -3051,6 +3125,16 @@ async function startServer() {
               }
 
               const serverTime = new Date().toISOString();
+              broadcast({
+                type: "RECORD_DELETED",
+                collection,
+                id,
+                author: author || employeeId || "Operator",
+                timestamp: serverTime,
+                systemResetVersion,
+                systemResetId
+              });
+
               broadcast({
                 type: "record_deleted",
                 collection,

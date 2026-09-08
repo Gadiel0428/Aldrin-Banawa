@@ -1,123 +1,11 @@
 {
+  "systemResetVersion": 1788787623401,
+  "systemResetTimestamp": "2026-09-07T13:27:03.401Z",
+  "systemResetId": "RST-1788787623401-E5BED",
+  "systemResetBy": "ALDRIN BANAWA (JPMP-002)",
   "state": {
-    "stocks": [
-      {
-        "id": "STK-6732",
-        "partCode": "2314234231",
-        "description": "23412v3c4214",
-        "type": "CONSUMABLE",
-        "location": "c12342134",
-        "quantity": 421341234,
-        "unit": "KG",
-        "lotNumber": "2134213c4",
-        "color": null,
-        "receivedDate": "2026-09-02",
-        "fifoColor": "Black",
-        "status": "APPROVED",
-        "resinSackRisk": false,
-        "customer": "General / Internal",
-        "reorderMin": 2342314123,
-        "remarks": null,
-        "bom": []
-      },
-      {
-        "id": "STK-5654",
-        "partCode": "12432",
-        "description": "14234r2134c2423",
-        "type": "CONSUMABLE",
-        "location": "21341c2142",
-        "quantity": 214232234,
-        "unit": "KG",
-        "lotNumber": "c1234c`134",
-        "color": "32142",
-        "receivedDate": "2026-09-02",
-        "fifoColor": "Black",
-        "status": "APPROVED",
-        "resinSackRisk": false,
-        "customer": "General / Internal",
-        "reorderMin": 31242,
-        "remarks": null,
-        "bom": []
-      }
-    ],
-    "receiving": [
-      {
-        "id": "42134c2",
-        "date": "2026-09-02",
-        "receivedDate": "2026-09-02",
-        "location": "c12342134",
-        "vendorSupplier": "234234",
-        "reorderMin": 2342314123,
-        "remarks": null,
-        "source": "EXTERNAL",
-        "itemDescription": "23412v3c4214",
-        "partCode": "2314234231",
-        "color": null,
-        "quantity": 421341234,
-        "unit": "KG",
-        "lotNumber": "2134213c4",
-        "physicalCondition": {
-          "boxIntact": true,
-          "noPestSign": true,
-          "noWaterDamage": true,
-          "noContamination": true,
-          "systemRecording": true,
-          "quantityAccuracy": true,
-          "receivingInspection": true,
-          "materialTraceability": true,
-          "materialConditionCheck": true
-        },
-        "rrNumber": "42134c2",
-        "poNumber": "341234c12",
-        "drNumber": "34c234",
-        "siNumber": "23423",
-        "supplierOrDept": "INDIRECT BOM",
-        "iqcStatus": "APPROVED_IQC",
-        "status": "DRAFT",
-        "fifoColorCode": "Black",
-        "bom": [],
-        "autoDeductBom": false,
-        "customer": "General / Internal"
-      },
-      {
-        "id": "12c34124",
-        "date": "2026-09-02",
-        "receivedDate": "2026-09-02",
-        "location": "21341c2142",
-        "vendorSupplier": "3c2412342",
-        "reorderMin": 31242,
-        "remarks": null,
-        "source": "INTERNAL",
-        "itemDescription": "14234r2134c2423",
-        "partCode": "12432",
-        "color": "32142",
-        "quantity": 214232234,
-        "unit": "KG",
-        "lotNumber": "c1234c`134",
-        "physicalCondition": {
-          "boxIntact": true,
-          "noPestSign": true,
-          "noWaterDamage": true,
-          "noContamination": true,
-          "systemRecording": true,
-          "quantityAccuracy": true,
-          "receivingInspection": true,
-          "materialTraceability": true,
-          "materialConditionCheck": true
-        },
-        "rrNumber": "12c34124",
-        "poNumber": "12421",
-        "drNumber": "422",
-        "siNumber": "222142",
-        "supplierOrDept": "RESIN/RAW MATERIALS",
-        "iqcStatus": "NA",
-        "status": "DRAFT",
-        "fifoColorCode": "Black",
-        "bom": [],
-        "autoDeductBom": false,
-        "customer": "General / Internal"
-      }
-    ],
+    "stocks": [],
+    "receiving": [],
     "returns": [],
     "recycling": [],
     "issuances": [],
@@ -127,12 +15,48 @@
     "registries": [],
     "registeredUsers": [
       {
+        "employeeId": "JPMP-012",
+        "username": "JAN MIGUEL MENDOZA",
+        "role": "IMPEX",
+        "phoneNumber": "",
+        "permission": "VIEW_ONLY",
+        "pin": "1405",
+        "status": "ACTIVE"
+      },
+      {
+        "employeeId": "JPMP-056",
+        "username": "IVY AVENGUA",
+        "role": "WAREHOUSE CLERK",
+        "phoneNumber": "",
+        "permission": "LIMITED_ACCESS",
+        "pin": "9217",
+        "status": "ACTIVE"
+      },
+      {
         "employeeId": "JPMP-002",
         "username": "ALDRIN BANAWA",
         "role": "SUPER ADMINISTRATOR",
         "phoneNumber": "+639669858846",
         "permission": "FULL_ACCESS",
         "pin": "0423",
+        "status": "ACTIVE"
+      },
+      {
+        "employeeId": "JPMP-052",
+        "username": "RHEA VICTORIA",
+        "role": "PRINTING AND ASSEMBLY (PRODUCTION)",
+        "phoneNumber": "",
+        "permission": "LIMITED_ACCESS",
+        "pin": "4755",
+        "status": "ACTIVE"
+      },
+      {
+        "employeeId": "JPMP-089",
+        "username": "CHRISTIAN LONGCOP",
+        "role": "WAREHOUSE INVENTORY SPECIALIST",
+        "phoneNumber": "",
+        "permission": "LIMITED_ACCESS",
+        "pin": "6591",
         "status": "ACTIVE"
       }
     ],
@@ -144,157 +68,10 @@
   ],
   "chatMessages": [
     {
-      "id": "sys-1787797089772-la90",
+      "id": "sys-reset-1788787623401",
       "sender": "System Audit",
-      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
-      "timestamp": "2026-08-27T02:18:09.772Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1787797105896-3zhl",
-      "sender": "System Audit",
-      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED OFF.",
-      "timestamp": "2026-08-27T02:18:25.896Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1787797178575-atiz",
-      "sender": "System Audit",
-      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
-      "timestamp": "2026-08-27T02:19:38.575Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1787886522396-ark9",
-      "sender": "System Audit",
-      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
-      "timestamp": "2026-08-28T03:08:42.396Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1787886537297-r3s6",
-      "sender": "System Audit",
-      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
-      "timestamp": "2026-08-28T03:08:57.297Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1787887607275-a86b",
-      "sender": "System Audit",
-      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
-      "timestamp": "2026-08-28T03:26:47.275Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1787887622305-u7vx",
-      "sender": "System Audit",
-      "text": "SUPER ADMIN ALDRIN BANAWA deleted receiving record 1B34q23b.",
-      "timestamp": "2026-08-28T03:27:02.305Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1787887624720-v5v5",
-      "sender": "System Audit",
-      "text": "SUPER ADMIN ALDRIN BANAWA deleted receiving record aebwaeraw.",
-      "timestamp": "2026-08-28T03:27:04.720Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1787887627099-a9gr",
-      "sender": "System Audit",
-      "text": "SUPER ADMIN ALDRIN BANAWA deleted receiving record f1231.",
-      "timestamp": "2026-08-28T03:27:07.099Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1787887637482-kx8l",
-      "sender": "System Audit",
-      "text": "SUPER ADMIN ALDRIN BANAWA deleted stock record STK-6674.",
-      "timestamp": "2026-08-28T03:27:17.482Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1787887640500-nvih",
-      "sender": "System Audit",
-      "text": "SUPER ADMIN ALDRIN BANAWA deleted stock record STK-2007.",
-      "timestamp": "2026-08-28T03:27:20.500Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1787887643694-ca9r",
-      "sender": "System Audit",
-      "text": "SUPER ADMIN ALDRIN BANAWA deleted stock record STK-6140.",
-      "timestamp": "2026-08-28T03:27:23.694Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1787887646899-9ep0",
-      "sender": "System Audit",
-      "text": "SUPER ADMIN ALDRIN BANAWA deleted stock record STK-5035.",
-      "timestamp": "2026-08-28T03:27:26.899Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1787887649983-kogm",
-      "sender": "System Audit",
-      "text": "SUPER ADMIN ALDRIN BANAWA deleted stock record STK-2212.",
-      "timestamp": "2026-08-28T03:27:29.983Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1787966207908-lv7s",
-      "sender": "System Audit",
-      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
-      "timestamp": "2026-08-29T01:16:47.908Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1788327365629-1za6",
-      "sender": "System Audit",
-      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
-      "timestamp": "2026-09-02T05:36:05.629Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1788327715026-ic2v",
-      "sender": "System Audit",
-      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
-      "timestamp": "2026-09-02T05:41:55.026Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1788328195296-occ9",
-      "sender": "System Audit",
-      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
-      "timestamp": "2026-09-02T05:49:55.296Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1788328408611-jqgn",
-      "sender": "System Audit",
-      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
-      "timestamp": "2026-09-02T05:53:28.611Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1788402166717-4zgq",
-      "sender": "System Audit",
-      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
-      "timestamp": "2026-09-03T02:22:46.717Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1788402954964-dx4d",
-      "sender": "System Audit",
-      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
-      "timestamp": "2026-09-03T02:35:54.964Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1788404284196-xtfk",
-      "sender": "System Audit",
-      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
-      "timestamp": "2026-09-03T02:58:04.196Z",
+      "text": "CENTRAL DATABASE HARD RESET: All encoded warehouse records cleared from central database by Super Administrator (ALDRIN BANAWA (JPMP-002)). Reset Version: 1788787623401, Reset ID: RST-1788787623401-E5BED.",
+      "timestamp": "2026-09-07T13:27:03.401Z",
       "isSystem": true
     }
   ]

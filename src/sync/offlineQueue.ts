@@ -117,7 +117,7 @@ export class OfflineQueue {
     this.load();
     if (!currentResetVersion) return;
     const initialCount = this.items.length;
-    this.items = this.items.filter((i) => !i.reset_version || i.reset_version >= currentResetVersion);
+    this.items = this.items.filter((i) => i.reset_version && Number(i.reset_version) === Number(currentResetVersion));
     if (this.items.length !== initialCount) {
       this.save();
     }
