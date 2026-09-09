@@ -29,6 +29,6 @@ export interface SyncStatusInfo {
   pendingCount: number;
   lastSyncTimestamp: number | null;
   deviceId: string;
-  activeProvider: 'SUPABASE' | 'SERVER_SOCKET' | 'LOCAL_OFFLINE';
+  activeProvider: 'CENTRAL_SERVER' | 'SERVER_SOCKET' | 'OFFLINE';
   errorMessage?: string;
 }

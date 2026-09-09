@@ -59,7 +59,7 @@ import DesktopInstallModal from './components/DesktopInstallModal';
 import MobileAppDownloadModal from './components/MobileAppDownloadModal';
 import { ConfirmModal, ConfirmActionConfig } from './components/ConfirmModal';
 import BarcodeScannerModal from './components/BarcodeScannerModal';
-import SupabaseSettingsModal from './components/SupabaseSettingsModal';
+import CentralDatabaseModal from './components/CentralDatabaseModal';
 import ActiveUsersModal from './components/ActiveUsersModal';
 import { SyncStatus } from './components/SyncStatus';
 import { StockMovementView } from './components/StockMovement';
@@ -68,27 +68,18 @@ import { InventoryTable } from './components/InventoryTable';
 import { createStockMovement } from './database/movements';
 
 import { 
-  getStoredSupabaseConfig, 
-  saveStoredSupabaseConfig,
-  isSupabaseConfigured, 
-  getSupabase,
-  fetchCollectionFromSupabase, 
-  fetchFullSupabaseSnapshot,
-  syncCollectionToSupabase, 
-  setupSupabaseRealtimeSubscriptions,
-  processPendingSupabaseMutations,
-  deleteAccountFromSupabase,
-  deleteRecordFromSupabase,
-  trackSupabasePresence,
-  untrackSupabasePresence,
-  broadcastSupabaseForceSync,
-  broadcastSupabaseInstallation,
-  resolveAccountPin,
-  fetchAuthoritativeAccounts,
-  verifyAccountCredentials,
-  saveAccountToSupabase,
-  updateAccountPinInSupabase
-} from './lib/supabase';
+  fetchCentralDatabaseSnapshot,
+  verifyCentralCredentials,
+  registerCentralAccount,
+  updateCentralAccount,
+  updateCentralPin,
+  deleteCentralAccount,
+  clearAllAccountsExceptSuperAdmin,
+  upsertCentralRecord,
+  deleteCentralRecord,
+  performCentralGlobalReset,
+  resolveAccountPin
+} from './lib/centralApi';
 
 import { 
   MaterialStockItem, 
@@ -223,7 +214,7 @@ function savePendingSyncQueue(queue: Record<string, any[]>) {
 }
 
 function markPendingSync(collection: string, data: any[]) {
-  // Direct live synchronizations are transmitted immediately via Supabase, WebSockets, and server endpoints.
+  // Direct live synchronizations are transmitted immediately via WebSockets and REST server endpoints.
   // We do not queue whole collection arrays to prevent stale overwrites across users.
 }
 
@@ -296,10 +287,8 @@ export default function App() {
   });
   const [authTab, setAuthTab] = useState<'login' | 'register'>('login');
 
-  // Supabase PostgreSQL Realtime state
-  const [showSupabaseSettingsModal, setShowSupabaseSettingsModal] = useState<boolean>(false);
-  const [supabaseStatus, setSupabaseStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected');
-  const [supabaseRefreshTrigger, setSupabaseRefreshTrigger] = useState<number>(0);
+  // Central Database modal state
+  const [showCentralDatabaseModal, setShowCentralDatabaseModal] = useState<boolean>(false);
 
   // Helper to obtain persistent workstation / session identifier
   const getStationId = (): string => {
@@ -344,7 +333,6 @@ export default function App() {
   const [activeUsers, setActiveUsers] = useState<string[]>([]);
   const [activePresence, setActivePresence] = useState<ActivePresenceUser[]>([]);
   const [wsPresence, setWsPresence] = useState<ActivePresenceUser[]>([]);
-  const [supabasePresence, setSupabasePresence] = useState<ActivePresenceUser[]>([]);
   const [localTabsPresence, setLocalTabsPresence] = useState<ActivePresenceUser[]>([]);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
@@ -439,9 +427,8 @@ export default function App() {
 
     const combined: ActivePresenceUser[] = [
       selfItem,
-      ...wsPresence.map(p => ({ ...p, source: (p.source || 'websocket') as ('websocket' | 'supabase' | 'local' | 'self') })),
-      ...supabasePresence.map(p => ({ ...p, source: (p.source || 'supabase') as ('websocket' | 'supabase' | 'local' | 'self') })),
-      ...localTabsPresence.map(p => ({ ...p, source: (p.source || 'local') as ('websocket' | 'supabase' | 'local' | 'self') }))
+      ...wsPresence.map(p => ({ ...p, source: (p.source || 'websocket') as ('websocket' | 'central' | 'local' | 'self') })),
+      ...localTabsPresence.map(p => ({ ...p, source: (p.source || 'local') as ('websocket' | 'central' | 'local' | 'self') }))
     ];
 
     const map = new Map<string, ActivePresenceUser>();
@@ -484,7 +471,7 @@ export default function App() {
       }
       return finalNames;
     });
-  }, [currentUser, currentEmployeeId, currentRole, currentPermission, view, wsPresence, supabasePresence, localTabsPresence]);
+  }, [currentUser, currentEmployeeId, currentRole, currentPermission, view, wsPresence, localTabsPresence]);
 
   useEffect(() => {
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
@@ -660,7 +647,6 @@ export default function App() {
                 action: `Terminal ${payload.stationId} (${payload.platform || 'Device'}) completed fresh install & synced`,
                 time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
               });
-              setSupabaseRefreshTrigger(prev => prev + 1);
             }
           } else if (payload.type === 'activity_toast') {
             setLiveSyncToast({
@@ -933,7 +919,7 @@ export default function App() {
     handleLogout();
   };
 
-  // Normalizer helper for records coming from any source (REST, WebSocket, Supabase, Cache)
+  // Normalizer helper for records coming from central database, REST, and WebSocket
   const normalizeRecords = (colName: string, items: any[]): any[] => {
     if (!Array.isArray(items)) return [];
     return items.map((r: any) => {
@@ -1483,12 +1469,15 @@ export default function App() {
       mut => mut && mut.collection === colName && (!mut.reset_version || mut.reset_version >= currentResetVer)
     );
 
-    // If incoming is empty and there are no active pending local mutations
+    // Prevent data flickering bug: Never replace valid table data with [] during fetching or reconnecting
     if (incomingArr.length === 0) {
-      const activePendingUpserts = pendingMutations.filter(m => m.type === 'upsert' && m.record && m.record.id && !deletedSet.has(m.record.id));
-      if (activePendingUpserts.length === 0) {
+      if (forceOverwrite) {
         return [];
       }
+      if (safeCurrent.length > 0) {
+        return safeCurrent;
+      }
+      return [];
     }
 
     // Filter incoming records from server to exclude locally deleted IDs and stale reset versions
@@ -1695,7 +1684,7 @@ export default function App() {
     return orderedUsers;
   };
 
-  // Fresh install protocol: wipes local cache, fetches pure authoritative snapshot from central server / Supabase,
+  // Fresh install protocol: wipes local cache, fetches pure authoritative snapshot from central server,
   // and broadcasts live synchronization to all connected users and workstations across the cluster.
   const performFreshInstallAndSync = async (isUserInitiated = false) => {
     try {
@@ -1797,19 +1786,6 @@ export default function App() {
         } catch (e) {}
       }
 
-      // 4. Announce over Supabase Realtime broadcast to all cloud users
-      if (isSupabaseConfigured()) {
-        broadcastSupabaseInstallation({
-          stationId,
-          installId,
-          username: currentUser || 'JUWEI OPERATOR',
-          employeeId: currentEmployeeId || '',
-          platform: getPlatformName()
-        });
-      }
-
-      // 5. Trigger cloud sync refresh
-      setSupabaseRefreshTrigger(prev => prev + 1);
       setLastSyncedTime(new Date());
 
       setLiveSyncToast({
@@ -1834,7 +1810,7 @@ export default function App() {
     } catch (e) {}
   }, []);
 
-  // Helper to execute coordinated single-record upsert across local state, Supabase, WebSocket, and Express server
+  // Helper to execute coordinated single-record upsert across local state, WebSocket, and Express server
   const upsertRecordLocallyAndRemotely = (
     collection: string, 
     record: any, 
@@ -2021,7 +1997,7 @@ export default function App() {
     });
   };
 
-  // Manual Full-Sync across WebSocket, REST, Supabase & Local Terminals
+  // Manual Full-Sync across WebSocket, REST & Local Terminals
   const handleManualSync = async () => {
     setIsManualSyncing(true);
     try {
@@ -2038,17 +2014,6 @@ export default function App() {
         } catch (e) {}
       }
 
-      // 2. Broadcast force sync over Supabase Realtime & re-track local terminal
-      if (isSupabaseConfigured()) {
-        broadcastSupabaseForceSync();
-        trackSupabasePresence({
-          stationId: getStationId(),
-          username: currentUser || 'JUWEI OPERATOR',
-          employeeId: currentEmployeeId || '',
-          role: currentRole || (currentPermission === 'FULL_ACCESS' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR'),
-          activeView: view
-        });
-      }
 
       // 3. Broadcast force sync over local BroadcastChannel
       if (syncChannelRef.current) {
@@ -2671,17 +2636,6 @@ export default function App() {
                 });
               }
               runSyncCheck();
-              if (isSupabaseConfigured()) {
-                setSupabaseRefreshTrigger(prev => prev + 1);
-              }
-              break;
-            }
-            case 'supabase_config_updated': {
-              if (payload.url && payload.anonKey) {
-                saveStoredSupabaseConfig({ url: payload.url, anonKey: payload.anonKey });
-                setSupabaseStatus('connecting');
-                setSupabaseRefreshTrigger(prev => prev + 1);
-              }
               break;
             }
             case 'client_installed_broadcast': {
@@ -2694,9 +2648,6 @@ export default function App() {
                   time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                 });
                 runSyncCheck();
-                if (isSupabaseConfigured()) {
-                  setSupabaseRefreshTrigger(prev => prev + 1);
-                }
               }
               break;
             }
@@ -2772,7 +2723,7 @@ export default function App() {
     };
   }, [serverAddress]);
 
-  // Keep WebSocket & Supabase presence and active view module in sync dynamically across all connected operators
+  // Keep WebSocket presence and active view module in sync dynamically across all connected operators
   useEffect(() => {
     const stationId = getStationId();
     if (wsOpen(socket)) {
@@ -2787,30 +2738,9 @@ export default function App() {
         }));
       } catch (e) {}
     }
-
-    if (isSupabaseConfigured()) {
-      trackSupabasePresence({
-        stationId,
-        username: currentUser || 'JUWEI OPERATOR',
-        employeeId: currentEmployeeId || '',
-        role: currentRole || (currentPermission === 'FULL_ACCESS' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR'),
-        activeView: view
-      });
-    }
   }, [currentUser, currentEmployeeId, currentRole, currentPermission, view, socket]);
 
-  // Central Database Connection Status Monitor
-  useEffect(() => {
-    if (connectionStatus === 'connected') {
-      setSupabaseStatus('connected');
-    } else if (connectionStatus === 'connecting') {
-      setSupabaseStatus('connecting');
-    } else {
-      setSupabaseStatus('disconnected');
-    }
-  }, [connectionStatus]);
-
-  // Sync state helpers (supports Supabase PostgreSQL, WebSocket, and HTTP POST REST)
+  // Sync state helpers (supports Central Database, WebSocket, and HTTP POST REST)
   const syncCollection = (collection: string, data: any[]) => {
     lastMutationTimes.current[collection] = Date.now();
     setLastSyncedTime(new Date());
@@ -3149,7 +3079,6 @@ export default function App() {
 
     if (cleanNewId !== cleanOldId) {
       unmarkUserAsDeleted(cleanNewId);
-      deleteAccountFromSupabase(cleanOldId).catch(() => {});
       const baseUrl = getApiBaseUrl();
       fetch(`${baseUrl}/api/accounts/delete`, {
         method: 'POST',
@@ -3202,9 +3131,6 @@ export default function App() {
         }).catch(() => {});
       } catch (e) {}
 
-      // Direct single authoritative storage persistence
-      saveAccountToSupabase(targetUpdatedUser).catch(() => {});
-      updateAccountPinInSupabase(cleanNewId, targetUpdatedUser.pin || '1234').catch(() => {});
     }
 
     syncCollection('registeredUsers', nextUsers);
@@ -3237,11 +3163,11 @@ export default function App() {
       }
     );
 
-    // If not found in local memory or PIN was updated on another machine, verify live against single authoritative storage
+    // If not found in local memory or PIN was updated on another machine, verify live against central database
     if (!foundUser && enteredPin) {
       setIsLoggingIn(true);
       try {
-        const authoritativeUser = await verifyAccountCredentials(rawInput, enteredPin);
+        const authoritativeUser = await verifyCentralCredentials(rawInput, enteredPin);
         if (authoritativeUser) {
           foundUser = authoritativeUser;
           setRegisteredUsers(prev => upsertUserInState(prev, authoritativeUser));
@@ -3300,9 +3226,9 @@ export default function App() {
 
     if (foundUser) {
       if (!searchPin || (foundUser.pin && foundUser.pin.trim() !== searchPin)) {
-        // Check single authoritative storage in case PIN was synced from another terminal
+        // Check central database in case PIN was updated from another terminal
         if (searchPin) {
-          verifyAccountCredentials(searchEmpId, searchPin).then(verified => {
+          verifyCentralCredentials(searchEmpId, searchPin).then(verified => {
             if (verified) {
               setRegisteredUsers(prev => upsertUserInState(prev, verified));
               setShowLoginQrScanner(false);
@@ -3335,9 +3261,9 @@ export default function App() {
         setIsLoggingIn(false);
       }, 300);
     } else {
-      // Not yet in local memory, check single authoritative cloud storage
+      // Not yet in local memory, check central database
       if (searchPin) {
-        verifyAccountCredentials(searchEmpId, searchPin).then(verified => {
+        verifyCentralCredentials(searchEmpId, searchPin).then(verified => {
           if (verified) {
             setRegisteredUsers(prev => upsertUserInState(prev, verified));
             setShowLoginQrScanner(false);
@@ -4209,7 +4135,7 @@ export default function App() {
           animate={{ opacity: 1, y: 0, scale: 1, filter: 'blur(0px)' }}
           transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
         >
-          {/* Supabase Cloud Database Quick Settings */}
+          {/* Central Database Status Quick Settings */}
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
@@ -4218,14 +4144,14 @@ export default function App() {
 
             <button
               type="button"
-              onClick={() => setShowSupabaseSettingsModal(true)}
+              onClick={() => setShowCentralDatabaseModal(true)}
               className="flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700/80 border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer text-xs"
-              title="Unified Central Storage • All Users Synced"
-              aria-label="Unified Central Storage Status"
-              id="btn-login-supabase-settings"
+              title="Central Database • Single Source of Truth"
+              aria-label="Central Database Status"
+              id="btn-login-central-db-settings"
             >
               <Database className="h-3.5 w-3.5 text-emerald-400" />
-              <span className="text-[11px] font-mono text-emerald-300 font-semibold">1 Storage • Synced</span>
+              <span className="text-[11px] font-mono text-emerald-300 font-semibold">Central DB • Synced</span>
             </button>
           </div>
 
@@ -4712,7 +4638,7 @@ export default function App() {
           
           <div className="flex items-center gap-2 text-xs font-medium shrink-0">
             {/* Unified Centralized Realtime & Offline Sync Engine */}
-            <SyncStatus onOpenSettings={() => setShowSupabaseSettingsModal(true)} />
+            <SyncStatus onOpenSettings={() => setShowCentralDatabaseModal(true)} />
 
             {/* Connected Workstations / Active Terminals Pill - Logo Only with Count */}
             <button
@@ -4955,15 +4881,17 @@ export default function App() {
         />
       )}
 
-      {/* Supabase PostgreSQL Database & Realtime Settings Modal */}
-      <SupabaseSettingsModal
-        isOpen={showSupabaseSettingsModal}
-        onClose={() => setShowSupabaseSettingsModal(false)}
-        connectionStatus={supabaseStatus}
-        onForceSync={() => {
-          handleManualSync();
-        }}
-        onFreshInstallAndSync={() => performFreshInstallAndSync(true)}
+      {/* Central Database & Realtime Diagnostics Modal */}
+      <CentralDatabaseModal
+        isOpen={showCentralDatabaseModal}
+        onClose={() => setShowCentralDatabaseModal(false)}
+        connectionStatus={connectionStatus}
+        systemResetVersion={Number(localStorage.getItem('juwei_wms_system_reset_version')) || 1}
+        systemResetId={localStorage.getItem('juwei_wms_system_reset_id') || 'CENTRAL-COMMITTED'}
+        onForceSync={handleManualSync}
+        isManualSyncing={isManualSyncing}
+        totalRecordsCount={stocks.length + receiving.length + returns.length + recycling.length + issuances.length + deliveries.length}
+        totalUsersCount={registeredUsers.length}
       />
 
       {/* Active Workstation Terminals Modal */}
@@ -4975,7 +4903,7 @@ export default function App() {
           activePresence={activePresence}
           registeredUsers={registeredUsers}
           connectionStatus={connectionStatus}
-          supabaseStatus={supabaseStatus}
+          databaseStatus={connectionStatus}
           wsLatency={wsLatency}
           lastSyncedTime={lastSyncedTime}
           onForceSync={handleManualSync}

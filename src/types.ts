@@ -243,7 +243,7 @@ export interface ActivePresenceUser {
   connectedAt?: string;
   lastPing?: number;
   terminalName?: string;
-  source?: 'websocket' | 'supabase' | 'local' | 'self';
+  source?: 'websocket' | 'central' | 'local' | 'self';
 }
 
 export interface QueuedMutation {

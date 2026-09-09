@@ -125,7 +125,7 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({ onOpenSettings }) => {
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
                 <span>Single Source of Truth</span>
               </div>
-              <span className="font-semibold text-emerald-600 dark:text-emerald-400">Supabase PostgreSQL</span>
+              <span className="font-semibold text-emerald-600 dark:text-emerald-400">Central Backend Database</span>
             </div>
 
             <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 dark:bg-slate-800/60">
@@ -211,7 +211,7 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({ onOpenSettings }) => {
                 className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 transition-colors cursor-pointer"
               >
                 <Settings2 className="w-3.5 h-3.5" />
-                Configure Database & Credentials
+                Central Database & Engine Diagnostics
               </button>
             </div>
           )}

@@ -1,0 +1,121 @@
+{
+  "systemResetVersion": 1788787623401,
+  "systemResetTimestamp": "2026-09-07T13:27:03.401Z",
+  "systemResetId": "RST-1788787623401-E5BED",
+  "systemResetBy": "ALDRIN BANAWA (JPMP-002)",
+  "stateRevision": 3,
+  "state": {
+    "stocks": [],
+    "receiving": [],
+    "returns": [],
+    "recycling": [],
+    "issuances": [],
+    "deliveries": [],
+    "envLogs": [],
+    "forkliftChecks": [],
+    "registries": [],
+    "registeredUsers": [
+      {
+        "employeeId": "JPMP-002",
+        "username": "ALDRIN BANAWA",
+        "role": "SUPER ADMINISTRATOR",
+        "phoneNumber": "+639669858846",
+        "permission": "FULL_ACCESS",
+        "pin": "0423",
+        "status": "ACTIVE",
+        "id": "REC-1788854183544-xo72z",
+        "record_id": "REC-1788854183544-xo72z",
+        "version": 1,
+        "updated_at": "2026-09-08T07:56:23.544Z",
+        "reset_version": 1788787623401,
+        "lastActive": "2026-09-08T07:56:57.989Z"
+      },
+      {
+        "employeeId": "JPMP-012",
+        "username": "JAN MIGUEL MENDOZA",
+        "role": "IMPEX",
+        "phoneNumber": "",
+        "permission": "VIEW_ONLY",
+        "pin": "1405",
+        "status": "ACTIVE",
+        "id": "REC-1788854183544-jl65t",
+        "record_id": "REC-1788854183544-jl65t",
+        "version": 1,
+        "updated_at": "2026-09-08T07:56:23.544Z",
+        "reset_version": 1788787623401
+      },
+      {
+        "employeeId": "JPMP-056",
+        "username": "IVY AVENGUA",
+        "role": "WAREHOUSE CLERK",
+        "phoneNumber": "",
+        "permission": "LIMITED_ACCESS",
+        "pin": "9217",
+        "status": "ACTIVE",
+        "id": "REC-1788854183544-jkyh1",
+        "record_id": "REC-1788854183544-jkyh1",
+        "version": 1,
+        "updated_at": "2026-09-08T07:56:23.544Z",
+        "reset_version": 1788787623401
+      },
+      {
+        "employeeId": "JPMP-052",
+        "username": "RHEA VICTORIA",
+        "role": "PRINTING AND ASSEMBLY (PRODUCTION)",
+        "phoneNumber": "",
+        "permission": "LIMITED_ACCESS",
+        "pin": "4755",
+        "status": "ACTIVE",
+        "id": "REC-1788854183544-yuyy0",
+        "record_id": "REC-1788854183544-yuyy0",
+        "version": 1,
+        "updated_at": "2026-09-08T07:56:23.544Z",
+        "reset_version": 1788787623401
+      },
+      {
+        "employeeId": "JPMP-089",
+        "username": "CHRISTIAN LONGCOP",
+        "role": "WAREHOUSE INVENTORY SPECIALIST",
+        "phoneNumber": "",
+        "permission": "LIMITED_ACCESS",
+        "pin": "6591",
+        "status": "ACTIVE",
+        "id": "REC-1788854183544-oqdqn",
+        "record_id": "REC-1788854183544-oqdqn",
+        "version": 1,
+        "updated_at": "2026-09-08T07:56:23.544Z",
+        "reset_version": 1788787623401
+      }
+    ],
+    "stockMovements": []
+  },
+  "deletedRecordTombstones": [
+    "STK-TEST-001"
+  ],
+  "deletedUserTombstones": [
+    "JPMP-777"
+  ],
+  "chatMessages": [
+    {
+      "id": "sys-1788851015432-wh10",
+      "sender": "System Audit",
+      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
+      "timestamp": "2026-09-08T07:03:35.432Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1788851823207-757m",
+      "sender": "System Audit",
+      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED OFF.",
+      "timestamp": "2026-09-08T07:17:03.207Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1788854184966-j8vu",
+      "sender": "System",
+      "text": "ALDRIN BANAWA (WS-37II) connected.",
+      "timestamp": "2026-09-08T07:56:24.966Z",
+      "isSystem": true
+    }
+  ]
+}

@@ -10,7 +10,7 @@ interface ActiveUsersModalProps {
   activePresence?: ActivePresenceUser[];
   registeredUsers: RegisteredAccount[];
   connectionStatus: 'connected' | 'connecting' | 'disconnected';
-  supabaseStatus: 'connected' | 'connecting' | 'disconnected';
+  databaseStatus?: 'connected' | 'connecting' | 'disconnected';
   wsLatency: number | null;
   lastSyncedTime: Date;
   onForceSync: () => void;
@@ -40,7 +40,7 @@ export default function ActiveUsersModal({
   activePresence = [],
   registeredUsers,
   connectionStatus,
-  supabaseStatus,
+  databaseStatus = 'connected',
   wsLatency,
   lastSyncedTime,
   onForceSync,
@@ -107,11 +107,11 @@ export default function ActiveUsersModal({
 
               <div className="bg-slate-800/60 border border-slate-700/60 p-2.5 rounded-xl">
                 <div className="text-[10px] text-slate-400 uppercase font-mono font-bold flex items-center gap-1">
-                  <Server className="h-3 w-3 text-blue-400" /> Cloud Database
+                  <Server className="h-3 w-3 text-blue-400" /> Central Database
                 </div>
                 <div className="font-bold text-white mt-1 flex items-center gap-1.5 font-mono">
-                  <span className={`w-2 h-2 rounded-full ${supabaseStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
-                  <span>{supabaseStatus === 'connected' ? 'Supabase RT' : 'Local Disk'}</span>
+                  <span className={`w-2 h-2 rounded-full ${databaseStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+                  <span>{databaseStatus === 'connected' ? 'Authoritative DB' : 'Offline'}</span>
                 </div>
               </div>
 
@@ -150,7 +150,7 @@ export default function ActiveUsersModal({
                   const isSuper = user.toUpperCase().includes('ALDRIN') || user.toUpperCase().includes('JPMP-002') || (matchedAccount && matchedAccount.permission === 'FULL_ACCESS') || presenceItem.role === 'SUPER ADMINISTRATOR';
                   const activeViewLabel = presenceItem.activeView ? (VIEW_LABELS[presenceItem.activeView] || presenceItem.activeView) : 'Operations Console';
                   const stationTag = presenceItem.stationId || `WS-${idx + 1}`;
-                  const sourceTag = presenceItem.source === 'self' ? 'This Terminal' : (presenceItem.source === 'local' ? 'Local Tab' : (presenceItem.source === 'supabase' ? 'Cloud Supabase' : 'Cluster LAN'));
+                  const sourceTag = presenceItem.source === 'self' ? 'This Terminal' : (presenceItem.source === 'local' ? 'Local Tab' : 'Central Server');
 
                   return (
                     <div
