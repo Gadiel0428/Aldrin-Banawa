@@ -262,3 +262,65 @@ export async function performCentralGlobalReset(payload: {
     return { success: false, error: err?.message || 'Network error performing reset' };
   }
 }
+
+export async function initializeFreshInstallation(payload: {
+  deviceId: string;
+  deviceName?: string;
+  stationId?: string;
+}): Promise<any> {
+  try {
+    const res = await fetch('/api/terminal/fresh-install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return await res.json();
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error on fresh install initialization' };
+  }
+}
+
+export async function fetchAuthorizedDevices(): Promise<any> {
+  try {
+    const res = await fetch('/api/devices/authorized');
+    return await res.json();
+  } catch (err: any) {
+    return { success: false, devices: [] };
+  }
+}
+
+export async function authorizeDevice(payload: {
+  deviceId: string;
+  deviceName?: string;
+  authorId: string;
+  pin: string;
+}): Promise<any> {
+  try {
+    const res = await fetch('/api/devices/authorize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return await res.json();
+  } catch (err: any) {
+    return { success: false, error: err?.message };
+  }
+}
+
+export async function revokeDevice(payload: {
+  deviceId: string;
+  employeeId: string;
+  pin: string;
+}): Promise<any> {
+  try {
+    const res = await fetch('/api/devices/revoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return await res.json();
+  } catch (err: any) {
+    return { success: false, error: err?.message };
+  }
+}
+

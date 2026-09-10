@@ -1,9 +1,11 @@
 {
-  "systemResetVersion": 1788787623401,
-  "systemResetTimestamp": "2026-09-07T13:27:03.401Z",
-  "systemResetId": "RST-1788787623401-E5BED",
-  "systemResetBy": "ALDRIN BANAWA (JPMP-002)",
-  "stateRevision": 3,
+  "installationId": "INS-2026-JUWEI-PRIM01",
+  "primaryDeviceId": "dev_primary_admin_pc",
+  "systemResetVersion": 1788945000000,
+  "systemResetTimestamp": "2026-09-09T08:00:00.000Z",
+  "systemResetId": "RST-FRESH-INSTALL-001",
+  "systemResetBy": "SUPER ADMINISTRATOR (JPMP-002)",
+  "stateRevision": 1,
   "state": {
     "stocks": [],
     "receiving": [],
@@ -16,6 +18,8 @@
     "registries": [],
     "registeredUsers": [
       {
+        "id": "USR-JPMP-002",
+        "record_id": "USR-JPMP-002",
         "employeeId": "JPMP-002",
         "username": "ALDRIN BANAWA",
         "role": "SUPER ADMINISTRATOR",
@@ -23,98 +27,40 @@
         "permission": "FULL_ACCESS",
         "pin": "0423",
         "status": "ACTIVE",
-        "id": "REC-1788854183544-xo72z",
-        "record_id": "REC-1788854183544-xo72z",
+        "registeredBy": "INITIAL_INSTALLATION_SUPER_ADMIN",
+        "registeredBySuperAdmin": true,
+        "registeredAt": "2026-09-09T08:00:00.000Z",
+        "stationId": "WS-MASTER-01",
+        "deviceId": "dev_primary_admin_pc",
+        "isPrimaryAdminDevice": true,
+        "authorizedDevices": [
+          "dev_primary_admin_pc"
+        ],
         "version": 1,
-        "updated_at": "2026-09-08T07:56:23.544Z",
-        "reset_version": 1788787623401,
-        "lastActive": "2026-09-08T07:56:57.989Z"
-      },
-      {
-        "employeeId": "JPMP-012",
-        "username": "JAN MIGUEL MENDOZA",
-        "role": "IMPEX",
-        "phoneNumber": "",
-        "permission": "VIEW_ONLY",
-        "pin": "1405",
-        "status": "ACTIVE",
-        "id": "REC-1788854183544-jl65t",
-        "record_id": "REC-1788854183544-jl65t",
-        "version": 1,
-        "updated_at": "2026-09-08T07:56:23.544Z",
-        "reset_version": 1788787623401
-      },
-      {
-        "employeeId": "JPMP-056",
-        "username": "IVY AVENGUA",
-        "role": "WAREHOUSE CLERK",
-        "phoneNumber": "",
-        "permission": "LIMITED_ACCESS",
-        "pin": "9217",
-        "status": "ACTIVE",
-        "id": "REC-1788854183544-jkyh1",
-        "record_id": "REC-1788854183544-jkyh1",
-        "version": 1,
-        "updated_at": "2026-09-08T07:56:23.544Z",
-        "reset_version": 1788787623401
-      },
-      {
-        "employeeId": "JPMP-052",
-        "username": "RHEA VICTORIA",
-        "role": "PRINTING AND ASSEMBLY (PRODUCTION)",
-        "phoneNumber": "",
-        "permission": "LIMITED_ACCESS",
-        "pin": "4755",
-        "status": "ACTIVE",
-        "id": "REC-1788854183544-yuyy0",
-        "record_id": "REC-1788854183544-yuyy0",
-        "version": 1,
-        "updated_at": "2026-09-08T07:56:23.544Z",
-        "reset_version": 1788787623401
-      },
-      {
-        "employeeId": "JPMP-089",
-        "username": "CHRISTIAN LONGCOP",
-        "role": "WAREHOUSE INVENTORY SPECIALIST",
-        "phoneNumber": "",
-        "permission": "LIMITED_ACCESS",
-        "pin": "6591",
-        "status": "ACTIVE",
-        "id": "REC-1788854183544-oqdqn",
-        "record_id": "REC-1788854183544-oqdqn",
-        "version": 1,
-        "updated_at": "2026-09-08T07:56:23.544Z",
-        "reset_version": 1788787623401
+        "updated_at": "2026-09-09T08:00:00.000Z",
+        "reset_version": 1788945000000
       }
     ],
     "stockMovements": []
   },
-  "deletedRecordTombstones": [
-    "STK-TEST-001"
+  "authorizedDevices": [
+    {
+      "deviceId": "dev_primary_admin_pc",
+      "deviceName": "Primary Administrator PC (Workstation)",
+      "isPrimaryAdminDevice": true,
+      "status": "AUTHORIZED",
+      "authorizedBy": "INITIAL_SUPER_ADMIN_BINDING",
+      "authorizedAt": "2026-09-09T08:00:00.000Z"
+    }
   ],
-  "deletedUserTombstones": [
-    "JPMP-777"
-  ],
+  "deletedRecordTombstones": [],
+  "deletedUserTombstones": [],
   "chatMessages": [
     {
-      "id": "sys-1788851015432-wh10",
-      "sender": "System Audit",
-      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED IN.",
-      "timestamp": "2026-09-08T07:03:35.432Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1788851823207-757m",
-      "sender": "System Audit",
-      "text": "OPERATOR ALDRIN BANAWA (SUPER ADMINISTRATOR) HAS LOGGED OFF.",
-      "timestamp": "2026-09-08T07:17:03.207Z",
-      "isSystem": true
-    },
-    {
-      "id": "sys-1788854184966-j8vu",
-      "sender": "System",
-      "text": "ALDRIN BANAWA (WS-37II) connected.",
-      "timestamp": "2026-09-08T07:56:24.966Z",
+      "id": "sys-fresh-install",
+      "sender": "SYSTEM AUDIT",
+      "text": "FRESH INSTALLATION COMPLETE: Initial primary administrator device bound to Super Administrator account (JPMP-002). System initialized with zero transactional records.",
+      "timestamp": "2026-09-09T08:00:00.000Z",
       "isSystem": true
     }
   ]

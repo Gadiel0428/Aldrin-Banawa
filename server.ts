@@ -9,22 +9,32 @@ import path from "path";
 import fs from "fs";
 import { WebSocketServer, WebSocket } from "ws";
 
-// Initial seed data for empty database bootstrapping
-import { 
-  INITIAL_STOCK, 
-  INITIAL_RECEIVING, 
-  INITIAL_RETURNS, 
-  INITIAL_RECYCLING, 
-  INITIAL_ISSUANCE, 
-  INITIAL_DELIVERIES, 
-  INITIAL_ENV_LOGS, 
-  INITIAL_FORKLIFT_CHECKS 
-} from "./src/data";
+// Initial seed structures for empty database bootstrapping
+const INITIAL_STOCK: any[] = [];
+const INITIAL_RECEIVING: any[] = [];
+const INITIAL_RETURNS: any[] = [];
+const INITIAL_RECYCLING: any[] = [];
+const INITIAL_ISSUANCE: any[] = [];
+const INITIAL_DELIVERIES: any[] = [];
+const INITIAL_ENV_LOGS: any[] = [];
+const INITIAL_FORKLIFT_CHECKS: any[] = [];
 
 async function startServer() {
   const app = express();
   const server = http.createServer(app);
+  const wss = new WebSocketServer({ noServer: true });
   const PORT = 3000;
+
+  server.on("upgrade", (request, socket, head) => {
+    const pathname = request.url?.split("?")[0] || "";
+    if (pathname === "/ws" || pathname === "/" || pathname === "") {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit("connection", ws, request);
+      });
+    } else {
+      socket.destroy();
+    }
+  });
 
   // Safe Disk Storage Path Resolution (AppData on Windows Desktop, Current Working Dir in Container)
   function getStorageFilePath(filename: string): string {
@@ -40,7 +50,15 @@ async function startServer() {
 
   // Authoritative Central Database File
   const DATA_FILE = getStorageFilePath("central-database.json");
-  const LEGACY_DATA_FILE = getStorageFilePath("data-store.json");
+
+  interface AuthorizedDeviceRecord {
+    deviceId: string;
+    deviceName: string;
+    isPrimaryAdminDevice?: boolean;
+    status: 'AUTHORIZED' | 'PENDING' | 'REVOKED';
+    authorizedBy?: string;
+    authorizedAt?: string;
+  }
 
   interface ServerUser {
     employeeId: string;
@@ -56,10 +74,30 @@ async function startServer() {
     registeredAt?: string;
     stationId?: string;
     id: string;
+    deviceId?: string;
+    isPrimaryAdminDevice?: boolean;
+    authorizedDevices?: string[];
     version: number;
     updated_at: string;
     reset_version: number;
   }
+
+  // Installation & Primary Device Identification
+  let installationId = "INS-2026-JUWEI-PRIM01";
+  let primaryDeviceId = "dev_primary_admin_pc";
+  const authorizedDevicesMap = new Map<string, AuthorizedDeviceRecord>([
+    [
+      "dev_primary_admin_pc",
+      {
+        deviceId: "dev_primary_admin_pc",
+        deviceName: "Primary Administrator PC (Workstation)",
+        isPrimaryAdminDevice: true,
+        status: "AUTHORIZED",
+        authorizedBy: "INITIAL_SUPER_ADMIN_BINDING",
+        authorizedAt: "2026-09-09T08:00:00.000Z"
+      }
+    ]
+  ]);
 
   const defaultSuperAdmin: ServerUser = { 
     id: 'USR-JPMP-002',
@@ -70,13 +108,16 @@ async function startServer() {
     permission: 'FULL_ACCESS', 
     pin: '0423',
     status: 'ACTIVE',
-    registeredBy: 'ROOT_SUPER_ADMIN (JPMP-002)',
+    registeredBy: 'INITIAL_INSTALLATION_SUPER_ADMIN',
     registeredBySuperAdmin: true,
-    registeredAt: '2026-01-01T00:00:00.000Z',
-    stationId: 'MASTER_TERMINAL',
+    registeredAt: '2026-09-09T08:00:00.000Z',
+    stationId: 'WS-MASTER-01',
+    deviceId: 'dev_primary_admin_pc',
+    isPrimaryAdminDevice: true,
+    authorizedDevices: ['dev_primary_admin_pc'],
     version: 1,
-    updated_at: '2026-01-01T00:00:00.000Z',
-    reset_version: 1
+    updated_at: '2026-09-09T08:00:00.000Z',
+    reset_version: 1788945000000
   };
 
   // Authoritative Central Database Reset & Versioning Metadata
@@ -181,12 +222,15 @@ async function startServer() {
   function commitDatabase(): boolean {
     try {
       const payload = JSON.stringify({
+        installationId,
+        primaryDeviceId,
         systemResetVersion,
         systemResetTimestamp,
         systemResetId,
         systemResetBy,
         stateRevision,
         state,
+        authorizedDevices: Array.from(authorizedDevicesMap.values()),
         deletedRecordTombstones: Array.from(deletedRecordTombstones),
         deletedUserTombstones: Array.from(deletedUserTombstones),
         chatMessages: chatMessages.slice(-200)
@@ -207,12 +251,15 @@ async function startServer() {
       try {
         // Direct write fallback
         fs.writeFileSync(DATA_FILE, JSON.stringify({
+          installationId,
+          primaryDeviceId,
           systemResetVersion,
           systemResetTimestamp,
           systemResetId,
           systemResetBy,
           stateRevision,
-          state
+          state,
+          authorizedDevices: Array.from(authorizedDevicesMap.values())
         }), "utf-8");
         return true;
       } catch (fallbackErr) {
@@ -225,21 +272,25 @@ async function startServer() {
   // Load persisted state from disk on server initialization
   function loadDatabaseFromDisk() {
     try {
-      let targetPath = DATA_FILE;
-      if (!fs.existsSync(targetPath) && fs.existsSync(LEGACY_DATA_FILE)) {
-        targetPath = LEGACY_DATA_FILE;
-      }
-
-      if (fs.existsSync(targetPath)) {
-        const raw = fs.readFileSync(targetPath, "utf-8");
+      if (fs.existsSync(DATA_FILE)) {
+        const raw = fs.readFileSync(DATA_FILE, "utf-8");
         const parsed = JSON.parse(raw);
 
         if (parsed) {
+          if (parsed.installationId) installationId = String(parsed.installationId);
+          if (parsed.primaryDeviceId) primaryDeviceId = String(parsed.primaryDeviceId);
           if (parsed.systemResetVersion) systemResetVersion = Number(parsed.systemResetVersion) || 1;
           if (parsed.systemResetTimestamp) systemResetTimestamp = String(parsed.systemResetTimestamp);
           if (parsed.systemResetId) systemResetId = String(parsed.systemResetId);
           if (parsed.systemResetBy) systemResetBy = String(parsed.systemResetBy);
           if (parsed.stateRevision) stateRevision = Number(parsed.stateRevision) || 1;
+
+          if (Array.isArray(parsed.authorizedDevices)) {
+            authorizedDevicesMap.clear();
+            parsed.authorizedDevices.forEach((dev: AuthorizedDeviceRecord) => {
+              if (dev && dev.deviceId) authorizedDevicesMap.set(dev.deviceId, dev);
+            });
+          }
 
           if (parsed.state && typeof parsed.state === "object") {
             Object.keys(parsed.state).forEach((key) => {
@@ -269,13 +320,21 @@ async function startServer() {
         console.log(`JUWEI WMS: Central Database initialized with seed datasets.`);
       }
 
-      // Ensure Super Administrator JPMP-002 is always present and active
-      const superAdminExists = state.registeredUsers.some(
+      // Ensure Super Administrator JPMP-002 is always present and active, bound to primary device
+      const superAdminIndex = state.registeredUsers.findIndex(
         u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002'
       );
-      if (!superAdminExists) {
-        state.registeredUsers.unshift({ ...defaultSuperAdmin });
+      if (superAdminIndex === -1) {
+        state.registeredUsers.unshift({ ...defaultSuperAdmin, deviceId: primaryDeviceId });
         commitDatabase();
+      } else {
+        const existing = state.registeredUsers[superAdminIndex];
+        state.registeredUsers[superAdminIndex] = {
+          ...existing,
+          deviceId: existing.deviceId || primaryDeviceId,
+          isPrimaryAdminDevice: true,
+          authorizedDevices: Array.from(new Set([...(existing.authorizedDevices || []), primaryDeviceId]))
+        };
       }
     } catch (err) {
       console.warn("JUWEI WMS: Notice loading database from disk:", err);
@@ -301,48 +360,120 @@ async function startServer() {
   }
   const activeDevices = new Map<string, ConnectedDevice>();
 
-  // WebSocket Server Setup
-  const wss = new WebSocketServer({ server, path: "/ws" });
-
-  interface ConnectedClientInfo {
-    stationId?: string;
-    deviceId?: string;
+  // Authoritative Central Active Connection Registry
+  interface ActiveConnectionRecord {
+    connection_id: string;
+    user_id: string;
+    session_id: string;
+    device_id: string;
+    stationId: string;
+    employeeId: string;
     username: string;
-    employeeId?: string;
-    role?: string;
-    activeView?: string;
+    role: string;
+    permission: string;
+    platform: string;
+    deviceName: string;
+    activeView: string;
     connectedAt: string;
     lastPing: number;
-    resetVersion?: number;
+    resetVersion: number;
+    ws: WebSocket;
+    ip: string;
+    userAgent?: string;
   }
-  const activeConnections = new Map<WebSocket, ConnectedClientInfo>();
+
+  // Keyed strictly by unique connection_id
+  const connectionRegistry = new Map<string, ActiveConnectionRecord>();
+  const socketToConnectionId = new WeakMap<WebSocket, string>();
+
+  // Helper metrics calculated directly from the server-side registry
+  function getActiveOperatorsCount(): number {
+    const operatorIds = new Set<string>();
+    for (const conn of connectionRegistry.values()) {
+      const id = (conn.employeeId || conn.user_id || conn.username || '').trim().toUpperCase();
+      if (id && id !== 'ANONYMOUS' && id !== 'CONNECTING TERMINAL') {
+        operatorIds.add(id);
+      }
+    }
+    return Math.max(operatorIds.size, connectionRegistry.size > 0 ? 1 : 0);
+  }
+
+  function getActiveTerminalsCount(): number {
+    return connectionRegistry.size;
+  }
 
   function getActiveUsersList(): string[] {
-    const users = Array.from(activeConnections.values()).map(c => c.username).filter(Boolean);
-    return Array.from(new Set(users));
+    const names = new Set<string>();
+    for (const conn of connectionRegistry.values()) {
+      if (conn.username && conn.username !== 'CONNECTING TERMINAL') {
+        names.add(conn.username);
+      }
+    }
+    return Array.from(names);
   }
 
   function getActivePresenceList() {
-    return Array.from(activeConnections.values()).map(c => ({
+    return Array.from(connectionRegistry.values()).map(c => ({
+      connection_id: c.connection_id,
+      connectionId: c.connection_id,
+      user_id: c.user_id,
+      userId: c.user_id,
+      session_id: c.session_id,
+      sessionId: c.session_id,
+      device_id: c.device_id,
+      deviceId: c.device_id,
       stationId: c.stationId || '',
-      deviceId: c.deviceId || '',
-      username: c.username,
       employeeId: c.employeeId || '',
+      username: c.username,
       role: c.role || 'OPERATOR',
+      permission: c.permission || 'LIMITED_ACCESS',
+      platform: c.platform || 'Web',
+      deviceName: c.deviceName || 'Terminal',
       activeView: c.activeView || 'dashboard',
       connectedAt: c.connectedAt,
       lastPing: c.lastPing,
-      source: 'central_websocket'
+      source: 'central_websocket' as const
     }));
   }
 
-  // Broadcast helper
+  // Filter sensitive fields (e.g., plain PINs) based on caller role/permission
+  function filterDataForClient(data: any, clientPermission?: string, clientEmployeeId?: string): any {
+    const isSuperAdmin = (clientEmployeeId || '').toUpperCase().trim() === 'JPMP-002' || clientPermission === 'FULL_ACCESS';
+    if (isSuperAdmin) {
+      return data;
+    }
+    const cloned = { ...data };
+    if (Array.isArray(cloned.registeredUsers)) {
+      cloned.registeredUsers = cloned.registeredUsers.map((u: any) => {
+        const { pin, pin_hash, ...safeUser } = u;
+        return safeUser;
+      });
+    }
+    return cloned;
+  }
+
+  // Authoritative WebSocket Broadcast with Role-based Data Sanitization
   function broadcast(msg: any, excludeSocket?: WebSocket) {
-    const rawMsg = JSON.stringify(msg);
+    const adminMsg = JSON.stringify(msg);
+    let safeMsg = adminMsg;
+
+    if (msg.collection === 'registeredUsers' && msg.record) {
+      const sanitized = { ...msg.record };
+      delete sanitized.pin;
+      delete sanitized.pin_hash;
+      safeMsg = JSON.stringify({ ...msg, record: sanitized });
+    } else if (msg.data && msg.data.registeredUsers) {
+      const sanitizedData = filterDataForClient(msg.data, 'LIMITED_ACCESS');
+      safeMsg = JSON.stringify({ ...msg, data: sanitizedData });
+    }
+
     for (const client of wss.clients) {
       if (client.readyState === WebSocket.OPEN && client !== excludeSocket) {
         try {
-          client.send(rawMsg);
+          const connId = socketToConnectionId.get(client);
+          const conn = connId ? connectionRegistry.get(connId) : null;
+          const isSuper = conn?.permission === 'FULL_ACCESS' || (conn?.employeeId || '').toUpperCase() === 'JPMP-002';
+          client.send(isSuper ? adminMsg : safeMsg);
         } catch (sendErr) {
           console.warn("WebSocket client send warning:", sendErr);
         }
@@ -350,56 +481,413 @@ async function startServer() {
     }
   }
 
-  // Periodic heartbeat
+  function broadcastPresenceSync() {
+    const presenceList = getActivePresenceList();
+    const payload = {
+      type: "PRESENCE_SYNC",
+      presenceList,
+      activePresence: presenceList,
+      activeUsers: getActiveUsersList(),
+      connectedOperators: getActiveOperatorsCount(),
+      liveActiveTerminals: getActiveTerminalsCount(),
+      systemResetVersion,
+      timestamp: new Date().toISOString()
+    };
+    broadcast(payload);
+    // Backward compatibility for existing listeners
+    broadcast({
+      type: "presence_updated",
+      activeUsers: getActiveUsersList(),
+      activePresence: presenceList
+    });
+  }
+
+  interface UpsertExecutionResult {
+    success: boolean;
+    status: number;
+    error?: string;
+    confirmedRecord?: any;
+    isCreation?: boolean;
+    systemResetVersion?: number;
+    systemResetId?: string;
+  }
+
+  function executeRecordUpsert(params: {
+    collection: string;
+    record: any;
+    author?: string;
+    employeeId?: string;
+    user_id?: string;
+    actionDesc?: string;
+    expectedVersion?: number;
+    reset_version?: number;
+    userPermission?: string;
+    excludeSocket?: WebSocket;
+  }): UpsertExecutionResult {
+    const { collection, record, author, employeeId, user_id, actionDesc, expectedVersion, reset_version, userPermission, excludeSocket } = params;
+
+    const clientResetVersion = Number(reset_version) || Number(record?.reset_version) || systemResetVersion;
+    if (clientResetVersion < systemResetVersion) {
+      return {
+        success: false,
+        status: 409,
+        error: "STALE_RESET_VERSION: Central database was reset. Data from previous reset versions cannot be restored.",
+        systemResetVersion,
+        systemResetId
+      };
+    }
+
+    if (!collection || !record) {
+      return { success: false, status: 400, error: "Collection and record required" };
+    }
+
+    if (!(collection in state)) {
+      return { success: false, status: 400, error: `Unknown collection: ${collection}` };
+    }
+
+    if (userPermission === 'VIEW_ONLY') {
+      return { success: false, status: 403, error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." };
+    }
+
+    const serverTime = new Date().toISOString();
+    const currentList: any[] = (state as any)[collection] || [];
+    const recordId = String(record.id || record.record_id || `REC-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`);
+
+    const existingIndex = currentList.findIndex((item: any) => item && (String(item.id) === recordId || String(item.record_id) === recordId));
+    const existingRecord = existingIndex >= 0 ? currentList[existingIndex] : null;
+
+    let confirmedRecord: any;
+    let isCreation = false;
+    const effectiveUserId = String(user_id || record.user_id || (employeeId ? `USR-${employeeId}` : (author ? `USR-${author}` : 'OPERATOR'))).trim();
+
+    if (existingRecord) {
+      // Optimistic concurrency check
+      if (expectedVersion !== undefined && existingRecord.version && existingRecord.version > expectedVersion) {
+        return {
+          success: false,
+          status: 409,
+          error: "VERSION_CONFLICT: Newer revision exists in central database.",
+          confirmedRecord: existingRecord,
+          systemResetVersion
+        };
+      }
+
+      const nextVersion = (Number(existingRecord.version) || 1) + 1;
+      confirmedRecord = {
+        ...existingRecord,
+        ...record,
+        id: recordId,
+        record_id: record.record_id || recordId,
+        reset_version: systemResetVersion,
+        created_at: existingRecord.created_at || record.created_at || serverTime,
+        created_by: existingRecord.created_by || record.created_by || author || 'Operator',
+        updated_at: serverTime,
+        updated_by: author || employeeId || 'Operator',
+        user_id: effectiveUserId,
+        version: nextVersion
+      };
+      currentList[existingIndex] = confirmedRecord;
+    } else {
+      isCreation = true;
+      confirmedRecord = {
+        ...record,
+        id: recordId,
+        record_id: record.record_id || recordId,
+        reset_version: systemResetVersion,
+        created_at: record.created_at || serverTime,
+        created_by: record.created_by || author || employeeId || 'Operator',
+        updated_at: serverTime,
+        updated_by: author || employeeId || 'Operator',
+        user_id: effectiveUserId,
+        version: Number(record.version) || 1
+      };
+      currentList.unshift(confirmedRecord);
+    }
+
+    deletedRecordTombstones.delete(recordId);
+    (state as any)[collection] = currentList;
+    stateRevision++;
+
+    // COMMIT DATABASE SYNCHRONOUSLY BEFORE BROADCAST
+    const commitOk = commitDatabase();
+    if (!commitOk) {
+      return { success: false, status: 500, error: "Failed to commit record to central disk database" };
+    }
+
+    // BROADCAST TO ALL CONNECTED CLIENTS
+    const eventType = isCreation ? "DATA_CREATE" : "DATA_UPDATE";
+    broadcast({
+      type: eventType,
+      collection,
+      record: confirmedRecord,
+      id: recordId,
+      record_id: recordId,
+      author: author || employeeId || "Operator",
+      user_id: effectiveUserId,
+      actionDesc: actionDesc || `${isCreation ? 'Created' : 'Updated'} ${collection} record`,
+      timestamp: serverTime,
+      version: confirmedRecord.version,
+      systemResetVersion,
+      systemResetId
+    }, excludeSocket);
+
+    broadcast({
+      type: isCreation ? "RECORD_CREATED" : "RECORD_UPDATED",
+      collection,
+      record: confirmedRecord,
+      id: recordId,
+      record_id: recordId,
+      author: author || employeeId || "Operator",
+      user_id: effectiveUserId,
+      actionDesc: actionDesc || `${isCreation ? 'Created' : 'Updated'} ${collection} record`,
+      timestamp: serverTime,
+      version: confirmedRecord.version,
+      systemResetVersion,
+      systemResetId
+    }, excludeSocket);
+
+    broadcast({
+      type: "collection_updated",
+      collection,
+      data: currentList,
+      systemResetVersion
+    }, excludeSocket);
+
+    return {
+      success: true,
+      status: 200,
+      confirmedRecord,
+      isCreation,
+      systemResetVersion,
+      systemResetId
+    };
+  }
+
+  interface DeleteExecutionResult {
+    success: boolean;
+    status: number;
+    error?: string;
+    id?: string;
+    collection?: string;
+    systemResetVersion?: number;
+    systemResetId?: string;
+  }
+
+  function executeRecordDelete(params: {
+    collection: string;
+    id: string;
+    author?: string;
+    employeeId?: string;
+    user_id?: string;
+    actionDesc?: string;
+    reset_version?: number;
+    userPermission?: string;
+    excludeSocket?: WebSocket;
+  }): DeleteExecutionResult {
+    const { collection, id, author, employeeId, user_id, actionDesc, reset_version, userPermission, excludeSocket } = params;
+
+    const clientResetVersion = Number(reset_version) || systemResetVersion;
+    if (clientResetVersion < systemResetVersion) {
+      return {
+        success: false,
+        status: 409,
+        error: "STALE_RESET_VERSION: Central database was reset. Stale delete operation rejected.",
+        systemResetVersion,
+        systemResetId
+      };
+    }
+
+    if (!collection || !id) {
+      return { success: false, status: 400, error: "Collection and ID required" };
+    }
+
+    if (!(collection in state)) {
+      return { success: false, status: 400, error: "Invalid collection" };
+    }
+
+    if (userPermission === 'VIEW_ONLY') {
+      return { success: false, status: 403, error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." };
+    }
+
+    const recordId = String(id);
+    markRecordTombstone(recordId);
+    (state as any)[collection] = ((state as any)[collection] || []).filter((item: any) => String(item.id) !== recordId && String(item.record_id) !== recordId);
+    stateRevision++;
+
+    // COMMIT DATABASE SYNCHRONOUSLY BEFORE BROADCAST
+    const commitOk = commitDatabase();
+    if (!commitOk) {
+      return { success: false, status: 500, error: "Failed to commit record deletion to central database" };
+    }
+
+    const serverTime = new Date().toISOString();
+    const effectiveUserId = String(user_id || (employeeId ? `USR-${employeeId}` : (author ? `USR-${author}` : 'OPERATOR'))).trim();
+
+    broadcast({
+      type: "DATA_DELETE",
+      collection,
+      id: recordId,
+      record_id: recordId,
+      author: author || employeeId || "Operator",
+      user_id: effectiveUserId,
+      actionDesc: actionDesc || `Deleted ${collection} record`,
+      timestamp: serverTime,
+      systemResetVersion,
+      systemResetId
+    }, excludeSocket);
+
+    broadcast({
+      type: "RECORD_DELETED",
+      collection,
+      id: recordId,
+      record_id: recordId,
+      author: author || employeeId || "Operator",
+      user_id: effectiveUserId,
+      timestamp: serverTime,
+      systemResetVersion,
+      systemResetId
+    }, excludeSocket);
+
+    broadcast({
+      type: "record_deleted",
+      collection,
+      id: recordId,
+      systemResetVersion
+    }, excludeSocket);
+
+    broadcast({
+      type: "collection_updated",
+      collection,
+      data: (state as any)[collection],
+      systemResetVersion
+    }, excludeSocket);
+
+    return {
+      success: true,
+      status: 200,
+      id: recordId,
+      collection,
+      systemResetVersion,
+      systemResetId
+    };
+  }
+
+  // Periodic Heartbeat to maintain live connection registry
   const heartbeatInterval = setInterval(() => {
     let changed = false;
-    wss.clients.forEach((client: any) => {
-      if (client.isAlive === false) {
-        if (activeConnections.has(client)) {
-          activeConnections.delete(client);
-          changed = true;
-        }
-        return client.terminate();
+    const now = Date.now();
+    for (const [connId, conn] of connectionRegistry.entries()) {
+      if (!conn.ws || conn.ws.readyState !== WebSocket.OPEN) {
+        connectionRegistry.delete(connId);
+        changed = true;
+        broadcast({
+          type: "USER_OFFLINE",
+          connection_id: connId,
+          user_id: conn.user_id,
+          session_id: conn.session_id,
+          device_id: conn.device_id,
+          employeeId: conn.employeeId,
+          username: conn.username,
+          systemResetVersion
+        });
+      } else if (now - conn.lastPing > 45000) {
+        try { conn.ws.terminate(); } catch (e) {}
+        connectionRegistry.delete(connId);
+        changed = true;
+        broadcast({
+          type: "USER_OFFLINE",
+          connection_id: connId,
+          user_id: conn.user_id,
+          session_id: conn.session_id,
+          device_id: conn.device_id,
+          employeeId: conn.employeeId,
+          username: conn.username,
+          systemResetVersion
+        });
       }
-      client.isAlive = false;
-      try {
-        client.ping();
-      } catch (e) {}
-    });
-    if (changed) {
-      broadcast({
-        type: "presence_updated",
-        activeUsers: getActiveUsersList(),
-        activePresence: getActivePresenceList()
-      });
     }
-  }, 25000);
+    if (changed) {
+      broadcastPresenceSync();
+    }
+  }, 15000);
 
   wss.on("close", () => {
     clearInterval(heartbeatInterval);
   });
 
-  wss.on("connection", (ws: any) => {
+  // Client Connection Lifecycle Management
+  wss.on("connection", (ws: any, req: http.IncomingMessage) => {
     ws.isAlive = true;
+
+    // Generate unique connection_id for this socket
+    const connection_id = `conn_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    socketToConnectionId.set(ws, connection_id);
+
+    const ip = (req.headers['x-forwarded-for'] as string) || req.socket?.remoteAddress || '127.0.0.1';
+    const userAgent = req.headers['user-agent'] || '';
+    const platform = userAgent.includes("Android") ? "Android" : (userAgent.includes("iPhone") || userAgent.includes("iPad") ? "iOS" : (userAgent.includes("Windows") ? "Windows" : "Desktop"));
+
+    // Register active terminal in central connection registry
+    const initialRecord: ActiveConnectionRecord = {
+      connection_id,
+      user_id: "ANONYMOUS",
+      session_id: `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      device_id: `dev_${Math.random().toString(36).substring(2, 9)}`,
+      stationId: "",
+      employeeId: "",
+      username: "CONNECTING TERMINAL",
+      role: "OPERATOR",
+      permission: "LIMITED_ACCESS",
+      platform,
+      deviceName: `${platform} Terminal`,
+      activeView: "dashboard",
+      connectedAt: new Date().toISOString(),
+      lastPing: Date.now(),
+      resetVersion: systemResetVersion,
+      ws,
+      ip,
+      userAgent
+    };
+    connectionRegistry.set(connection_id, initialRecord);
 
     ws.on("pong", () => {
       ws.isAlive = true;
+      const cId = socketToConnectionId.get(ws);
+      if (cId) {
+        const c = connectionRegistry.get(cId);
+        if (c) c.lastPing = Date.now();
+      }
     });
 
-    // Send initial snapshot
+    // Send complete initial snapshot and current presence list immediately
     try {
+      const presenceList = getActivePresenceList();
       ws.send(JSON.stringify({
         type: "init",
+        connection_id,
+        connectionId: connection_id,
         systemResetVersion,
         systemResetTimestamp,
         systemResetId,
         systemResetBy,
-        data: {
-          ...state,
-          chatMessages
-        },
+        data: filterDataForClient({ ...state, chatMessages }, initialRecord.permission, initialRecord.employeeId),
         activeUsers: getActiveUsersList(),
-        activePresence: getActivePresenceList()
+        activePresence: presenceList,
+        presenceList,
+        connectedOperators: getActiveOperatorsCount(),
+        liveActiveTerminals: getActiveTerminalsCount()
+      }));
+
+      ws.send(JSON.stringify({
+        type: "PRESENCE_SYNC",
+        connection_id,
+        presenceList,
+        activePresence: presenceList,
+        activeUsers: getActiveUsersList(),
+        connectedOperators: getActiveOperatorsCount(),
+        liveActiveTerminals: getActiveTerminalsCount(),
+        systemResetVersion,
+        timestamp: new Date().toISOString()
       }));
     } catch (err) {
       console.warn("Error sending initial WS state:", err);
@@ -416,7 +904,8 @@ async function startServer() {
 
         switch (payload.type) {
           case "ping": {
-            const info = activeConnections.get(ws);
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const info = connectionRegistry.get(connId);
             if (info) info.lastPing = Date.now();
             ws.send(JSON.stringify({ 
               type: "pong", 
@@ -428,49 +917,122 @@ async function startServer() {
 
           case "authenticate":
           case "join": {
-            const username = payload.username || "Operator";
-            const employeeId = payload.employeeId || "";
-            const role = payload.role || "OPERATOR";
-            const activeView = payload.activeView || "dashboard";
-            const stationId = payload.stationId || "";
-            const deviceId = payload.deviceId || "";
-            const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || 0;
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            if (!conn) break;
 
-            activeConnections.set(ws, {
-              stationId,
+            const employeeId = String(payload.employeeId || "").trim().toUpperCase();
+            const username = String(payload.username || (employeeId === 'JPMP-002' ? 'ALDRIN BANAWA' : 'OPERATOR')).trim().toUpperCase();
+            const role = String(payload.role || (employeeId === 'JPMP-002' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR')).trim().toUpperCase();
+            const permission = String(payload.permission || (employeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS')).trim();
+            const activeView = String(payload.activeView || "dashboard").trim();
+            const stationId = String(payload.stationId || "").trim();
+            const deviceId = String(payload.device_id || payload.deviceId || conn.device_id).trim();
+            const sessionId = String(payload.session_id || payload.sessionId || conn.session_id).trim();
+            const userId = String(payload.user_id || payload.userId || (employeeId ? `USR-${employeeId}` : conn.user_id)).trim();
+            const devPlatform = String(payload.platform || conn.platform || "Web").trim();
+            const devName = String(payload.deviceName || `${devPlatform} Terminal`).trim();
+            const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || systemResetVersion;
+
+            // Update this specific connection record in the central registry
+            conn.user_id = userId;
+            conn.session_id = sessionId;
+            conn.device_id = deviceId;
+            conn.stationId = stationId;
+            conn.employeeId = employeeId;
+            conn.username = username;
+            conn.role = role;
+            conn.permission = permission;
+            conn.platform = devPlatform;
+            conn.deviceName = devName;
+            conn.activeView = activeView;
+            conn.resetVersion = clientResetVersion;
+            conn.lastPing = Date.now();
+
+            // Track in activeDevices map as well
+            activeDevices.set(deviceId, {
               deviceId,
-              username,
+              deviceName: devName,
               employeeId,
+              username,
               role,
-              activeView,
-              connectedAt: new Date().toISOString(),
-              lastPing: Date.now(),
-              resetVersion: clientResetVersion
+              ip: conn.ip,
+              userAgent: conn.userAgent,
+              appVersion: '1.0.0',
+              platform: devPlatform,
+              connectedAt: conn.connectedAt,
+              lastSeen: Date.now(),
+              currentView: activeView
             });
 
-            // Confirm authentication and instruct client whether resync is required
             const requiresResync = clientResetVersion < systemResetVersion;
             ws.send(JSON.stringify({
               type: "auth_confirmed",
+              connection_id: connId,
+              user_id: userId,
+              session_id: sessionId,
+              device_id: deviceId,
               systemResetVersion,
               systemResetId,
               systemResetTimestamp,
               requiresResync,
-              activeUsers: getActiveUsersList(),
-              activePresence: getActivePresenceList()
+              connectedOperators: getActiveOperatorsCount(),
+              liveActiveTerminals: getActiveTerminalsCount()
             }));
 
-            // Broadcast presence update
-            broadcast({
-              type: "presence_updated",
+            // Force resync if client reset_version is behind server
+            if (requiresResync) {
+              ws.send(JSON.stringify({
+                type: "SYNC_REQUIRED",
+                reason: "STALE_RESET_VERSION",
+                systemResetVersion,
+                systemResetId
+              }));
+            }
+
+            // Immediately send the authoritative snapshot matching client permission
+            ws.send(JSON.stringify({
+              type: "init",
+              connection_id: connId,
+              connectionId: connId,
+              systemResetVersion,
+              systemResetTimestamp,
+              systemResetId,
+              systemResetBy,
+              data: filterDataForClient({ ...state, chatMessages }, conn.permission, conn.employeeId),
               activeUsers: getActiveUsersList(),
-              activePresence: getActivePresenceList()
+              activePresence: getActivePresenceList(),
+              presenceList: getActivePresenceList(),
+              connectedOperators: getActiveOperatorsCount(),
+              liveActiveTerminals: getActiveTerminalsCount()
+            }));
+
+            // Broadcast USER_ONLINE to all clients
+            broadcast({
+              type: "USER_ONLINE",
+              connection_id: connId,
+              user_id: userId,
+              session_id: sessionId,
+              device_id: deviceId,
+              employeeId,
+              username,
+              role,
+              permission,
+              platform: devPlatform,
+              deviceName: devName,
+              activeView,
+              stationId,
+              connectedAt: conn.connectedAt,
+              systemResetVersion
             });
+
+            // Broadcast updated PRESENCE_SYNC to all clients
+            broadcastPresenceSync();
 
             const joinMsg: ChatMessage = {
               id: `sys-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
               sender: "System",
-              text: `${username} (${employeeId || stationId || 'Terminal'}) connected.`,
+              text: `${username} (${employeeId || stationId || devName}) connected.`,
               timestamp: new Date().toISOString(),
               isSystem: true
             };
@@ -480,34 +1042,174 @@ async function startServer() {
             break;
           }
 
-          case "presence_update": {
-            let info = activeConnections.get(ws);
-            if (!info) {
-              info = {
-                stationId: payload.stationId || '',
-                deviceId: payload.deviceId || '',
-                username: payload.username || 'OPERATOR',
-                employeeId: payload.employeeId || '',
-                role: payload.role || 'OPERATOR',
-                activeView: payload.activeView || 'dashboard',
-                connectedAt: new Date().toISOString(),
-                lastPing: Date.now(),
-              };
-              activeConnections.set(ws, info);
-            } else {
-              if (payload.stationId) info.stationId = payload.stationId;
-              if (payload.username) info.username = payload.username;
-              if (payload.employeeId) info.employeeId = payload.employeeId;
-              if (payload.role) info.role = payload.role;
-              if (payload.activeView) info.activeView = payload.activeView;
-              info.lastPing = Date.now();
-            }
+          case "record_upsert":
+          case "upsert_record":
+          case "DATA_CREATE":
+          case "DATA_UPDATE":
+          case "create_record":
+          case "update_record": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || conn?.resetVersion || systemResetVersion;
 
-            broadcast({
-              type: "presence_updated",
-              activeUsers: getActiveUsersList(),
-              activePresence: getActivePresenceList()
+            const upsertRes = executeRecordUpsert({
+              collection: payload.collection,
+              record: payload.record,
+              author: payload.author || conn?.username || "Operator",
+              employeeId: payload.employeeId || conn?.employeeId,
+              user_id: payload.user_id || conn?.user_id,
+              actionDesc: payload.actionDesc,
+              expectedVersion: payload.expectedVersion,
+              reset_version: clientResetVersion,
+              userPermission: conn?.permission
             });
+
+            if (!upsertRes.success) {
+              ws.send(JSON.stringify({
+                type: "ERROR",
+                error: upsertRes.error,
+                status: upsertRes.status,
+                systemResetVersion,
+                systemResetId
+              }));
+              if (upsertRes.status === 409) {
+                ws.send(JSON.stringify({
+                  type: "SYNC_REQUIRED",
+                  reason: "STALE_RESET_VERSION_OR_CONFLICT",
+                  systemResetVersion,
+                  systemResetId
+                }));
+              }
+            } else {
+              ws.send(JSON.stringify({
+                type: "UPSERT_CONFIRMED",
+                collection: payload.collection,
+                record: upsertRes.confirmedRecord,
+                isCreation: upsertRes.isCreation,
+                systemResetVersion
+              }));
+            }
+            break;
+          }
+
+          case "record_delete":
+          case "delete_record":
+          case "DATA_DELETE": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || conn?.resetVersion || systemResetVersion;
+            const targetId = String(payload.id || payload.record_id || payload.recordId || "");
+
+            const deleteRes = executeRecordDelete({
+              collection: payload.collection,
+              id: targetId,
+              author: payload.author || conn?.username || "Operator",
+              employeeId: payload.employeeId || conn?.employeeId,
+              user_id: payload.user_id || conn?.user_id,
+              actionDesc: payload.actionDesc,
+              reset_version: clientResetVersion,
+              userPermission: conn?.permission
+            });
+
+            if (!deleteRes.success) {
+              ws.send(JSON.stringify({
+                type: "ERROR",
+                error: deleteRes.error,
+                status: deleteRes.status,
+                systemResetVersion,
+                systemResetId
+              }));
+            } else {
+              ws.send(JSON.stringify({
+                type: "DELETE_CONFIRMED",
+                collection: payload.collection,
+                id: targetId,
+                systemResetVersion
+              }));
+            }
+            break;
+          }
+
+          case "request_sync":
+          case "resync":
+          case "get_state": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            const presenceList = getActivePresenceList();
+            ws.send(JSON.stringify({
+              type: "init",
+              connection_id: connId,
+              connectionId: connId,
+              systemResetVersion,
+              systemResetTimestamp,
+              systemResetId,
+              systemResetBy,
+              data: filterDataForClient({ ...state, chatMessages }, conn?.permission || "LIMITED_ACCESS", conn?.employeeId),
+              activeUsers: getActiveUsersList(),
+              activePresence: presenceList,
+              presenceList,
+              connectedOperators: getActiveOperatorsCount(),
+              liveActiveTerminals: getActiveTerminalsCount()
+            }));
+            ws.send(JSON.stringify({
+              type: "PRESENCE_SYNC",
+              connection_id: connId,
+              presenceList,
+              activePresence: presenceList,
+              activeUsers: getActiveUsersList(),
+              connectedOperators: getActiveOperatorsCount(),
+              liveActiveTerminals: getActiveTerminalsCount(),
+              systemResetVersion,
+              timestamp: new Date().toISOString()
+            }));
+            break;
+          }
+
+          case "presence_update": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            if (conn) {
+              if (payload.activeView) conn.activeView = payload.activeView;
+              if (payload.stationId) conn.stationId = payload.stationId;
+              if (payload.username) conn.username = payload.username.toUpperCase();
+              if (payload.employeeId) conn.employeeId = payload.employeeId.toUpperCase();
+              if (payload.role) conn.role = payload.role.toUpperCase();
+              if (payload.permission) conn.permission = payload.permission;
+              conn.lastPing = Date.now();
+              broadcastPresenceSync();
+            }
+            break;
+          }
+
+          case "force_sync_all":
+          case "sync_all_workstations": {
+            const author = payload.author || "SUPER ADMINISTRATOR";
+            broadcast({
+              type: "SYNC_REQUIRED",
+              author,
+              reason: "CLUSTER_SYNC_REQUESTED",
+              systemResetVersion,
+              timestamp: new Date().toISOString()
+            });
+            broadcast({
+              type: "force_sync",
+              triggeredBy: author
+            });
+            break;
+          }
+
+          case "get_presence": {
+            const presenceList = getActivePresenceList();
+            ws.send(JSON.stringify({
+              type: "PRESENCE_SYNC",
+              presenceList,
+              activePresence: presenceList,
+              activeUsers: getActiveUsersList(),
+              connectedOperators: getActiveOperatorsCount(),
+              liveActiveTerminals: getActiveTerminalsCount(),
+              systemResetVersion,
+              timestamp: new Date().toISOString()
+            }));
             break;
           }
 
@@ -536,14 +1238,37 @@ async function startServer() {
     });
 
     ws.on("close", () => {
-      const clientInfo = activeConnections.get(ws);
-      if (clientInfo) {
-        activeConnections.delete(ws);
-        broadcast({
-          type: "presence_updated",
-          activeUsers: getActiveUsersList(),
-          activePresence: getActivePresenceList()
-        });
+      const connId = socketToConnectionId.get(ws);
+      if (connId) {
+        const conn = connectionRegistry.get(connId);
+        // Remove ONLY this specific connection_id!
+        connectionRegistry.delete(connId);
+        socketToConnectionId.delete(ws);
+
+        if (conn) {
+          // If no other connection has this deviceId, clean activeDevices
+          const otherUsingDevice = Array.from(connectionRegistry.values()).some(c => c.device_id === conn.device_id);
+          if (!otherUsingDevice) {
+            activeDevices.delete(conn.device_id);
+          }
+
+          // Broadcast USER_OFFLINE
+          broadcast({
+            type: "USER_OFFLINE",
+            connection_id: connId,
+            user_id: conn.user_id,
+            session_id: conn.session_id,
+            device_id: conn.device_id,
+            employeeId: conn.employeeId,
+            username: conn.username,
+            role: conn.role,
+            platform: conn.platform,
+            systemResetVersion
+          });
+
+          // Broadcast updated PRESENCE_SYNC
+          broadcastPresenceSync();
+        }
       }
     });
   });
@@ -572,7 +1297,46 @@ async function startServer() {
       systemResetTimestamp,
       totalRecords: Object.values(state).reduce((acc, curr) => acc + (Array.isArray(curr) ? curr.length : 0), 0),
       usersCount: state.registeredUsers.length,
-      connectedClients: activeConnections.size
+      connectedClients: connectionRegistry.size,
+      connectedTerminals: connectionRegistry.size,
+      connectedOperators: getActiveOperatorsCount(),
+      liveActiveTerminals: connectionRegistry.size
+    });
+  });
+
+  // REST API: Live Connection & Active Terminals Registry
+  app.get("/api/presence", (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.json({
+      status: "ok",
+      connectedOperators: getActiveOperatorsCount(),
+      liveActiveTerminals: connectionRegistry.size,
+      systemResetVersion,
+      presence: getActivePresenceList(),
+      activeUsers: getActiveUsersList()
+    });
+  });
+
+  // REST API: Synchronize All Workstations (Windows, Android, iOS, Desktop)
+  app.post(["/api/sync/all-workstations", "/api/sync-all-workstations"], (req, res) => {
+    const author = req.body?.author || "SUPER ADMINISTRATOR";
+    broadcast({
+      type: "SYNC_REQUIRED",
+      author,
+      reason: "CLUSTER_SYNC_REQUESTED",
+      systemResetVersion,
+      timestamp: new Date().toISOString()
+    });
+    broadcast({
+      type: "force_sync",
+      triggeredBy: author
+    });
+    return res.json({
+      success: true,
+      message: "SYNC_REQUIRED broadcast sent to all workstations and devices",
+      connectedTerminals: connectionRegistry.size,
+      connectedOperators: getActiveOperatorsCount(),
+      systemResetVersion
     });
   });
 
@@ -583,6 +1347,9 @@ async function startServer() {
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
 
+    const clientEmpId = (req.headers['x-employee-id'] as string) || '';
+    const clientPermission = (req.headers['x-permission'] as string) || '';
+
     res.json({
       status: "ok",
       revision: stateRevision,
@@ -590,10 +1357,12 @@ async function startServer() {
       systemResetTimestamp,
       systemResetId,
       systemResetBy,
-      data: {
+      data: filterDataForClient({
         ...state,
         chatMessages
-      }
+      }, clientPermission, clientEmpId),
+      connectedOperators: getActiveOperatorsCount(),
+      liveActiveTerminals: connectionRegistry.size
     });
   });
 
@@ -659,6 +1428,126 @@ async function startServer() {
     }
   });
 
+  // REST API: Authorized Devices Management (Super Administrator)
+  app.get("/api/devices/authorized", (req, res) => {
+    res.json({
+      success: true,
+      installationId,
+      primaryDeviceId,
+      devices: Array.from(authorizedDevicesMap.values())
+    });
+  });
+
+  app.post("/api/devices/authorize", (req, res) => {
+    const { deviceId, deviceName, authorId } = req.body;
+    if (!deviceId) return res.status(400).json({ error: "deviceId required" });
+
+    if (!isAuthorizedSuperAdmin(req)) {
+      return res.status(403).json({ error: "PERMISSION_DENIED: Only Super Administrator can authorize devices." });
+    }
+
+    const cleanDeviceId = String(deviceId).trim();
+    const cleanDeviceName = String(deviceName || `Workstation (${cleanDeviceId})`).trim();
+    const nowIso = new Date().toISOString();
+
+    const deviceRecord: AuthorizedDeviceRecord = {
+      deviceId: cleanDeviceId,
+      deviceName: cleanDeviceName,
+      isPrimaryAdminDevice: cleanDeviceId === primaryDeviceId,
+      status: 'AUTHORIZED',
+      authorizedBy: authorId || 'ALDRIN BANAWA (JPMP-002)',
+      authorizedAt: nowIso
+    };
+
+    authorizedDevicesMap.set(cleanDeviceId, deviceRecord);
+    commitDatabase();
+
+    broadcast({
+      type: "DEVICE_AUTHORIZATION_UPDATED",
+      device: deviceRecord,
+      systemResetVersion
+    });
+
+    return res.json({ success: true, device: deviceRecord });
+  });
+
+  app.post("/api/devices/revoke", (req, res) => {
+    const { deviceId } = req.body;
+    if (!deviceId) return res.status(400).json({ error: "deviceId required" });
+
+    if (!isAuthorizedSuperAdmin(req)) {
+      return res.status(403).json({ error: "PERMISSION_DENIED: Only Super Administrator can revoke devices." });
+    }
+
+    if (deviceId === primaryDeviceId) {
+      return res.status(400).json({ error: "CANNOT_REVOKE_PRIMARY: The primary administrator device cannot be revoked." });
+    }
+
+    const existing = authorizedDevicesMap.get(deviceId);
+    if (existing) {
+      existing.status = 'REVOKED';
+      authorizedDevicesMap.set(deviceId, existing);
+      commitDatabase();
+
+      broadcast({
+        type: "DEVICE_REVOKED",
+        deviceId,
+        systemResetVersion
+      });
+    }
+
+    return res.json({ success: true, message: `Device ${deviceId} revoked` });
+  });
+
+  // REST API: Terminal Fresh Install & Primary Administrator Device Binding
+  app.post("/api/terminal/fresh-install", (req, res) => {
+    try {
+      const { deviceId, deviceName, stationId } = req.body;
+      const targetDeviceId = deviceId || primaryDeviceId;
+
+      // Ensure target device is authorized
+      if (!authorizedDevicesMap.has(targetDeviceId)) {
+        authorizedDevicesMap.set(targetDeviceId, {
+          deviceId: targetDeviceId,
+          deviceName: deviceName || 'Primary Administrator PC',
+          isPrimaryAdminDevice: true,
+          status: 'AUTHORIZED',
+          authorizedBy: 'SYSTEM_FRESH_INSTALL',
+          authorizedAt: new Date().toISOString()
+        });
+      }
+
+      // If this PC is registering as primary administrator device:
+      primaryDeviceId = targetDeviceId;
+
+      // Ensure Super Administrator JPMP-002 is bound to this device
+      const superAdminIndex = state.registeredUsers.findIndex(
+        u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002'
+      );
+      if (superAdminIndex >= 0) {
+        state.registeredUsers[superAdminIndex] = {
+          ...state.registeredUsers[superAdminIndex],
+          deviceId: targetDeviceId,
+          isPrimaryAdminDevice: true,
+          authorizedDevices: [targetDeviceId]
+        };
+      }
+
+      commitDatabase();
+
+      return res.json({
+        success: true,
+        installationId,
+        primaryDeviceId,
+        systemResetVersion,
+        systemResetId,
+        superAdmin: state.registeredUsers.find(u => u.employeeId === 'JPMP-002')
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   // Helper to authenticate Super Admin
   function isAuthorizedSuperAdmin(req: express.Request): boolean {
     const bodyPin = (req.body?.pin || '').toString().trim();
@@ -719,6 +1608,9 @@ async function startServer() {
       if (!keepUsers) {
         state.registeredUsers = [{ 
           ...defaultSuperAdmin, 
+          deviceId: primaryDeviceId,
+          isPrimaryAdminDevice: true,
+          authorizedDevices: [primaryDeviceId],
           reset_version: systemResetVersion,
           version: 1,
           updated_at: systemResetTimestamp
@@ -1145,113 +2037,32 @@ async function startServer() {
       const userPermission = (req.body.permission || req.headers['x-user-permission'] || '').toString().toUpperCase();
       const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version'] || record?.reset_version) || systemResetVersion;
 
-      // Reject data from before a global reset
-      if (clientResetVersion < systemResetVersion) {
-        return res.status(409).json({
-          error: "STALE_RESET_VERSION: Central database was reset. Data from previous reset versions cannot be restored.",
-          systemResetVersion,
-          systemResetId
+      const result = executeRecordUpsert({
+        collection,
+        record,
+        author,
+        employeeId,
+        user_id: req.body.user_id || record?.user_id,
+        actionDesc,
+        expectedVersion,
+        reset_version: clientResetVersion,
+        userPermission
+      });
+
+      if (!result.success) {
+        return res.status(result.status).json({
+          error: result.error,
+          confirmedRecord: result.confirmedRecord,
+          systemResetVersion: result.systemResetVersion,
+          systemResetId: result.systemResetId
         });
       }
-
-      if (!collection || !record) {
-        return res.status(400).json({ error: "Collection and record required" });
-      }
-
-      if (!(collection in state)) {
-        return res.status(400).json({ error: `Unknown collection: ${collection}` });
-      }
-
-      if (userPermission === 'VIEW_ONLY') {
-        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
-      }
-
-      const serverTime = new Date().toISOString();
-      const currentList: any[] = (state as any)[collection] || [];
-      const recordId = String(record.id || `REC-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`);
-
-      const existingIndex = currentList.findIndex((item: any) => item && String(item.id) === recordId);
-      const existingRecord = existingIndex >= 0 ? currentList[existingIndex] : null;
-
-      let confirmedRecord: any;
-      let isCreation = false;
-
-      if (existingRecord) {
-        // Optimistic concurrency check
-        if (expectedVersion !== undefined && existingRecord.version && existingRecord.version > expectedVersion) {
-          return res.status(409).json({
-            error: "VERSION_CONFLICT: Newer revision exists in central database.",
-            currentRecord: existingRecord,
-            systemResetVersion
-          });
-        }
-
-        const nextVersion = (Number(existingRecord.version) || 1) + 1;
-        confirmedRecord = {
-          ...existingRecord,
-          ...record,
-          id: recordId,
-          record_id: record.record_id || recordId,
-          reset_version: systemResetVersion,
-          created_at: existingRecord.created_at || record.created_at || serverTime,
-          created_by: existingRecord.created_by || record.created_by || author || 'Operator',
-          updated_at: serverTime,
-          updated_by: author || employeeId || 'Operator',
-          version: nextVersion
-        };
-        currentList[existingIndex] = confirmedRecord;
-      } else {
-        isCreation = true;
-        confirmedRecord = {
-          ...record,
-          id: recordId,
-          record_id: record.record_id || recordId,
-          reset_version: systemResetVersion,
-          created_at: record.created_at || serverTime,
-          created_by: record.created_by || author || employeeId || 'Operator',
-          updated_at: serverTime,
-          updated_by: author || employeeId || 'Operator',
-          version: Number(record.version) || 1
-        };
-        currentList.unshift(confirmedRecord);
-      }
-
-      deletedRecordTombstones.delete(recordId);
-      (state as any)[collection] = currentList;
-      stateRevision++;
-
-      // COMMIT DATABASE SYNCHRONOUSLY BEFORE BROADCAST
-      const commitOk = commitDatabase();
-      if (!commitOk) {
-        return res.status(500).json({ error: "Failed to commit record to central disk database" });
-      }
-
-      // BROADCAST TO ALL CONNECTED CLIENTS
-      const eventType = isCreation ? "RECORD_CREATED" : "RECORD_UPDATED";
-      broadcast({
-        type: eventType,
-        collection,
-        record: confirmedRecord,
-        author: author || employeeId || "Operator",
-        actionDesc: actionDesc || `${isCreation ? 'Created' : 'Updated'} ${collection} record`,
-        timestamp: serverTime,
-        version: confirmedRecord.version,
-        systemResetVersion,
-        systemResetId
-      });
-
-      broadcast({
-        type: "collection_updated",
-        collection,
-        data: currentList,
-        systemResetVersion
-      });
 
       return res.json({
         success: true,
         collection,
-        record: confirmedRecord,
-        systemResetVersion
+        record: result.confirmedRecord,
+        systemResetVersion: result.systemResetVersion
       });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
@@ -1264,66 +2075,35 @@ async function startServer() {
    */
   app.post("/api/records/delete", async (req, res) => {
     try {
-      const { collection, id, author, employeeId } = req.body;
+      const { collection, id, author, employeeId, actionDesc } = req.body;
       const userPermission = (req.body.permission || req.headers['x-user-permission'] || '').toString().toUpperCase();
       const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version']) || systemResetVersion;
 
-      if (clientResetVersion < systemResetVersion) {
-        return res.status(409).json({
-          error: "STALE_RESET_VERSION: Central database was reset. Stale delete operation rejected.",
-          systemResetVersion,
-          systemResetId
+      const result = executeRecordDelete({
+        collection,
+        id,
+        author,
+        employeeId,
+        user_id: req.body.user_id,
+        actionDesc,
+        reset_version: clientResetVersion,
+        userPermission
+      });
+
+      if (!result.success) {
+        return res.status(result.status).json({
+          error: result.error,
+          systemResetVersion: result.systemResetVersion,
+          systemResetId: result.systemResetId
         });
       }
 
-      if (!collection || !id) {
-        return res.status(400).json({ error: "Collection and ID required" });
-      }
-
-      if (!(collection in state)) {
-        return res.status(400).json({ error: "Invalid collection" });
-      }
-
-      if (userPermission === 'VIEW_ONLY') {
-        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
-      }
-
-      markRecordTombstone(id);
-      (state as any)[collection] = ((state as any)[collection] || []).filter((item: any) => String(item.id) !== String(id));
-      stateRevision++;
-
-      // COMMIT DATABASE SYNCHRONOUSLY BEFORE BROADCAST
-      const commitOk = commitDatabase();
-      if (!commitOk) {
-        return res.status(500).json({ error: "Failed to commit record deletion to central database" });
-      }
-
-      const serverTime = new Date().toISOString();
-      broadcast({
-        type: "RECORD_DELETED",
+      return res.json({
+        success: true,
         collection,
-        id,
-        author: author || employeeId || "Operator",
-        timestamp: serverTime,
-        systemResetVersion,
-        systemResetId
+        id: result.id,
+        systemResetVersion: result.systemResetVersion
       });
-
-      broadcast({
-        type: "record_deleted",
-        collection,
-        id,
-        systemResetVersion
-      });
-
-      broadcast({
-        type: "collection_updated",
-        collection,
-        data: (state as any)[collection],
-        systemResetVersion
-      });
-
-      return res.json({ success: true, collection, id, systemResetVersion });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }

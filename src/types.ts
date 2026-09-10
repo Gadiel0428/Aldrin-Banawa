@@ -202,6 +202,15 @@ export interface ForkliftChecklist extends BaseRecordAudit {
   remarks?: string;
 }
 
+export interface AuthorizedDevice {
+  deviceId: string;
+  deviceName: string;
+  isPrimaryAdminDevice?: boolean;
+  status: 'AUTHORIZED' | 'PENDING' | 'REVOKED';
+  authorizedBy?: string;
+  authorizedAt?: string;
+}
+
 export interface RegisteredAccount {
   username: string;
   role: string;
@@ -215,6 +224,9 @@ export interface RegisteredAccount {
   registeredBySuperAdmin?: boolean;
   registeredAt?: string;
   stationId?: string;
+  deviceId?: string;
+  isPrimaryAdminDevice?: boolean;
+  authorizedDevices?: string[];
 }
 
 export type RegistryType = 'LOCATION' | 'CATEGORY' | 'CUSTOMER' | 'SUPPLIER' | 'BARCODE_PRESET';
@@ -235,10 +247,21 @@ export interface MasterRegistryItem extends BaseRecordAudit {
 }
 
 export interface ActivePresenceUser {
+  connection_id?: string;
+  connectionId?: string;
+  user_id?: string;
+  userId?: string;
+  session_id?: string;
+  sessionId?: string;
+  device_id?: string;
+  deviceId?: string;
   stationId?: string;
   username: string;
   employeeId?: string;
   role?: string;
+  permission?: string;
+  platform?: string;
+  deviceName?: string;
   activeView?: string;
   connectedAt?: string;
   lastPing?: number;

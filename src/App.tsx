@@ -290,15 +290,44 @@ export default function App() {
   // Central Database modal state
   const [showCentralDatabaseModal, setShowCentralDatabaseModal] = useState<boolean>(false);
 
+  // Persistent Device Identifier across sessions
+  const getPersistentDeviceId = (): string => {
+    if (typeof window === 'undefined') return 'DEV-SERVER';
+    try {
+      let id = localStorage.getItem('juwei_wms_device_id');
+      if (!id) {
+        const ua = window.navigator.userAgent || '';
+        const isAndroid = /android/i.test(ua);
+        const isWindows = /windows/i.test(ua);
+        const isIOS = /ipad|iphone|ipod/i.test(ua);
+        const prefix = isAndroid ? 'dev_android' : (isIOS ? 'dev_ios' : (isWindows ? 'dev_win' : 'dev_desk'));
+        id = `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`;
+        localStorage.setItem('juwei_wms_device_id', id);
+      }
+      return id;
+    } catch (e) {
+      return 'DEV-LOCAL';
+    }
+  };
+
+  const getPlatformType = (): string => {
+    if (typeof window === 'undefined') return 'Desktop';
+    const ua = window.navigator.userAgent || '';
+    if (/android/i.test(ua)) return 'Android';
+    if (/ipad|iphone|ipod/i.test(ua)) return 'iOS';
+    if (/windows/i.test(ua)) return 'Windows';
+    return 'Desktop';
+  };
+
   // Helper to obtain persistent workstation / session identifier
   const getStationId = (): string => {
     if (typeof window === 'undefined') return 'WS-MASTER';
     try {
-      let id = localStorage.getItem('juwei_wms_station_id') || sessionStorage.getItem('juwei_wms_station_id');
+      let id = sessionStorage.getItem('juwei_wms_station_id') || localStorage.getItem('juwei_wms_station_id');
       if (!id) {
         id = 'WS-' + Math.random().toString(36).substring(2, 6).toUpperCase();
-        localStorage.setItem('juwei_wms_station_id', id);
         sessionStorage.setItem('juwei_wms_station_id', id);
+        localStorage.setItem('juwei_wms_station_id', id);
       }
       return id;
     } catch (e) {
@@ -327,6 +356,10 @@ export default function App() {
     if (isMac) return 'macOS Terminal';
     return 'Web Terminal';
   };
+
+  // Unique session and connection IDs for this client tab
+  const clientSessionId = useRef<string>(`sess_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`);
+  const clientConnectionId = useRef<string>('');
 
   // Real-time states
   const [socket, setSocket] = useState<WebSocket | null>(null);
@@ -414,11 +447,25 @@ export default function App() {
   // Unified Presence Combiner & Active Terminals Reconciler
   useEffect(() => {
     const myStationId = getStationId();
+    const myDeviceId = getPersistentDeviceId();
+    const myConnId = clientConnectionId.current;
+    const mySessionId = clientSessionId.current;
+
     const selfItem: ActivePresenceUser = {
+      connection_id: myConnId,
+      connectionId: myConnId,
+      sessionId: mySessionId,
+      session_id: mySessionId,
+      deviceId: myDeviceId,
+      device_id: myDeviceId,
       stationId: myStationId,
+      user_id: currentEmployeeId ? `USR-${currentEmployeeId}` : 'ANONYMOUS',
       username: currentUser || 'JUWEI OPERATOR',
       employeeId: currentEmployeeId || (currentUser?.toUpperCase().includes('ALDRIN') ? 'JPMP-002' : ''),
       role: currentRole || (currentPermission === 'FULL_ACCESS' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR'),
+      permission: currentPermission || 'LIMITED_ACCESS',
+      platform: getPlatformType(),
+      deviceName: `${getPlatformType()} Terminal - ${myStationId}`,
       activeView: view,
       connectedAt: new Date().toISOString(),
       lastPing: Date.now(),
@@ -427,7 +474,10 @@ export default function App() {
 
     const combined: ActivePresenceUser[] = [
       selfItem,
-      ...wsPresence.map(p => ({ ...p, source: (p.source || 'websocket') as ('websocket' | 'central' | 'local' | 'self') })),
+      ...wsPresence.map(p => ({
+        ...p,
+        source: (p.connection_id && p.connection_id === myConnId ? 'self' : (p.source || 'websocket')) as ('websocket' | 'central' | 'local' | 'self')
+      })),
       ...localTabsPresence.map(p => ({ ...p, source: (p.source || 'local') as ('websocket' | 'central' | 'local' | 'self') }))
     ];
 
@@ -437,8 +487,15 @@ export default function App() {
     for (const item of combined) {
       if (!item || !item.username) continue;
       
+      const connId = item.connection_id || (item as any).connectionId;
+      const sessId = item.session_id || (item as any).sessionId;
+      const key = connId || sessId || item.stationId || (item.employeeId ? `${item.employeeId}_${item.username}` : `${item.username}_${item.source || 'terminal'}`);
+
       // If this item is a remote reflection of the current client tab itself, let selfItem take precedence
-      if (item.stationId === myStationId && item.source !== 'self') {
+      if (connId && connId === myConnId && item.source !== 'self') {
+        continue;
+      }
+      if (!connId && item.stationId === myStationId && item.source !== 'self') {
         continue;
       }
 
@@ -446,11 +503,6 @@ export default function App() {
       if (item.source === 'local' && item.lastPing && (now - item.lastPing > 30000)) {
         continue;
       }
-
-      // Unique deduplication key: stationId > (employeeId + username) > username + source
-      const key = item.stationId && item.stationId.trim().length > 0 
-        ? item.stationId.trim().toUpperCase() 
-        : (item.employeeId ? `${item.employeeId.toUpperCase()}_${item.username.toUpperCase()}` : `${item.username.toUpperCase()}_${item.source || 'terminal'}`);
 
       // If self is already in map, don't overwrite with remote copy of self
       if (map.has(key)) {
@@ -2338,14 +2390,24 @@ export default function App() {
         
         if (ws && ws.readyState === WebSocket.OPEN) {
           try {
-            ws.send(JSON.stringify({
-              type: 'join',
+            const authPayload = {
+              type: 'authenticate',
+              user_id: currentEmployeeId ? `USR-${currentEmployeeId}` : 'ANONYMOUS',
+              session_id: clientSessionId.current,
+              device_id: getPersistentDeviceId(),
+              connection_id: clientConnectionId.current || undefined,
               stationId: getStationId(),
               username: currentUser || 'JUWEI OPERATOR',
               employeeId: currentEmployeeId || '',
               role: currentRole || (currentPermission === 'FULL_ACCESS' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR'),
-              activeView: view
-            }));
+              permission: currentPermission || (currentEmployeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
+              activeView: view,
+              platform: getPlatformType(),
+              deviceName: `${getPlatformType()} Terminal - ${getStationId()}`,
+              reset_version: Number(localStorage.getItem('juwei_wms_system_reset_version')) || 1
+            };
+            ws.send(JSON.stringify(authPayload));
+            ws.send(JSON.stringify({ ...authPayload, type: 'join' }));
 
             if (localStorage.getItem('juwei_wms_is_fresh_install') === 'true') {
               ws.send(JSON.stringify({
@@ -2403,21 +2465,70 @@ export default function App() {
               setConnectionStatus('connected');
               setLastSyncedTime(new Date());
 
+              if (payload.connection_id) {
+                clientConnectionId.current = payload.connection_id;
+              }
+
               const serverResetVer = Number(payload.systemResetVersion) || 0;
               const localResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
 
               if (serverResetVer > localResetVer) {
                 console.log(`[JUWEI WMS] Server reset version ${serverResetVer} > local ${localResetVer}. Hard purging local stale data.`);
                 purgeAllLocalOfflineCachesAndQueues(serverResetVer);
-                applyAuthoritativeResetState(payload.data, payload.activeUsers, payload.activePresence);
+                applyAuthoritativeResetState(payload.data, payload.activeUsers, payload.presenceList || payload.activePresence);
               } else {
                 if (serverResetVer > 0 && localResetVer === 0) {
                   localStorage.setItem('juwei_wms_system_reset_version', String(serverResetVer));
                 }
-                applyStatePayload(payload.data, payload.activeUsers, payload.activePresence);
+                applyStatePayload(payload.data, payload.activeUsers, payload.presenceList || payload.activePresence);
               }
-              if (payload.activePresence && Array.isArray(payload.activePresence)) {
+              if (payload.presenceList && Array.isArray(payload.presenceList)) {
+                setWsPresence(payload.presenceList);
+              } else if (payload.activePresence && Array.isArray(payload.activePresence)) {
                 setWsPresence(payload.activePresence);
+              }
+              break;
+            }
+            case 'auth_confirmed': {
+              if (payload.connection_id) {
+                clientConnectionId.current = payload.connection_id;
+              }
+              if (payload.presenceList && Array.isArray(payload.presenceList)) {
+                setWsPresence(payload.presenceList);
+              }
+              break;
+            }
+            case 'USER_ONLINE': {
+              if (payload.presenceList && Array.isArray(payload.presenceList)) {
+                setWsPresence(payload.presenceList);
+              }
+              if (payload.connection && payload.connection.connection_id !== clientConnectionId.current) {
+                setLiveSyncToast({
+                  id: String(Date.now()),
+                  author: payload.connection.username || 'Operator',
+                  action: `Connected to cluster (${payload.connection.platform || 'Workstation'})`,
+                  time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                });
+              }
+              break;
+            }
+            case 'USER_OFFLINE': {
+              if (payload.presenceList && Array.isArray(payload.presenceList)) {
+                setWsPresence(payload.presenceList);
+              }
+              if (payload.connection && payload.connection.connection_id !== clientConnectionId.current) {
+                setLiveSyncToast({
+                  id: String(Date.now()),
+                  author: payload.connection.username || 'Operator',
+                  action: `Disconnected from cluster`,
+                  time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                });
+              }
+              break;
+            }
+            case 'PRESENCE_SYNC': {
+              if (payload.presenceList && Array.isArray(payload.presenceList)) {
+                setWsPresence(payload.presenceList);
               }
               break;
             }
@@ -2457,6 +2568,8 @@ export default function App() {
               handleManualSync();
               break;
             }
+            case 'DATA_CREATE':
+            case 'DATA_UPDATE':
             case 'RECORD_CREATED':
             case 'RECORD_UPDATED':
             case 'record_upserted': {
@@ -2512,6 +2625,7 @@ export default function App() {
               }
               break;
             }
+            case 'DATA_DELETE':
             case 'RECORD_DELETED':
             case 'record_deleted': {
               const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
@@ -3300,6 +3414,29 @@ export default function App() {
     setCurrentPermission(cleanPermission);
     setIsLoggedIn(true);
 
+    // Generate new unique authenticated session for this login
+    clientSessionId.current = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    if (wsOpen(socket)) {
+      try {
+        socket!.send(JSON.stringify({
+          type: 'authenticate',
+          user_id: `USR-${cleanEmployeeId}`,
+          session_id: clientSessionId.current,
+          device_id: getPersistentDeviceId(),
+          connection_id: clientConnectionId.current || undefined,
+          stationId: getStationId(),
+          username: cleanUsername,
+          employeeId: cleanEmployeeId,
+          role: cleanRole,
+          permission: cleanPermission,
+          activeView: view,
+          platform: getPlatformType(),
+          deviceName: `${getPlatformType()} Terminal - ${getStationId()}`,
+          reset_version: Number(localStorage.getItem('juwei_wms_system_reset_version')) || 1
+        }));
+      } catch (e) {}
+    }
+
     // Update lastActive timestamp on the operator's account & sync across terminals
     setRegisteredUsers(prev => {
       const updated = prev.map(u => {
@@ -3328,6 +3465,27 @@ export default function App() {
   const handleLogout = () => {
     sendSystemActivity(`OPERATOR ${currentUser} (${currentRole}) HAS LOGGED OFF.`);
     
+    if (wsOpen(socket)) {
+      try {
+        socket!.send(JSON.stringify({
+          type: 'authenticate',
+          user_id: 'ANONYMOUS',
+          session_id: clientSessionId.current,
+          device_id: getPersistentDeviceId(),
+          connection_id: clientConnectionId.current || undefined,
+          stationId: getStationId(),
+          username: 'CONNECTING TERMINAL',
+          employeeId: '',
+          role: 'OPERATOR',
+          permission: 'LIMITED_ACCESS',
+          activeView: 'login',
+          platform: getPlatformType(),
+          deviceName: `${getPlatformType()} Terminal - ${getStationId()}`,
+          reset_version: Number(localStorage.getItem('juwei_wms_system_reset_version')) || 1
+        }));
+      } catch (e) {}
+    }
+
     setCurrentUser('');
     setCurrentRole('');
     setCurrentEmployeeId('');
