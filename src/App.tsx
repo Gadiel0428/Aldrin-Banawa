@@ -1249,11 +1249,28 @@ export default function App() {
     const httpProto = isHttps ? 'https:' : 'http:';
 
     const baseUrl = getApiBaseUrl();
+    const persistentDevId = getPersistentDeviceId();
+    const effectiveAuthor = currentUser || 'OPERATOR';
+    const effectiveUserId = currentEmployeeId ? `USR-${currentEmployeeId}` : `USR-${effectiveAuthor}`;
+    const batchPayload = {
+      mutations,
+      reset_version: currentResetVer,
+      device_id: persistentDevId,
+      author: effectiveAuthor,
+      employeeId: currentEmployeeId,
+      user_id: effectiveUserId
+    };
+
     try {
       const res = await fetch(`${baseUrl}/api/sync/batch`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mutations, reset_version: currentResetVer })
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-device-id': persistentDevId,
+          'x-employee-id': currentEmployeeId || '',
+          'x-user-permission': currentPermission || ''
+        },
+        body: JSON.stringify(batchPayload)
       });
       if (res.status === 409) {
         const errJson = await res.json().catch(() => ({}));
@@ -1272,8 +1289,13 @@ export default function App() {
     try {
       const resFallback = await fetch(`${httpProto}//${cleanHost}/api/sync/batch`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mutations, reset_version: currentResetVer })
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-device-id': persistentDevId,
+          'x-employee-id': currentEmployeeId || '',
+          'x-user-permission': currentPermission || ''
+        },
+        body: JSON.stringify(batchPayload)
       });
       if (resFallback.status === 409) {
         const errJson = await resFallback.json().catch(() => ({}));
@@ -1514,108 +1536,56 @@ export default function App() {
 
     const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
     const deletedSet = getDeletedRecordIds();
-    const now = Date.now();
 
     // Check for active unconfirmed local mutations with valid reset version
     const pendingMutations = getPendingMutations().filter(
       mut => mut && mut.collection === colName && (!mut.reset_version || mut.reset_version >= currentResetVer)
     );
 
-    // Prevent data flickering bug: Never replace valid table data with [] during fetching or reconnecting
-    if (incomingArr.length === 0) {
-      if (forceOverwrite) {
-        return [];
-      }
-      if (safeCurrent.length > 0) {
-        return safeCurrent;
-      }
-      return [];
+    // Prevent data flickering bug: If server returned empty array and forceOverwrite is false,
+    // only preserve current if it has valid data and we are in transit
+    if (incomingArr.length === 0 && !forceOverwrite && safeCurrent.length > 0) {
+      // If we haven't synced yet or network blip, keep current temporarily
+      return safeCurrent;
     }
 
-    // Filter incoming records from server to exclude locally deleted IDs and stale reset versions
+    // Filter incoming records from server to exclude stale reset versions
     const filteredIncoming = incomingArr.filter(item => {
-      if (!item || !item.id) return false;
-      if (deletedSet.has(item.id)) return false;
+      if (!item || (!item.id && !item.record_id)) return false;
       if (item.reset_version && currentResetVer > 0 && Number(item.reset_version) < currentResetVer) return false;
       return true;
     });
 
-    // Build merged map starting with authoritative incoming items
+    // Central Server Database is the SINGLE SOURCE OF TRUTH
     const mergedMap = new Map<string, any>();
 
-    // 1. Process all incoming records with server-authoritative version and timestamp precedence
+    // 1. All server records populate the authoritative state
     for (const remoteItem of filteredIncoming) {
-      const localItem = safeCurrent.find(it => it && it.id === remoteItem.id);
-      if (localItem) {
-        const remoteVer = Number(remoteItem.version) || 0;
-        const localVer = Number(localItem.version) || 0;
-        const remoteTs = remoteItem.updated_at ? new Date(remoteItem.updated_at).getTime() : 0;
-        const localTs = localItem.updated_at ? new Date(localItem.updated_at).getTime() : 0;
-
-        // Server authoritative record wins if higher version or newer updated_at
-        if (remoteVer > localVer || remoteTs > localTs) {
-          mergedMap.set(remoteItem.id, remoteItem);
-        } else if (remoteVer === localVer && remoteTs === localTs) {
-          mergedMap.set(remoteItem.id, { ...localItem, ...remoteItem });
-        } else {
-          // If locally mutated very recently, preserve local until server confirms
-          const lastLocalMut = recentlyMutatedRecords.current.get(localItem.id) || 0;
-          if (now - lastLocalMut < 5000 && localTs > remoteTs) {
-            mergedMap.set(remoteItem.id, localItem);
-          } else {
-            mergedMap.set(remoteItem.id, remoteItem);
-          }
-        }
-      } else {
-        mergedMap.set(remoteItem.id, remoteItem);
-      }
+      const recId = String(remoteItem.id || remoteItem.record_id);
+      mergedMap.set(recId, remoteItem);
     }
 
-    // 2. Only preserve local items from safeCurrent IF they were mutated locally on this workstation within the last 5 seconds.
-    // (Prevents deleted or globally reset server records from being resurrected by local client state!)
-    for (const localItem of safeCurrent) {
-      if (localItem && localItem.id && !deletedSet.has(localItem.id)) {
-        if (!mergedMap.has(localItem.id)) {
-          const lastLocalMut = recentlyMutatedRecords.current.get(localItem.id) || 0;
-          if (now - lastLocalMut < 5000) {
-            mergedMap.set(localItem.id, localItem);
-          }
-        }
-      }
-    }
-
-    // 3. Preserve any unconfirmed offline mutations created locally on this workstation with valid reset version
+    // 2. Overlay ONLY pending unconfirmed offline mutations created on this device
     for (const mut of pendingMutations) {
-      if (mut && mut.type === 'upsert' && mut.record && mut.record.id) {
-        if (!deletedSet.has(mut.record.id) && !mergedMap.has(mut.record.id)) {
-          mergedMap.set(mut.record.id, mut.record);
+      if (mut && mut.type === 'upsert' && mut.record && (mut.record.id || mut.record.record_id)) {
+        const id = String(mut.record.id || mut.record.record_id);
+        if (!deletedSet.has(id)) {
+          mergedMap.set(id, { ...(mergedMap.get(id) || {}), ...mut.record });
         }
+      } else if (mut && mut.type === 'delete' && (mut.recordId || (mut as any).id)) {
+        const id = String(mut.recordId || (mut as any).id);
+        mergedMap.delete(id);
       }
     }
 
-    // 4. Stable Ordering: preserve safeCurrent's exact index order for all existing items, then prepend any new incoming items
-    const orderedList: any[] = [];
-    const usedIds = new Set<string>();
-
-    for (const existingItem of safeCurrent) {
-      if (existingItem && existingItem.id && mergedMap.has(existingItem.id)) {
-        orderedList.push(mergedMap.get(existingItem.id));
-        usedIds.add(existingItem.id);
-      }
-    }
-
-    for (const [id, item] of mergedMap.entries()) {
-      if (!usedIds.has(id)) {
-        orderedList.unshift(item);
-      }
-    }
+    const resultList = Array.from(mergedMap.values());
 
     // If contents and ordering are equal to currentArr, return currentArr reference (prevents re-render and flicker)
-    if (areCollectionsEqual(safeCurrent, orderedList)) {
+    if (areCollectionsEqual(safeCurrent, resultList)) {
       return safeCurrent;
     }
 
-    return orderedList;
+    return resultList;
   };
 
   // Helper to compare users by content to avoid unnecessary user state re-renders
@@ -2366,7 +2336,9 @@ export default function App() {
       }
       const isHttps = isSecureServerHost(cleanHost, targetAddr);
       const wsProto = isHttps ? 'wss:' : 'ws:';
-      const socketUrl = `${wsProto}//${cleanHost}/ws`;
+      const clientAccountId = localStorage.getItem('juwei_wms_account_id') || 'ACC-JUWEI';
+      const clientWarehouseId = localStorage.getItem('juwei_wms_warehouse_id') || 'WH-MAIN';
+      const socketUrl = `${wsProto}//${cleanHost}/ws?accountId=${encodeURIComponent(clientAccountId)}&warehouseId=${encodeURIComponent(clientWarehouseId)}`;
 
       if (pingInterval) clearInterval(pingInterval);
 
@@ -2392,6 +2364,8 @@ export default function App() {
           try {
             const authPayload = {
               type: 'authenticate',
+              accountId: clientAccountId,
+              warehouseId: clientWarehouseId,
               user_id: currentEmployeeId ? `USR-${currentEmployeeId}` : 'ANONYMOUS',
               session_id: clientSessionId.current,
               device_id: getPersistentDeviceId(),
@@ -2459,6 +2433,57 @@ export default function App() {
           }
 
           switch (payload.type) {
+            case 'FULL_INVENTORY_SYNC': {
+              const incoming = Array.isArray(payload.inventory) ? payload.inventory : (Array.isArray(payload.stocks) ? payload.stocks : []);
+              setLastSyncedTime(new Date());
+              if (incoming.length > 0 || payload.inventory !== undefined) {
+                const norm = normalizeRecords('stocks', incoming);
+                setStocks(norm);
+                console.log(`[JUWEI WMS] Received FULL_INVENTORY_SYNC (${norm.length} items) for account: ${payload.accountId || 'ALL'}, warehouse: ${payload.warehouseId || 'ALL'}`);
+              }
+              break;
+            }
+            case 'INVENTORY_UPDATE':
+            case 'STOCK_ADJUSTMENT':
+            case 'LOCATION_TRANSFER':
+            case 'PICK_PACK_SHIP': {
+              setLastSyncedTime(new Date());
+              const { record, inventory, stocks: updatedStocks, collection, actionDesc, author } = payload;
+              if (author && author !== (currentUser || '')) {
+                setLiveSyncToast({
+                  id: String(Date.now()),
+                  author,
+                  action: actionDesc || `${payload.type} processed in room`,
+                  time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                });
+              }
+              if (Array.isArray(inventory)) {
+                const norm = normalizeRecords('stocks', inventory);
+                setStocks(norm);
+              } else if (Array.isArray(updatedStocks)) {
+                const norm = normalizeRecords('stocks', updatedStocks);
+                setStocks(norm);
+              } else if (record && record.id) {
+                const targetCol = collection || 'stocks';
+                const updateFn = (prev: any[]) => {
+                  if (isRecordDeletedLocally(record.id)) return prev;
+                  const idx = prev.findIndex(it => it.id === record.id);
+                  if (idx >= 0) {
+                    const next = [...prev];
+                    next[idx] = record;
+                    return next;
+                  }
+                  return [record, ...prev];
+                };
+                if (targetCol === 'stocks') setStocks(updateFn);
+                else if (targetCol === 'receiving') setReceiving(updateFn);
+                else if (targetCol === 'returns') setReturns(updateFn);
+                else if (targetCol === 'recycling') setRecycling(updateFn);
+                else if (targetCol === 'issuances') setIssuances(updateFn);
+                else if (targetCol === 'deliveries') setDeliveries(updateFn);
+              }
+              break;
+            }
             case 'init': {
               hasConnectedOnce = true;
               missedPongs = 0;
@@ -2867,6 +2892,9 @@ export default function App() {
     }
 
     const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
+    const persistentDevId = getPersistentDeviceId();
+    const effectiveAuthor = currentUser || 'OPERATOR';
+    const effectiveUserId = currentEmployeeId ? `USR-${currentEmployeeId}` : `USR-${effectiveAuthor}`;
 
     // Mark as pending before network request
     markPendingSync(collection, data);
@@ -2878,7 +2906,10 @@ export default function App() {
           type: 'sync_collection',
           collection,
           data,
-          reset_version: currentResetVer
+          reset_version: currentResetVer,
+          device_id: persistentDevId,
+          user_id: effectiveUserId,
+          author: effectiveAuthor
         });
       } catch (e) {}
     }
@@ -2890,7 +2921,11 @@ export default function App() {
           type: 'update_collection',
           collection,
           data,
-          reset_version: currentResetVer
+          reset_version: currentResetVer,
+          device_id: persistentDevId,
+          user_id: effectiveUserId,
+          author: effectiveAuthor,
+          employeeId: currentEmployeeId
         }));
       } catch (e) {
         console.warn('WS send error:', e);
@@ -2904,10 +2939,25 @@ export default function App() {
     const httpProto = isHttps ? 'https:' : 'http:';
     
     const baseUrl = getApiBaseUrl();
+    const syncPayload = {
+      collection,
+      data,
+      reset_version: currentResetVer,
+      device_id: persistentDevId,
+      author: effectiveAuthor,
+      employeeId: currentEmployeeId,
+      user_id: effectiveUserId
+    };
+
     fetch(`${baseUrl}/api/sync`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ collection, data, reset_version: currentResetVer })
+      headers: { 
+        'Content-Type': 'application/json',
+        'x-device-id': persistentDevId,
+        'x-employee-id': currentEmployeeId || '',
+        'x-user-permission': currentPermission || ''
+      },
+      body: JSON.stringify(syncPayload)
     })
     .then(async res => {
       if (res.status === 409) {
@@ -2924,8 +2974,13 @@ export default function App() {
     .catch(() => {
       fetch(`${httpProto}//${cleanHost}/api/sync`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ collection, data, reset_version: currentResetVer })
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-device-id': persistentDevId,
+          'x-employee-id': currentEmployeeId || '',
+          'x-user-permission': currentPermission || ''
+        },
+        body: JSON.stringify(syncPayload)
       })
       .then(async res => {
         if (res.status === 409) {

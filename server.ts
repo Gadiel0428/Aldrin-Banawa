@@ -366,6 +366,7 @@ async function startServer() {
     user_id: string;
     session_id: string;
     device_id: string;
+    deviceId?: string;
     stationId: string;
     employeeId: string;
     username: string;
@@ -380,11 +381,217 @@ async function startServer() {
     ws: WebSocket;
     ip: string;
     userAgent?: string;
+    accountId: string;
+    warehouseId: string;
   }
 
   // Keyed strictly by unique connection_id
   const connectionRegistry = new Map<string, ActiveConnectionRecord>();
   const socketToConnectionId = new WeakMap<WebSocket, string>();
+
+  // Room-based broadcasting mapping for Warehouse and Account groups
+  const accountRooms = new Map<string, Set<WebSocket>>();
+  const warehouseRooms = new Map<string, Set<WebSocket>>();
+  const socketToRoomMeta = new WeakMap<WebSocket, { accountId: string; warehouseId: string }>();
+
+  function normalizeGroupId(id?: any, defaultVal: string = "WH-MAIN"): string {
+    if (!id || typeof id !== "string") return defaultVal;
+    const clean = id.trim();
+    return clean.length > 0 ? clean : defaultVal;
+  }
+
+  function assignSocketToGroup(ws: WebSocket, accountIdInput?: string, warehouseIdInput?: string) {
+    const accountId = normalizeGroupId(accountIdInput, "ACC-JUWEI");
+    const warehouseId = normalizeGroupId(warehouseIdInput, "WH-MAIN");
+
+    // Remove socket from previous rooms if it was already assigned
+    removeSocketFromGroups(ws);
+
+    if (!accountRooms.has(accountId)) {
+      accountRooms.set(accountId, new Set());
+    }
+    accountRooms.get(accountId)!.add(ws);
+
+    if (!warehouseRooms.has(warehouseId)) {
+      warehouseRooms.set(warehouseId, new Set());
+    }
+    warehouseRooms.get(warehouseId)!.add(ws);
+
+    socketToRoomMeta.set(ws, { accountId, warehouseId });
+
+    const connId = socketToConnectionId.get(ws);
+    if (connId) {
+      const conn = connectionRegistry.get(connId);
+      if (conn) {
+        conn.accountId = accountId;
+        conn.warehouseId = warehouseId;
+      }
+    }
+    console.log(`[WS ROOM] Assigned socket to Group -> Account: [${accountId}], Warehouse: [${warehouseId}]`);
+  }
+
+  function removeSocketFromGroups(ws: WebSocket) {
+    const meta = socketToRoomMeta.get(ws);
+    if (meta) {
+      const accSet = accountRooms.get(meta.accountId);
+      if (accSet) {
+        accSet.delete(ws);
+        if (accSet.size === 0) accountRooms.delete(meta.accountId);
+      }
+      const whSet = warehouseRooms.get(meta.warehouseId);
+      if (whSet) {
+        whSet.delete(ws);
+        if (whSet.size === 0) warehouseRooms.delete(meta.warehouseId);
+      }
+    }
+    socketToRoomMeta.delete(ws);
+  }
+
+  function getSocketsInGroup(params: { accountId?: string; warehouseId?: string }): Set<WebSocket> {
+    const matchingSockets = new Set<WebSocket>();
+    const targetAcc = normalizeGroupId(params.accountId, "");
+    const targetWh = normalizeGroupId(params.warehouseId, "");
+
+    // If specific warehouseId specified (and not ALL/GLOBAL)
+    if (targetWh && targetWh !== "ALL" && targetWh !== "GLOBAL" && targetWh.toLowerCase() !== "all") {
+      const whSet = warehouseRooms.get(targetWh);
+      if (whSet) {
+        for (const s of whSet) {
+          if (s && s.readyState === WebSocket.OPEN) {
+            const meta = socketToRoomMeta.get(s);
+            if (!targetAcc || targetAcc === "ALL" || targetAcc === "GLOBAL" || (meta && meta.accountId === targetAcc)) {
+              matchingSockets.add(s);
+            }
+          }
+        }
+      }
+    } else if (targetAcc && targetAcc !== "ALL" && targetAcc !== "GLOBAL" && targetAcc.toLowerCase() !== "all") {
+      const accSet = accountRooms.get(targetAcc);
+      if (accSet) {
+        for (const s of accSet) {
+          if (s && s.readyState === WebSocket.OPEN) {
+            matchingSockets.add(s);
+          }
+        }
+      }
+    } else {
+      for (const client of wss.clients) {
+        if (client && client.readyState === WebSocket.OPEN) {
+          matchingSockets.add(client);
+        }
+      }
+    }
+
+    return matchingSockets;
+  }
+
+  function queryDatabaseInventory(accountId?: string, warehouseId?: string) {
+    const allStocks = Array.isArray(state.stocks) ? state.stocks : [];
+    const cleanWh = (warehouseId || "").trim();
+    const cleanAcc = (accountId || "").trim();
+
+    return allStocks.filter((item: any) => {
+      if (!item) return false;
+      const itemWh = (item.warehouseId || item.warehouse_id || item.warehouse || "WH-MAIN").trim();
+      const itemAcc = (item.accountId || item.account_id || item.account || "ACC-JUWEI").trim();
+
+      const whMatch = !cleanWh || cleanWh === "ALL" || cleanWh === "GLOBAL" || cleanWh.toLowerCase() === "all" || cleanWh === itemWh || itemWh === "WH-MAIN" || !item.warehouseId;
+      const accMatch = !cleanAcc || cleanAcc === "ALL" || cleanAcc === "GLOBAL" || cleanAcc.toLowerCase() === "all" || cleanAcc === itemAcc || itemAcc === "ACC-JUWEI" || !item.accountId;
+
+      return whMatch && accMatch;
+    });
+  }
+
+  // Room-based inventory broadcast strictly targeting active connections matching accountId/warehouseId
+  function broadcastInventoryEvent(event: {
+    type: string; // 'STOCK_ADJUSTMENT' | 'PICK_PACK_SHIP' | 'LOCATION_TRANSFER' | 'INVENTORY_UPDATE' | 'stock_movement_created'
+    accountId?: string;
+    warehouseId?: string;
+    collection?: string;
+    record?: any;
+    movement?: any;
+    actionDesc?: string;
+    author?: string;
+    user_id?: string;
+    device_id?: string;
+    timestamp?: string;
+    excludeSocket?: WebSocket;
+  }) {
+    const targetAccountId = normalizeGroupId(event.accountId || event.record?.accountId || event.record?.account_id, "ACC-JUWEI");
+    const targetWarehouseId = normalizeGroupId(event.warehouseId || event.record?.warehouseId || event.record?.warehouse_id || event.movement?.warehouse_id, "WH-MAIN");
+
+    // Query updated inventory from central database
+    const updatedInventory = queryDatabaseInventory(targetAccountId, targetWarehouseId);
+    const eventTime = event.timestamp || new Date().toISOString();
+
+    const payloadObj = {
+      type: event.type,
+      accountId: targetAccountId,
+      warehouseId: targetWarehouseId,
+      inventory: updatedInventory,
+      stocks: updatedInventory,
+      collection: event.collection || 'stocks',
+      record: event.record,
+      movement: event.movement,
+      actionDesc: event.actionDesc || `Inventory event: ${event.type}`,
+      author: event.author || 'Operator',
+      user_id: event.user_id,
+      device_id: event.device_id,
+      timestamp: eventTime,
+      systemResetVersion,
+      systemResetId
+    };
+
+    const payloadString = JSON.stringify(payloadObj);
+
+    const legacyCollectionMsg = JSON.stringify({
+      type: "collection_updated",
+      collection: event.collection || "stocks",
+      data: event.collection && event.collection !== 'stocks' ? (state as any)[event.collection] : updatedInventory,
+      systemResetVersion
+    });
+
+    const legacyUpsertMsg = event.record ? JSON.stringify({
+      type: event.record._isNew ? "DATA_CREATE" : "DATA_UPDATE",
+      collection: event.collection || "stocks",
+      record: event.record,
+      id: event.record.id,
+      record_id: event.record.record_id || event.record.id,
+      author: event.author || "Operator",
+      timestamp: eventTime,
+      systemResetVersion,
+      systemResetId
+    }) : null;
+
+    // STRICTLY find all active connections matching that same accountId and warehouseId
+    const targetSockets = getSocketsInGroup({ accountId: targetAccountId, warehouseId: targetWarehouseId });
+
+    // Requirement 4: Ensure all broadcast iterations check that readyState === OPEN
+    for (const client of targetSockets) {
+      if (client && client.readyState === WebSocket.OPEN && client !== event.excludeSocket) {
+        try {
+          client.send(payloadString);
+          client.send(legacyCollectionMsg);
+          if (legacyUpsertMsg) client.send(legacyUpsertMsg);
+          if (event.movement) {
+            client.send(JSON.stringify({
+              type: "stock_movement_created",
+              movement: event.movement,
+              stock: event.record,
+              stocks: updatedInventory,
+              warehouseId: targetWarehouseId,
+              accountId: targetAccountId,
+              systemResetVersion
+            }));
+          }
+        } catch (sendErr) {
+          console.warn("WebSocket client send warning in inventory room:", sendErr);
+        }
+      }
+    }
+
+    console.log(`[INVENTORY-BROADCAST] [${event.type}] Dispatched to ${targetSockets.size} active sockets in Room [${targetAccountId}:${targetWarehouseId}]`);
+  }
 
   // Helper metrics calculated directly from the server-side registry
   function getActiveOperatorsCount(): number {
@@ -432,6 +639,8 @@ async function startServer() {
       activeView: c.activeView || 'dashboard',
       connectedAt: c.connectedAt,
       lastPing: c.lastPing,
+      accountId: c.accountId || 'ACC-JUWEI',
+      warehouseId: c.warehouseId || 'WH-MAIN',
       source: 'central_websocket' as const
     }));
   }
@@ -518,13 +727,14 @@ async function startServer() {
     author?: string;
     employeeId?: string;
     user_id?: string;
+    device_id?: string;
     actionDesc?: string;
     expectedVersion?: number;
     reset_version?: number;
     userPermission?: string;
     excludeSocket?: WebSocket;
   }): UpsertExecutionResult {
-    const { collection, record, author, employeeId, user_id, actionDesc, expectedVersion, reset_version, userPermission, excludeSocket } = params;
+    const { collection, record, author, employeeId, user_id, device_id, actionDesc, expectedVersion, reset_version, userPermission, excludeSocket } = params;
 
     const clientResetVersion = Number(reset_version) || Number(record?.reset_version) || systemResetVersion;
     if (clientResetVersion < systemResetVersion) {
@@ -559,6 +769,7 @@ async function startServer() {
     let confirmedRecord: any;
     let isCreation = false;
     const effectiveUserId = String(user_id || record.user_id || (employeeId ? `USR-${employeeId}` : (author ? `USR-${author}` : 'OPERATOR'))).trim();
+    const effectiveDeviceId = String(device_id || record.device_id || 'DEV-CENTRAL').trim();
 
     if (existingRecord) {
       // Optimistic concurrency check
@@ -584,6 +795,7 @@ async function startServer() {
         updated_at: serverTime,
         updated_by: author || employeeId || 'Operator',
         user_id: effectiveUserId,
+        device_id: effectiveDeviceId,
         version: nextVersion
       };
       currentList[existingIndex] = confirmedRecord;
@@ -599,6 +811,7 @@ async function startServer() {
         updated_at: serverTime,
         updated_by: author || employeeId || 'Operator',
         user_id: effectiveUserId,
+        device_id: effectiveDeviceId,
         version: Number(record.version) || 1
       };
       currentList.unshift(confirmedRecord);
@@ -614,44 +827,72 @@ async function startServer() {
       return { success: false, status: 500, error: "Failed to commit record to central disk database" };
     }
 
-    // BROADCAST TO ALL CONNECTED CLIENTS
-    const eventType = isCreation ? "DATA_CREATE" : "DATA_UPDATE";
-    broadcast({
-      type: eventType,
-      collection,
-      record: confirmedRecord,
-      id: recordId,
-      record_id: recordId,
-      author: author || employeeId || "Operator",
-      user_id: effectiveUserId,
-      actionDesc: actionDesc || `${isCreation ? 'Created' : 'Updated'} ${collection} record`,
-      timestamp: serverTime,
-      version: confirmedRecord.version,
-      systemResetVersion,
-      systemResetId
-    }, excludeSocket);
+    console.log(`[CENTRAL-DB] [${isCreation ? 'CREATE' : 'UPDATE'}] [${collection}] ID: ${recordId} | Rev: v${confirmedRecord.version} | User: ${effectiveUserId} | Device: ${effectiveDeviceId} | Time: ${serverTime}`);
 
-    broadcast({
-      type: isCreation ? "RECORD_CREATED" : "RECORD_UPDATED",
-      collection,
-      record: confirmedRecord,
-      id: recordId,
-      record_id: recordId,
-      author: author || employeeId || "Operator",
-      user_id: effectiveUserId,
-      actionDesc: actionDesc || `${isCreation ? 'Created' : 'Updated'} ${collection} record`,
-      timestamp: serverTime,
-      version: confirmedRecord.version,
-      systemResetVersion,
-      systemResetId
-    }, excludeSocket);
+    const isInventoryCollection = ['stocks', 'issuances', 'deliveries', 'receiving', 'returns', 'recycling'].includes(collection);
+    if (isInventoryCollection) {
+      let invEventType = "INVENTORY_UPDATE";
+      if (collection === 'stocks') {
+        invEventType = isCreation ? "STOCK_CREATED" : "STOCK_ADJUSTMENT";
+      } else if (collection === 'issuances' || collection === 'deliveries') {
+        invEventType = "PICK_PACK_SHIP";
+      }
 
-    broadcast({
-      type: "collection_updated",
-      collection,
-      data: currentList,
-      systemResetVersion
-    }, excludeSocket);
+      broadcastInventoryEvent({
+        type: invEventType,
+        collection,
+        record: confirmedRecord,
+        accountId: confirmedRecord.accountId || confirmedRecord.account_id,
+        warehouseId: confirmedRecord.warehouseId || confirmedRecord.warehouse_id || confirmedRecord.locationWarehouse,
+        author: author || employeeId || "Operator",
+        user_id: effectiveUserId,
+        device_id: effectiveDeviceId,
+        actionDesc: actionDesc || `${isCreation ? 'Created' : 'Updated'} ${collection} record`,
+        timestamp: serverTime,
+        excludeSocket
+      });
+    } else {
+      // Non-inventory collections use global broadcast
+      const eventType = isCreation ? "DATA_CREATE" : "DATA_UPDATE";
+      broadcast({
+        type: eventType,
+        collection,
+        record: confirmedRecord,
+        id: recordId,
+        record_id: recordId,
+        author: author || employeeId || "Operator",
+        user_id: effectiveUserId,
+        device_id: effectiveDeviceId,
+        actionDesc: actionDesc || `${isCreation ? 'Created' : 'Updated'} ${collection} record`,
+        timestamp: serverTime,
+        version: confirmedRecord.version,
+        systemResetVersion,
+        systemResetId
+      }, excludeSocket);
+
+      broadcast({
+        type: isCreation ? "RECORD_CREATED" : "RECORD_UPDATED",
+        collection,
+        record: confirmedRecord,
+        id: recordId,
+        record_id: recordId,
+        author: author || employeeId || "Operator",
+        user_id: effectiveUserId,
+        device_id: effectiveDeviceId,
+        actionDesc: actionDesc || `${isCreation ? 'Created' : 'Updated'} ${collection} record`,
+        timestamp: serverTime,
+        version: confirmedRecord.version,
+        systemResetVersion,
+        systemResetId
+      }, excludeSocket);
+
+      broadcast({
+        type: "collection_updated",
+        collection,
+        data: currentList,
+        systemResetVersion
+      }, excludeSocket);
+    }
 
     return {
       success: true,
@@ -679,12 +920,13 @@ async function startServer() {
     author?: string;
     employeeId?: string;
     user_id?: string;
+    device_id?: string;
     actionDesc?: string;
     reset_version?: number;
     userPermission?: string;
     excludeSocket?: WebSocket;
   }): DeleteExecutionResult {
-    const { collection, id, author, employeeId, user_id, actionDesc, reset_version, userPermission, excludeSocket } = params;
+    const { collection, id, author, employeeId, user_id, device_id, actionDesc, reset_version, userPermission, excludeSocket } = params;
 
     const clientResetVersion = Number(reset_version) || systemResetVersion;
     if (clientResetVersion < systemResetVersion) {
@@ -722,45 +964,72 @@ async function startServer() {
 
     const serverTime = new Date().toISOString();
     const effectiveUserId = String(user_id || (employeeId ? `USR-${employeeId}` : (author ? `USR-${author}` : 'OPERATOR'))).trim();
+    const effectiveDeviceId = String(device_id || 'DEV-CENTRAL').trim();
 
-    broadcast({
-      type: "DATA_DELETE",
-      collection,
-      id: recordId,
-      record_id: recordId,
-      author: author || employeeId || "Operator",
-      user_id: effectiveUserId,
-      actionDesc: actionDesc || `Deleted ${collection} record`,
-      timestamp: serverTime,
-      systemResetVersion,
-      systemResetId
-    }, excludeSocket);
+    console.log(`[CENTRAL-DB] [DELETE] [${collection}] ID: ${recordId} | User: ${effectiveUserId} | Device: ${effectiveDeviceId} | Time: ${serverTime}`);
 
-    broadcast({
-      type: "RECORD_DELETED",
-      collection,
-      id: recordId,
-      record_id: recordId,
-      author: author || employeeId || "Operator",
-      user_id: effectiveUserId,
-      timestamp: serverTime,
-      systemResetVersion,
-      systemResetId
-    }, excludeSocket);
+    const isInventoryCollection = ['stocks', 'issuances', 'deliveries', 'receiving', 'returns', 'recycling'].includes(collection);
+    if (isInventoryCollection) {
+      let invEventType = "INVENTORY_UPDATE";
+      if (collection === 'stocks') {
+        invEventType = "STOCK_ADJUSTMENT";
+      } else if (collection === 'issuances' || collection === 'deliveries') {
+        invEventType = "PICK_PACK_SHIP";
+      }
 
-    broadcast({
-      type: "record_deleted",
-      collection,
-      id: recordId,
-      systemResetVersion
-    }, excludeSocket);
+      broadcastInventoryEvent({
+        type: invEventType,
+        collection,
+        record: { id: recordId, record_id: recordId, quantity: 0, status: 'DELETED' },
+        author: author || employeeId || "Operator",
+        user_id: effectiveUserId,
+        device_id: effectiveDeviceId,
+        actionDesc: actionDesc || `Deleted ${collection} record`,
+        timestamp: serverTime,
+        excludeSocket
+      });
+    } else {
+      broadcast({
+        type: "DATA_DELETE",
+        collection,
+        id: recordId,
+        record_id: recordId,
+        author: author || employeeId || "Operator",
+        user_id: effectiveUserId,
+        device_id: effectiveDeviceId,
+        actionDesc: actionDesc || `Deleted ${collection} record`,
+        timestamp: serverTime,
+        systemResetVersion,
+        systemResetId
+      }, excludeSocket);
 
-    broadcast({
-      type: "collection_updated",
-      collection,
-      data: (state as any)[collection],
-      systemResetVersion
-    }, excludeSocket);
+      broadcast({
+        type: "RECORD_DELETED",
+        collection,
+        id: recordId,
+        record_id: recordId,
+        author: author || employeeId || "Operator",
+        user_id: effectiveUserId,
+        device_id: effectiveDeviceId,
+        timestamp: serverTime,
+        systemResetVersion,
+        systemResetId
+      }, excludeSocket);
+
+      broadcast({
+        type: "record_deleted",
+        collection,
+        id: recordId,
+        systemResetVersion
+      }, excludeSocket);
+
+      broadcast({
+        type: "collection_updated",
+        collection,
+        data: (state as any)[collection],
+        systemResetVersion
+      }, excludeSocket);
+    }
 
     return {
       success: true,
@@ -792,6 +1061,7 @@ async function startServer() {
         });
       } else if (now - conn.lastPing > 45000) {
         try { conn.ws.terminate(); } catch (e) {}
+        removeSocketFromGroups(conn.ws);
         connectionRegistry.delete(connId);
         changed = true;
         broadcast({
@@ -827,6 +1097,64 @@ async function startServer() {
     const userAgent = req.headers['user-agent'] || '';
     const platform = userAgent.includes("Android") ? "Android" : (userAgent.includes("iPhone") || userAgent.includes("iPad") ? "iOS" : (userAgent.includes("Windows") ? "Windows" : "Desktop"));
 
+    // 1. On connection, extract the user's accountId (or warehouseId) from the connection query/auth token
+    let queryAccountId = "ACC-JUWEI";
+    let queryWarehouseId = "WH-MAIN";
+    try {
+      const host = req.headers.host || "127.0.0.1:3000";
+      const parsedUrl = new URL(req.url || "/ws", `http://${host}`);
+      const qAcc = parsedUrl.searchParams.get("accountId") || parsedUrl.searchParams.get("account_id") || (req.headers["x-account-id"] as string);
+      const qWh = parsedUrl.searchParams.get("warehouseId") || parsedUrl.searchParams.get("warehouse_id") || (req.headers["x-warehouse-id"] as string);
+      const authToken = parsedUrl.searchParams.get("token") || parsedUrl.searchParams.get("auth_token") || (req.headers["authorization"] ? req.headers["authorization"].replace(/^Bearer\s+/i, "") : "");
+
+      if (qAcc) queryAccountId = qAcc.trim();
+      if (qWh) queryWarehouseId = qWh.trim();
+
+      if (authToken) {
+        try {
+          if (authToken.startsWith("{") && authToken.endsWith("}")) {
+            const parsedToken = JSON.parse(authToken);
+            if (parsedToken.accountId || parsedToken.account_id) queryAccountId = String(parsedToken.accountId || parsedToken.account_id).trim();
+            if (parsedToken.warehouseId || parsedToken.warehouse_id) queryWarehouseId = String(parsedToken.warehouseId || parsedToken.warehouse_id).trim();
+          } else if (authToken.includes(".")) {
+            const parts = authToken.split(".");
+            if (parts.length >= 2) {
+              const payloadJson = Buffer.from(parts[1], "base64").toString("utf-8");
+              const parsedJwt = JSON.parse(payloadJson);
+              if (parsedJwt.accountId || parsedJwt.account_id) queryAccountId = String(parsedJwt.accountId || parsedJwt.account_id).trim();
+              if (parsedJwt.warehouseId || parsedJwt.warehouse_id) queryWarehouseId = String(parsedJwt.warehouseId || parsedJwt.warehouse_id).trim();
+            }
+          }
+        } catch (e) {}
+      }
+    } catch (urlErr) {
+      console.warn("Failed parsing WS connection url:", urlErr);
+    }
+
+    // 3. Upon any new socket connection or reconnection, immediately query the database for the current inventory state
+    // and send a FULL_INVENTORY_SYNC event directly to that socket before subscribing it to incremental updates.
+    const initialInventory = queryDatabaseInventory(queryAccountId, queryWarehouseId);
+    if (ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({
+          type: "FULL_INVENTORY_SYNC",
+          accountId: queryAccountId,
+          warehouseId: queryWarehouseId,
+          inventory: initialInventory,
+          stocks: initialInventory,
+          count: initialInventory.length,
+          timestamp: new Date().toISOString(),
+          systemResetVersion,
+          systemResetId
+        }));
+      } catch (err) {
+        console.warn("Error sending FULL_INVENTORY_SYNC to connecting socket:", err);
+      }
+    }
+
+    // Assign socket to group (subscribing to room updates after sending initial sync)
+    assignSocketToGroup(ws, queryAccountId, queryWarehouseId);
+
     // Register active terminal in central connection registry
     const initialRecord: ActiveConnectionRecord = {
       connection_id,
@@ -846,7 +1174,9 @@ async function startServer() {
       resetVersion: systemResetVersion,
       ws,
       ip,
-      userAgent
+      userAgent,
+      accountId: queryAccountId,
+      warehouseId: queryWarehouseId
     };
     connectionRegistry.set(connection_id, initialRecord);
 
@@ -949,6 +1279,34 @@ async function startServer() {
             conn.resetVersion = clientResetVersion;
             conn.lastPing = Date.now();
 
+            if (payload.accountId) {
+              conn.accountId = String(payload.accountId).trim();
+            }
+            if (payload.warehouseId) {
+              conn.warehouseId = String(payload.warehouseId).trim();
+            }
+
+            // Immediately query database for current inventory state for authenticated account/warehouse
+            const authenticatedInventory = queryDatabaseInventory(conn.accountId, conn.warehouseId);
+            if (ws.readyState === WebSocket.OPEN) {
+              try {
+                ws.send(JSON.stringify({
+                  type: "FULL_INVENTORY_SYNC",
+                  accountId: conn.accountId,
+                  warehouseId: conn.warehouseId,
+                  inventory: authenticatedInventory,
+                  stocks: authenticatedInventory,
+                  count: authenticatedInventory.length,
+                  timestamp: new Date().toISOString(),
+                  systemResetVersion,
+                  systemResetId
+                }));
+              } catch (e) {}
+            }
+
+            // Assign socket to account/warehouse room
+            assignSocketToGroup(ws, conn.accountId, conn.warehouseId);
+
             // Track in activeDevices map as well
             activeDevices.set(deviceId, {
               deviceId,
@@ -1042,6 +1400,284 @@ async function startServer() {
             break;
           }
 
+          case "SUBSCRIBE_WAREHOUSE":
+          case "JOIN_ROOM":
+          case "subscribe_room":
+          case "set_warehouse": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
+            const targetWh = normalizeGroupId(payload.warehouseId || payload.room || conn?.warehouseId, "WH-MAIN");
+
+            if (conn) {
+              conn.accountId = targetAcc;
+              conn.warehouseId = targetWh;
+            }
+
+            // 1. Immediately query database for current inventory state
+            const roomInventory = queryDatabaseInventory(targetAcc, targetWh);
+
+            // 2. Send FULL_INVENTORY_SYNC directly to that socket before subscribing
+            if (ws.readyState === WebSocket.OPEN) {
+              try {
+                ws.send(JSON.stringify({
+                  type: "FULL_INVENTORY_SYNC",
+                  accountId: targetAcc,
+                  warehouseId: targetWh,
+                  inventory: roomInventory,
+                  stocks: roomInventory,
+                  count: roomInventory.length,
+                  timestamp: new Date().toISOString(),
+                  systemResetVersion,
+                  systemResetId
+                }));
+              } catch (e) {}
+            }
+
+            // 3. Assign socket to that room group
+            assignSocketToGroup(ws, targetAcc, targetWh);
+
+            if (ws.readyState === WebSocket.OPEN) {
+              try {
+                ws.send(JSON.stringify({
+                  type: "ROOM_SUBSCRIBED",
+                  accountId: targetAcc,
+                  warehouseId: targetWh,
+                  systemResetVersion
+                }));
+              } catch (e) {}
+            }
+            break;
+          }
+
+          case "GET_INVENTORY":
+          case "REQUEST_INVENTORY_SYNC": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
+            const targetWh = normalizeGroupId(payload.warehouseId || conn?.warehouseId, "WH-MAIN");
+
+            const currentInv = queryDatabaseInventory(targetAcc, targetWh);
+            if (ws.readyState === WebSocket.OPEN) {
+              try {
+                ws.send(JSON.stringify({
+                  type: "FULL_INVENTORY_SYNC",
+                  accountId: targetAcc,
+                  warehouseId: targetWh,
+                  inventory: currentInv,
+                  stocks: currentInv,
+                  count: currentInv.length,
+                  timestamp: new Date().toISOString(),
+                  systemResetVersion,
+                  systemResetId
+                }));
+              } catch (e) {}
+            }
+            break;
+          }
+
+          case "STOCK_ADJUSTMENT":
+          case "adjust_stock": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
+            const targetWh = normalizeGroupId(payload.warehouseId || conn?.warehouseId, "WH-MAIN");
+            const { productId, delta, newQuantity, location, lotNumber, notes } = payload;
+
+            let stockItem = state.stocks.find((s: any) => String(s.id) === String(productId) || s.partCode === productId);
+            const prevQty = stockItem ? Number(stockItem.quantity) || 0 : 0;
+            const calculatedQty = newQuantity !== undefined ? Number(newQuantity) : (prevQty + Number(delta || 0));
+
+            const serverTime = new Date().toISOString();
+            if (stockItem) {
+              stockItem.quantity = Math.max(0, calculatedQty);
+              stockItem.version = (stockItem.version || 1) + 1;
+              stockItem.updated_at = serverTime;
+              stockItem.reset_version = systemResetVersion;
+              if (location) stockItem.location = location;
+              if (lotNumber) stockItem.lotNumber = lotNumber;
+              stockItem.warehouseId = targetWh;
+              stockItem.accountId = targetAcc;
+            } else if (productId) {
+              stockItem = normalizeRecord({
+                id: productId,
+                partCode: productId,
+                description: notes || 'Adjusted Stock Item',
+                type: 'RAW',
+                location: location || 'Zone A',
+                quantity: Math.max(0, calculatedQty),
+                unit: 'PCS',
+                lotNumber: lotNumber || '',
+                receivedDate: serverTime.split('T')[0],
+                fifoColor: 'Dark Green',
+                status: 'APPROVED',
+                warehouseId: targetWh,
+                accountId: targetAcc
+              });
+              state.stocks.push(stockItem);
+            }
+
+            const movementId = `mov-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+            const movementRecord = {
+              id: movementId,
+              product_id: productId,
+              warehouse_id: targetWh,
+              account_id: targetAcc,
+              type: payload.type || 'STOCK_ADJUSTMENT',
+              quantity: delta !== undefined ? Number(delta) : (calculatedQty - prevQty),
+              previous_quantity: prevQty,
+              new_quantity: stockItem ? stockItem.quantity : calculatedQty,
+              notes: notes || 'Stock adjustment via WebSocket',
+              user_id: conn?.user_id || 'OPERATOR',
+              user_name: conn?.username || 'Operator',
+              device_id: conn?.device_id || 'TERMINAL',
+              created_at: serverTime,
+              reset_version: systemResetVersion
+            };
+
+            if (!state.stockMovements) state.stockMovements = [];
+            state.stockMovements.unshift(movementRecord);
+            stateRevision++;
+
+            // COMMIT DATABASE SYNCHRONOUSLY FIRST
+            commitDatabase();
+
+            // BROADCAST TO ALL ACTIVE CONNECTIONS IN SAME ACCOUNT / WAREHOUSE ROOM
+            broadcastInventoryEvent({
+              type: "STOCK_ADJUSTMENT",
+              accountId: targetAcc,
+              warehouseId: targetWh,
+              collection: "stocks",
+              record: stockItem,
+              movement: movementRecord,
+              actionDesc: notes || `Adjusted stock for ${productId} (${prevQty} -> ${stockItem?.quantity})`,
+              author: conn?.username || "Operator",
+              user_id: conn?.user_id,
+              device_id: conn?.device_id
+            });
+            break;
+          }
+
+          case "LOCATION_TRANSFER":
+          case "transfer_location": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
+            const sourceWh = normalizeGroupId(payload.fromWarehouseId || payload.warehouseId || conn?.warehouseId, "WH-MAIN");
+            const targetWh = normalizeGroupId(payload.toWarehouseId || payload.warehouseId || conn?.warehouseId, "WH-MAIN");
+            const { productId, fromLocation, toLocation, quantity, notes } = payload;
+
+            let stockItem = state.stocks.find((s: any) => String(s.id) === String(productId) || s.partCode === productId);
+            const serverTime = new Date().toISOString();
+            if (stockItem) {
+              if (toLocation) stockItem.location = toLocation;
+              stockItem.warehouseId = targetWh;
+              stockItem.version = (stockItem.version || 1) + 1;
+              stockItem.updated_at = serverTime;
+              stockItem.reset_version = systemResetVersion;
+            }
+
+            const movementId = `mov-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+            const movementRecord = {
+              id: movementId,
+              product_id: productId,
+              warehouse_id: targetWh,
+              account_id: targetAcc,
+              type: 'LOCATION_TRANSFER',
+              quantity: Number(quantity) || 0,
+              notes: notes || `Transferred from ${fromLocation || sourceWh} to ${toLocation || targetWh}`,
+              user_id: conn?.user_id || 'OPERATOR',
+              user_name: conn?.username || 'Operator',
+              device_id: conn?.device_id || 'TERMINAL',
+              created_at: serverTime,
+              reset_version: systemResetVersion
+            };
+
+            if (!state.stockMovements) state.stockMovements = [];
+            state.stockMovements.unshift(movementRecord);
+            stateRevision++;
+
+            commitDatabase();
+
+            broadcastInventoryEvent({
+              type: "LOCATION_TRANSFER",
+              accountId: targetAcc,
+              warehouseId: targetWh,
+              collection: "stocks",
+              record: stockItem,
+              movement: movementRecord,
+              actionDesc: notes || `Location transfer for ${productId} to ${toLocation || targetWh}`,
+              author: conn?.username || "Operator",
+              user_id: conn?.user_id,
+              device_id: conn?.device_id
+            });
+            break;
+          }
+
+          case "PICK_PACK_SHIP":
+          case "pick_pack_ship": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
+            const targetWh = normalizeGroupId(payload.warehouseId || conn?.warehouseId, "WH-MAIN");
+            const { orderId, operationType, items, notes } = payload;
+
+            const serverTime = new Date().toISOString();
+            let affectedStockItem: any = null;
+
+            if (Array.isArray(items)) {
+              for (const item of items) {
+                const pId = item.productId || item.id || item.partCode;
+                const qty = Number(item.quantity) || 0;
+                let stockItem = state.stocks.find((s: any) => String(s.id) === String(pId) || s.partCode === pId);
+                if (stockItem) {
+                  if (operationType === 'SHIP' || operationType === 'PICK') {
+                    stockItem.quantity = Math.max(0, (Number(stockItem.quantity) || 0) - qty);
+                  }
+                  stockItem.version = (stockItem.version || 1) + 1;
+                  stockItem.updated_at = serverTime;
+                  stockItem.reset_version = systemResetVersion;
+                  affectedStockItem = stockItem;
+                }
+              }
+            }
+
+            const movementId = `mov-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+            const movementRecord = {
+              id: movementId,
+              warehouse_id: targetWh,
+              account_id: targetAcc,
+              type: operationType || 'PICK_PACK_SHIP',
+              reference_number: orderId,
+              notes: notes || `${operationType || 'Pick/Pack/Ship'} operation for order ${orderId}`,
+              user_id: conn?.user_id || 'OPERATOR',
+              user_name: conn?.username || 'Operator',
+              device_id: conn?.device_id || 'TERMINAL',
+              created_at: serverTime,
+              reset_version: systemResetVersion
+            };
+
+            if (!state.stockMovements) state.stockMovements = [];
+            state.stockMovements.unshift(movementRecord);
+            stateRevision++;
+
+            commitDatabase();
+
+            broadcastInventoryEvent({
+              type: "PICK_PACK_SHIP",
+              accountId: targetAcc,
+              warehouseId: targetWh,
+              collection: "stocks",
+              record: affectedStockItem,
+              movement: movementRecord,
+              actionDesc: notes || `${operationType || 'Pick/Pack/Ship'} completed for order ${orderId}`,
+              author: conn?.username || "Operator",
+              user_id: conn?.user_id,
+              device_id: conn?.device_id
+            });
+            break;
+          }
+
           case "record_upsert":
           case "upsert_record":
           case "DATA_CREATE":
@@ -1058,6 +1694,7 @@ async function startServer() {
               author: payload.author || conn?.username || "Operator",
               employeeId: payload.employeeId || conn?.employeeId,
               user_id: payload.user_id || conn?.user_id,
+              device_id: payload.device_id || conn?.deviceId || payload.record?.device_id,
               actionDesc: payload.actionDesc,
               expectedVersion: payload.expectedVersion,
               reset_version: clientResetVersion,
@@ -1106,6 +1743,7 @@ async function startServer() {
               author: payload.author || conn?.username || "Operator",
               employeeId: payload.employeeId || conn?.employeeId,
               user_id: payload.user_id || conn?.user_id,
+              device_id: payload.device_id || conn?.deviceId,
               actionDesc: payload.actionDesc,
               reset_version: clientResetVersion,
               userPermission: conn?.permission
@@ -1127,6 +1765,180 @@ async function startServer() {
                 systemResetVersion
               }));
             }
+            break;
+          }
+
+          case "update_collection":
+          case "sync_collection": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || conn?.resetVersion || systemResetVersion;
+            const col = payload.collection;
+
+            if (clientResetVersion < systemResetVersion) {
+              ws.send(JSON.stringify({
+                type: "ERROR",
+                error: "STALE_RESET_VERSION: Central database was reset. Stale sync rejected.",
+                status: 409,
+                systemResetVersion,
+                systemResetId
+              }));
+              break;
+            }
+
+            if (!col || !(col in state)) {
+              ws.send(JSON.stringify({ type: "ERROR", error: `Unknown collection: ${col}`, status: 400 }));
+              break;
+            }
+
+            if (conn?.permission === 'VIEW_ONLY') {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
+              break;
+            }
+
+            const items: any[] = Array.isArray(payload.data) ? payload.data : [];
+            const currentList: any[] = (state as any)[col] || [];
+            const listMap = new Map<string, any>(currentList.map(item => [String(item.id || item.record_id), item]));
+
+            let modifiedCount = 0;
+            const serverTime = new Date().toISOString();
+            const effectiveAuthor = payload.author || conn?.username || "Operator";
+            const effectiveEmpId = payload.employeeId || conn?.employeeId;
+            const effectiveDevId = payload.device_id || conn?.deviceId || 'DEV-CENTRAL';
+            const effectiveUserId = payload.user_id || conn?.user_id || (effectiveEmpId ? `USR-${effectiveEmpId}` : `USR-${effectiveAuthor}`);
+
+            for (const item of items) {
+              if (!item) continue;
+              const recId = String(item.id || item.record_id || `REC-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`);
+              if (deletedRecordTombstones.has(recId)) continue; // Never resurrect deleted items
+
+              const existing = listMap.get(recId);
+              if (existing) {
+                const clientVer = Number(item.version) || 1;
+                const existingVer = Number(existing.version) || 1;
+                if (existingVer > clientVer) continue;
+
+                const nextVersion = existingVer + 1;
+                const updatedRec = {
+                  ...existing,
+                  ...item,
+                  id: recId,
+                  record_id: recId,
+                  version: nextVersion,
+                  updated_at: serverTime,
+                  updated_by: effectiveAuthor,
+                  user_id: effectiveUserId,
+                  device_id: effectiveDevId,
+                  reset_version: systemResetVersion
+                };
+                listMap.set(recId, updatedRec);
+                modifiedCount++;
+              } else {
+                const newRec = {
+                  ...item,
+                  id: recId,
+                  record_id: recId,
+                  version: Number(item.version) || 1,
+                  created_at: item.created_at || serverTime,
+                  created_by: item.created_by || effectiveAuthor,
+                  updated_at: serverTime,
+                  updated_by: effectiveAuthor,
+                  user_id: effectiveUserId,
+                  device_id: effectiveDevId,
+                  reset_version: systemResetVersion
+                };
+                listMap.set(recId, newRec);
+                modifiedCount++;
+              }
+            }
+
+            if (modifiedCount > 0) {
+              (state as any)[col] = Array.from(listMap.values());
+              stateRevision++;
+              commitDatabase();
+
+              console.log(`[CENTRAL-DB] [WS-SYNC-COLLECTION] Collection: ${col} | Items: ${items.length} | Modified: ${modifiedCount} | User: ${effectiveUserId} | Device: ${effectiveDevId}`);
+
+              if (['stocks', 'issuances', 'deliveries', 'receiving', 'returns', 'recycling'].includes(col)) {
+                broadcastInventoryEvent({
+                  type: "INVENTORY_UPDATE",
+                  collection: col,
+                  actionDesc: `Synchronized ${col} collection (${modifiedCount} items modified)`,
+                  author: effectiveAuthor,
+                  user_id: effectiveUserId,
+                  device_id: effectiveDevId
+                });
+              } else {
+                broadcast({
+                  type: "collection_updated",
+                  collection: col,
+                  data: (state as any)[col],
+                  systemResetVersion
+                });
+              }
+            }
+
+            ws.send(JSON.stringify({
+              type: "COLLECTION_SYNC_CONFIRMED",
+              collection: col,
+              count: (state as any)[col]?.length || 0,
+              systemResetVersion
+            }));
+            break;
+          }
+
+          case "batch_mutations":
+          case "sync_batch": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || conn?.resetVersion || systemResetVersion;
+            
+            if (clientResetVersion < systemResetVersion) {
+              ws.send(JSON.stringify({
+                type: "ERROR",
+                error: "STALE_RESET_VERSION: Central database was reset.",
+                status: 409,
+                systemResetVersion,
+                systemResetId
+              }));
+              break;
+            }
+
+            const mutations = Array.isArray(payload.mutations) ? payload.mutations : [];
+            let processed = 0;
+            for (const m of mutations) {
+              if (m.type === 'upsert' && m.collection && m.record) {
+                const res = executeRecordUpsert({
+                  collection: m.collection,
+                  record: m.record,
+                  author: m.author || conn?.username || "Operator",
+                  employeeId: m.employeeId || conn?.employeeId,
+                  user_id: m.user_id || conn?.user_id,
+                  device_id: m.device_id || conn?.deviceId,
+                  reset_version: clientResetVersion
+                });
+                if (res.success) processed++;
+              } else if (m.type === 'delete' && m.collection && (m.id || m.recordId)) {
+                const res = executeRecordDelete({
+                  collection: m.collection,
+                  id: String(m.id || m.recordId),
+                  author: m.author || conn?.username || "Operator",
+                  employeeId: m.employeeId || conn?.employeeId,
+                  user_id: m.user_id || conn?.user_id,
+                  device_id: m.device_id || conn?.deviceId,
+                  reset_version: clientResetVersion
+                });
+                if (res.success) processed++;
+              }
+            }
+
+            console.log(`[CENTRAL-DB] [WS-BATCH-MUTATIONS] Processed ${processed}/${mutations.length} mutations | User: ${conn?.username || 'Operator'} | Device: ${conn?.deviceId || 'Terminal'}`);
+
+            ws.send(JSON.stringify({
+              type: "BATCH_SYNC_CONFIRMED",
+              processed,
+              systemResetVersion
+            }));
             break;
           }
 
@@ -1238,6 +2050,7 @@ async function startServer() {
     });
 
     ws.on("close", () => {
+      removeSocketFromGroups(ws);
       const connId = socketToConnectionId.get(ws);
       if (connId) {
         const conn = connectionRegistry.get(connId);
@@ -1364,6 +2177,171 @@ async function startServer() {
       connectedOperators: getActiveOperatorsCount(),
       liveActiveTerminals: connectionRegistry.size
     });
+  });
+
+  // REST API: Sync collection (Batch upsert from client to central database)
+  app.post("/api/sync", async (req, res) => {
+    try {
+      const { collection, data, reset_version, author, employeeId, device_id } = req.body;
+      const clientResetVersion = Number(reset_version || req.headers['x-reset-version']) || systemResetVersion;
+      if (clientResetVersion < systemResetVersion) {
+        return res.status(409).json({
+          error: "STALE_RESET_VERSION: Central database was reset. Stale sync rejected.",
+          systemResetVersion,
+          systemResetId
+        });
+      }
+
+      if (!collection || !(collection in state)) {
+        return res.status(400).json({ error: `Unknown or invalid collection: ${collection}` });
+      }
+
+      const clientPermission = (req.headers['x-user-permission'] || req.body.permission || '').toString().toUpperCase();
+      if (clientPermission === 'VIEW_ONLY') {
+        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
+      }
+
+      const items: any[] = Array.isArray(data) ? data : [];
+      const currentList: any[] = (state as any)[collection] || [];
+      const listMap = new Map<string, any>(currentList.map(it => [String(it.id || it.record_id), it]));
+
+      let modifiedCount = 0;
+      const serverTime = new Date().toISOString();
+      const effectiveAuthor = author || employeeId || "Operator";
+      const effectiveDevId = String(device_id || req.headers['x-device-id'] || 'DEV-CENTRAL').trim();
+      const effectiveUserId = String(req.body.user_id || (employeeId ? `USR-${employeeId}` : `USR-${effectiveAuthor}`)).trim();
+
+      for (const item of items) {
+        if (!item) continue;
+        const recId = String(item.id || item.record_id || `REC-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`);
+        if (deletedRecordTombstones.has(recId)) continue;
+
+        const existing = listMap.get(recId);
+        if (existing) {
+          const clientVer = Number(item.version) || 1;
+          const existingVer = Number(existing.version) || 1;
+          if (existingVer > clientVer) continue;
+
+          const nextVersion = existingVer + 1;
+          const updatedRec = {
+            ...existing,
+            ...item,
+            id: recId,
+            record_id: recId,
+            version: nextVersion,
+            updated_at: serverTime,
+            updated_by: effectiveAuthor,
+            user_id: effectiveUserId,
+            device_id: effectiveDevId,
+            reset_version: systemResetVersion
+          };
+          listMap.set(recId, updatedRec);
+          modifiedCount++;
+        } else {
+          const newRec = {
+            ...item,
+            id: recId,
+            record_id: recId,
+            version: Number(item.version) || 1,
+            created_at: item.created_at || serverTime,
+            created_by: item.created_by || effectiveAuthor,
+            updated_at: serverTime,
+            updated_by: effectiveAuthor,
+            user_id: effectiveUserId,
+            device_id: effectiveDevId,
+            reset_version: systemResetVersion
+          };
+          listMap.set(recId, newRec);
+          modifiedCount++;
+        }
+      }
+
+      if (modifiedCount > 0) {
+        (state as any)[collection] = Array.from(listMap.values());
+        stateRevision++;
+        commitDatabase();
+
+        console.log(`[CENTRAL-DB] [REST-POST-SYNC] Collection: ${collection} | Items received: ${items.length} | Modified: ${modifiedCount} | User: ${effectiveUserId} | Device: ${effectiveDevId}`);
+
+        broadcast({
+          type: "collection_updated",
+          collection,
+          data: (state as any)[collection],
+          systemResetVersion
+        });
+      }
+
+      return res.json({
+        success: true,
+        collection,
+        count: (state as any)[collection]?.length || 0,
+        modified: modifiedCount,
+        systemResetVersion
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // REST API: Batch Mutations (offline reconciliation for reconnecting devices)
+  app.post("/api/sync/batch", async (req, res) => {
+    try {
+      const { mutations, reset_version, author, employeeId, device_id } = req.body;
+      const clientResetVersion = Number(reset_version || req.headers['x-reset-version']) || systemResetVersion;
+      
+      if (clientResetVersion < systemResetVersion) {
+        return res.status(409).json({
+          error: "STALE_RESET_VERSION: Central database was reset. Stale offline queue rejected.",
+          systemResetVersion,
+          systemResetId
+        });
+      }
+
+      const mutList = Array.isArray(mutations) ? mutations : [];
+      let processed = 0;
+      const effectiveDevId = String(device_id || req.headers['x-device-id'] || 'DEV-OFFLINE').trim();
+      const effectiveAuthor = author || employeeId || "Operator";
+      const effectiveUserId = String(req.body.user_id || (employeeId ? `USR-${employeeId}` : `USR-${effectiveAuthor}`)).trim();
+
+      for (const m of mutList) {
+        if (m.type === 'upsert' && m.collection && m.record) {
+          const r = executeRecordUpsert({
+            collection: m.collection,
+            record: m.record,
+            author: m.author || effectiveAuthor,
+            employeeId: m.employeeId || employeeId,
+            user_id: m.user_id || effectiveUserId,
+            device_id: m.device_id || effectiveDevId,
+            actionDesc: m.actionDesc,
+            reset_version: clientResetVersion
+          });
+          if (r.success) processed++;
+        } else if (m.type === 'delete' && m.collection && (m.id || m.recordId)) {
+          const r = executeRecordDelete({
+            collection: m.collection,
+            id: String(m.id || m.recordId),
+            author: m.author || effectiveAuthor,
+            employeeId: m.employeeId || employeeId,
+            user_id: m.user_id || effectiveUserId,
+            device_id: m.device_id || effectiveDevId,
+            actionDesc: m.actionDesc,
+            reset_version: clientResetVersion
+          });
+          if (r.success) processed++;
+        }
+      }
+
+      console.log(`[CENTRAL-DB] [REST-BATCH-MUTATIONS] Processed ${processed}/${mutList.length} offline mutations from device ${effectiveDevId} | User: ${effectiveUserId}`);
+
+      return res.json({
+        success: true,
+        processed,
+        total: mutList.length,
+        systemResetVersion
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
   });
 
   // REST API: State Summary & Revision
@@ -2043,6 +3021,7 @@ async function startServer() {
         author,
         employeeId,
         user_id: req.body.user_id || record?.user_id,
+        device_id: req.body.device_id || req.headers['x-device-id'] || record?.device_id,
         actionDesc,
         expectedVersion,
         reset_version: clientResetVersion,
@@ -2085,6 +3064,7 @@ async function startServer() {
         author,
         employeeId,
         user_id: req.body.user_id,
+        device_id: req.body.device_id || req.headers['x-device-id'],
         actionDesc,
         reset_version: clientResetVersion,
         userPermission
@@ -2244,21 +3224,28 @@ async function startServer() {
         return res.status(500).json({ error: "Failed to commit stock movement to central database" });
       }
 
-      // BROADCAST REAL-TIME MOVEMENT & UPDATED STOCKS
-      broadcast({
-        type: "stock_movement_created",
-        movement: movementRecord,
-        stock: stockItem,
-        stocks: state.stocks,
-        stateRevision,
-        systemResetVersion
-      });
+      // BROADCAST REAL-TIME MOVEMENT & UPDATED STOCKS STRICTLY TO MATCHING ROOM
+      let movementEventType = "INVENTORY_UPDATE";
+      if (['TRANSFER_IN', 'TRANSFER_OUT', 'TRANSFER', 'LOCATION_TRANSFER'].includes(type)) {
+        movementEventType = "LOCATION_TRANSFER";
+      } else if (['ADJUSTMENT_IN', 'ADJUSTMENT_OUT', 'CYCLE_COUNT', 'ADJUSTMENT'].includes(type)) {
+        movementEventType = "STOCK_ADJUSTMENT";
+      } else if (['SALE', 'PICK', 'PACK', 'SHIP', 'DISPATCH'].includes(type)) {
+        movementEventType = "PICK_PACK_SHIP";
+      }
 
-      broadcast({
-        type: "collection_updated",
-        collection: "stocks",
-        data: state.stocks,
-        systemResetVersion
+      broadcastInventoryEvent({
+        type: movementEventType,
+        accountId: req.body.accountId || stockItem.accountId || 'ACC-JUWEI',
+        warehouseId: warehouseId || stockItem.warehouseId || 'WH-MAIN',
+        collection: 'stocks',
+        record: stockItem,
+        movement: movementRecord,
+        actionDesc: notes || `Stock movement: ${type} (${finalDelta})`,
+        author: userName || 'Operator',
+        user_id: userId,
+        device_id: deviceId,
+        timestamp: serverTime
       });
 
       return res.json({

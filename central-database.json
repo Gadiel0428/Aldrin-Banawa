@@ -5,9 +5,29 @@
   "systemResetTimestamp": "2026-09-09T08:00:00.000Z",
   "systemResetId": "RST-FRESH-INSTALL-001",
   "systemResetBy": "SUPER ADMINISTRATOR (JPMP-002)",
-  "stateRevision": 1,
+  "stateRevision": 2,
   "state": {
-    "stocks": [],
+    "stocks": [
+      {
+        "id": "P-TEST-001",
+        "partCode": "P-TEST-001",
+        "description": "Room broadcast verification",
+        "type": "RAW",
+        "location": "Zone A",
+        "quantity": 5,
+        "unit": "PCS",
+        "lotNumber": "",
+        "receivedDate": "2026-09-11",
+        "fifoColor": "Dark Green",
+        "status": "APPROVED",
+        "warehouseId": "WH-MAIN",
+        "accountId": "ACC-JUWEI",
+        "record_id": "P-TEST-001",
+        "version": 1,
+        "updated_at": "2026-09-11T00:48:20.025Z",
+        "reset_version": 1788945000000
+      }
+    ],
     "receiving": [],
     "returns": [],
     "recycling": [],
@@ -41,7 +61,24 @@
         "reset_version": 1788945000000
       }
     ],
-    "stockMovements": []
+    "stockMovements": [
+      {
+        "id": "mov-1789087700025-9e8nx",
+        "product_id": "P-TEST-001",
+        "warehouse_id": "WH-MAIN",
+        "account_id": "ACC-JUWEI",
+        "type": "STOCK_ADJUSTMENT",
+        "quantity": 5,
+        "previous_quantity": 0,
+        "new_quantity": 5,
+        "notes": "Room broadcast verification",
+        "user_id": "ANONYMOUS",
+        "user_name": "CONNECTING TERMINAL",
+        "device_id": "dev_eilz2rh",
+        "created_at": "2026-09-11T00:48:20.025Z",
+        "reset_version": 1788945000000
+      }
+    ]
   },
   "authorizedDevices": [
     {
@@ -61,6 +98,20 @@
       "sender": "SYSTEM AUDIT",
       "text": "FRESH INSTALLATION COMPLETE: Initial primary administrator device bound to Super Administrator account (JPMP-002). System initialized with zero transactional records.",
       "timestamp": "2026-09-09T08:00:00.000Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1789087689016-qo3s",
+      "sender": "System",
+      "text": "ALDRIN BANAWA (WS-37II) connected.",
+      "timestamp": "2026-09-11T00:48:09.016Z",
+      "isSystem": true
+    },
+    {
+      "id": "sys-1789087689017-zgct",
+      "sender": "System",
+      "text": "ALDRIN BANAWA (WS-37II) connected.",
+      "timestamp": "2026-09-11T00:48:09.017Z",
       "isSystem": true
     }
   ]

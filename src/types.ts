@@ -60,6 +60,8 @@ export interface MaterialStockItem extends BaseRecordAudit {
   customer?: string;
   reorderMin?: number;
   remarks?: string;
+  warehouseId?: string;
+  accountId?: string;
 }
 
 export type PresetSourceType = 
@@ -266,6 +268,8 @@ export interface ActivePresenceUser {
   connectedAt?: string;
   lastPing?: number;
   terminalName?: string;
+  warehouseId?: string;
+  accountId?: string;
   source?: 'websocket' | 'central' | 'local' | 'self';
 }
 

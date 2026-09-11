@@ -4,12 +4,16 @@
  */
 
 import { Product, ProductFilter } from '../types/product';
-
-const PRODUCTS_LOCAL_KEY = 'juwei_wms_local_products';
+import { getDeviceId } from './movements';
 
 export async function fetchProducts(filter?: ProductFilter): Promise<Product[]> {
   try {
-    const res = await fetch('/api/sync', { headers: { 'Accept': 'application/json' } });
+    const res = await fetch('/api/sync', { 
+      headers: { 
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache'
+      } 
+    });
     if (res.ok) {
       const json = await res.json();
       const stocks = json?.data?.stocks || [];
@@ -17,52 +21,39 @@ export async function fetchProducts(filter?: ProductFilter): Promise<Product[]> 
 
       const productMap = new Map<string, Product>();
 
-      // Load cached/saved local products first
-      try {
-        const local = localStorage.getItem(PRODUCTS_LOCAL_KEY);
-        if (local) {
-          const parsed = JSON.parse(local);
-          if (Array.isArray(parsed)) {
-            parsed.forEach((p) => {
-              if (p && p.sku) productMap.set(p.sku.toUpperCase(), p);
-            });
-          }
-        }
-      } catch {}
-
-      // Add from stocks
-      stocks.forEach((s: any) => {
-        const sku = (s.sku || s.partNumber || s.id || '').toUpperCase();
+      // Add from central database master registries first
+      registries.forEach((r: any) => {
+        const sku = String(r.partNumber || r.sku || r.code || r.id || '').toUpperCase().trim();
         if (sku && !productMap.has(sku)) {
           productMap.set(sku, {
-            id: s.id,
-            sku: s.sku || s.partNumber || s.id,
-            name: s.partName || s.name || sku,
-            barcode: s.barcode,
-            unit: s.unit || 'PCS',
-            cost: Number(s.unitCost) || 0,
-            price: Number(s.unitPrice) || 0,
-            min_stock: Number(s.minStock) || 10,
-            category: s.category || 'RAW',
-            is_active: true,
+            id: String(r.id || r.record_id || sku),
+            sku: r.partNumber || r.sku || r.code || sku,
+            name: r.partName || r.name || sku,
+            barcode: r.barcode,
+            unit: r.unit || 'PCS',
+            cost: Number(r.unitCost || r.cost) || 0,
+            price: Number(r.unitPrice || r.price) || 0,
+            min_stock: Number(r.minStock || r.min_stock) || 10,
+            category: r.category || 'RAW',
+            is_active: r.status !== 'INACTIVE',
           });
         }
       });
 
-      // Add from registries
-      registries.forEach((r: any) => {
-        const sku = (r.partNumber || r.sku || r.id || '').toUpperCase();
+      // Add or enrich from central database stocks
+      stocks.forEach((s: any) => {
+        const sku = String(s.partCode || s.partNumber || s.sku || s.id || '').toUpperCase().trim();
         if (sku && !productMap.has(sku)) {
           productMap.set(sku, {
-            id: r.id,
-            sku: r.partNumber || r.sku || r.id,
-            name: r.partName || r.name || sku,
-            barcode: r.barcode,
-            unit: r.unit || 'PCS',
-            cost: Number(r.unitCost) || 0,
-            price: Number(r.unitPrice) || 0,
-            min_stock: Number(r.minStock) || 10,
-            category: r.category || 'RAW',
+            id: String(s.id || s.record_id || sku),
+            sku: s.partCode || s.partNumber || s.sku || sku,
+            name: s.description || s.partName || s.name || sku,
+            barcode: s.barcode,
+            unit: s.unit || 'PCS',
+            cost: Number(s.unitCost || s.cost) || 0,
+            price: Number(s.unitPrice || s.price) || 0,
+            min_stock: Number(s.reorderMin || s.minStock || s.min_stock) || 10,
+            category: s.type || s.category || 'RAW',
             is_active: true,
           });
         }
@@ -84,21 +75,21 @@ export async function fetchProducts(filter?: ProductFilter): Promise<Product[]> 
       return results;
     }
   } catch (e) {
-    console.warn('fetchProducts server error:', e);
+    console.warn('[JUWEI-WMS] fetchProducts central database request error:', e);
   }
-
-  // Fallback to local storage
-  try {
-    const local = localStorage.getItem(PRODUCTS_LOCAL_KEY);
-    if (local) {
-      return JSON.parse(local);
-    }
-  } catch {}
 
   return [];
 }
 
 export async function upsertProduct(input: Partial<Product>): Promise<Product> {
+  const deviceId = getDeviceId();
+  const resetVersion = typeof window !== 'undefined'
+    ? (Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0)
+    : 0;
+  const currentUserId = typeof window !== 'undefined'
+    ? (localStorage.getItem('juwei_wms_employeeId') ? `USR-${localStorage.getItem('juwei_wms_employeeId')}` : 'USR-OPERATOR')
+    : 'USR-OPERATOR';
+
   const newProduct: Product = {
     id: input.id || 'PROD-' + Date.now(),
     sku: input.sku || `SKU-${Date.now()}`,
@@ -113,43 +104,55 @@ export async function upsertProduct(input: Partial<Product>): Promise<Product> {
     updated_at: new Date().toISOString(),
   };
 
-  // Cache locally
-  try {
-    const existing = await fetchProducts();
-    const updated = [newProduct, ...existing.filter((p) => p.sku.toUpperCase() !== newProduct.sku.toUpperCase())];
-    localStorage.setItem(PRODUCTS_LOCAL_KEY, JSON.stringify(updated));
-  } catch {}
+  const registryRecord = {
+    id: newProduct.id,
+    record_id: newProduct.id,
+    code: newProduct.sku,
+    partNumber: newProduct.sku,
+    name: newProduct.name,
+    partName: newProduct.name,
+    type: 'PART_CODE',
+    category: newProduct.category,
+    unit: newProduct.unit,
+    unitCost: newProduct.cost,
+    unitPrice: newProduct.price,
+    minStock: newProduct.min_stock,
+    barcode: newProduct.barcode,
+    status: newProduct.is_active ? 'ACTIVE' : 'INACTIVE',
+    dateRegistered: new Date().toISOString().split('T')[0],
+    version: 1,
+    updated_at: newProduct.updated_at,
+    user_id: currentUserId,
+    device_id: deviceId,
+    reset_version: resetVersion
+  };
 
-  // Sync to server stock/registry collection
+  // Save to Central Database FIRST via REST API
   try {
-    await fetch('/api/sync/batch', {
+    const res = await fetch('/api/records/upsert', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-device-id': deviceId
+      },
       body: JSON.stringify({
-        reset_version: Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0,
-        mutations: [
-          {
-            type: 'upsert',
-            collection: 'registries',
-            record: {
-              id: newProduct.id,
-              partNumber: newProduct.sku,
-              partName: newProduct.name,
-              category: newProduct.category,
-              unit: newProduct.unit,
-              unitCost: newProduct.cost,
-              unitPrice: newProduct.price,
-              minStock: newProduct.min_stock,
-              barcode: newProduct.barcode,
-              isRegistered: true,
-              registeredAt: new Date().toISOString(),
-            },
-          },
-        ],
-      }),
+        collection: 'registries',
+        record: registryRecord,
+        author: currentUserId,
+        device_id: deviceId,
+        user_id: currentUserId,
+        reset_version: resetVersion,
+        actionDesc: `Master product catalog encode/upsert: ${newProduct.name} (${newProduct.sku})`
+      })
     });
-  } catch (err) {
-    console.warn('upsertProduct batch sync warning:', err);
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Server returned ${res.status}`);
+    }
+  } catch (err: any) {
+    console.error('[JUWEI-WMS] upsertProduct error saving to central database:', err);
+    throw new Error(`Central Database commit failed: ${err.message}`);
   }
 
   return newProduct;
