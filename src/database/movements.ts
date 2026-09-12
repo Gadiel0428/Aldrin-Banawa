@@ -4,6 +4,7 @@
  */
 
 import { CreateStockMovementInput, StockMovement, StockMovementResult } from '../types/movement';
+import { getApiBaseUrl } from '../config/serverConfig';
 
 // Helper to get or generate a persistent device ID
 export function getDeviceId(): string {
@@ -37,7 +38,8 @@ export async function createStockMovement(input: CreateStockMovementInput): Prom
       ? (Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0)
       : 0;
 
-    const resp = await fetch('/api/stock-movements', {
+    const baseUrl = getApiBaseUrl();
+    const resp = await fetch(`${baseUrl}/api/stock-movements`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -69,7 +71,8 @@ export async function createStockMovement(input: CreateStockMovementInput): Prom
 
 export async function fetchStockMovements(limit = 100, warehouseId?: string, productId?: string): Promise<StockMovement[]> {
   try {
-    let url = `/api/stock-movements?limit=${limit}`;
+    const baseUrl = getApiBaseUrl();
+    let url = `${baseUrl}/api/stock-movements?limit=${limit}`;
     if (warehouseId) url += `&warehouseId=${encodeURIComponent(warehouseId)}`;
     if (productId) url += `&productId=${encodeURIComponent(productId)}`;
 

@@ -5,6 +5,7 @@
 
 import { InventoryItem, Warehouse, InventorySummary } from '../types/inventory';
 import { Product } from '../types/product';
+import { getApiBaseUrl } from '../config/serverConfig';
 
 export const DEFAULT_WAREHOUSES: Warehouse[] = [
   { id: 'wh-main', name: 'Main Warehouse (Bays 1-4)', location: 'Building A', code: 'WH-MAIN', is_active: true },
@@ -18,7 +19,8 @@ export async function fetchWarehouses(): Promise<Warehouse[]> {
 
 export async function fetchInventory(warehouseId?: string): Promise<InventoryItem[]> {
   try {
-    const res = await fetch('/api/sync', { headers: { 'Accept': 'application/json' } });
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/sync`, { headers: { 'Accept': 'application/json' } });
     if (res.ok) {
       const json = await res.json();
       const rawStocks = json?.data?.stocks || [];

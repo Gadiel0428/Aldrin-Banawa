@@ -119,7 +119,18 @@ import EnvironmentalModule from './components/EnvironmentalModule';
 import RegisteredAccountsModule from './components/RegisteredAccountsModule';
 import MasterRegistryModule, { DEFAULT_MASTER_REGISTRIES } from './components/MasterRegistryModule';
 
-const DEFAULT_ONLINE_CLOUD_HOST = 'ais-dev-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app';
+import {
+  DEFAULT_PRODUCTION_SERVER_HOST,
+  DEFAULT_PRODUCTION_SERVER_URL,
+  getCentralServerUrl,
+  getCentralServerHost,
+  getApiBaseUrl,
+  getCentralWebSocketUrl,
+  isLocalhostAddress,
+  sanitizeServerHost,
+  isSecureHost as isSecureServerHost
+} from './config/serverConfig';
+import StartupDiagnosticsModal from './components/StartupDiagnosticsModal';
 
 // Isolated real-time clock component to prevent full application re-render cycles every second
 function LiveClock() {
@@ -139,59 +150,12 @@ function LiveClock() {
   );
 }
 
-export function sanitizeServerHost(raw: string): string {
-  if (!raw) return '';
-  let cleaned = raw.trim();
-  cleaned = cleaned.replace(/^https?:\/\//i, '');
-  cleaned = cleaned.replace(/^wss?:\/\//i, '');
-  cleaned = (cleaned.split('/')[0] || '').trim().toLowerCase();
-  return cleaned;
-}
+const DEFAULT_ONLINE_CLOUD_HOST = DEFAULT_PRODUCTION_SERVER_HOST;
 
-export function isSecureServerHost(cleanHost: string, rawInput: string = ''): boolean {
-  if (!cleanHost) return false;
-  if (/^https:\/\//i.test(rawInput) || /^wss:\/\//i.test(rawInput)) return true;
-  if (cleanHost.includes('.run.app') || cleanHost.includes('cloud') || cleanHost.includes('appspot')) return true;
-  const isLocal = cleanHost.includes('localhost') || cleanHost.includes('127.0.0.1') || cleanHost.startsWith('192.168.') || cleanHost.startsWith('10.');
-  if (isLocal) {
-    return window.location.protocol === 'https:';
-  }
-  return true;
-}
+export { getApiBaseUrl, getCentralServerUrl, getCentralServerHost, sanitizeServerHost, isSecureServerHost };
 
 function getDefaultServerAddress(): string {
-  if (typeof window !== 'undefined' && window.location && window.location.host) {
-    const cleanHost = sanitizeServerHost(window.location.host);
-    if (cleanHost) {
-      const cached = localStorage.getItem('juwei_wms_server_address');
-      if (cached) {
-        const cleanCached = sanitizeServerHost(cached);
-        // Only prioritize cached if it is valid and not an obsolete localhost cache when the window is on a remote host
-        if (cleanCached && !(cleanCached.includes('localhost') && !cleanHost.includes('localhost'))) {
-          return cleanCached;
-        }
-      }
-      return cleanHost;
-    }
-  }
-  const cached = localStorage.getItem('juwei_wms_server_address');
-  if (cached) {
-    const clean = sanitizeServerHost(cached);
-    if (clean) return clean;
-  }
-  return DEFAULT_ONLINE_CLOUD_HOST;
-}
-
-export function getApiBaseUrl(): string {
-  if (typeof window !== 'undefined' && window.location) {
-    if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
-      return '';
-    }
-  }
-  const targetHost = getDefaultServerAddress() || 'localhost:3000';
-  const isHttps = isSecureServerHost(targetHost);
-  const proto = isHttps ? 'https:' : 'http:';
-  return `${proto}//${targetHost}`;
+  return getCentralServerHost();
 }
 
 export function wsOpen(ws: WebSocket | null): boolean {
@@ -289,6 +253,8 @@ export default function App() {
 
   // Central Database modal state
   const [showCentralDatabaseModal, setShowCentralDatabaseModal] = useState<boolean>(false);
+  // Startup Diagnostics and Multi-PC Real-Time Sync Verifier modal state
+  const [showStartupDiagnosticsModal, setShowStartupDiagnosticsModal] = useState<boolean>(false);
 
   // Persistent Device Identifier across sessions
   const getPersistentDeviceId = (): string => {
@@ -370,7 +336,7 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
-  const [serverAddress, setServerAddress] = useState<string>(() => getDefaultServerAddress());
+  const [serverAddress, setServerAddress] = useState<string>(() => getCentralServerHost());
   const [wsLatency, setWsLatency] = useState<number | null>(null);
   const [lastSyncedTime, setLastSyncedTime] = useState<Date>(new Date());
   const [liveSyncToast, setLiveSyncToast] = useState<{ id: string; author: string; action: string; time: string } | null>(null);
@@ -2279,42 +2245,22 @@ export default function App() {
     };
 
     const runSyncCheck = async (): Promise<boolean> => {
-      // 1. Try relative / configured baseUrl /api/sync first to hydrate authoritative data
+      // 1. Authoritative Central Server Sync: every client strictly connects to the central cloud API
+      const centralUrl = getCentralServerUrl();
+      const centralOk = await tryFetchSync(`${centralUrl}/api/sync`);
+      if (centralOk) {
+        await flushPendingMutationsQueue();
+        return true;
+      }
+
+      // 2. Relative API check if loaded on remote custom domain proxy
       const baseUrl = getApiBaseUrl();
-      const relOk = await tryFetchSync(`${baseUrl}/api/sync`);
-      if (relOk) {
-        await flushPendingMutationsQueue();
-        return true;
-      }
-
-      // 2. Try localhost:3000 if desktop / embedded node server
-      const local3000Ok = await tryFetchSync('http://localhost:3000/api/sync');
-      if (local3000Ok) {
-        await flushPendingMutationsQueue();
-        return true;
-      }
-
-      // 3. Try window host if available
-      if (typeof window !== 'undefined' && window.location && window.location.host) {
-        const localProto = window.location.protocol === 'https:' ? 'https:' : 'http:';
-        const localOk = await tryFetchSync(`${localProto}//${window.location.host}/api/sync`);
-        if (localOk) {
+      if (baseUrl && baseUrl !== centralUrl) {
+        const relOk = await tryFetchSync(`${baseUrl}/api/sync`);
+        if (relOk) {
           await flushPendingMutationsQueue();
           return true;
         }
-      }
-
-      // 4. Try configured server host address
-      let targetAddr = serverAddress.trim() || getDefaultServerAddress();
-      const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
-      const isHttps = isSecureServerHost(cleanHost, targetAddr);
-      const httpProto = isHttps ? 'https:' : 'http:';
-      const httpUrl = `${httpProto}//${cleanHost}/api/sync`;
-
-      const hostOk = await tryFetchSync(httpUrl);
-      if (hostOk) {
-        await flushPendingMutationsQueue();
-        return true;
       }
 
       if (isMounted && !hasConnectedOnce) {
@@ -2329,16 +2275,10 @@ export default function App() {
         return;
       }
 
-      let targetAddr = serverAddress.trim() || getDefaultServerAddress();
-      let cleanHost = sanitizeServerHost(targetAddr);
-      if (!cleanHost || cleanHost.length === 0) {
-        cleanHost = 'localhost:3000';
-      }
-      const isHttps = isSecureServerHost(cleanHost, targetAddr);
-      const wsProto = isHttps ? 'wss:' : 'ws:';
       const clientAccountId = localStorage.getItem('juwei_wms_account_id') || 'ACC-JUWEI';
       const clientWarehouseId = localStorage.getItem('juwei_wms_warehouse_id') || 'WH-MAIN';
-      const socketUrl = `${wsProto}//${cleanHost}/ws?accountId=${encodeURIComponent(clientAccountId)}&warehouseId=${encodeURIComponent(clientWarehouseId)}`;
+      // Strictly connect to Authoritative Central Server WebSocket endpoint
+      const socketUrl = getCentralWebSocketUrl(clientAccountId, clientWarehouseId);
 
       if (pingInterval) clearInterval(pingInterval);
 
@@ -4355,17 +4295,31 @@ export default function App() {
               <span className="text-[11px] text-slate-400 font-mono font-medium">SYSTEM READY</span>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setShowCentralDatabaseModal(true)}
-              className="flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700/80 border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer text-xs"
-              title="Central Database • Single Source of Truth"
-              aria-label="Central Database Status"
-              id="btn-login-central-db-settings"
-            >
-              <Database className="h-3.5 w-3.5 text-emerald-400" />
-              <span className="text-[11px] font-mono text-emerald-300 font-semibold">Central DB • Synced</span>
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setShowStartupDiagnosticsModal(true)}
+                className="flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700/80 border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer text-xs"
+                title="Startup Diagnostics & Multi-PC Synchronization Verifier"
+                aria-label="Startup Diagnostics"
+                id="btn-login-diagnostics"
+              >
+                <Activity className="h-3.5 w-3.5 text-indigo-400" />
+                <span className="text-[11px] font-mono text-indigo-300 font-semibold">Diagnostics</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowCentralDatabaseModal(true)}
+                className="flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700/80 border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer text-xs"
+                title="Central Database • Single Source of Truth"
+                aria-label="Central Database Status"
+                id="btn-login-central-db-settings"
+              >
+                <Database className="h-3.5 w-3.5 text-emerald-400" />
+                <span className="text-[11px] font-mono text-emerald-300 font-semibold">Central DB</span>
+              </button>
+            </div>
           </div>
 
           <div className="flex flex-col items-center text-center">
@@ -4851,7 +4805,10 @@ export default function App() {
           
           <div className="flex items-center gap-2 text-xs font-medium shrink-0">
             {/* Unified Centralized Realtime & Offline Sync Engine */}
-            <SyncStatus onOpenSettings={() => setShowCentralDatabaseModal(true)} />
+            <SyncStatus 
+              onOpenSettings={() => setShowCentralDatabaseModal(true)} 
+              onOpenDiagnostics={() => setShowStartupDiagnosticsModal(true)}
+            />
 
             {/* Connected Workstations / Active Terminals Pill - Logo Only with Count */}
             <button
@@ -5106,6 +5063,31 @@ export default function App() {
         totalRecordsCount={stocks.length + receiving.length + returns.length + recycling.length + issuances.length + deliveries.length}
         totalUsersCount={registeredUsers.length}
       />
+
+      {/* Central Startup Diagnostics & Multi-PC Synchronization Verifier Modal */}
+      {showStartupDiagnosticsModal && (
+        <StartupDiagnosticsModal
+          isOpen={showStartupDiagnosticsModal}
+          onClose={() => setShowStartupDiagnosticsModal(false)}
+          currentUser={
+            registeredUsers.find((u) => u.employeeId === currentEmployeeId) || {
+              employeeId: currentEmployeeId || 'JPMP-002',
+              name: currentUser || 'SUPER ADMIN',
+              role: currentPermission || 'SUPER_ADMIN'
+            }
+          }
+          currentWarehouseId={localStorage.getItem('juwei_wms_warehouse_id') || 'WH-MAIN'}
+          currentAccountId={localStorage.getItem('juwei_wms_account_id') || 'ACC-JUWEI'}
+          wsConnected={connectionStatus === 'connected'}
+          systemResetVersion={Number(localStorage.getItem('juwei_wms_system_reset_version')) || 1}
+          onForceSync={handleManualSync}
+          onReconnectWs={() => {
+            if (socket) {
+              try { socket.close(); } catch {}
+            }
+          }}
+        />
+      )}
 
       {/* Active Workstation Terminals Modal */}
       {showActiveUsersModal && (

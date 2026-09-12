@@ -2092,12 +2092,34 @@ async function startServer() {
 
   app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin", "*");
-    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-user-permission, x-reset-version, x-employee-id");
-    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-user-permission, x-reset-version, x-employee-id, x-device-id, x-account-id, x-warehouse-id, x-session-id, x-client-platform, x-permission, Cache-Control, Pragma");
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH");
+    res.header("Access-Control-Max-Age", "86400");
     if (req.method === "OPTIONS") {
       return res.sendStatus(200);
     }
     next();
+  });
+
+  // REST API: Diagnostics & Connectivity Verification
+  app.get("/api/diagnostics", (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.json({
+      status: "ok",
+      serverTimestamp: new Date().toISOString(),
+      uptimeSeconds: process.uptime(),
+      systemResetVersion,
+      systemResetId,
+      systemResetTimestamp,
+      totalRecords: Object.values(state).reduce((acc, curr) => acc + (Array.isArray(curr) ? curr.length : 0), 0),
+      usersCount: state.registeredUsers.length,
+      connectedTerminals: connectionRegistry.size,
+      connectedOperators: getActiveOperatorsCount(),
+      corsActive: true,
+      databaseReady: true,
+      websocketReady: true,
+      authoritativeSource: "CENTRAL_CLOUD_DATABASE"
+    });
   });
 
   // REST API: Health Check

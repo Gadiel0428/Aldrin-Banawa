@@ -4,16 +4,18 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Wifi, WifiOff, RefreshCw, AlertCircle, Database, CheckCircle2, ChevronDown, ChevronUp, Clock, Laptop, ShieldCheck, Settings2 } from 'lucide-react';
+import { Wifi, WifiOff, RefreshCw, AlertCircle, Database, CheckCircle2, ChevronDown, ChevronUp, Clock, Laptop, ShieldCheck, Settings2, Globe, Activity } from 'lucide-react';
 import { syncManager } from '../sync/syncManager';
 import { OfflineQueue } from '../sync/offlineQueue';
 import { SyncStatusInfo, OfflineQueueItem } from '../types/sync';
+import { getCentralServerUrl } from '../config/serverConfig';
 
 interface SyncStatusProps {
   onOpenSettings?: () => void;
+  onOpenDiagnostics?: () => void;
 }
 
-export const SyncStatus: React.FC<SyncStatusProps> = ({ onOpenSettings }) => {
+export const SyncStatus: React.FC<SyncStatusProps> = ({ onOpenSettings, onOpenDiagnostics }) => {
   const [status, setStatus] = useState<SyncStatusInfo>(syncManager.getStatus());
   const [isOpen, setIsOpen] = useState(false);
   const [queueItems, setQueueItems] = useState<OfflineQueueItem[]>([]);
@@ -75,21 +77,28 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({ onOpenSettings }) => {
 
   return (
     <div className="relative inline-block text-xs font-medium">
-      {/* Status Pill Button - Icon / Logo Only */}
+      {/* Status Pill Button - Visible Connection Status & Central Endpoint */}
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className={`inline-flex items-center justify-center w-8 h-8 rounded-xl border transition-all shadow-xs hover:shadow-md cursor-pointer ${badge.bg}`}
-        title={`Sync Status: ${badge.label} (Click for details)`}
+        className={`inline-flex items-center gap-2 px-2.5 h-8 rounded-xl border transition-all shadow-xs hover:shadow-md cursor-pointer ${badge.bg}`}
+        title={`Sync Status: ${badge.label} • Central Server: ${getCentralServerUrl()} (Click for details & diagnostics)`}
         aria-label={`Sync Status: ${badge.label}`}
       >
-        <span className="relative flex items-center justify-center">
+        <span className="relative flex items-center justify-center shrink-0">
           {badge.icon}
           {status.pendingCount > 0 && (
             <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-white text-[9px] font-bold rounded-full min-w-3.5 h-3.5 flex items-center justify-center px-0.5">
               {status.pendingCount}
             </span>
           )}
+        </span>
+        <span className="font-semibold text-[11px] whitespace-nowrap hidden sm:inline-block">
+          {badge.label}
+        </span>
+        <span className="hidden md:inline-flex items-center gap-1 font-mono text-[10px] text-slate-500 dark:text-slate-400 border-l border-slate-200 dark:border-slate-700 pl-1.5 max-w-[130px] lg:max-w-[200px] truncate" title={getCentralServerUrl()}>
+          <Globe className="w-2.5 h-2.5 text-indigo-500 shrink-0" />
+          <span className="truncate">{getCentralServerUrl().replace(/^https?:\/\//i, '')}</span>
         </span>
       </button>
 
@@ -112,6 +121,16 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({ onOpenSettings }) => {
           </div>
 
           <div className="space-y-2.5 text-xs">
+            <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 dark:bg-slate-800/60">
+              <div className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
+                <Globe className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Central Endpoint</span>
+              </div>
+              <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400 truncate max-w-[180px]" title={getCentralServerUrl()}>
+                {getCentralServerUrl()}
+              </span>
+            </div>
+
             <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 dark:bg-slate-800/60">
               <div className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
                 <Laptop className="w-3.5 h-3.5 text-slate-400" />
@@ -200,21 +219,34 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({ onOpenSettings }) => {
             )}
           </div>
 
-          {onOpenSettings && (
-            <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800 flex justify-end">
+          <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+            {onOpenDiagnostics && (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsOpen(false);
+                  onOpenDiagnostics();
+                }}
+                className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-600 hover:text-emerald-500 dark:text-emerald-400 dark:hover:text-emerald-300 transition-colors cursor-pointer"
+              >
+                <Activity className="w-3.5 h-3.5" />
+                Startup Diagnostics
+              </button>
+            )}
+            {onOpenSettings && (
               <button
                 type="button"
                 onClick={() => {
                   setIsOpen(false);
                   onOpenSettings();
                 }}
-                className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 transition-colors cursor-pointer ml-auto"
               >
                 <Settings2 className="w-3.5 h-3.5" />
-                Central Database & Engine Diagnostics
+                Central Database
               </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
     </div>

@@ -5,10 +5,12 @@
 
 import { Product, ProductFilter } from '../types/product';
 import { getDeviceId } from './movements';
+import { getApiBaseUrl } from '../config/serverConfig';
 
 export async function fetchProducts(filter?: ProductFilter): Promise<Product[]> {
   try {
-    const res = await fetch('/api/sync', { 
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/sync`, { 
       headers: { 
         'Accept': 'application/json',
         'Cache-Control': 'no-cache'
@@ -129,7 +131,8 @@ export async function upsertProduct(input: Partial<Product>): Promise<Product> {
 
   // Save to Central Database FIRST via REST API
   try {
-    const res = await fetch('/api/records/upsert', {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/records/upsert`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

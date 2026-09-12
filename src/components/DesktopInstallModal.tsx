@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Monitor, Download, X, ShieldCheck, Cpu, FileCode2 } from 'lucide-react';
+import { getCentralServerUrl } from '../config/serverConfig';
 
 interface DesktopInstallModalProps {
   isOpen: boolean;
@@ -11,12 +12,8 @@ export default function DesktopInstallModal({ isOpen, onClose }: DesktopInstallM
   const [copiedCmd, setCopiedCmd] = useState(false);
 
   const getAppUrl = () => {
-    if (typeof window !== 'undefined' && window.location && window.location.host) {
-      const cleanHost = window.location.host;
-      const proto = window.location.protocol === 'https:' ? 'https:' : 'http:';
-      return `${proto}//${cleanHost}/`;
-    }
-    return 'https://ais-dev-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app/';
+    const centralUrl = getCentralServerUrl();
+    return centralUrl.endsWith('/') ? centralUrl : `${centralUrl}/`;
   };
 
   // 1. Download 1-Click Windows BAT Installer (Works 100% on any Windows PC without PowerShell ExecutionPolicy restrictions)

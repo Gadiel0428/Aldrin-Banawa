@@ -4,6 +4,7 @@
  */
 
 import { RegisteredAccount } from '../types';
+import { getApiBaseUrl } from '../config/serverConfig';
 
 export function resolveAccountPin(user: any, employeeId?: string): string {
   if (user?.pin) return String(user.pin).trim();
@@ -42,7 +43,8 @@ export interface CentralDbSnapshot {
  */
 export async function fetchCentralDatabaseSnapshot(): Promise<CentralDbSnapshot | null> {
   try {
-    const res = await fetch('/api/sync', {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/sync`, {
       headers: {
         'Accept': 'application/json',
         'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -75,7 +77,8 @@ export async function verifyCentralCredentials(
   if (!cleanInput || !enteredPin) return null;
 
   try {
-    const res = await fetch('/api/accounts/verify', {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/accounts/verify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ identifier: cleanInput, pin: enteredPin }),
@@ -100,7 +103,8 @@ export async function registerCentralAccount(
   account: Partial<RegisteredAccount>
 ): Promise<{ success: boolean; user?: RegisteredAccount; error?: string }> {
   try {
-    const res = await fetch('/api/accounts/register', {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/accounts/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(account),
@@ -120,7 +124,8 @@ export async function updateCentralAccount(
   account: RegisteredAccount
 ): Promise<{ success: boolean; user?: RegisteredAccount; error?: string }> {
   try {
-    const res = await fetch('/api/accounts/update', {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/accounts/update`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ oldEmployeeId, updatedUser: account }),
@@ -142,7 +147,8 @@ export async function updateCentralPin(
   requesterEmployeeId?: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const res = await fetch('/api/accounts/update-pin', {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/accounts/update-pin`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -167,7 +173,8 @@ export async function deleteCentralAccount(
   requesterId?: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const res = await fetch('/api/accounts/delete', {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/accounts/delete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ employeeId, requesterId }),
@@ -186,7 +193,8 @@ export async function clearAllAccountsExceptSuperAdmin(
   superAdminPin: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const res = await fetch('/api/accounts/clear-all-except-super-admin', {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/accounts/clear-all-except-super-admin`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pin: superAdminPin }),
@@ -207,7 +215,8 @@ export async function upsertCentralRecord(
   record: any
 ): Promise<{ success: boolean; record?: any; error?: string }> {
   try {
-    const res = await fetch('/api/records/upsert', {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/records/upsert`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ collection, record }),
@@ -227,7 +236,8 @@ export async function deleteCentralRecord(
   id: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const res = await fetch('/api/records/delete', {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/records/delete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ collection, id }),
@@ -251,7 +261,8 @@ export async function performCentralGlobalReset(payload: {
   keepUsers: boolean;
 }): Promise<{ success: boolean; systemResetVersion?: number; systemResetId?: string; error?: string }> {
   try {
-    const res = await fetch('/api/reset-everything', {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/reset-everything`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -269,7 +280,8 @@ export async function initializeFreshInstallation(payload: {
   stationId?: string;
 }): Promise<any> {
   try {
-    const res = await fetch('/api/terminal/fresh-install', {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/terminal/fresh-install`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -282,7 +294,8 @@ export async function initializeFreshInstallation(payload: {
 
 export async function fetchAuthorizedDevices(): Promise<any> {
   try {
-    const res = await fetch('/api/devices/authorized');
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/devices/authorized`);
     return await res.json();
   } catch (err: any) {
     return { success: false, devices: [] };
@@ -296,7 +309,8 @@ export async function authorizeDevice(payload: {
   pin: string;
 }): Promise<any> {
   try {
-    const res = await fetch('/api/devices/authorize', {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/devices/authorize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -313,7 +327,8 @@ export async function revokeDevice(payload: {
   pin: string;
 }): Promise<any> {
   try {
-    const res = await fetch('/api/devices/revoke', {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/devices/revoke`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -323,4 +338,3 @@ export async function revokeDevice(payload: {
     return { success: false, error: err?.message };
   }
 }
-

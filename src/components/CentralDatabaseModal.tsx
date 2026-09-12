@@ -4,8 +4,9 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Database, Server, Wifi, RefreshCw, CheckCircle2, ShieldAlert, Laptop, Clock, Activity, HardDrive } from 'lucide-react';
+import { Database, Server, Wifi, RefreshCw, CheckCircle2, ShieldAlert, Laptop, Clock, Activity, HardDrive, Globe } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { getApiBaseUrl, getCentralServerUrl } from '../config/serverConfig';
 
 interface CentralDatabaseModalProps {
   isOpen: boolean;
@@ -40,7 +41,8 @@ export default function CentralDatabaseModal({
   const checkServerHealth = async () => {
     setIsChecking(true);
     try {
-      const res = await fetch('/api/health');
+      const baseUrl = getApiBaseUrl();
+      const res = await fetch(`${baseUrl}/api/health`);
       if (res.ok) {
         const data = await res.json();
         setHealthInfo({ status: 'OK', uptime: data.uptime, dbCommitted: true });
@@ -177,12 +179,12 @@ export default function CentralDatabaseModal({
                 </h4>
                 <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3 space-y-2 font-mono text-xs text-slate-300">
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-500">Service:</span>
-                    <span className="text-slate-200">Express REST + WS Server</span>
+                    <span className="text-slate-500">Central Endpoint:</span>
+                    <span className="text-emerald-400 font-bold truncate max-w-[280px]" title={getCentralServerUrl()}>{getCentralServerUrl()}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-500">Port:</span>
-                    <span className="text-slate-200">3000 (Universal Ingress)</span>
+                    <span className="text-slate-500">Service:</span>
+                    <span className="text-slate-200">Express REST + WS Server</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-slate-500">System Reset ID:</span>

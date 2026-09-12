@@ -2,17 +2,19 @@ const { app, BrowserWindow, shell, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
+// Authoritative Central Production Server URL (Single Production Configuration)
+const CENTRAL_SERVER_URL = process.env.CENTRAL_SERVER_URL || process.env.VITE_CENTRAL_SERVER_URL || 'https://ais-dev-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app';
+
 // Ensure unhandled exceptions don't crash the desktop app silently
 process.on('uncaughtException', (err) => {
-  console.error('JUWEI WMS Uncaught Exception:', err);
+  console.error('JUWEI WMS Desktop Uncaught Exception:', err);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.warn('JUWEI WMS Unhandled Rejection at:', promise, 'reason:', reason);
+  console.warn('JUWEI WMS Desktop Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
 let mainWindow = null;
-let serverStarted = false;
 
 // Set safe writable data path for persistence (AppData / LocalAppData on Windows)
 try {
@@ -22,23 +24,6 @@ try {
   console.warn('Could not determine userData directory:', e);
 }
 
-function startEmbeddedServer() {
-  if (serverStarted) return;
-  try {
-    process.env.NODE_ENV = 'production';
-    const serverPath = path.join(__dirname, '../dist/server.cjs');
-    if (fs.existsSync(serverPath)) {
-      console.log('Starting JUWEI WMS Node Express & WebSocket Server from:', serverPath);
-      require(serverPath);
-      serverStarted = true;
-    } else {
-      console.warn('Embedded server bundle dist/server.cjs not found at:', serverPath);
-    }
-  } catch (err) {
-    console.error('Error starting embedded JUWEI WMS server:', err);
-  }
-}
-
 function createWindow() {
   const iconPath = path.join(__dirname, '../public/favicon.ico');
   const windowOptions = {
@@ -46,7 +31,7 @@ function createWindow() {
     height: 868,
     minWidth: 1024,
     minHeight: 700,
-    title: 'JUWEI WAREHOUSE MANAGEMENT SYSTEM',
+    title: 'JUWEI WAREHOUSE MANAGEMENT SYSTEM (CENTRAL CLOUD CONNECTED)',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
@@ -65,36 +50,39 @@ function createWindow() {
 
   mainWindow = new BrowserWindow(windowOptions);
 
-  const isDev = process.env.NODE_ENV === 'development' || process.env.VITE_DEV_SERVER_URL;
+  const isDev = process.env.NODE_ENV === 'development' && process.env.VITE_DEV_SERVER_URL;
 
   if (isDev && process.env.VITE_DEV_SERVER_URL) {
+    console.log('[JUWEI WMS Desktop] Loading local development server:', process.env.VITE_DEV_SERVER_URL);
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    // Start embedded Express & WebSocket real-time server
-    startEmbeddedServer();
-
+    // Installed Client Mode: Automatically connect to CENTRAL PRODUCTION SERVER
+    // NEVER use localhost or local per-PC database for client synchronization!
+    console.log('[JUWEI WMS Desktop] Connecting to Central Production Server:', CENTRAL_SERVER_URL);
+    
     let retries = 0;
-    const maxRetries = 25;
-    const loadApp = () => {
-      mainWindow.loadURL('http://localhost:3000').catch((err) => {
+    const maxRetries = 10;
+    const loadCentralApp = () => {
+      mainWindow.loadURL(CENTRAL_SERVER_URL).catch((err) => {
+        console.warn(`[JUWEI WMS Desktop] Connection to Central Server attempt ${retries + 1}/${maxRetries} failed:`, err.message);
         if (retries < maxRetries) {
           retries++;
-          setTimeout(loadApp, 400);
+          setTimeout(loadCentralApp, 1500);
         } else {
-          console.warn('Could not connect to http://localhost:3000, loading fallback local HTML file:', err);
+          console.warn('[JUWEI WMS Desktop] Loading offline fallback local interface...');
           const indexPath = path.join(__dirname, '../dist/index.html');
           if (fs.existsSync(indexPath)) {
             mainWindow.loadFile(indexPath).catch(loadErr => {
-              console.error('Failed to load local HTML fallback:', loadErr);
+              console.error('[JUWEI WMS Desktop] Failed to load local HTML fallback:', loadErr);
             });
           } else {
-            console.error('dist/index.html does not exist at path:', indexPath);
+            console.error('[JUWEI WMS Desktop] dist/index.html does not exist at path:', indexPath);
           }
         }
       });
     };
 
-    setTimeout(loadApp, 200);
+    loadCentralApp();
   }
 
   mainWindow.once('ready-to-show', () => {
