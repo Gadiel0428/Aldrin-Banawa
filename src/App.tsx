@@ -2277,6 +2277,7 @@ export default function App() {
 
       const clientAccountId = localStorage.getItem('juwei_wms_account_id') || 'ACC-JUWEI';
       const clientWarehouseId = localStorage.getItem('juwei_wms_warehouse_id') || 'WH-MAIN';
+      console.log(`[JUWEI WMS] Connecting WebSocket with accountId="${clientAccountId}", warehouseId="${clientWarehouseId}"`);
       // Strictly connect to Authoritative Central Server WebSocket endpoint
       const socketUrl = getCentralWebSocketUrl(clientAccountId, clientWarehouseId);
 
@@ -2376,6 +2377,9 @@ export default function App() {
             case 'FULL_INVENTORY_SYNC': {
               const incoming = Array.isArray(payload.inventory) ? payload.inventory : (Array.isArray(payload.stocks) ? payload.stocks : []);
               setLastSyncedTime(new Date());
+              if (payload.serverInstanceId) {
+                console.log(`[JUWEI WMS] FULL_INVENTORY_SYNC serverInstanceId: ${payload.serverInstanceId}`);
+              }
               if (incoming.length > 0 || payload.inventory !== undefined) {
                 const norm = normalizeRecords('stocks', incoming);
                 setStocks(norm);
@@ -2781,14 +2785,12 @@ export default function App() {
 
     connectWebSocket();
 
-    // Gentle background HTTP poll fallback (10s if connected, 5s if disconnected)
+    // Continuous background HTTP poll fallback (fixed 5000ms interval regardless of ws.readyState)
     httpPollInterval = setInterval(() => {
       if (isMounted) {
-        if (!ws || ws.readyState !== WebSocket.OPEN) {
-          runSyncCheck();
-        }
+        runSyncCheck();
       }
-    }, 7000);
+    }, 5000);
 
     return () => {
       isMounted = false;

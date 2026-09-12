@@ -7,7 +7,12 @@ import express from "express";
 import http from "http";
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
 import { WebSocketServer, WebSocket } from "ws";
+
+// Ephemeral per-process instance identifiers (fresh every boot, never persisted)
+const SERVER_INSTANCE_ID = crypto.randomUUID();
+const SERVER_BOOT_TIME = new Date().toISOString();
 
 // Initial seed structures for empty database bootstrapping
 const INITIAL_STOCK: any[] = [];
@@ -1047,6 +1052,9 @@ async function startServer() {
     const now = Date.now();
     for (const [connId, conn] of connectionRegistry.entries()) {
       if (!conn.ws || conn.ws.readyState !== WebSocket.OPEN) {
+        if (conn.ws) {
+          removeSocketFromGroups(conn.ws);
+        }
         connectionRegistry.delete(connId);
         changed = true;
         broadcast({
@@ -1092,6 +1100,7 @@ async function startServer() {
     // Generate unique connection_id for this socket
     const connection_id = `conn_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
     socketToConnectionId.set(ws, connection_id);
+    console.log(`[WS Connection] New client connected (${connection_id}) on server instance: ${SERVER_INSTANCE_ID}`);
 
     const ip = (req.headers['x-forwarded-for'] as string) || req.socket?.remoteAddress || '127.0.0.1';
     const userAgent = req.headers['user-agent'] || '';
@@ -1138,6 +1147,7 @@ async function startServer() {
       try {
         ws.send(JSON.stringify({
           type: "FULL_INVENTORY_SYNC",
+          serverInstanceId: SERVER_INSTANCE_ID,
           accountId: queryAccountId,
           warehouseId: queryWarehouseId,
           inventory: initialInventory,
@@ -1194,6 +1204,7 @@ async function startServer() {
       const presenceList = getActivePresenceList();
       ws.send(JSON.stringify({
         type: "init",
+        serverInstanceId: SERVER_INSTANCE_ID,
         connection_id,
         connectionId: connection_id,
         systemResetVersion,
@@ -1292,6 +1303,7 @@ async function startServer() {
               try {
                 ws.send(JSON.stringify({
                   type: "FULL_INVENTORY_SYNC",
+                  serverInstanceId: SERVER_INSTANCE_ID,
                   accountId: conn.accountId,
                   warehouseId: conn.warehouseId,
                   inventory: authenticatedInventory,
@@ -1351,6 +1363,7 @@ async function startServer() {
             // Immediately send the authoritative snapshot matching client permission
             ws.send(JSON.stringify({
               type: "init",
+              serverInstanceId: SERVER_INSTANCE_ID,
               connection_id: connId,
               connectionId: connId,
               systemResetVersion,
@@ -1422,6 +1435,7 @@ async function startServer() {
               try {
                 ws.send(JSON.stringify({
                   type: "FULL_INVENTORY_SYNC",
+                  serverInstanceId: SERVER_INSTANCE_ID,
                   accountId: targetAcc,
                   warehouseId: targetWh,
                   inventory: roomInventory,
@@ -1462,6 +1476,7 @@ async function startServer() {
               try {
                 ws.send(JSON.stringify({
                   type: "FULL_INVENTORY_SYNC",
+                  serverInstanceId: SERVER_INSTANCE_ID,
                   accountId: targetAcc,
                   warehouseId: targetWh,
                   inventory: currentInv,
@@ -1950,6 +1965,7 @@ async function startServer() {
             const presenceList = getActivePresenceList();
             ws.send(JSON.stringify({
               type: "init",
+              serverInstanceId: SERVER_INSTANCE_ID,
               connection_id: connId,
               connectionId: connId,
               systemResetVersion,
@@ -2106,6 +2122,8 @@ async function startServer() {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     res.json({
       status: "ok",
+      serverInstanceId: SERVER_INSTANCE_ID,
+      serverBootTime: SERVER_BOOT_TIME,
       serverTimestamp: new Date().toISOString(),
       uptimeSeconds: process.uptime(),
       systemResetVersion,
@@ -2126,6 +2144,8 @@ async function startServer() {
   app.get("/api/health", (req, res) => {
     res.json({
       status: "ok",
+      serverInstanceId: SERVER_INSTANCE_ID,
+      serverBootTime: SERVER_BOOT_TIME,
       uptime: process.uptime(),
       systemResetVersion,
       systemResetId,
@@ -3354,6 +3374,10 @@ async function startServer() {
 
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`JUWEI WAREHOUSE MANAGEMENT SYSTEM Central Real-time Server listening on http://0.0.0.0:${PORT}`);
+    console.log(`[SERVER STARTUP] Instance ID: ${SERVER_INSTANCE_ID} | Boot Time: ${SERVER_BOOT_TIME} | PID: ${process.pid}`);
+    if (!process.env.JUWEI_DATA_DIR) {
+      console.warn(`[SERVER WARNING] JUWEI_DATA_DIR is not set. Database file (${DATA_FILE}) is stored on ephemeral local disk and won't be shared across multiple server instances.`);
+    }
   });
 }
 

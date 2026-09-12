@@ -68,6 +68,8 @@ export function isSecureHost(cleanHost: string, rawInput: string = ''): boolean 
   return true;
 }
 
+let hasLoggedResolution = false;
+
 /**
  * Resolves the authoritative central server URL for the client.
  * Enforces production cloud authority:
@@ -77,21 +79,32 @@ export function isSecureHost(cleanHost: string, rawInput: string = ''): boolean 
  * - If installed on PC-2 / local / file, automatically resolves to DEFAULT_PRODUCTION_SERVER_URL
  */
 export function getCentralServerUrl(): string {
+  const finalize = (
+    resolvedUrl: string,
+    source: 'Electron config' | 'cached localStorage' | 'current window origin' | 'build env var' | 'hardcoded default'
+  ): string => {
+    if (!hasLoggedResolution) {
+      hasLoggedResolution = true;
+      console.log(`[Central Server URL] Resolved via [${source}]: ${resolvedUrl}`);
+    }
+    return resolvedUrl;
+  };
+
   // 1. Check environment variable injected at build time
   const metaEnv = typeof import.meta !== 'undefined' ? (import.meta as any).env : undefined;
   const envUrl = metaEnv && metaEnv.VITE_CENTRAL_SERVER_URL
     ? String(metaEnv.VITE_CENTRAL_SERVER_URL).trim()
     : '';
 
-  // 2. Check Electron injected API
+  // 1. Check Electron injected API (Source: Electron config)
   if (typeof window !== 'undefined' && (window as any).electronAPI?.centralServerUrl) {
     const electronUrl = String((window as any).electronAPI.centralServerUrl).trim();
     if (electronUrl && !isLocalhostAddress(electronUrl)) {
-      return electronUrl.replace(/\/+$/, '');
+      return finalize(electronUrl.replace(/\/+$/, ''), 'Electron config');
     }
   }
 
-  // 3. Check cached settings (strictly reject localhost/127.0.0.1)
+  // 2. Check cached settings (Source: cached localStorage)
   if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
     const cached = localStorage.getItem('juwei_wms_server_address');
     if (cached) {
@@ -102,27 +115,27 @@ export function getCentralServerUrl(): string {
         const cleanCached = sanitizeServerHost(cached);
         if (cleanCached && cleanCached.length > 0) {
           const isHttps = isSecureHost(cleanCached, cached);
-          return `${isHttps ? 'https:' : 'http:'}//${cleanCached}`;
+          return finalize(`${isHttps ? 'https:' : 'http:'}//${cleanCached}`, 'cached localStorage');
         }
       }
     }
   }
 
-  // 4. Check if currently browsing on a genuine remote host (e.g. *.run.app)
+  // 3. Check if currently browsing on a genuine remote host (Source: current window origin)
   if (typeof window !== 'undefined' && window.location && window.location.host) {
     const currentHost = window.location.host;
     if (!isLocalhostAddress(currentHost) && window.location.protocol.startsWith('http')) {
-      return `${window.location.protocol}//${currentHost}`;
+      return finalize(`${window.location.protocol}//${currentHost}`, 'current window origin');
     }
   }
 
-  // 5. Use build env URL if valid non-localhost
+  // 4. Use build env URL if valid non-localhost (Source: build env var)
   if (envUrl && !isLocalhostAddress(envUrl)) {
-    return envUrl.replace(/\/+$/, '');
+    return finalize(envUrl.replace(/\/+$/, ''), 'build env var');
   }
 
-  // 6. Absolute Fallback: Default Central Production Cloud Server
-  return DEFAULT_PRODUCTION_SERVER_URL;
+  // 5. Absolute Fallback: Default Central Production Cloud Server (Source: hardcoded default)
+  return finalize(DEFAULT_PRODUCTION_SERVER_URL, 'hardcoded default');
 }
 
 /**
