@@ -6,3 +6,5 @@ coverage/
 *.log
 .env*
 !.env.example
+central-database.json
+central-database.json.*

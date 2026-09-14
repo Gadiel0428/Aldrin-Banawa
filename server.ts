@@ -3375,7 +3375,15 @@ async function startServer() {
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`JUWEI WAREHOUSE MANAGEMENT SYSTEM Central Real-time Server listening on http://0.0.0.0:${PORT}`);
     console.log(`[SERVER STARTUP] Instance ID: ${SERVER_INSTANCE_ID} | Boot Time: ${SERVER_BOOT_TIME} | PID: ${process.pid}`);
-    if (!process.env.JUWEI_DATA_DIR) {
+    const isInsideSourceDir = path.resolve(DATA_FILE).startsWith(path.resolve(process.cwd()));
+    if (!process.env.JUWEI_DATA_DIR && isInsideSourceDir) {
+      console.error("\n" + "!".repeat(78));
+      console.error("⚠️  CRITICAL PERSISTENCE WARNING: NO PERSISTENT VOLUME CONFIGURED! ⚠️");
+      console.error(`JUWEI_DATA_DIR is unset and resolved DATA_FILE (${DATA_FILE}) is inside the project source directory.`);
+      console.error("Data will NOT survive redeploys or server restarts!");
+      console.error("A persistent disk must be attached with JUWEI_DATA_DIR pointing to it to retain data.");
+      console.error("!".repeat(78) + "\n");
+    } else if (!process.env.JUWEI_DATA_DIR) {
       console.warn(`[SERVER WARNING] JUWEI_DATA_DIR is not set. Database file (${DATA_FILE}) is stored on ephemeral local disk and won't be shared across multiple server instances.`);
     }
   });
