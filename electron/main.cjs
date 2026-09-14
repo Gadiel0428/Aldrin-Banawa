@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 
 // Authoritative Central Production Server URL (Single Production Configuration)
-const CENTRAL_SERVER_URL = process.env.CENTRAL_SERVER_URL || process.env.VITE_CENTRAL_SERVER_URL || 'https://ais-dev-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app';
+const CENTRAL_SERVER_URL = process.env.CENTRAL_SERVER_URL || process.env.VITE_CENTRAL_SERVER_URL || 'https://ais-pre-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app';
 
 // Ensure unhandled exceptions don't crash the desktop app silently
 process.on('uncaughtException', (err) => {

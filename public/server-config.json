@@ -1,8 +1,8 @@
 {
   "name": "JUWEI WMS Central Cloud Production Server",
   "version": "1.0.0",
-  "centralServerUrl": "https://ais-dev-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app",
-  "centralServerHost": "ais-dev-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app",
+  "centralServerUrl": "https://ais-pre-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app",
+  "centralServerHost": "ais-pre-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app",
   "defaultAccount": "ACC-JUWEI",
   "defaultWarehouse": "WH-MAIN",
   "notes": "Every installed client on any computer automatically connects to this central server and central database."

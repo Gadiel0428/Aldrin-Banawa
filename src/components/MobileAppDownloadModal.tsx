@@ -19,6 +19,7 @@ import {
   CheckCircle2
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import { toPublicCloudUrl } from '../config/serverConfig';
 
 interface MobileAppDownloadModalProps {
   isOpen: boolean;
@@ -70,7 +71,8 @@ export default function MobileAppDownloadModal({
     };
   }, [onFreshInstallSync]);
 
-  const currentUrl = typeof window !== 'undefined' ? window.location.origin : '';
+  const rawOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+  const currentUrl = toPublicCloudUrl(rawOrigin);
   const isHttps = typeof window !== 'undefined' ? window.location.protocol === 'https:' : true;
 
   const handleInstallClick = async () => {

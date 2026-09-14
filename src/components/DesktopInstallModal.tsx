@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Monitor, Download, X, ShieldCheck, Cpu, FileCode2 } from 'lucide-react';
-import { getCentralServerUrl } from '../config/serverConfig';
+import { getCentralServerUrl, toPublicCloudUrl } from '../config/serverConfig';
 
 interface DesktopInstallModalProps {
   isOpen: boolean;
@@ -13,7 +13,8 @@ export default function DesktopInstallModal({ isOpen, onClose }: DesktopInstallM
 
   const getAppUrl = () => {
     const centralUrl = getCentralServerUrl();
-    return centralUrl.endsWith('/') ? centralUrl : `${centralUrl}/`;
+    const publicUrl = toPublicCloudUrl(centralUrl);
+    return publicUrl.endsWith('/') ? publicUrl : `${publicUrl}/`;
   };
 
   // 1. Download 1-Click Windows BAT Installer (Works 100% on any Windows PC without PowerShell ExecutionPolicy restrictions)
