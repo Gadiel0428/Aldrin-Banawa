@@ -10,19 +10,9 @@
  * or a local database for production synchronization.
  */
 
-// Authoritative Cloud Production URL (Public Shared Production URL - No Google/Gmail auth required)
-export const DEFAULT_PRODUCTION_SERVER_HOST = 'ais-pre-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app';
+// Authoritative Cloud Production URL
+export const DEFAULT_PRODUCTION_SERVER_HOST = 'ais-dev-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app';
 export const DEFAULT_PRODUCTION_SERVER_URL = `https://${DEFAULT_PRODUCTION_SERVER_HOST}`;
-
-/**
- * Ensures a server URL points to the public shared endpoint (ais-pre-...)
- * rather than the private development sandbox (ais-dev-...), preventing
- * Google/Gmail sign-in prompts on external workstations and terminals.
- */
-export function toPublicCloudUrl(url: string): string {
-  if (!url) return DEFAULT_PRODUCTION_SERVER_URL;
-  return url.replace(/ais-dev-([a-z0-9]+)/gi, 'ais-pre-$1');
-}
 
 /**
  * Returns whether a given host or address is a forbidden local address
@@ -157,7 +147,7 @@ export function getCentralServerHost(): string {
 }
 
 /**
- * Returns the Base API URL (e.g. https://ais-pre-...run.app)
+ * Returns the Base API URL (e.g. https://ais-dev-...run.app)
  */
 export function getApiBaseUrl(): string {
   return getCentralServerUrl();

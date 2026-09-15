@@ -240,21 +240,6 @@ export default function App() {
   const [currentPermission, setCurrentPermission] = useState<string>(() => {
     try { return localStorage.getItem('juwei_wms_userPermission') || 'LIMITED_ACCESS'; } catch (e) { return 'LIMITED_ACCESS'; }
   });
-  const [serverInstanceId, setServerInstanceId] = useState<string | null>(null);
-
-  const updateCurrentPermission = (value: string) => {
-    setCurrentPermission(value);
-    try {
-      localStorage.setItem('juwei_wms_userPermission', value);
-    } catch (e) {}
-  };
-
-  const updateCurrentRole = (value: string) => {
-    setCurrentRole(value);
-    try {
-      localStorage.setItem('juwei_wms_userRole', value);
-    } catch (e) {}
-  };
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
     try {
       const stored = localStorage.getItem('juwei_wms_isLoggedIn');
@@ -632,8 +617,8 @@ export default function App() {
             if (user && user.employeeId) {
               setRegisteredUsers(prev => upsertUserInState(prev, user));
               if ((currentEmployeeId || '').toUpperCase() === (user.employeeId || '').toUpperCase()) {
-                if (user.role) updateCurrentRole(user.role);
-                if (user.permission) updateCurrentPermission(user.permission);
+                if (user.role) setCurrentRole(user.role);
+                if (user.permission) setCurrentPermission(user.permission);
                 if (user.username) setCurrentUser(user.username);
               }
               if (author && author !== (currentUser || '')) {
@@ -887,10 +872,12 @@ export default function App() {
     if (currentRecord) {
       // Update role / permissions if modified by Super Admin
       if (currentRecord.permission && currentRecord.permission !== currentPermission) {
-        updateCurrentPermission(currentRecord.permission);
+        setCurrentPermission(currentRecord.permission);
+        localStorage.setItem('juwei_wms_userPermission', currentRecord.permission);
       }
       if (currentRecord.role && currentRecord.role !== currentRole) {
-        updateCurrentRole(currentRecord.role);
+        setCurrentRole(currentRecord.role);
+        localStorage.setItem('juwei_wms_userRole', currentRecord.role);
       }
       if (currentRecord.username && currentRecord.username !== currentUser) {
         setCurrentUser(currentRecord.username);
@@ -2376,9 +2363,6 @@ export default function App() {
         if (!isMounted) return;
         try {
           const payload = JSON.parse(event.data);
-          if (payload.serverInstanceId) {
-            setServerInstanceId(payload.serverInstanceId);
-          }
           if (payload.type === 'pong') {
             missedPongs = 0;
             if (payload.clientPingTime) {
@@ -2677,8 +2661,8 @@ export default function App() {
               if (user && user.employeeId) {
                 setRegisteredUsers(prev => upsertUserInState(prev, user));
                 if ((currentEmployeeId || '').toUpperCase() === (user.employeeId || '').toUpperCase()) {
-                  if (user.role) updateCurrentRole(user.role);
-                  if (user.permission) updateCurrentPermission(user.permission);
+                  if (user.role) setCurrentRole(user.role);
+                  if (user.permission) setCurrentPermission(user.permission);
                   if (user.username) setCurrentUser(user.username);
                 }
                 if (user.username && user.employeeId !== (currentEmployeeId || '')) {
@@ -3422,9 +3406,9 @@ export default function App() {
     const nowIso = new Date().toISOString();
 
     setCurrentUser(cleanUsername);
-    updateCurrentRole(cleanRole);
+    setCurrentRole(cleanRole);
     setCurrentEmployeeId(cleanEmployeeId);
-    updateCurrentPermission(cleanPermission);
+    setCurrentPermission(cleanPermission);
     setIsLoggedIn(true);
 
     // Generate new unique authenticated session for this login
@@ -3500,9 +3484,9 @@ export default function App() {
     }
 
     setCurrentUser('');
-    updateCurrentRole('');
+    setCurrentRole('');
     setCurrentEmployeeId('');
-    updateCurrentPermission('LIMITED_ACCESS');
+    setCurrentPermission('LIMITED_ACCESS');
     setIsLoggedIn(false);
     try {
       localStorage.removeItem('juwei_wms_isLoggedIn');
@@ -5121,7 +5105,6 @@ export default function App() {
           lastSyncedTime={lastSyncedTime}
           onForceSync={handleManualSync}
           isManualSyncing={isManualSyncing}
-          serverInstanceId={serverInstanceId}
         />
       )}
 

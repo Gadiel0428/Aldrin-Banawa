@@ -235,6 +235,17 @@ async function startServer() {
         systemResetBy,
         stateRevision,
         state,
+        stocks: state.stocks || [],
+        receiving: state.receiving || [],
+        returns: state.returns || [],
+        recycling: state.recycling || [],
+        issuances: state.issuances || [],
+        deliveries: state.deliveries || [],
+        envLogs: state.envLogs || [],
+        forkliftChecks: state.forkliftChecks || [],
+        registries: state.registries || [],
+        registeredUsers: state.registeredUsers || [],
+        stockMovements: state.stockMovements || [],
         authorizedDevices: Array.from(authorizedDevicesMap.values()),
         deletedRecordTombstones: Array.from(deletedRecordTombstones),
         deletedUserTombstones: Array.from(deletedUserTombstones),
@@ -264,8 +275,19 @@ async function startServer() {
           systemResetBy,
           stateRevision,
           state,
+          stocks: state.stocks || [],
+          receiving: state.receiving || [],
+          returns: state.returns || [],
+          recycling: state.recycling || [],
+          issuances: state.issuances || [],
+          deliveries: state.deliveries || [],
+          envLogs: state.envLogs || [],
+          forkliftChecks: state.forkliftChecks || [],
+          registries: state.registries || [],
+          registeredUsers: state.registeredUsers || [],
+          stockMovements: state.stockMovements || [],
           authorizedDevices: Array.from(authorizedDevicesMap.values())
-        }), "utf-8");
+        }, null, 2), "utf-8");
         return true;
       } catch (fallbackErr) {
         console.error("CRITICAL: Direct database write fallback also failed:", fallbackErr);
@@ -304,6 +326,11 @@ async function startServer() {
                 (state as any)[key] = parsed.state[key].map((rec: any) => normalizeRecord(rec));
               }
             });
+          }
+          for (const key of Object.keys(state)) {
+            if (Array.isArray(parsed[key]) && (!(parsed.state && key in parsed.state))) {
+              (state as any)[key] = parsed[key].map((rec: any) => normalizeRecord(rec));
+            }
           }
 
           if (Array.isArray(parsed.deletedRecordTombstones)) {
@@ -487,6 +514,39 @@ async function startServer() {
       }
     }
 
+    // Always include sockets assigned to ALL / GLOBAL or with administrative authority
+    for (const globalWh of ["ALL", "GLOBAL"]) {
+      const gSet = warehouseRooms.get(globalWh);
+      if (gSet) {
+        for (const s of gSet) {
+          if (s && s.readyState === WebSocket.OPEN) {
+            matchingSockets.add(s);
+          }
+        }
+      }
+    }
+    for (const globalAcc of ["ALL", "GLOBAL"]) {
+      const gSet = accountRooms.get(globalAcc);
+      if (gSet) {
+        for (const s of gSet) {
+          if (s && s.readyState === WebSocket.OPEN) {
+            matchingSockets.add(s);
+          }
+        }
+      }
+    }
+    for (const client of wss.clients) {
+      if (client && client.readyState === WebSocket.OPEN) {
+        const connId = socketToConnectionId.get(client);
+        if (connId) {
+          const conn = connectionRegistry.get(connId);
+          if (conn && (conn.permission === 'FULL_ACCESS' || (conn.employeeId || '').toUpperCase() === 'JPMP-002' || conn.role === 'SUPER ADMINISTRATOR')) {
+            matchingSockets.add(client);
+          }
+        }
+      }
+    }
+
     return matchingSockets;
   }
 
@@ -520,6 +580,8 @@ async function startServer() {
     user_id?: string;
     device_id?: string;
     timestamp?: string;
+    isCreation?: boolean;
+    isDelete?: boolean;
     excludeSocket?: WebSocket;
   }) {
     const targetAccountId = normalizeGroupId(event.accountId || event.record?.accountId || event.record?.account_id, "ACC-JUWEI");
@@ -528,6 +590,7 @@ async function startServer() {
     // Query updated inventory from central database
     const updatedInventory = queryDatabaseInventory(targetAccountId, targetWarehouseId);
     const eventTime = event.timestamp || new Date().toISOString();
+    const recordId = event.record?.id || event.record?.record_id;
 
     const payloadObj = {
       type: event.type,
@@ -537,6 +600,8 @@ async function startServer() {
       stocks: updatedInventory,
       collection: event.collection || 'stocks',
       record: event.record,
+      id: recordId,
+      record_id: recordId,
       movement: event.movement,
       actionDesc: event.actionDesc || `Inventory event: ${event.type}`,
       author: event.author || 'Operator',
@@ -556,17 +621,123 @@ async function startServer() {
       systemResetVersion
     });
 
-    const legacyUpsertMsg = event.record ? JSON.stringify({
-      type: event.record._isNew ? "DATA_CREATE" : "DATA_UPDATE",
-      collection: event.collection || "stocks",
-      record: event.record,
-      id: event.record.id,
-      record_id: event.record.record_id || event.record.id,
-      author: event.author || "Operator",
-      timestamp: eventTime,
-      systemResetVersion,
-      systemResetId
-    }) : null;
+    const messagesToSend: string[] = [payloadString, legacyCollectionMsg];
+
+    if (event.isDelete) {
+      messagesToSend.push(JSON.stringify({
+        type: "DATA_DELETE",
+        collection: event.collection || "stocks",
+        id: recordId,
+        record_id: recordId,
+        author: event.author || "Operator",
+        user_id: event.user_id,
+        device_id: event.device_id,
+        actionDesc: event.actionDesc || `Deleted ${event.collection || 'stocks'} record`,
+        timestamp: eventTime,
+        systemResetVersion,
+        systemResetId
+      }));
+      messagesToSend.push(JSON.stringify({
+        type: "RECORD_DELETED",
+        collection: event.collection || "stocks",
+        id: recordId,
+        record_id: recordId,
+        author: event.author || "Operator",
+        user_id: event.user_id,
+        device_id: event.device_id,
+        timestamp: eventTime,
+        systemResetVersion,
+        systemResetId
+      }));
+      messagesToSend.push(JSON.stringify({
+        type: "record_deleted",
+        collection: event.collection || "stocks",
+        id: recordId,
+        systemResetVersion
+      }));
+    } else if (event.isCreation || event.record?._isNew) {
+      messagesToSend.push(JSON.stringify({
+        type: "DATA_CREATE",
+        collection: event.collection || "stocks",
+        record: event.record,
+        id: recordId,
+        record_id: recordId,
+        author: event.author || "Operator",
+        user_id: event.user_id,
+        device_id: event.device_id,
+        actionDesc: event.actionDesc || `Created ${event.collection || 'stocks'} record`,
+        timestamp: eventTime,
+        systemResetVersion,
+        systemResetId
+      }));
+      messagesToSend.push(JSON.stringify({
+        type: "RECORD_CREATED",
+        collection: event.collection || "stocks",
+        record: event.record,
+        id: recordId,
+        record_id: recordId,
+        author: event.author || "Operator",
+        user_id: event.user_id,
+        device_id: event.device_id,
+        timestamp: eventTime,
+        systemResetVersion,
+        systemResetId
+      }));
+      messagesToSend.push(JSON.stringify({
+        type: "record_upserted",
+        collection: event.collection || "stocks",
+        record: event.record,
+        id: recordId,
+        systemResetVersion
+      }));
+    } else if (event.record) {
+      messagesToSend.push(JSON.stringify({
+        type: "DATA_UPDATE",
+        collection: event.collection || "stocks",
+        record: event.record,
+        id: recordId,
+        record_id: recordId,
+        author: event.author || "Operator",
+        user_id: event.user_id,
+        device_id: event.device_id,
+        actionDesc: event.actionDesc || `Updated ${event.collection || 'stocks'} record`,
+        timestamp: eventTime,
+        systemResetVersion,
+        systemResetId
+      }));
+      messagesToSend.push(JSON.stringify({
+        type: "RECORD_UPDATED",
+        collection: event.collection || "stocks",
+        record: event.record,
+        id: recordId,
+        record_id: recordId,
+        author: event.author || "Operator",
+        user_id: event.user_id,
+        device_id: event.device_id,
+        timestamp: eventTime,
+        systemResetVersion,
+        systemResetId
+      }));
+      messagesToSend.push(JSON.stringify({
+        type: "record_upserted",
+        collection: event.collection || "stocks",
+        record: event.record,
+        id: recordId,
+        systemResetVersion
+      }));
+    }
+
+    if (event.movement) {
+      messagesToSend.push(JSON.stringify({
+        type: "stock_movement_created",
+        movement: event.movement,
+        stock: event.record,
+        stocks: updatedInventory,
+        warehouseId: targetWarehouseId,
+        accountId: targetAccountId,
+        systemResetVersion
+      }));
+    }
 
     // STRICTLY find all active connections matching that same accountId and warehouseId
     const targetSockets = getSocketsInGroup({ accountId: targetAccountId, warehouseId: targetWarehouseId });
@@ -575,19 +746,8 @@ async function startServer() {
     for (const client of targetSockets) {
       if (client && client.readyState === WebSocket.OPEN && client !== event.excludeSocket) {
         try {
-          client.send(payloadString);
-          client.send(legacyCollectionMsg);
-          if (legacyUpsertMsg) client.send(legacyUpsertMsg);
-          if (event.movement) {
-            client.send(JSON.stringify({
-              type: "stock_movement_created",
-              movement: event.movement,
-              stock: event.record,
-              stocks: updatedInventory,
-              warehouseId: targetWarehouseId,
-              accountId: targetAccountId,
-              systemResetVersion
-            }));
+          for (const msg of messagesToSend) {
+            client.send(msg);
           }
         } catch (sendErr) {
           console.warn("WebSocket client send warning in inventory room:", sendErr);
@@ -595,7 +755,7 @@ async function startServer() {
       }
     }
 
-    console.log(`[INVENTORY-BROADCAST] [${event.type}] Dispatched to ${targetSockets.size} active sockets in Room [${targetAccountId}:${targetWarehouseId}]`);
+    console.log(`[INVENTORY-BROADCAST] [${event.type}] Dispatched ${messagesToSend.length} messages to ${targetSockets.size} active sockets in Room [${targetAccountId}:${targetWarehouseId}]`);
   }
 
   // Helper metrics calculated directly from the server-side registry
@@ -854,6 +1014,7 @@ async function startServer() {
         device_id: effectiveDeviceId,
         actionDesc: actionDesc || `${isCreation ? 'Created' : 'Updated'} ${collection} record`,
         timestamp: serverTime,
+        isCreation,
         excludeSocket
       });
     } else {
@@ -991,50 +1152,52 @@ async function startServer() {
         device_id: effectiveDeviceId,
         actionDesc: actionDesc || `Deleted ${collection} record`,
         timestamp: serverTime,
+        isDelete: true,
         excludeSocket
       });
-    } else {
-      broadcast({
-        type: "DATA_DELETE",
-        collection,
-        id: recordId,
-        record_id: recordId,
-        author: author || employeeId || "Operator",
-        user_id: effectiveUserId,
-        device_id: effectiveDeviceId,
-        actionDesc: actionDesc || `Deleted ${collection} record`,
-        timestamp: serverTime,
-        systemResetVersion,
-        systemResetId
-      }, excludeSocket);
-
-      broadcast({
-        type: "RECORD_DELETED",
-        collection,
-        id: recordId,
-        record_id: recordId,
-        author: author || employeeId || "Operator",
-        user_id: effectiveUserId,
-        device_id: effectiveDeviceId,
-        timestamp: serverTime,
-        systemResetVersion,
-        systemResetId
-      }, excludeSocket);
-
-      broadcast({
-        type: "record_deleted",
-        collection,
-        id: recordId,
-        systemResetVersion
-      }, excludeSocket);
-
-      broadcast({
-        type: "collection_updated",
-        collection,
-        data: (state as any)[collection],
-        systemResetVersion
-      }, excludeSocket);
     }
+
+    // Always broadcast DATA_DELETE, RECORD_DELETED, and collection_updated globally
+    broadcast({
+      type: "DATA_DELETE",
+      collection,
+      id: recordId,
+      record_id: recordId,
+      author: author || employeeId || "Operator",
+      user_id: effectiveUserId,
+      device_id: effectiveDeviceId,
+      actionDesc: actionDesc || `Deleted ${collection} record`,
+      timestamp: serverTime,
+      systemResetVersion,
+      systemResetId
+    }, excludeSocket);
+
+    broadcast({
+      type: "RECORD_DELETED",
+      collection,
+      id: recordId,
+      record_id: recordId,
+      author: author || employeeId || "Operator",
+      user_id: effectiveUserId,
+      device_id: effectiveDeviceId,
+      timestamp: serverTime,
+      systemResetVersion,
+      systemResetId
+    }, excludeSocket);
+
+    broadcast({
+      type: "record_deleted",
+      collection,
+      id: recordId,
+      systemResetVersion
+    }, excludeSocket);
+
+    broadcast({
+      type: "collection_updated",
+      collection,
+      data: (state as any)[collection],
+      systemResetVersion
+    }, excludeSocket);
 
     return {
       success: true,
@@ -1713,7 +1876,8 @@ async function startServer() {
               actionDesc: payload.actionDesc,
               expectedVersion: payload.expectedVersion,
               reset_version: clientResetVersion,
-              userPermission: conn?.permission
+              userPermission: conn?.permission,
+              excludeSocket: ws
             });
 
             if (!upsertRes.success) {
@@ -1761,7 +1925,8 @@ async function startServer() {
               device_id: payload.device_id || conn?.deviceId,
               actionDesc: payload.actionDesc,
               reset_version: clientResetVersion,
-              userPermission: conn?.permission
+              userPermission: conn?.permission,
+              excludeSocket: ws
             });
 
             if (!deleteRes.success) {
@@ -2092,6 +2257,7 @@ async function startServer() {
             username: conn.username,
             role: conn.role,
             platform: conn.platform,
+            connection: conn,
             systemResetVersion
           });
 
@@ -3375,15 +3541,7 @@ async function startServer() {
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`JUWEI WAREHOUSE MANAGEMENT SYSTEM Central Real-time Server listening on http://0.0.0.0:${PORT}`);
     console.log(`[SERVER STARTUP] Instance ID: ${SERVER_INSTANCE_ID} | Boot Time: ${SERVER_BOOT_TIME} | PID: ${process.pid}`);
-    const isInsideSourceDir = path.resolve(DATA_FILE).startsWith(path.resolve(process.cwd()));
-    if (!process.env.JUWEI_DATA_DIR && isInsideSourceDir) {
-      console.error("\n" + "!".repeat(78));
-      console.error("⚠️  CRITICAL PERSISTENCE WARNING: NO PERSISTENT VOLUME CONFIGURED! ⚠️");
-      console.error(`JUWEI_DATA_DIR is unset and resolved DATA_FILE (${DATA_FILE}) is inside the project source directory.`);
-      console.error("Data will NOT survive redeploys or server restarts!");
-      console.error("A persistent disk must be attached with JUWEI_DATA_DIR pointing to it to retain data.");
-      console.error("!".repeat(78) + "\n");
-    } else if (!process.env.JUWEI_DATA_DIR) {
+    if (!process.env.JUWEI_DATA_DIR) {
       console.warn(`[SERVER WARNING] JUWEI_DATA_DIR is not set. Database file (${DATA_FILE}) is stored on ephemeral local disk and won't be shared across multiple server instances.`);
     }
   });

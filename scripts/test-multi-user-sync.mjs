@@ -125,12 +125,13 @@ async function runTest() {
 
   const presenceRes = await fetch(`${API_URL}/api/presence`);
   const presenceJson = await presenceRes.json();
-  console.log(` -> Total Connected Terminals: ${presenceJson.liveActiveTerminals}`);
+  const initialTerminals = presenceJson.liveActiveTerminals;
+  console.log(` -> Total Connected Terminals: ${initialTerminals}`);
   console.log(` -> Total Active Operators: ${presenceJson.connectedOperators}`);
   console.log(' -> Active Presence List:', presenceJson.presence.map(p => `${p.username} [${p.platform}] (${p.connection_id})`));
 
-  if (presenceJson.liveActiveTerminals < 5) {
-    throw new Error(`Expected at least 5 active terminals, got ${presenceJson.liveActiveTerminals}`);
+  if (initialTerminals < 5) {
+    throw new Error(`Expected at least 5 active terminals, got ${initialTerminals}`);
   }
   console.log(' [PASS] All 5 terminals registered and tracked simultaneously without collision!');
 
@@ -259,9 +260,10 @@ async function runTest() {
 
   const postOfflineRes = await fetch(`${API_URL}/api/presence`);
   const postOfflineJson = await postOfflineRes.json();
-  console.log(` -> Remaining Connected Terminals: ${postOfflineJson.liveActiveTerminals} (Expected: 4)`);
-  if (postOfflineJson.liveActiveTerminals !== 4) {
-    throw new Error(`Expected exactly 4 active terminals, got ${postOfflineJson.liveActiveTerminals}`);
+  const expectedRemaining = initialTerminals - 1;
+  console.log(` -> Remaining Connected Terminals: ${postOfflineJson.liveActiveTerminals} (Expected: ${expectedRemaining})`);
+  if (postOfflineJson.liveActiveTerminals !== expectedRemaining) {
+    throw new Error(`Expected exactly ${expectedRemaining} active terminals, got ${postOfflineJson.liveActiveTerminals}`);
   }
   console.log(' [PASS] Connection cleanup and USER_OFFLINE broadcast verified!');
 

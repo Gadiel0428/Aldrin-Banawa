@@ -15,7 +15,6 @@ interface ActiveUsersModalProps {
   lastSyncedTime: Date;
   onForceSync: () => void;
   isManualSyncing: boolean;
-  serverInstanceId?: string | null;
 }
 
 const VIEW_LABELS: Record<string, string> = {
@@ -45,8 +44,7 @@ export default function ActiveUsersModal({
   wsLatency,
   lastSyncedTime,
   onForceSync,
-  isManualSyncing,
-  serverInstanceId
+  isManualSyncing
 }: ActiveUsersModalProps) {
   const totalOnline = Math.max(1, activePresence.length, activeUsers.length);
 
@@ -96,46 +94,33 @@ export default function ActiveUsersModal({
             </div>
 
             {/* Sync & Health Metrics Panel */}
-            <div className="p-4 bg-slate-950/40 border-b border-slate-800 space-y-2.5 text-xs">
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                <div className="bg-slate-800/60 border border-slate-700/60 p-2.5 rounded-xl">
-                  <div className="text-[10px] text-slate-400 uppercase font-mono font-bold flex items-center gap-1">
-                    <Radio className="h-3 w-3 text-emerald-400" /> WebSocket
-                  </div>
-                  <div className="font-bold text-white mt-1 flex items-center gap-1.5 font-mono">
-                    <span className={`w-2 h-2 rounded-full ${connectionStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
-                    <span>{connectionStatus === 'connected' ? `${wsLatency !== null ? `${wsLatency}ms` : 'Active'}` : 'Offline'}</span>
-                  </div>
+            <div className="p-4 bg-slate-950/40 border-b border-slate-800 grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
+              <div className="bg-slate-800/60 border border-slate-700/60 p-2.5 rounded-xl">
+                <div className="text-[10px] text-slate-400 uppercase font-mono font-bold flex items-center gap-1">
+                  <Radio className="h-3 w-3 text-emerald-400" /> WebSocket
                 </div>
-
-                <div className="bg-slate-800/60 border border-slate-700/60 p-2.5 rounded-xl">
-                  <div className="text-[10px] text-slate-400 uppercase font-mono font-bold flex items-center gap-1">
-                    <Server className="h-3 w-3 text-blue-400" /> Central Database
-                  </div>
-                  <div className="font-bold text-white mt-1 flex items-center gap-1.5 font-mono">
-                    <span className={`w-2 h-2 rounded-full ${databaseStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
-                    <span>{databaseStatus === 'connected' ? 'Authoritative DB' : 'Offline'}</span>
-                  </div>
-                </div>
-
-                <div className="bg-slate-800/60 border border-slate-700/60 p-2.5 rounded-xl col-span-2 sm:col-span-1">
-                  <div className="text-[10px] text-slate-400 uppercase font-mono font-bold flex items-center gap-1">
-                    <Clock className="h-3 w-3 text-indigo-400" /> Last Sync
-                  </div>
-                  <div className="font-bold text-white mt-1 text-[11px] font-mono truncate">
-                    {lastSyncedTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                  </div>
+                <div className="font-bold text-white mt-1 flex items-center gap-1.5 font-mono">
+                  <span className={`w-2 h-2 rounded-full ${connectionStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
+                  <span>{connectionStatus === 'connected' ? `${wsLatency !== null ? `${wsLatency}ms` : 'Active'}` : 'Offline'}</span>
                 </div>
               </div>
 
-              {/* Server Instance ID Metric */}
-              <div className="bg-slate-800/50 border border-slate-700/60 px-3 py-2 rounded-xl flex items-center justify-between font-mono">
-                <div className="flex items-center gap-1.5 text-slate-400 text-[10px] uppercase font-bold">
-                  <Activity className="h-3 w-3 text-amber-400 shrink-0" />
-                  <span>Server Instance ID:</span>
+              <div className="bg-slate-800/60 border border-slate-700/60 p-2.5 rounded-xl">
+                <div className="text-[10px] text-slate-400 uppercase font-mono font-bold flex items-center gap-1">
+                  <Server className="h-3 w-3 text-blue-400" /> Central Database
                 </div>
-                <div className="text-amber-300 text-[11px] font-mono truncate max-w-[220px] sm:max-w-[280px]" title={serverInstanceId || 'Connecting to server...'}>
-                  {serverInstanceId || 'Connecting to server...'}
+                <div className="font-bold text-white mt-1 flex items-center gap-1.5 font-mono">
+                  <span className={`w-2 h-2 rounded-full ${databaseStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+                  <span>{databaseStatus === 'connected' ? 'Authoritative DB' : 'Offline'}</span>
+                </div>
+              </div>
+
+              <div className="bg-slate-800/60 border border-slate-700/60 p-2.5 rounded-xl col-span-2 sm:col-span-1">
+                <div className="text-[10px] text-slate-400 uppercase font-mono font-bold flex items-center gap-1">
+                  <Clock className="h-3 w-3 text-indigo-400" /> Last Sync
+                </div>
+                <div className="font-bold text-white mt-1 text-[11px] font-mono truncate">
+                  {lastSyncedTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                 </div>
               </div>
             </div>

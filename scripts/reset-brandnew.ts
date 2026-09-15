@@ -54,8 +54,10 @@ async function resetAllData() {
     systemResetBy: "ALDRIN BANAWA (SUPER ADMINISTRATOR)"
   };
 
+  const CENTRAL_DB_FILE = path.join(process.cwd(), "central-database.json");
+  fs.writeFileSync(CENTRAL_DB_FILE, JSON.stringify(brandNewStore, null, 2), "utf-8");
   fs.writeFileSync(DATA_FILE, JSON.stringify(brandNewStore, null, 2), "utf-8");
-  console.log("data-store.json successfully reset to factory brand-new state.");
+  console.log("central-database.json and data-store.json successfully reset to factory brand-new state.");
 }
 
 resetAllData().then(() => {

@@ -1,0 +1,46 @@
+{
+  "state": {
+    "stocks": [],
+    "receiving": [],
+    "returns": [],
+    "recycling": [],
+    "issuances": [],
+    "deliveries": [],
+    "envLogs": [],
+    "forkliftChecks": [],
+    "registries": [],
+    "stockMovements": [],
+    "registeredUsers": [
+      {
+        "id": "USR-JPMP-002",
+        "employeeId": "JPMP-002",
+        "username": "ALDRIN BANAWA",
+        "role": "SUPER ADMINISTRATOR",
+        "phoneNumber": "+639669858846",
+        "permission": "FULL_ACCESS",
+        "pin": "0423",
+        "status": "ACTIVE",
+        "registeredBy": "SYSTEM",
+        "registeredBySuperAdmin": true,
+        "registeredAt": "2026-09-15T01:52:35.337Z",
+        "version": 1,
+        "updated_at": "2026-09-15T01:52:35.337Z",
+        "reset_version": 1
+      }
+    ]
+  },
+  "chatMessages": [
+    {
+      "id": "sys-init",
+      "sender": "SYSTEM SECURITY AUDIT",
+      "text": "JUWEI WAREHOUSE MANAGEMENT SYSTEM ISO 9001:2015 Central Real-time Database Initialized.",
+      "timestamp": "2026-09-15T01:52:35.337Z",
+      "isSystem": true
+    }
+  ],
+  "stateRevision": 1,
+  "systemResetVersion": 1,
+  "systemResetTimestamp": "2026-09-15T01:52:35.337Z",
+  "systemResetId": "INIT-1789437155338",
+  "systemResetBy": "ALDRIN BANAWA (SUPER ADMINISTRATOR)"
+}
