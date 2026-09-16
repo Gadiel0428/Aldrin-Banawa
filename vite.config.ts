@@ -4,8 +4,12 @@ import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
+  const buildTimestamp = Date.now();
   return {
     base: './',
+    define: {
+      __BUILD_ID__: JSON.stringify(buildTimestamp),
+    },
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

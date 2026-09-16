@@ -119,6 +119,7 @@ import EnvironmentalModule from './components/EnvironmentalModule';
 import RegisteredAccountsModule from './components/RegisteredAccountsModule';
 import MasterRegistryModule, { DEFAULT_MASTER_REGISTRIES } from './components/MasterRegistryModule';
 import OnlineUpdatePromptModal, { PendingOnlineUpdate } from './components/OnlineUpdatePromptModal';
+import VersionUpdateBanner from './components/VersionUpdateBanner';
 
 import {
   DEFAULT_PRODUCTION_SERVER_HOST,
@@ -343,6 +344,10 @@ export default function App() {
   const [liveSyncToast, setLiveSyncToast] = useState<{ id: string; author: string; action: string; time: string } | null>(null);
   const [showActiveUsersModal, setShowActiveUsersModal] = useState<boolean>(false);
   const [pendingOnlineUpdates, setPendingOnlineUpdates] = useState<PendingOnlineUpdate[]>([]);
+  const [updateAvailable, setUpdateAvailable] = useState<boolean>(false);
+  const [bannerDismissed, setBannerDismissed] = useState<boolean>(false);
+  const [newVersionString, setNewVersionString] = useState<string>('');
+  const updateAvailableRef = useRef<boolean>(false);
 
   // Cross-tab zero-latency synchronization channel
   const syncChannelRef = useRef<BroadcastChannel | null>(null);
@@ -1812,6 +1817,11 @@ export default function App() {
     lastMutationTimes.current[collection] = Date.now();
     setLastSyncedTime(new Date());
 
+    // If an application update is available and user previously clicked 'Later', gently re-surface notification
+    if (updateAvailableRef.current) {
+      setBannerDismissed(false);
+    }
+
     // Queue for offline resilience
     queueOfflineMutation({
       type: 'upsert',
@@ -2246,7 +2256,58 @@ export default function App() {
       } catch (e) {}
     };
 
+    const checkBuildVersion = async () => {
+      // Do NOT re-check or re-trigger once updateAvailable is already true
+      if (updateAvailableRef.current) return;
+
+      try {
+        const clientBuildId = typeof __BUILD_ID__ !== 'undefined' ? String(__BUILD_ID__) : '';
+        // If client bundle does not have a valid __BUILD_ID__, skip comparison
+        if (!clientBuildId || clientBuildId === '0') return;
+
+        const endpoints = [
+          '/api/build-info',
+          '/build-info.json'
+        ];
+
+        for (const ep of endpoints) {
+          try {
+            const res = await fetch(ep, {
+              method: 'GET',
+              cache: 'no-store',
+              headers: { 'Accept': 'application/json' }
+            });
+            if (res.ok) {
+              const data = await res.json();
+              const serverBuildId = data?.buildId != null ? String(data.buildId) : '';
+              // If server returns fallback or empty, don't trigger false positive
+              if (!serverBuildId || serverBuildId === '0' || data?.isDevelopmentFallback) {
+                break;
+              }
+
+              if (serverBuildId !== clientBuildId) {
+                console.log(`[JUWEI WMS UPDATE] New version detected! Client __BUILD_ID__: ${clientBuildId}, Server buildId: ${serverBuildId}`);
+                updateAvailableRef.current = true;
+                setUpdateAvailable(true);
+                if (data.version) {
+                  setNewVersionString(String(data.version));
+                }
+                break;
+              }
+            }
+          } catch (fetchErr) {
+            // Quiet fallback
+          }
+        }
+      } catch (e) {
+        // Quiet fallback
+      }
+    };
+
     const runSyncCheck = async (): Promise<boolean> => {
+      // Check for newly deployed application build
+      checkBuildVersion();
+
       // 1. Authoritative Central Server Sync: every client strictly connects to the central cloud API
       const centralUrl = getCentralServerUrl();
       const centralOk = await tryFetchSync(`${centralUrl}/api/sync`);
@@ -4249,11 +4310,24 @@ export default function App() {
 
   if (!isLoggedIn) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-950 px-4 py-12 sm:px-6 lg:px-8 font-sans relative overflow-hidden" id="juwei-auth-container">
+      <div className="min-h-screen flex flex-col justify-center bg-slate-950 font-sans relative overflow-hidden" id="juwei-auth-container">
         {/* Soft Ambient Floating Glow Orbs for Authentic Frosted Diffusion */}
         <div className="glass-ambient-orb-1" />
         <div className="glass-ambient-orb-2" />
         <div className="glass-ambient-orb-3" />
+
+        {/* Dismissible Version Update Notification Banner */}
+        {updateAvailable && !bannerDismissed && (
+          <div className="fixed top-0 left-0 right-0 z-50">
+            <VersionUpdateBanner
+              onReload={() => window.location.reload()}
+              onLater={() => setBannerDismissed(true)}
+              newVersion={newVersionString}
+            />
+          </div>
+        )}
+
+        <div className="w-full flex items-center justify-center px-4 py-12 sm:px-6 lg:px-8">
 
         {/* NEWLY REGISTERED USER SECURE PIN DISCOVERY OVERLAY */}
         {newlyRegisteredUser && (
@@ -4618,6 +4692,7 @@ export default function App() {
           </div>
         )}
 
+        </div>
       </div>
     );
   }
@@ -4891,6 +4966,15 @@ export default function App() {
 
       {/* Main Content Pane */}
       <main className="flex-1 flex flex-col h-full min-w-0 bg-slate-50/70 z-10 relative overflow-hidden">
+        {/* Dismissible Version Update Notification Banner */}
+        {updateAvailable && !bannerDismissed && (
+          <VersionUpdateBanner
+            onReload={() => window.location.reload()}
+            onLater={() => setBannerDismissed(true)}
+            newVersion={newVersionString}
+          />
+        )}
+
         {/* Minimalist Frosted Glass Header Bar */}
         <header className="h-16 glass-header px-4 sm:px-6 lg:px-8 flex justify-between items-center shrink-0 z-20 sticky top-0">
           <div className="flex items-center gap-3 min-w-0">

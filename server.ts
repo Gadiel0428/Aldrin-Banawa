@@ -2306,6 +2306,36 @@ async function startServer() {
     });
   });
 
+  // REST API: Build Info for Live Application Updates
+  app.get(["/api/build-info", "/build-info.json"], (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+
+    const possiblePaths = [
+      path.join(process.cwd(), "dist", "build-info.json"),
+      path.join(__dirname, "dist", "build-info.json"),
+      path.join(__dirname, "build-info.json"),
+      path.join(process.cwd(), "build-info.json"),
+    ];
+
+    for (const p of possiblePaths) {
+      if (fs.existsSync(p)) {
+        try {
+          const content = JSON.parse(fs.readFileSync(p, "utf8"));
+          return res.json(content);
+        } catch (e) {}
+      }
+    }
+
+    // Dynamic fallback if running in dev mode or prior to write-build-info
+    return res.json({
+      buildId: 0,
+      version: "1.0.0",
+      isDevelopmentFallback: true
+    });
+  });
+
   // REST API: Health Check
   app.get("/api/health", (req, res) => {
     res.json({
