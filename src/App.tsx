@@ -118,6 +118,7 @@ import DeliveryModule from './components/DeliveryModule';
 import EnvironmentalModule from './components/EnvironmentalModule';
 import RegisteredAccountsModule from './components/RegisteredAccountsModule';
 import MasterRegistryModule, { DEFAULT_MASTER_REGISTRIES } from './components/MasterRegistryModule';
+import OnlineUpdatePromptModal, { PendingOnlineUpdate } from './components/OnlineUpdatePromptModal';
 
 import {
   DEFAULT_PRODUCTION_SERVER_HOST,
@@ -341,6 +342,7 @@ export default function App() {
   const [lastSyncedTime, setLastSyncedTime] = useState<Date>(new Date());
   const [liveSyncToast, setLiveSyncToast] = useState<{ id: string; author: string; action: string; time: string } | null>(null);
   const [showActiveUsersModal, setShowActiveUsersModal] = useState<boolean>(false);
+  const [pendingOnlineUpdates, setPendingOnlineUpdates] = useState<PendingOnlineUpdate[]>([]);
 
   // Cross-tab zero-latency synchronization channel
   const syncChannelRef = useRef<BroadcastChannel | null>(null);
@@ -2547,17 +2549,10 @@ export default function App() {
                 console.warn(`[JUWEI WMS] Discarding stale upsert from reset_version ${payload.systemResetVersion}`);
                 break;
               }
-              const { collection, record, author, actionDesc } = payload;
+              const { collection, record, author, actionDesc, employeeId, device_id, stationId } = payload;
               if (record && record.id && collection) {
                 setLastSyncedTime(new Date());
-                if (author && author !== (currentUser || '')) {
-                  setLiveSyncToast({
-                    id: record.id,
-                    author,
-                    action: actionDesc || `Updated ${collection} record`,
-                    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                  });
-                }
+
                 const updateFn = (prev: any[]) => {
                   if (isRecordDeletedLocally(record.id)) return prev;
                   const idx = prev.findIndex(it => it.id === record.id);
@@ -2569,16 +2564,59 @@ export default function App() {
                   }
                   return [record, ...prev];
                 };
-                switch (collection) {
-                  case 'stocks': setStocks(updateFn); break;
-                  case 'receiving': setReceiving(updateFn); break;
-                  case 'returns': setReturns(updateFn); break;
-                  case 'recycling': setRecycling(updateFn); break;
-                  case 'issuances': setIssuances(updateFn); break;
-                  case 'deliveries': setDeliveries(updateFn); break;
-                  case 'envLogs': setEnvLogs(updateFn); break;
-                  case 'forkliftChecks': setForkliftChecks(updateFn); break;
-                  case 'registries': setRegistries(updateFn); break;
+
+                const applyChange = () => {
+                  switch (collection) {
+                    case 'stocks': setStocks(updateFn); break;
+                    case 'receiving': setReceiving(updateFn); break;
+                    case 'returns': setReturns(updateFn); break;
+                    case 'recycling': setRecycling(updateFn); break;
+                    case 'issuances': setIssuances(updateFn); break;
+                    case 'deliveries': setDeliveries(updateFn); break;
+                    case 'envLogs': setEnvLogs(updateFn); break;
+                    case 'forkliftChecks': setForkliftChecks(updateFn); break;
+                    case 'registries': setRegistries(updateFn); break;
+                  }
+                };
+
+                // Apply state update in the background for consistency
+                applyChange();
+
+                // If modified by another user/workstation, prompt the operator with the online update prompt modal
+                const isFromOtherUser = author && author.toUpperCase() !== (currentUser || '').toUpperCase();
+                if (isFromOtherUser) {
+                  const updateId = `upd-${record.id}-${Date.now()}`;
+                  const promptItem: PendingOnlineUpdate = {
+                    id: updateId,
+                    type: (payload.type === 'DATA_CREATE' || payload.type === 'RECORD_CREATED') ? 'DATA_CREATE' : 'DATA_UPDATE',
+                    collection,
+                    record,
+                    recordId: record.id,
+                    author: author || 'Connected Operator',
+                    employeeId,
+                    device_id,
+                    stationId,
+                    actionDesc: actionDesc || `Modified ${collection} record (${record.partCode || record.id})`,
+                    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+                    systemResetVersion: Number(payload.systemResetVersion) || currentResetVer,
+                    applyUpdate: applyChange,
+                    dismissUpdate: () => {
+                      setPendingOnlineUpdates(prev => prev.filter(u => u.id !== updateId));
+                    }
+                  };
+
+                  setPendingOnlineUpdates(prev => {
+                    // Prevent duplicate prompts for exact same record
+                    const filtered = prev.filter(p => p.recordId !== record.id);
+                    return [promptItem, ...filtered];
+                  });
+
+                  setLiveSyncToast({
+                    id: record.id,
+                    author,
+                    action: actionDesc || `Updated ${collection} record`,
+                    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                  });
                 }
               }
               break;
@@ -2602,21 +2640,60 @@ export default function App() {
                 console.warn(`[JUWEI WMS] Discarding stale delete from reset_version ${payload.systemResetVersion}`);
                 break;
               }
-              const { collection, id } = payload;
+              const { collection, id, author, actionDesc, employeeId, device_id, stationId } = payload;
               if (id && collection) {
                 markRecordAsDeletedLocally(id);
                 setLastSyncedTime(new Date());
                 const filterFn = (prev: any[]) => prev.filter(it => it.id !== id);
-                switch (collection) {
-                  case 'stocks': setStocks(filterFn); break;
-                  case 'receiving': setReceiving(filterFn); break;
-                  case 'returns': setReturns(filterFn); break;
-                  case 'recycling': setRecycling(filterFn); break;
-                  case 'issuances': setIssuances(filterFn); break;
-                  case 'deliveries': setDeliveries(filterFn); break;
-                  case 'envLogs': setEnvLogs(filterFn); break;
-                  case 'forkliftChecks': setForkliftChecks(filterFn); break;
-                  case 'registries': setRegistries(filterFn); break;
+                
+                const applyDelete = () => {
+                  switch (collection) {
+                    case 'stocks': setStocks(filterFn); break;
+                    case 'receiving': setReceiving(filterFn); break;
+                    case 'returns': setReturns(filterFn); break;
+                    case 'recycling': setRecycling(filterFn); break;
+                    case 'issuances': setIssuances(filterFn); break;
+                    case 'deliveries': setDeliveries(filterFn); break;
+                    case 'envLogs': setEnvLogs(filterFn); break;
+                    case 'forkliftChecks': setForkliftChecks(filterFn); break;
+                    case 'registries': setRegistries(filterFn); break;
+                  }
+                };
+
+                applyDelete();
+
+                const isFromOtherUser = author && author.toUpperCase() !== (currentUser || '').toUpperCase();
+                if (isFromOtherUser) {
+                  const updateId = `del-${id}-${Date.now()}`;
+                  const promptItem: PendingOnlineUpdate = {
+                    id: updateId,
+                    type: 'DATA_DELETE',
+                    collection,
+                    recordId: id,
+                    author: author || 'Connected Operator',
+                    employeeId,
+                    device_id,
+                    stationId,
+                    actionDesc: actionDesc || `Deleted ${collection} record (${id})`,
+                    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+                    systemResetVersion: Number(payload.systemResetVersion) || currentResetVer,
+                    applyUpdate: applyDelete,
+                    dismissUpdate: () => {
+                      setPendingOnlineUpdates(prev => prev.filter(u => u.id !== updateId));
+                    }
+                  };
+
+                  setPendingOnlineUpdates(prev => {
+                    const filtered = prev.filter(p => p.recordId !== id);
+                    return [promptItem, ...filtered];
+                  });
+
+                  setLiveSyncToast({
+                    id,
+                    author,
+                    action: actionDesc || `Deleted ${collection} record`,
+                    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                  });
                 }
               }
               break;
@@ -2710,7 +2787,25 @@ export default function App() {
             }
             case 'force_sync': {
               setLastSyncedTime(new Date());
-              if (payload.triggeredBy && payload.triggeredBy !== (currentUser || '')) {
+              const isFromOtherUser = payload.triggeredBy && payload.triggeredBy.toUpperCase() !== (currentUser || '').toUpperCase();
+              if (isFromOtherUser) {
+                const updateId = `sync-${Date.now()}`;
+                const promptItem: PendingOnlineUpdate = {
+                  id: updateId,
+                  type: 'SYNC',
+                  collection: 'Cluster Database',
+                  author: payload.triggeredBy || 'Cluster Operator',
+                  actionDesc: 'Triggered cluster-wide online data refresh',
+                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+                  applyUpdate: () => {
+                    runSyncCheck();
+                  },
+                  dismissUpdate: () => {
+                    setPendingOnlineUpdates(prev => prev.filter(u => u.id !== updateId));
+                  }
+                };
+                setPendingOnlineUpdates(prev => [promptItem, ...prev.filter(p => p.type !== 'SYNC')]);
+
                 setLiveSyncToast({
                   id: String(Date.now()),
                   author: payload.triggeredBy,
@@ -4837,6 +4932,19 @@ export default function App() {
               <Smartphone className="h-3.5 w-3.5 text-slate-600 shrink-0" />
             </button>
 
+            {/* Online Live Updates Indicator Pill */}
+            {pendingOnlineUpdates.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {}}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white shadow-md shadow-amber-500/30 animate-pulse transition-all cursor-pointer"
+                title={`${pendingOnlineUpdates.length} online update(s) received from other operators`}
+              >
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                <span>{pendingOnlineUpdates.length} Online Update{pendingOnlineUpdates.length > 1 ? 's' : ''}</span>
+              </button>
+            )}
+
             {/* Isolated Live Date & Time Display */}
             <LiveClock />
           </div>
@@ -5105,6 +5213,30 @@ export default function App() {
           lastSyncedTime={lastSyncedTime}
           onForceSync={handleManualSync}
           isManualSyncing={isManualSyncing}
+        />
+      )}
+
+      {/* Interactive Online Live Update Prompt Modal */}
+      {pendingOnlineUpdates.length > 0 && (
+        <OnlineUpdatePromptModal
+          pendingUpdates={pendingOnlineUpdates}
+          onAcceptUpdate={(updateId) => {
+            const upd = pendingOnlineUpdates.find(u => u.id === updateId);
+            if (upd) {
+              upd.applyUpdate();
+              setPendingOnlineUpdates(prev => prev.filter(u => u.id !== updateId));
+            }
+          }}
+          onAcceptAllUpdates={() => {
+            pendingOnlineUpdates.forEach(u => u.applyUpdate());
+            setPendingOnlineUpdates([]);
+          }}
+          onDismissUpdate={(updateId) => {
+            setPendingOnlineUpdates(prev => prev.filter(u => u.id !== updateId));
+          }}
+          onDismissAllUpdates={() => {
+            setPendingOnlineUpdates([]);
+          }}
         />
       )}
 
