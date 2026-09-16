@@ -2314,8 +2314,6 @@ async function startServer() {
 
     const possiblePaths = [
       path.join(process.cwd(), "dist", "build-info.json"),
-      path.join(__dirname, "dist", "build-info.json"),
-      path.join(__dirname, "build-info.json"),
       path.join(process.cwd(), "build-info.json"),
     ];
 
@@ -3550,10 +3548,7 @@ async function startServer() {
       console.warn("Vite middleware unavailable:", e);
     }
   } else {
-    let distPath = __dirname;
-    if (!fs.existsSync(path.join(distPath, "index.html"))) {
-      distPath = path.join(process.cwd(), "dist");
-    }
+    const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
