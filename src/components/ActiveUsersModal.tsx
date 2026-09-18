@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { Users, X, Activity, Server, Radio, Shield, Clock, CheckCircle2, Monitor, MapPin } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { RegisteredAccount, ActivePresenceUser } from '../types';
@@ -48,7 +49,7 @@ export default function ActiveUsersModal({
 }: ActiveUsersModalProps) {
   const totalOnline = Math.max(1, activePresence.length, activeUsers.length);
 
-  return (
+  const modalContent = (
     <AnimatePresence>
       {isOpen && (
         <motion.div
@@ -57,7 +58,7 @@ export default function ActiveUsersModal({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-md"
+          className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-md overflow-y-auto"
         >
           <motion.div
             key="active-users-modal-content"
@@ -65,7 +66,7 @@ export default function ActiveUsersModal({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.94, y: 16 }}
             transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-            className="glass-card-darker border border-white/20 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden text-slate-200 flex flex-col max-h-[90vh] backdrop-blur-2xl"
+            className="glass-card-darker border border-white/20 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden text-slate-200 flex flex-col max-h-[calc(100vh-2rem)] my-auto backdrop-blur-2xl"
           >
             {/* Header */}
             <div className="p-5 bg-slate-950/60 border-b border-white/10 flex items-center justify-between backdrop-blur-md">
@@ -226,4 +227,10 @@ export default function ActiveUsersModal({
       )}
     </AnimatePresence>
   );
+
+  if (typeof document !== 'undefined') {
+    return createPortal(modalContent, document.body);
+  }
+
+  return modalContent;
 }

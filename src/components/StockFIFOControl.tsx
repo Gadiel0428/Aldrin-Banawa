@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Search, 
@@ -1356,15 +1357,16 @@ export default function StockFIFOControl({
       </div>
 
       {/* Manual Quantity Adjustment Popover Dialog */}
-      <AnimatePresence>
-        {showAdjustModal && (
+      {/* Quick Adjustment Modal */}
+      {typeof document !== 'undefined' && showAdjustModal && createPortal(
+        <AnimatePresence>
           <motion.div
             key="adjust-modal-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50"
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 z-[100] overflow-y-auto"
           >
             <motion.div
               key="adjust-modal-content"
@@ -1372,7 +1374,7 @@ export default function StockFIFOControl({
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.94, y: 16 }}
               transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-              className="bg-white rounded-xl shadow-lg border border-slate-200 p-6 max-w-sm w-full space-y-4"
+              className="bg-white rounded-2xl shadow-2xl border border-slate-200 p-6 max-w-sm w-full space-y-4 my-auto"
             >
               <h4 className="font-bold text-sm text-slate-800">Adjust Inventory Balance</h4>
               <p className="text-xs text-slate-500">Record physical stock audit corrections or bin counts.</p>
@@ -1413,19 +1415,20 @@ export default function StockFIFOControl({
               </div>
             </motion.div>
           </motion.div>
-        )}
-      </AnimatePresence>
+        </AnimatePresence>,
+        document.body
+      )}
 
       {/* Edit Registered Stock Item Modal (Super Admin) */}
-      <AnimatePresence>
-        {editingStockItem && (
+      {typeof document !== 'undefined' && editingStockItem && createPortal(
+        <AnimatePresence>
           <motion.div
             key="edit-stock-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50"
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 z-[100] overflow-y-auto"
           >
             <motion.div
               key="edit-stock-content"
@@ -1433,7 +1436,7 @@ export default function StockFIFOControl({
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.94, y: 16 }}
               transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-              className="bg-white rounded-xl shadow-xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto"
+              className="bg-white rounded-2xl shadow-2xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[calc(100vh-2rem)] my-auto overflow-y-auto"
             >
               <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                 <div>
@@ -1607,8 +1610,9 @@ export default function StockFIFOControl({
               </div>
             </motion.div>
           </motion.div>
-        )}
-      </AnimatePresence>
+        </AnimatePresence>,
+        document.body
+      )}
 
       {/* Item Transaction History Modal */}
       <AnimatePresence>
@@ -1724,14 +1728,14 @@ export default function StockFIFOControl({
             URL.revokeObjectURL(url);
           };
 
-          return (
+          return typeof document !== 'undefined' ? createPortal(
             <motion.div
               key="history-stock-backdrop"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.2 }}
-              className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+              className="fixed inset-0 z-[100] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
             >
               <motion.div
                 key="history-stock-content"
@@ -1739,7 +1743,7 @@ export default function StockFIFOControl({
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.94, y: 16 }}
                 transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-                className="bg-white rounded-2xl max-w-4xl w-full shadow-2xl border border-slate-200 overflow-hidden my-8 max-h-[90vh] flex flex-col"
+                className="bg-white rounded-2xl max-w-4xl w-full shadow-2xl border border-slate-200 overflow-hidden my-auto max-h-[calc(100vh-2rem)] flex flex-col"
               >
                 
                 {/* Header */}
@@ -1891,8 +1895,9 @@ export default function StockFIFOControl({
                 </div>
 
               </motion.div>
-            </motion.div>
-          );
+            </motion.div>,
+            document.body
+          ) : null;
         })()}
       </AnimatePresence>
 

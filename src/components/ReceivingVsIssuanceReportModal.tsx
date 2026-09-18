@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   X, 
@@ -96,22 +97,22 @@ export default function ReceivingVsIssuanceReportModal({
   const receivedPct = totalVolume > 0 ? Math.round((summary.totalReceivedQty / totalVolume) * 100) : 50;
   const issuedPct = totalVolume > 0 ? Math.round((summary.totalIssuedQty / totalVolume) * 100) : 50;
 
-  return (
+  const modalContent = (
     <motion.div
       key="receiving-vs-issuance-backdrop"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={{ duration: 0.25 }}
-      className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/80 backdrop-blur-2xl flex items-center justify-center p-2 sm:p-4 print:p-0 print:bg-white print:static"
+      transition={{ duration: 0.2 }}
+      className="fixed inset-0 z-[100] overflow-y-auto bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 print:p-0 print:bg-white print:static"
     >
       <motion.div
         key="receiving-vs-issuance-content"
         initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
         animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
         exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
-        transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
-        className="frosted-glass-modal-light w-full max-w-5xl rounded-3xl shadow-2xl border border-white/80 flex flex-col max-h-[92vh] print:max-h-none print:border-none print:shadow-none print:rounded-none overflow-hidden backdrop-blur-3xl"
+        transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+        className="frosted-glass-modal-light w-full max-w-5xl rounded-3xl shadow-2xl border border-white/80 flex flex-col max-h-[calc(100vh-2rem)] my-auto print:max-h-none print:border-none print:shadow-none print:rounded-none print:my-0 overflow-hidden backdrop-blur-3xl"
       >
         
         {/* Modal Header & Navigation (Hidden in Print) */}
@@ -644,4 +645,10 @@ export default function ReceivingVsIssuanceReportModal({
       </motion.div>
     </motion.div>
   );
+
+  if (typeof document !== 'undefined') {
+    return createPortal(modalContent, document.body);
+  }
+
+  return modalContent;
 }

@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   X, 
@@ -106,23 +107,23 @@ export default function InventoryReportModal({
     window.print();
   };
 
-  return (
+  const modalContent = (
     <AnimatePresence>
       <motion.div
         key="inventory-report-backdrop"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        transition={{ duration: 0.25 }}
-        className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/80 backdrop-blur-2xl flex items-center justify-center p-2 sm:p-4 print:p-0 print:bg-white print:static"
+        transition={{ duration: 0.2 }}
+        className="fixed inset-0 z-[100] overflow-y-auto bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 print:p-0 print:bg-white print:static"
       >
         <motion.div
           key="inventory-report-content"
           initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
           animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
           exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
-          transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
-          className="frosted-glass-modal-light w-full max-w-5xl rounded-3xl shadow-2xl border border-white/80 flex flex-col max-h-[92vh] print:max-h-none print:border-none print:shadow-none print:rounded-none overflow-hidden backdrop-blur-3xl"
+          transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+          className="frosted-glass-modal-light w-full max-w-5xl rounded-3xl shadow-2xl border border-white/80 flex flex-col max-h-[calc(100vh-2rem)] my-auto print:max-h-none print:border-none print:shadow-none print:rounded-none print:my-0 overflow-hidden backdrop-blur-3xl"
         >
           {/* Modal Header (Hidden during Print) */}
           <div className="bg-slate-950/90 backdrop-blur-md text-white px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 shrink-0 print:hidden">
@@ -544,4 +545,10 @@ export default function InventoryReportModal({
       </motion.div>
     </AnimatePresence>
   );
+
+  if (typeof document !== 'undefined') {
+    return createPortal(modalContent, document.body);
+  }
+
+  return modalContent;
 }

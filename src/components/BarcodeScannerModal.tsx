@@ -4,6 +4,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { 
@@ -116,7 +117,7 @@ export default function BarcodeScannerModal({
     }
   }, [isOpen, activeTab]);
 
-  return (
+  const modalContent = (
     <AnimatePresence>
       {isOpen && (
         <motion.div
@@ -124,8 +125,8 @@ export default function BarcodeScannerModal({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.25 }}
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-2xl"
+          transition={{ duration: 0.2 }}
+          className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-md overflow-y-auto"
         >
           {/* Hidden container for Html5Qrcode offline image scanner engine */}
           <div id={hiddenScannerRegionId} className="hidden" />
@@ -135,8 +136,8 @@ export default function BarcodeScannerModal({
             initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
             animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
             exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
-            transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
-            className="frosted-glass-modal border border-white/20 rounded-3xl w-full max-w-lg shadow-2xl text-slate-100 overflow-hidden flex flex-col max-h-[90vh] backdrop-blur-3xl"
+            transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+            className="frosted-glass-modal border border-white/20 rounded-3xl w-full max-w-lg shadow-2xl text-slate-100 overflow-hidden flex flex-col max-h-[calc(100vh-2rem)] my-auto backdrop-blur-3xl"
           >
         {/* Modal Header */}
         <div className="px-5 py-3.5 border-b border-white/10 flex items-center justify-between gap-3 bg-slate-950/40 backdrop-blur-md">
@@ -346,4 +347,10 @@ export default function BarcodeScannerModal({
     )}
   </AnimatePresence>
   );
+
+  if (typeof document !== 'undefined') {
+    return createPortal(modalContent, document.body);
+  }
+
+  return modalContent;
 }

@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Database, Server, Wifi, RefreshCw, CheckCircle2, ShieldAlert, Laptop, Clock, Activity, HardDrive, Globe } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { getApiBaseUrl, getCentralServerUrl } from '../config/serverConfig';
@@ -62,7 +63,7 @@ export default function CentralDatabaseModal({
     }
   }, [isOpen]);
 
-  return (
+  const modalContent = (
     <AnimatePresence>
       {isOpen && (
         <motion.div
@@ -71,7 +72,7 @@ export default function CentralDatabaseModal({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md"
+          className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-md overflow-y-auto"
         >
           <motion.div
             key="central-db-modal-content"
@@ -79,7 +80,7 @@ export default function CentralDatabaseModal({
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.95, opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="relative w-full max-w-2xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            className="relative w-full max-w-2xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[calc(100vh-2rem)] my-auto"
           >
             {/* Header */}
             <div className="flex items-center justify-between p-5 border-b border-slate-800 bg-slate-950/50">
@@ -233,4 +234,10 @@ export default function CentralDatabaseModal({
       )}
     </AnimatePresence>
   );
+
+  if (typeof document !== 'undefined') {
+    return createPortal(modalContent, document.body);
+  }
+
+  return modalContent;
 }

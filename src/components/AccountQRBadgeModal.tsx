@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
 import { 
@@ -305,7 +306,7 @@ export default function AccountQRBadgeModal({
     }
   };
 
-  return (
+  const modalContent = (
     <AnimatePresence>
       {isOpen && account && (
         <motion.div
@@ -313,24 +314,24 @@ export default function AccountQRBadgeModal({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.25 }}
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-2xl"
+          transition={{ duration: 0.2 }}
+          className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-slate-950/85 backdrop-blur-md overflow-y-auto"
         >
           <motion.div
             key="qr-badge-content"
-            initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+            initial={{ opacity: 0, scale: 0.94, y: 14, filter: 'blur(8px)' }}
             animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
-            exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
-            transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
-            className="frosted-glass-modal rounded-3xl max-w-sm w-full shadow-2xl text-white overflow-hidden flex flex-col relative border border-white/20"
+            exit={{ opacity: 0, scale: 0.94, y: 14, filter: 'blur(8px)' }}
+            transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+            className="frosted-glass-modal rounded-3xl max-w-sm w-full shadow-2xl text-white overflow-hidden flex flex-col relative border border-white/20 max-h-[calc(100vh-2rem)] my-auto"
           >
             {/* Top Accent Line */}
-            <div className="h-1 bg-gradient-to-r from-indigo-500 via-sky-400 to-emerald-400 w-full" />
+            <div className="h-1 bg-gradient-to-r from-indigo-500 via-sky-400 to-emerald-400 w-full shrink-0" />
 
             {/* Modal Header */}
-            <div className="px-5 py-4 border-b border-white/10 flex justify-between items-center bg-slate-950/40 backdrop-blur-md">
+            <div className="px-5 py-3.5 border-b border-white/10 flex justify-between items-center bg-slate-950/60 backdrop-blur-md shrink-0">
               <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-indigo-500/20 text-indigo-300 rounded-2xl border border-indigo-400/30 backdrop-blur-md">
+                <div className="p-2 bg-indigo-500/20 text-indigo-300 rounded-xl border border-indigo-400/30 backdrop-blur-md">
                   <QrCode className="h-5 w-5" />
                 </div>
                 <div>
@@ -343,144 +344,152 @@ export default function AccountQRBadgeModal({
                 </div>
               </div>
               <button
+                type="button"
                 onClick={onClose}
                 className="text-slate-400 hover:text-white p-1.5 rounded-xl hover:bg-white/10 transition cursor-pointer"
+                title="Close"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
-        {/* Badge Card Body */}
-        <div className="p-5 space-y-4">
-          {/* Official Pass Badge Graphic */}
-          <div className="bg-white rounded-2xl p-5 border-2 border-blue-900 shadow-xl text-blue-950 text-center space-y-3 relative overflow-hidden">
-            {/* Watermark / Header */}
-            <div className="border-b-2 border-blue-100 pb-2">
-              <div className="text-[10px] font-extrabold text-blue-800 font-mono tracking-widest uppercase">
-                JUWEI PLASTIC MOULDING PHILS. INC.
-              </div>
-              <div className="text-xs font-black text-blue-950 tracking-tight uppercase flex items-center justify-center gap-1 mt-0.5">
-                <CreditCard className="h-3.5 w-3.5 text-blue-600" />
-                WMS OPERATOR LOGIN QR PASS
-              </div>
-            </div>
-
-            {/* QR Code Container */}
-            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 inline-block shadow-inner my-1" id="badge-qr-svg-wrapper">
-              <QRCodeSVG
-                value={qrPayload}
-                size={160}
-                level="H"
-                includeMargin={true}
-                aria-label={`QR Login Pass for ${account.username}`}
-              />
-            </div>
-
-            {/* Operator Credentials */}
-            <div className="bg-blue-950 text-white p-3.5 rounded-xl text-center space-y-1">
-              <div className="text-xs font-black uppercase text-white tracking-wide">
-                {account.username}
-              </div>
-              <div className="text-[11px] font-mono font-bold text-blue-200">
-                EMPLOYEE ID: {account.employeeId}
-              </div>
-              {account.phoneNumber && (
-                <div className="text-[10px] font-mono font-semibold text-emerald-400 flex items-center justify-center gap-1">
-                  <Phone className="h-3 w-3" /> {account.phoneNumber}
+            {/* Badge Card Body - Scrollable if screen height is constrained */}
+            <div className="p-4 sm:p-5 space-y-3.5 overflow-y-auto flex-1">
+              {/* Official Pass Badge Graphic */}
+              <div className="bg-white rounded-2xl p-4 sm:p-5 border-2 border-blue-900 shadow-xl text-blue-950 text-center space-y-2.5 relative overflow-hidden">
+                {/* Watermark / Header */}
+                <div className="border-b-2 border-blue-100 pb-2">
+                  <div className="text-[10px] font-extrabold text-blue-800 font-mono tracking-widest uppercase">
+                    JUWEI PLASTIC MOULDING PHILS. INC.
+                  </div>
+                  <div className="text-xs font-black text-blue-950 tracking-tight uppercase flex items-center justify-center gap-1.5 mt-0.5">
+                    <CreditCard className="h-3.5 w-3.5 text-blue-600 shrink-0" />
+                    <span>WMS OPERATOR LOGIN QR PASS</span>
+                  </div>
                 </div>
-              )}
-              <div className="text-[10px] font-semibold text-blue-300 uppercase">
-                {account.role}
+
+                {/* QR Code Container */}
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-2.5 inline-block shadow-inner my-0.5" id="badge-qr-svg-wrapper">
+                  <QRCodeSVG
+                    value={qrPayload}
+                    size={135}
+                    level="H"
+                    includeMargin={true}
+                    aria-label={`QR Login Pass for ${account.username}`}
+                  />
+                </div>
+
+                {/* Operator Credentials */}
+                <div className="bg-blue-950 text-white p-3 rounded-xl text-center space-y-1">
+                  <div className="text-xs font-black uppercase text-white tracking-wide">
+                    {account.username}
+                  </div>
+                  <div className="text-[11px] font-mono font-bold text-blue-200">
+                    EMPLOYEE ID: {account.employeeId}
+                  </div>
+                  {account.phoneNumber && (
+                    <div className="text-[10px] font-mono font-semibold text-emerald-400 flex items-center justify-center gap-1">
+                      <Phone className="h-3 w-3 shrink-0" /> <span>{account.phoneNumber}</span>
+                    </div>
+                  )}
+                  <div className="text-[10px] font-semibold text-blue-300 uppercase">
+                    {account.role}
+                  </div>
+
+                  {/* Security PIN Display */}
+                  <div className="pt-2 border-t border-blue-800/80 mt-1.5 flex items-center justify-between px-2">
+                    <span className="text-[9px] font-mono font-bold text-blue-200 uppercase flex items-center gap-1">
+                      <Lock className="h-3 w-3 text-blue-300 shrink-0" /> LOGIN PIN:
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-sm font-mono font-black text-white bg-blue-900 px-2.5 py-0.5 rounded border border-blue-500 tracking-widest min-w-[58px] text-center">
+                        {showPin ? (account.pin || '1234') : '••••'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowPin(!showPin)}
+                        className="p-1 text-blue-300 hover:text-white transition cursor-pointer"
+                        title={showPin ? "Hide PIN" : "Reveal PIN"}
+                      >
+                        {showPin ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-[8px] text-blue-900 font-mono font-bold tracking-tight uppercase">
+                  SCAN QR CODE AT WMS LOG IN GATEWAY TO ACCESS SESSION
+                </div>
               </div>
 
-              {/* Security PIN Display */}
-              <div className="pt-2 border-t border-blue-800 mt-2 flex items-center justify-between px-2">
-                <span className="text-[9px] font-mono font-bold text-blue-200 uppercase flex items-center gap-1">
-                  <Lock className="h-3 w-3 text-blue-300" /> LOGIN PIN:
-                </span>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-sm font-mono font-black text-white bg-blue-900 px-2.5 py-0.5 rounded border border-blue-500 tracking-widest min-w-[58px] text-center">
-                    {showPin ? (account.pin || '1234') : '••••'}
-                  </span>
+              {/* Action Buttons */}
+              <div className="space-y-2 pt-0.5">
+                {onDirectLogin && (
                   <button
                     type="button"
-                    onClick={() => setShowPin(!showPin)}
-                    className="p-1 text-blue-300 hover:text-white transition cursor-pointer"
-                    title={showPin ? "Hide PIN" : "Reveal PIN"}
+                    onClick={() => {
+                      onDirectLogin(account);
+                      onClose();
+                    }}
+                    className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition flex items-center justify-center gap-2 shadow-md uppercase cursor-pointer"
                   >
-                    {showPin ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    <UserCheck className="h-4 w-4" /> LOG IN AS {account.username}
+                  </button>
+                )}
+
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={handlePrintBadge}
+                    className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-1 rounded-xl text-[11px] transition flex items-center justify-center gap-1 shadow-sm uppercase cursor-pointer whitespace-nowrap"
+                    title="Direct in-app print pass"
+                  >
+                    <Printer className="h-3.5 w-3.5 shrink-0" /> PRINT
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleDownloadBadge}
+                    disabled={isDownloading}
+                    className="bg-blue-700 hover:bg-blue-600 text-white font-bold py-2 px-1 rounded-xl text-[11px] transition flex items-center justify-center gap-1 shadow-sm uppercase cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                    title="Download QR Badge Image as PNG"
+                  >
+                    <Download className="h-3.5 w-3.5 shrink-0" /> {isDownloading ? 'SAVING...' : 'SAVE PNG'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleCopyPayload}
+                    className="bg-blue-950 hover:bg-blue-800 text-white border border-blue-700 font-bold py-2 px-1 rounded-xl text-[11px] transition flex items-center justify-center gap-1 uppercase cursor-pointer whitespace-nowrap"
+                    title="Copy QR payload string"
+                  >
+                    {copied ? (
+                      <>
+                        <Check className="h-3.5 w-3.5 text-blue-300 shrink-0" /> COPIED!
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-3.5 w-3.5 text-blue-300 shrink-0" /> COPY DATA
+                      </>
+                    )}
                   </button>
                 </div>
               </div>
             </div>
 
-            <div className="text-[8px] text-blue-900 font-mono font-bold tracking-tight uppercase">
-              SCAN QR CODE AT WMS LOG IN GATEWAY TO ACCESS SESSION
+            {/* Modal Footer */}
+            <div className="px-5 py-2.5 border-t border-blue-900/60 bg-blue-950/90 text-[10px] text-blue-300 font-mono text-center shrink-0">
+              JUWEI WMS OPERATOR SECURITY SYSTEM • QR VERIFICATION ENABLED
             </div>
-          </div>
-
-          {/* Action Buttons */}
-          <div className="space-y-2 pt-1">
-            {onDirectLogin && (
-              <button
-                type="button"
-                onClick={() => {
-                  onDirectLogin(account);
-                  onClose();
-                }}
-                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition flex items-center justify-center gap-2 shadow-md uppercase cursor-pointer"
-              >
-                <UserCheck className="h-4 w-4" /> LOG IN AS {account.username}
-              </button>
-            )}
-
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={handlePrintBadge}
-                className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-2 rounded-xl text-[11px] transition flex items-center justify-center gap-1 shadow-sm uppercase cursor-pointer"
-                title="Direct in-app print pass"
-              >
-                <Printer className="h-3.5 w-3.5" /> PRINT
-              </button>
-
-              <button
-                type="button"
-                onClick={handleDownloadBadge}
-                disabled={isDownloading}
-                className="bg-blue-700 hover:bg-blue-600 text-white font-bold py-2 px-2 rounded-xl text-[11px] transition flex items-center justify-center gap-1 shadow-sm uppercase cursor-pointer disabled:opacity-50"
-                title="Download QR Badge Image as PNG"
-              >
-                <Download className="h-3.5 w-3.5" /> {isDownloading ? 'SAVING...' : 'SAVE PNG'}
-              </button>
-
-              <button
-                type="button"
-                onClick={handleCopyPayload}
-                className="bg-blue-950 hover:bg-blue-800 text-white border border-blue-700 font-bold py-2 px-2 rounded-xl text-[11px] transition flex items-center justify-center gap-1 uppercase cursor-pointer"
-                title="Copy QR payload string"
-              >
-                {copied ? (
-                  <>
-                    <Check className="h-3.5 w-3.5 text-blue-300" /> COPIED!
-                  </>
-                ) : (
-                  <>
-                    <Copy className="h-3.5 w-3.5 text-blue-300" /> COPY DATA
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Modal Footer */}
-        <div className="px-5 py-3 border-t border-blue-800 bg-blue-950 text-[10px] text-blue-300 font-mono text-center">
-          JUWEI WMS OPERATOR SECURITY SYSTEM • QR VERIFICATION ENABLED
-        </div>
           </motion.div>
         </motion.div>
       )}
     </AnimatePresence>
   );
+
+  if (typeof document !== 'undefined') {
+    return createPortal(modalContent, document.body);
+  }
+
+  return modalContent;
 }

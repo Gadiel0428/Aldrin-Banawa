@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { Monitor, Download, X, ShieldCheck, Cpu, FileCode2 } from 'lucide-react';
 import { getCentralServerUrl } from '../config/serverConfig';
@@ -427,7 +428,7 @@ $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     setTimeout(() => setCopiedCmd(false), 2500);
   };
 
-  return (
+  const modalContent = (
     <AnimatePresence>
       {isOpen && (
         <motion.div
@@ -435,16 +436,16 @@ $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.25 }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-2xl p-4"
+          transition={{ duration: 0.2 }}
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-3 sm:p-4 overflow-y-auto"
         >
           <motion.div
             key="desktop-install-content"
             initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
             animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
             exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
-            transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
-            className="frosted-glass-modal border border-white/20 rounded-3xl max-w-xl w-full text-white shadow-2xl overflow-hidden flex flex-col max-h-[90vh] backdrop-blur-3xl"
+            transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+            className="frosted-glass-modal border border-white/20 rounded-3xl max-w-xl w-full text-white shadow-2xl overflow-hidden flex flex-col max-h-[calc(100vh-2rem)] my-auto backdrop-blur-3xl"
           >
             {/* Header */}
             <div className="p-5 border-b border-white/10 bg-slate-950/40 backdrop-blur-md flex items-center justify-between">
@@ -551,4 +552,10 @@ $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
       )}
     </AnimatePresence>
   );
+
+  if (typeof document !== 'undefined') {
+    return createPortal(modalContent, document.body);
+  }
+
+  return modalContent;
 }

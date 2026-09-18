@@ -121,10 +121,10 @@ export function getCentralServerUrl(): string {
     }
   }
 
-  // 3. Check if currently browsing on a genuine remote host (Source: current window origin)
+  // 3. Check if currently browsing on a genuine host (Source: current window origin)
   if (typeof window !== 'undefined' && window.location && window.location.host) {
     const currentHost = window.location.host;
-    if (!isLocalhostAddress(currentHost) && window.location.protocol.startsWith('http')) {
+    if (window.location.protocol.startsWith('http')) {
       return finalize(`${window.location.protocol}//${currentHost}`, 'current window origin');
     }
   }

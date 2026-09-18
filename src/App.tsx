@@ -4331,13 +4331,13 @@ export default function App() {
 
         {/* NEWLY REGISTERED USER SECURE PIN DISCOVERY OVERLAY */}
         {newlyRegisteredUser && (
-          <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-center justify-center p-4 backdrop-blur-xl animate-in fade-in duration-300">
+          <div className="fixed inset-0 bg-slate-950/80 z-[120] flex items-center justify-center p-3 sm:p-4 backdrop-blur-md overflow-y-auto">
             <motion.div 
               initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
               animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
               exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
-              transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-              className="max-w-md w-full glass-card p-8 rounded-3xl shadow-2xl text-center space-y-6 relative overflow-hidden border border-white/80 text-slate-900"
+              transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+              className="max-w-md w-full glass-card p-6 sm:p-8 rounded-3xl shadow-2xl text-center space-y-5 relative border border-white/80 text-slate-900 my-auto max-h-[calc(100vh-2rem)] overflow-y-auto"
             >
               <div className="flex justify-center">
                 <div className="h-14 w-14 bg-emerald-50/90 border border-emerald-200/90 rounded-2xl flex items-center justify-center text-emerald-600 shadow-sm backdrop-blur-md">
@@ -4672,8 +4672,8 @@ export default function App() {
 
         {/* Logging In Circle Loading Screen */}
         {isLoggingIn && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-md p-4 animate-in fade-in duration-200">
-            <div className="bg-white border border-slate-300 rounded-3xl p-8 max-w-sm w-full text-center space-y-4 shadow-2xl text-slate-900">
+          <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4 overflow-y-auto animate-in fade-in duration-200">
+            <div className="bg-white border border-slate-300 rounded-3xl p-8 max-w-sm w-full text-center space-y-4 shadow-2xl text-slate-900 my-auto">
               <div className="inline-flex p-4 bg-blue-100 text-blue-700 rounded-full border border-blue-300">
                 <Loader2 className="h-10 w-10 animate-spin text-blue-600" />
               </div>

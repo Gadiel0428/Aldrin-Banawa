@@ -552,16 +552,23 @@ async function startServer() {
 
   function queryDatabaseInventory(accountId?: string, warehouseId?: string) {
     const allStocks = Array.isArray(state.stocks) ? state.stocks : [];
-    const cleanWh = (warehouseId || "").trim();
-    const cleanAcc = (accountId || "").trim();
+    const cleanWh = (warehouseId || "").trim().toUpperCase();
+    const cleanAcc = (accountId || "").trim().toUpperCase();
+
+    const isAllWh = !cleanWh || cleanWh === "ALL" || cleanWh === "GLOBAL";
+    const isAllAcc = !cleanAcc || cleanAcc === "ALL" || cleanAcc === "GLOBAL";
+
+    if (isAllWh && isAllAcc) {
+      return allStocks;
+    }
 
     return allStocks.filter((item: any) => {
       if (!item) return false;
-      const itemWh = (item.warehouseId || item.warehouse_id || item.warehouse || "WH-MAIN").trim();
-      const itemAcc = (item.accountId || item.account_id || item.account || "ACC-JUWEI").trim();
+      const itemWh = String(item.warehouseId || item.warehouse_id || item.warehouse || "WH-MAIN").trim().toUpperCase();
+      const itemAcc = String(item.accountId || item.account_id || item.account || "ACC-JUWEI").trim().toUpperCase();
 
-      const whMatch = !cleanWh || cleanWh === "ALL" || cleanWh === "GLOBAL" || cleanWh.toLowerCase() === "all" || cleanWh === itemWh || itemWh === "WH-MAIN" || !item.warehouseId;
-      const accMatch = !cleanAcc || cleanAcc === "ALL" || cleanAcc === "GLOBAL" || cleanAcc.toLowerCase() === "all" || cleanAcc === itemAcc || itemAcc === "ACC-JUWEI" || !item.accountId;
+      const whMatch = isAllWh || itemWh === cleanWh;
+      const accMatch = isAllAcc || itemAcc === cleanAcc;
 
       return whMatch && accMatch;
     });
@@ -617,7 +624,7 @@ async function startServer() {
     const legacyCollectionMsg = JSON.stringify({
       type: "collection_updated",
       collection: event.collection || "stocks",
-      data: event.collection && event.collection !== 'stocks' ? (state as any)[event.collection] : updatedInventory,
+      data: (state as any)[event.collection || 'stocks'],
       systemResetVersion
     });
 
@@ -2224,6 +2231,196 @@ async function startServer() {
             });
             break;
           }
+
+          case "register_account": {
+            const newUser = payload.user;
+            if (!newUser || !newUser.employeeId) break;
+            const cleanEmpId = String(newUser.employeeId).trim().toUpperCase();
+            const cleanUsername = String(newUser.username || '').trim().toUpperCase();
+
+            unmarkUserTombstone(cleanEmpId);
+
+            const existingIdx = state.registeredUsers.findIndex(u => u.employeeId.toUpperCase() === cleanEmpId);
+            const userToStore: ServerUser = {
+              id: newUser.id || `USR-${cleanEmpId}`,
+              employeeId: cleanEmpId,
+              username: cleanUsername,
+              role: String(newUser.role || 'WAREHOUSE CLERK').trim().toUpperCase(),
+              phoneNumber: newUser.phoneNumber ? String(newUser.phoneNumber).trim() : '',
+              permission: String(newUser.permission || 'LIMITED_ACCESS').trim(),
+              pin: String(newUser.pin || '1234').trim().slice(0, 4),
+              status: 'ACTIVE',
+              registeredBy: payload.author || newUser.registeredBy || 'JPMP-002 (ALDRIN BANAWA)',
+              registeredBySuperAdmin: true,
+              registeredAt: newUser.registeredAt || new Date().toISOString(),
+              version: 1,
+              updated_at: new Date().toISOString(),
+              reset_version: systemResetVersion
+            };
+
+            if (existingIdx !== -1) {
+              state.registeredUsers[existingIdx] = userToStore;
+            } else {
+              state.registeredUsers.push(userToStore);
+            }
+            stateRevision++;
+            commitDatabase();
+
+            const authorName = payload.author || "Super Administrator";
+            broadcast({
+              type: "account_registered",
+              user: userToStore,
+              author: authorName,
+              systemResetVersion
+            });
+            broadcast({
+              type: "account_created",
+              account: userToStore,
+              user: userToStore,
+              systemResetVersion
+            });
+            broadcast({
+              type: "collection_updated",
+              collection: "registeredUsers",
+              data: state.registeredUsers,
+              systemResetVersion
+            });
+            break;
+          }
+
+          case "update_account": {
+            const updated = payload.user;
+            if (!updated || !updated.employeeId) break;
+            const cleanEmpId = String(updated.employeeId).trim().toUpperCase();
+            const existingIdx = state.registeredUsers.findIndex(u => u.employeeId.toUpperCase() === cleanEmpId);
+            if (existingIdx === -1) break;
+
+            const existing = state.registeredUsers[existingIdx];
+            const isSuper = cleanEmpId === 'JPMP-002';
+            const mergedUser: ServerUser = {
+              ...existing,
+              ...updated,
+              employeeId: isSuper ? 'JPMP-002' : cleanEmpId,
+              username: String(updated.username || existing.username).trim().toUpperCase(),
+              role: isSuper ? 'SUPER ADMINISTRATOR' : String(updated.role || existing.role).trim().toUpperCase(),
+              permission: isSuper ? 'FULL_ACCESS' : String(updated.permission || existing.permission).trim(),
+              pin: updated.pin ? String(updated.pin).trim().slice(0, 4) : existing.pin,
+              version: (existing.version || 1) + 1,
+              updated_at: new Date().toISOString(),
+              reset_version: systemResetVersion
+            };
+
+            state.registeredUsers[existingIdx] = mergedUser;
+            stateRevision++;
+            commitDatabase();
+
+            const authorName = payload.author || "Admin";
+            broadcast({
+              type: "account_updated",
+              user: mergedUser,
+              account: mergedUser,
+              author: authorName,
+              systemResetVersion
+            });
+            broadcast({
+              type: "collection_updated",
+              collection: "registeredUsers",
+              data: state.registeredUsers,
+              systemResetVersion
+            });
+            break;
+          }
+
+          case "delete_account": {
+            const cleanId = String(payload.employeeId || '').trim().toUpperCase();
+            if (!cleanId || cleanId === 'JPMP-002') break;
+
+            markUserTombstone(cleanId);
+            state.registeredUsers = state.registeredUsers.filter(u => u.employeeId.toUpperCase().trim() !== cleanId);
+            stateRevision++;
+            commitDatabase();
+
+            broadcast({
+              type: "account_deleted",
+              employeeId: cleanId,
+              systemResetVersion
+            });
+            broadcast({
+              type: "collection_updated",
+              collection: "registeredUsers",
+              data: state.registeredUsers,
+              systemResetVersion
+            });
+            break;
+          }
+
+          case "all_accounts_cleared": {
+            const superAdmin = state.registeredUsers.find(u => u.employeeId.toUpperCase().trim() === 'JPMP-002') || defaultSuperAdmin;
+            state.registeredUsers.forEach(u => {
+              if (u.employeeId.toUpperCase().trim() !== 'JPMP-002') {
+                markUserTombstone(u.employeeId);
+              }
+            });
+
+            state.registeredUsers = [{ ...superAdmin }];
+            stateRevision++;
+            commitDatabase();
+
+            broadcast({
+              type: "all_accounts_cleared",
+              data: state.registeredUsers,
+              systemResetVersion
+            });
+            broadcast({
+              type: "accounts_cleared",
+              systemResetVersion
+            });
+            broadcast({
+              type: "collection_updated",
+              collection: "registeredUsers",
+              data: state.registeredUsers,
+              systemResetVersion
+            });
+            break;
+          }
+
+          case "client_installed": {
+            const { stationId, installId, username, employeeId, platform, timestamp } = payload;
+            console.log(`[CENTRAL-DB] Client installed: Station ${stationId} by ${username} (${employeeId}) on ${platform}`);
+            broadcast({
+              type: "client_installed_broadcast",
+              stationId: stationId || "STATION",
+              installId,
+              username: username || "Operator",
+              employeeId,
+              platform: platform || "Terminal",
+              timestamp: timestamp || new Date().toISOString(),
+              systemResetVersion
+            }, ws);
+            break;
+          }
+
+          case "system_activity": {
+            const actText = String(payload.text || payload.action || '').trim();
+            if (actText) {
+              const newMsg: ChatMessage = {
+                id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+                sender: "SYSTEM",
+                text: actText,
+                timestamp: new Date().toISOString(),
+                isSystem: true
+              };
+              chatMessages.push(newMsg);
+              if (chatMessages.length > 200) chatMessages.shift();
+              commitDatabase();
+
+              broadcast({
+                type: "chat_broadcast",
+                message: newMsg
+              });
+            }
+            break;
+          }
         }
       } catch (err) {
         console.error("Failed processing socket message:", err);
@@ -3073,8 +3270,16 @@ async function startServer() {
       }
 
       broadcast({
+        type: "account_registered",
+        user: newUser,
+        author: registeredBy || 'Super Administrator',
+        systemResetVersion
+      });
+
+      broadcast({
         type: "account_created",
         account: newUser,
+        user: newUser,
         systemResetVersion
       });
 
@@ -3146,6 +3351,8 @@ async function startServer() {
       broadcast({
         type: "account_updated",
         account: mergedUser,
+        user: mergedUser,
+        author: req.body.author || 'Admin',
         systemResetVersion
       });
 
@@ -3222,6 +3429,12 @@ async function startServer() {
       if (!commitOk) {
         return res.status(500).json({ error: "Failed to commit accounts purge to central database" });
       }
+
+      broadcast({
+        type: "all_accounts_cleared",
+        data: state.registeredUsers,
+        systemResetVersion
+      });
 
       broadcast({
         type: "accounts_cleared",

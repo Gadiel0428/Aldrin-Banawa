@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion } from 'motion/react';
 import { 
   Printer, 
@@ -84,22 +85,22 @@ export default function PrintablePickingListModal({
   const binLocation = matchedStock?.location || matchedRegistry?.location || 'Zone A - Rack 02 - Bin B14';
   const uom = matchedRegistry?.unit || 'PCS';
 
-  return (
+  const modalContent = (
     <motion.div
       key="picking-list-backdrop"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={{ duration: 0.25 }}
-      className="fixed inset-0 bg-slate-950/80 backdrop-blur-2xl z-50 flex items-center justify-center p-2 sm:p-6 overflow-y-auto"
+      transition={{ duration: 0.2 }}
+      className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[100] flex items-center justify-center p-2 sm:p-4 overflow-y-auto print:p-0 print:bg-white print:static"
     >
       <motion.div
         key="picking-list-content"
         initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
         animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
         exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
-        transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
-        className="frosted-glass-modal-light rounded-3xl shadow-2xl border border-white/80 w-full max-w-5xl max-h-[95vh] flex flex-col overflow-hidden backdrop-blur-3xl"
+        transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+        className="frosted-glass-modal-light rounded-3xl shadow-2xl border border-white/80 w-full max-w-5xl max-h-[calc(100vh-2rem)] my-auto flex flex-col overflow-hidden backdrop-blur-3xl print:max-h-none print:border-none print:shadow-none print:rounded-none print:my-0"
       >
         
         {/* On-Screen Modal Control Header (Hidden during printing) */}
@@ -951,4 +952,10 @@ export default function PrintablePickingListModal({
       </motion.div>
     </motion.div>
   );
+
+  if (typeof document !== 'undefined') {
+    return createPortal(modalContent, document.body);
+  }
+
+  return modalContent;
 }

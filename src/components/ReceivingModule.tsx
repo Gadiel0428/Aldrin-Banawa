@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Plus, 
   Search, 
@@ -2718,15 +2719,15 @@ export default function ReceivingModule({
       )}
 
       {/* Edit Receiving Record Modal (Super Admin) */}
-      <AnimatePresence>
-        {editingReceiving && (
+      {typeof document !== 'undefined' && editingReceiving && createPortal(
+        <AnimatePresence>
           <motion.div
             key="editing-receiving-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50"
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 z-[100] overflow-y-auto"
           >
             <motion.div
               key="editing-receiving-content"
@@ -2734,7 +2735,7 @@ export default function ReceivingModule({
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.94, y: 16 }}
               transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-              className="bg-white rounded-xl shadow-xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto"
+              className="bg-white rounded-2xl shadow-2xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[calc(100vh-2rem)] my-auto overflow-y-auto"
             >
               <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                 <div>
@@ -2963,19 +2964,20 @@ export default function ReceivingModule({
               </div>
             </motion.div>
           </motion.div>
-        )}
-      </AnimatePresence>
+        </AnimatePresence>,
+        document.body
+      )}
 
       {/* Edit Return Record Modal (Super Admin) */}
-      <AnimatePresence>
-        {editingReturn && (
+      {typeof document !== 'undefined' && editingReturn && createPortal(
+        <AnimatePresence>
           <motion.div
             key="editing-return-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50"
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 z-[100] overflow-y-auto"
           >
             <motion.div
               key="editing-return-content"
@@ -2983,7 +2985,7 @@ export default function ReceivingModule({
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.94, y: 16 }}
               transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-              className="bg-white rounded-xl shadow-xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto"
+              className="bg-white rounded-2xl shadow-2xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[calc(100vh-2rem)] my-auto overflow-y-auto"
             >
               <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                 <div>
@@ -3153,8 +3155,9 @@ export default function ReceivingModule({
               </div>
             </motion.div>
           </motion.div>
-        )}
-      </AnimatePresence>
+        </AnimatePresence>,
+        document.body
+      )}
       {/* Barcode / QR Code Scanner Modal */}
       <BarcodeScannerModal 
         isOpen={showScannerModal}
@@ -3164,15 +3167,15 @@ export default function ReceivingModule({
         subtitle="Use handheld barcode scanner or enter barcode manually"
       />
       {/* Yes / No Action Confirmation Modal */}
-      <AnimatePresence>
-        {confirmAction && (
+      {typeof document !== 'undefined' && confirmAction && createPortal(
+        <AnimatePresence>
           <motion.div
             key="confirm-action-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[120] flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
           >
             <motion.div
               key="confirm-action-content"
@@ -3180,7 +3183,7 @@ export default function ReceivingModule({
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.94, y: 16 }}
               transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-              className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden"
+              className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden my-auto"
             >
               <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -3189,7 +3192,7 @@ export default function ReceivingModule({
                 </div>
                 <button 
                   onClick={() => setConfirmAction(null)} 
-                  className="text-slate-400 hover:text-white transition"
+                  className="text-slate-400 hover:text-white transition cursor-pointer"
                 >
                   <X className="h-5 w-5" />
                 </button>
@@ -3209,7 +3212,7 @@ export default function ReceivingModule({
                   <button
                     type="button"
                     onClick={() => setConfirmAction(null)}
-                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5"
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
                   >
                     <XCircle className="h-4 w-4 text-slate-500" />
                     NO
@@ -3220,7 +3223,7 @@ export default function ReceivingModule({
                       confirmAction.onConfirm();
                       setConfirmAction(null);
                     }}
-                    className={`px-5 py-2 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shadow-sm ${
+                    className={`px-5 py-2 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shadow-sm cursor-pointer ${
                       confirmAction.confirmVariant === 'primary' 
                         ? 'bg-indigo-600 hover:bg-indigo-700' 
                         : 'bg-rose-600 hover:bg-rose-700'
@@ -3233,8 +3236,9 @@ export default function ReceivingModule({
               </div>
             </motion.div>
           </motion.div>
-        )}
-      </AnimatePresence>
+        </AnimatePresence>,
+        document.body
+      )}
     </div>
   );
 }

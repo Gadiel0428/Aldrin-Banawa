@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Users, 
@@ -963,53 +964,56 @@ export default function RegisteredAccountsModule({
       </div>
 
       {/* Modal: Add New Operator Account */}
-      {showAddModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 p-6 max-w-lg w-full space-y-4 relative overflow-hidden text-left">
+      {showAddModal && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[100] bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full flex flex-col max-h-[calc(100vh-2rem)] my-auto overflow-hidden text-left relative">
             {/* Header */}
-            <div className="flex justify-between items-start border-b border-slate-100 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2.5 bg-indigo-50 rounded-xl text-indigo-600">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/70 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-indigo-50 rounded-xl text-indigo-600 border border-indigo-100/80">
                   <UserPlus className="h-5 w-5" />
                 </div>
                 <div>
                   <h4 className="font-bold text-base text-slate-900">
                     Register JPMP WMS Account
                   </h4>
-                  <p className="text-[11px] text-slate-500">
+                  <p className="text-xs text-slate-500">
                     Provision operator credentials, status, and floor permissions
                   </p>
                 </div>
               </div>
               <button 
+                type="button"
                 onClick={resetAddForm}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-md hover:bg-slate-100 transition cursor-pointer"
+                className="text-slate-400 hover:text-slate-700 p-1.5 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+                title="Close"
               >
-                ✕
+                <X className="h-5 w-5" />
               </button>
             </div>
 
-            {/* Master Computer Authority Rule Notice */}
-            <div className="bg-amber-50 border border-amber-200 text-amber-900 text-xs p-3 rounded-xl flex items-start gap-2">
-              <ShieldAlert className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
-              <div className="text-[11px] leading-relaxed">
-                <span className="font-bold font-mono uppercase text-amber-950 block">Master Authorization Notice:</span>
-                Accounts registered here by Super Administrator (<strong className="font-semibold text-slate-900">ALDRIN BANAWA - JPMP-002</strong>) will be securely distributed and authorized for sign-in by operators across all other terminals and computers.
+            {/* Scrollable Form Body */}
+            <form onSubmit={handleRegisterAccount} className="overflow-y-auto flex-1 p-6 space-y-4 text-xs">
+              {/* Master Computer Authority Rule Notice */}
+              <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3.5 rounded-xl flex items-start gap-3 shadow-xs">
+                <ShieldAlert className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                <div className="text-xs leading-relaxed">
+                  <span className="font-bold font-mono uppercase text-amber-950 block mb-0.5">Master Authorization Notice:</span>
+                  Accounts registered here by Super Administrator (<strong className="font-semibold text-slate-900">ALDRIN BANAWA - JPMP-002</strong>) will be securely distributed and authorized for sign-in by operators across all other terminals and computers.
+                </div>
               </div>
-            </div>
 
-            {/* Error Notification */}
-            {addError && (
-              <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs p-3 rounded-xl flex items-start gap-2 animate-in fade-in">
-                <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-rose-500" />
-                <span>{addError}</span>
-              </div>
-            )}
+              {/* Error Notification */}
+              {addError && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs p-3.5 rounded-xl flex items-start gap-2.5 animate-in fade-in">
+                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-rose-500" />
+                  <span className="font-medium">{addError}</span>
+                </div>
+              )}
 
-            {/* Registration Form */}
-            <form onSubmit={handleRegisterAccount} className="space-y-3.5 text-xs">
+              {/* Full Name */}
               <div>
-                <label className="block text-[10px] font-bold text-slate-600 uppercase font-mono mb-1">
+                <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
                   Full Name / Operator Name <span className="text-rose-500">*</span>
                 </label>
                 <input
@@ -1018,13 +1022,14 @@ export default function RegisteredAccountsModule({
                   placeholder="E.G. MARIA SANTOS"
                   value={newUsername}
                   onChange={e => setNewUsername(e.target.value.toUpperCase())}
-                  className="w-full border border-slate-200 px-3 py-2 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none uppercase font-semibold text-slate-800"
+                  className="w-full border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none uppercase font-semibold text-slate-800 text-xs bg-white"
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Employee ID & Phone Number */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-600 uppercase font-mono mb-1">
+                  <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
                     Employee ID / Register ID <span className="text-rose-500">*</span>
                   </label>
                   <input
@@ -1033,44 +1038,45 @@ export default function RegisteredAccountsModule({
                     placeholder="E.G. JPMP-005"
                     value={newEmployeeId}
                     onChange={e => setNewEmployeeId(e.target.value.toUpperCase())}
-                    className="w-full border border-slate-200 px-3 py-2 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono font-bold uppercase text-slate-800"
+                    className="w-full border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono font-bold uppercase text-slate-800 text-xs bg-white"
                   />
-                  <span className="text-[9px] text-slate-400 mt-0.5 block font-mono">
+                  <span className="text-[10px] text-slate-400 mt-1 block font-mono">
                     Auto-prefixed with JPMP-
                   </span>
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-600 uppercase font-mono mb-1">
+                  <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
                     Mobile Phone Number <span className="text-slate-400 font-normal">(Optional)</span>
                   </label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                      <Phone className="h-3.5 w-3.5 text-indigo-500" />
+                      <Phone className="h-4 w-4 text-indigo-500" />
                     </div>
                     <input
                       type="tel"
-                      placeholder="0917 123 4567 or +63 917..."
+                      placeholder="e.g. 0917 123 4567"
                       value={newPhoneNumber}
                       onChange={e => setNewPhoneNumber(e.target.value)}
-                      className="w-full pl-8.5 pr-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono font-bold text-slate-800"
+                      className="w-full pl-9.5 pr-3.5 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono font-bold text-slate-800 text-xs bg-white"
                     />
                   </div>
-                  <span className="text-[9px] text-slate-400 mt-0.5 block font-mono">
-                    For directory contact
+                  <span className="text-[10px] text-slate-400 mt-1 block font-mono">
+                    For direct mobile directory contact
                   </span>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Operational Role & Initial Status */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-600 uppercase font-mono mb-1">
+                  <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
                     Operational Role <span className="text-rose-500">*</span>
                   </label>
                   <select
                     value={newRole}
                     onChange={e => setNewRole(e.target.value)}
-                    className="w-full border border-slate-200 px-3 py-2 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none uppercase font-semibold text-slate-800 bg-white"
+                    className="w-full border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none uppercase font-semibold text-slate-800 bg-white text-xs"
                   >
                     <option value="SYSTEM ADMINISTRATOR">SYSTEM ADMINISTRATOR</option>
                     <option value="WAREHOUSE TEAM LEADER">WAREHOUSE TEAM LEADER</option>
@@ -1095,111 +1101,116 @@ export default function RegisteredAccountsModule({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-600 uppercase font-mono mb-1">
+                  <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
                     Initial Account Status <span className="text-rose-500">*</span>
                   </label>
                   <select
                     value={newStatus}
                     onChange={e => setNewStatus(e.target.value as 'ACTIVE' | 'PENDING' | 'INACTIVE')}
-                    className="w-full border border-slate-200 px-3 py-2 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none font-bold uppercase text-slate-800 bg-white font-mono"
+                    className="w-full border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none font-bold uppercase text-slate-800 bg-white font-mono text-xs"
                   >
-                    <option value="ACTIVE">● ACTIVE (READY FOR OPERATIONS)</option>
-                    <option value="PENDING">○ PENDING (AWAITING VERIFICATION)</option>
-                    <option value="INACTIVE">⊘ INACTIVE (SUSPENDED)</option>
+                    <option value="ACTIVE">ACTIVE (Ready)</option>
+                    <option value="PENDING">PENDING (Verification)</option>
+                    <option value="INACTIVE">INACTIVE (Suspended)</option>
                   </select>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Permission & PIN */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-600 uppercase font-mono mb-1">
+                  <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
                     Access Permission Level <span className="text-rose-500">*</span>
                   </label>
                   <select
                     value={newPermission}
                     onChange={e => setNewPermission(e.target.value)}
-                    className="w-full border border-slate-200 px-3 py-2 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none font-bold uppercase text-slate-800 bg-white"
+                    className="w-full border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none font-bold uppercase text-slate-800 bg-white text-xs"
                   >
-                    <option value="LIMITED_ACCESS">LIMITED ACCESS (CREATE & EDIT ACCESS)</option>
-                    <option value="FULL_ACCESS">FULL ACCESS (CREATE/EDIT/DELETE ACCESS)</option>
-                    <option value="VIEW_ONLY">VIEW ONLY (READ-ONLY ACCESS)</option>
+                    <option value="LIMITED_ACCESS">LIMITED (Create & Edit)</option>
+                    <option value="FULL_ACCESS">FULL (Full Access)</option>
+                    <option value="VIEW_ONLY">VIEW ONLY (Read Only)</option>
                   </select>
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-600 uppercase font-mono mb-1">
+                  <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
                     Custom 4-Digit PIN <span className="text-slate-400 font-normal">(Optional)</span>
                   </label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                      <KeyRound className="h-3.5 w-3.5 text-indigo-500" />
+                      <KeyRound className="h-4 w-4 text-indigo-500" />
                     </div>
                     <input
                       type="text"
                       maxLength={4}
-                      placeholder="Auto-generate if blank"
+                      placeholder="e.g. 1234 (Optional)"
                       value={newCustomPin}
                       onChange={e => setNewCustomPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                      className="w-full pl-8.5 pr-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono font-bold text-slate-800 tracking-widest"
+                      className="w-full pl-9.5 pr-3.5 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono font-bold text-slate-800 tracking-widest text-xs bg-white"
                     />
                   </div>
-                  <span className="text-[9px] text-slate-400 mt-0.5 block font-mono">
-                    Leave blank to auto-generate unique 4-digit PIN
+                  <span className="text-[10px] text-slate-400 mt-1 block font-mono">
+                    Leave blank to auto-generate PIN
                   </span>
                 </div>
               </div>
 
-              {/* Information Notice Card */}
-              <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl text-slate-600 flex items-start gap-2.5">
+              {/* Multi-PC Sync Info Notice */}
+              <div className="bg-slate-50 border border-slate-200/80 p-3.5 rounded-xl text-slate-600 flex items-start gap-3">
                 <ShieldCheck className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
-                <p className="text-[11px] leading-relaxed">
-                  <strong className="text-slate-800">Multi-PC Sync:</strong> The operator account will be registered immediately and synchronized to all active workstations and cloud databases.
+                <p className="text-xs leading-relaxed">
+                  <strong className="text-slate-800 font-bold">Multi-PC Sync:</strong> The operator account will be registered immediately and synchronized to all active workstations and cloud databases.
                 </p>
               </div>
 
-              <div className="flex justify-end gap-2.5 text-xs font-semibold pt-3 border-t border-slate-100">
+              {/* Sticky / Fixed Footer Buttons */}
+              <div className="flex justify-end gap-3 text-xs font-semibold pt-4 border-t border-slate-100 shrink-0">
                 <button 
                   type="button"
                   onClick={resetAddForm}
-                  className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition cursor-pointer"
+                  className="px-4 py-2.5 border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition cursor-pointer font-bold"
                 >
                   Cancel
                 </button>
                 <button 
                   type="submit"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-md font-bold uppercase transition flex items-center gap-1.5 cursor-pointer"
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-md font-bold uppercase transition flex items-center gap-2 cursor-pointer"
                 >
-                  <UserPlus className="h-3.5 w-3.5" />
+                  <UserPlus className="h-4 w-4" />
                   <span>Register Account</span>
                 </button>
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Modal: Edit Existing Account */}
-      {editingAccount && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
-          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 p-6 max-w-md w-full space-y-4 text-left">
-            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+      {editingAccount && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[100] bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-xl w-full flex flex-col max-h-[calc(100vh-2rem)] my-auto overflow-hidden text-left relative">
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/70 shrink-0">
               <div>
-                <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                <h4 className="font-bold text-base text-slate-900 flex items-center gap-2">
                   <Edit className="h-4 w-4 text-indigo-600" /> Edit Registered Account ({editingAccount.employeeId})
                 </h4>
-                <p className="text-[11px] text-slate-500">Super Admin Credentials & Status Management</p>
+                <p className="text-xs text-slate-500">Super Admin Credentials & Status Management</p>
               </div>
               <button 
+                type="button"
                 onClick={() => setEditingAccount(null)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-md hover:bg-slate-100 transition cursor-pointer"
+                className="text-slate-400 hover:text-slate-700 p-1.5 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+                title="Close"
               >
-                ✕
+                <X className="h-5 w-5" />
               </button>
             </div>
 
-            <form onSubmit={handleEditSubmit} className="space-y-3 text-xs">
+            <form onSubmit={handleEditSubmit} className="overflow-y-auto flex-1 p-6 space-y-4 text-xs">
               <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase font-mono mb-1">
+                <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
                   Full Name / Operator Name
                 </label>
                 <input
@@ -1207,13 +1218,13 @@ export default function RegisteredAccountsModule({
                   required
                   value={editingAccount.username}
                   onChange={e => setEditingAccount({ ...editingAccount, username: e.target.value.toUpperCase() })}
-                  className="w-full border border-slate-200 px-3 py-2 rounded-xl focus:ring-1 focus:ring-indigo-500 uppercase font-semibold text-slate-800"
+                  className="w-full border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 uppercase font-semibold text-slate-800 text-xs bg-white"
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase font-mono mb-1">
+                  <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
                     Employee ID
                   </label>
                   <input
@@ -1222,52 +1233,52 @@ export default function RegisteredAccountsModule({
                     value={editingAccount.employeeId}
                     disabled={editingAccount.employeeId === 'JPMP-002'}
                     onChange={e => setEditingAccount({ ...editingAccount, employeeId: e.target.value.toUpperCase() })}
-                    className="w-full border border-slate-200 px-3 py-2 rounded-xl focus:ring-1 focus:ring-indigo-500 font-mono font-bold uppercase disabled:bg-slate-100 disabled:text-slate-500 text-slate-800"
+                    className="w-full border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 font-mono font-bold uppercase disabled:bg-slate-100 disabled:text-slate-500 text-slate-800 text-xs bg-white"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase font-mono mb-1">
+                  <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
                     Account Status
                   </label>
                   <select
                     value={editingAccount.status || 'ACTIVE'}
                     onChange={e => setEditingAccount({ ...editingAccount, status: e.target.value as 'ACTIVE' | 'PENDING' | 'INACTIVE' })}
-                    className="w-full border border-slate-200 px-3 py-2 rounded-xl focus:ring-1 focus:ring-indigo-500 font-mono font-bold uppercase text-slate-800 bg-white"
+                    className="w-full border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 font-mono font-bold uppercase text-slate-800 bg-white text-xs"
                   >
-                    <option value="ACTIVE">● ACTIVE</option>
-                    <option value="PENDING">○ PENDING</option>
-                    <option value="INACTIVE">⊘ INACTIVE</option>
+                    <option value="ACTIVE">ACTIVE (Ready)</option>
+                    <option value="PENDING">PENDING (Verification)</option>
+                    <option value="INACTIVE">INACTIVE (Suspended)</option>
                   </select>
                 </div>
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase font-mono mb-1">
+                <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
                   Registered Mobile Phone Number
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                    <Phone className="h-3.5 w-3.5 text-indigo-500" />
+                    <Phone className="h-4 w-4 text-indigo-500" />
                   </div>
                   <input
                     type="tel"
                     placeholder="e.g. +63 917 123 4567"
                     value={editingAccount.phoneNumber || ''}
                     onChange={e => setEditingAccount({ ...editingAccount, phoneNumber: e.target.value })}
-                    className="w-full pl-8.5 pr-3 py-2 border border-slate-200 rounded-xl focus:ring-1 focus:ring-indigo-500 font-mono font-semibold text-slate-800"
+                    className="w-full pl-9.5 pr-3.5 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 font-mono font-semibold text-slate-800 text-xs bg-white"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase font-mono mb-1">
+                <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
                   Operational Role
                 </label>
                 <select
                   value={editingAccount.role}
                   onChange={e => setEditingAccount({ ...editingAccount, role: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-2 rounded-xl focus:ring-1 focus:ring-indigo-500 uppercase font-semibold text-slate-800 bg-white"
+                  className="w-full border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 uppercase font-semibold text-slate-800 bg-white text-xs"
                 >
                   <option value="SYSTEM ADMINISTRATOR">SYSTEM ADMINISTRATOR</option>
                   <option value="WAREHOUSE TEAM LEADER">WAREHOUSE TEAM LEADER</option>
@@ -1292,22 +1303,22 @@ export default function RegisteredAccountsModule({
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase font-mono mb-1">
+                <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
                   Access Permission Level
                 </label>
                 <select
                   value={editingAccount.permission || 'LIMITED_ACCESS'}
                   onChange={e => setEditingAccount({ ...editingAccount, permission: e.target.value })}
-                  className="w-full border border-slate-200 px-3 py-2 rounded-xl focus:ring-1 focus:ring-indigo-500 font-bold uppercase text-slate-800 bg-white"
+                  className="w-full border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 font-bold uppercase text-slate-800 bg-white text-xs"
                 >
-                  <option value="LIMITED_ACCESS">LIMITED ACCESS (CREATE & EDIT ACCESS)</option>
-                  <option value="FULL_ACCESS">FULL ACCESS (CREATE/EDIT/DELETE ACCESS)</option>
-                  <option value="VIEW_ONLY">VIEW ONLY (READ-ONLY ACCESS)</option>
+                  <option value="LIMITED_ACCESS">LIMITED (Create & Edit)</option>
+                  <option value="FULL_ACCESS">FULL (Full Access)</option>
+                  <option value="VIEW_ONLY">VIEW ONLY (Read Only)</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase font-mono mb-1">
+                <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
                   Reset 4-Digit Security PIN
                 </label>
                 <input
@@ -1320,28 +1331,29 @@ export default function RegisteredAccountsModule({
                     const digits = e.target.value.replace(/\D/g, '');
                     setEditingAccount({ ...editingAccount, pin: digits });
                   }}
-                  className="w-full border border-slate-200 px-3 py-2 rounded-xl focus:ring-1 focus:ring-indigo-500 font-mono font-bold tracking-widest text-center text-slate-800"
+                  className="w-full border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 font-mono font-bold tracking-widest text-center text-slate-800 text-xs bg-white"
                 />
               </div>
 
-              <div className="flex justify-end gap-2 text-xs font-semibold pt-3 border-t border-slate-100">
+              <div className="flex justify-end gap-3 text-xs font-semibold pt-4 border-t border-slate-100 shrink-0">
                 <button 
                   type="button"
                   onClick={() => setEditingAccount(null)}
-                  className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 cursor-pointer"
+                  className="px-4 py-2.5 border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition cursor-pointer font-bold"
                 >
                   Cancel
                 </button>
                 <button 
                   type="submit"
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 shadow-sm font-bold uppercase cursor-pointer"
+                  className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 shadow-md font-bold uppercase transition cursor-pointer"
                 >
                   Save Changes
                 </button>
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* QR Code Login Badge Modal */}

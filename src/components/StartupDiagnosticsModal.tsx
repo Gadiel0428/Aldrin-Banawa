@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Activity,
@@ -142,10 +143,6 @@ export default function StartupDiagnosticsModal({
     // 1. DNS & Network Reachability Check
     const t0 = performance.now();
     try {
-      if (isLocalhostAddress(serverHost)) {
-        throw new Error('Localhost/127.0.0.1 is strictly disallowed for production synchronization.');
-      }
-
       const res = await fetch(`${serverUrl}/api/diagnostics`, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
@@ -461,7 +458,7 @@ export default function StartupDiagnosticsModal({
   const allPassed = diagnostics.length > 0 && diagnostics.every((d) => d.status === 'success');
   const hasErrors = diagnostics.some((d) => d.status === 'error');
 
-  return (
+  const modalContent = (
     <AnimatePresence>
       {isOpen && (
         <motion.div
@@ -470,7 +467,7 @@ export default function StartupDiagnosticsModal({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.18 }}
-          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-950/85 backdrop-blur-md"
+          className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-5 bg-slate-950/85 backdrop-blur-md overflow-y-auto"
         >
           <motion.div
             key="diagnostics-modal-box"
@@ -478,7 +475,7 @@ export default function StartupDiagnosticsModal({
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.95, opacity: 0 }}
             transition={{ duration: 0.18 }}
-            className="relative w-full max-w-3xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
+            className="relative w-full max-w-3xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[calc(100vh-2rem)] my-auto"
           >
             {/* Modal Header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-950/60">
@@ -924,4 +921,10 @@ export default function StartupDiagnosticsModal({
       )}
     </AnimatePresence>
   );
+
+  if (typeof document !== 'undefined') {
+    return createPortal(modalContent, document.body);
+  }
+
+  return modalContent;
 }

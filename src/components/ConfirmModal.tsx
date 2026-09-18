@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { AlertTriangle, CheckCircle2, XCircle, Info } from 'lucide-react';
 
@@ -28,7 +29,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({ config, onClose }) =
     onClose();
   };
 
-  return (
+  const content = (
     <AnimatePresence>
       {config && (
         <motion.div
@@ -36,16 +37,16 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({ config, onClose }) =
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.25 }}
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-2xl"
+          transition={{ duration: 0.2 }}
+          className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md overflow-y-auto"
         >
           <motion.div
             key="confirm-modal-content"
             initial={{ opacity: 0, scale: 0.94, y: 14, filter: 'blur(8px)' }}
             animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
             exit={{ opacity: 0, scale: 0.94, y: 14, filter: 'blur(8px)' }}
-            transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-            className="frosted-glass-modal-light rounded-3xl shadow-2xl max-w-md w-full p-6 border border-white/80 text-slate-900"
+            transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+            className="frosted-glass-modal-light rounded-3xl shadow-2xl max-w-md w-full p-6 border border-white/80 text-slate-900 my-auto"
           >
             <div className="flex items-start gap-3.5 mb-4">
               <div className="p-2.5 rounded-2xl shrink-0 bg-blue-50/90 text-blue-700 border border-blue-200/80 backdrop-blur-md">
@@ -92,5 +93,12 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({ config, onClose }) =
       )}
     </AnimatePresence>
   );
+
+  if (typeof document !== 'undefined') {
+    return createPortal(content, document.body);
+  }
+
+  return content;
 };
+
 

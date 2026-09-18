@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Plus, 
   Search, 
@@ -1009,15 +1010,15 @@ export default function DeliveryModule({
       )}
 
       {/* Gate Pass Release Modal Dialog */}
-      <AnimatePresence>
-        {showGatePassModal && (
+      {typeof document !== 'undefined' && showGatePassModal && createPortal(
+        <AnimatePresence>
           <motion.div
             key="gate-pass-modal-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50"
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 z-[100] overflow-y-auto"
           >
             <motion.div
               key="gate-pass-modal-content"
@@ -1025,7 +1026,7 @@ export default function DeliveryModule({
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.94, y: 16 }}
               transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-              className="bg-white rounded-xl shadow-lg border border-slate-200 p-6 max-w-sm w-full space-y-4"
+              className="bg-white rounded-2xl shadow-2xl border border-slate-200 p-6 max-w-sm w-full space-y-4 my-auto"
             >
               <div>
                 <h4 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
@@ -1066,32 +1067,33 @@ export default function DeliveryModule({
               <div className="flex justify-end gap-2 text-xs font-semibold pt-2 border-t border-slate-100">
                 <button 
                   onClick={() => setShowGatePassModal(null)}
-                  className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded hover:bg-slate-50"
+                  className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded hover:bg-slate-50 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button 
                   onClick={() => handleGatePassReleaseSubmit(showGatePassModal)}
-                  className="px-3 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700"
+                  className="px-3 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 cursor-pointer"
                 >
                   Sign & Authorize Release
                 </button>
               </div>
             </motion.div>
           </motion.div>
-        )}
-      </AnimatePresence>
+        </AnimatePresence>,
+        document.body
+      )}
 
       {/* Edit Delivery Modal (Super Admin) */}
-      <AnimatePresence>
-        {editingDelivery && (
+      {typeof document !== 'undefined' && editingDelivery && createPortal(
+        <AnimatePresence>
           <motion.div
             key="editing-delivery-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50"
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 z-[100] overflow-y-auto"
           >
             <motion.div
               key="editing-delivery-content"
@@ -1099,7 +1101,7 @@ export default function DeliveryModule({
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.94, y: 16 }}
               transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-              className="bg-white rounded-xl shadow-xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto"
+              className="bg-white rounded-2xl shadow-2xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[calc(100vh-2rem)] my-auto overflow-y-auto"
             >
               <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                 <div>
@@ -1260,8 +1262,9 @@ export default function DeliveryModule({
               </div>
             </motion.div>
           </motion.div>
-        )}
-      </AnimatePresence>
+        </AnimatePresence>,
+        document.body
+      )}
 
       {/* Printable Picking List & Documentation Modal */}
       {selectedPickingDocDelivery && (
