@@ -121,7 +121,6 @@ import DeliveryModule from './components/DeliveryModule';
 import EnvironmentalModule from './components/EnvironmentalModule';
 import RegisteredAccountsModule from './components/RegisteredAccountsModule';
 import MasterRegistryModule, { DEFAULT_MASTER_REGISTRIES } from './components/MasterRegistryModule';
-import OnlineUpdatePromptModal, { PendingOnlineUpdate } from './components/OnlineUpdatePromptModal';
 import VersionUpdateBanner from './components/VersionUpdateBanner';
 
 import {
@@ -346,7 +345,6 @@ export default function App() {
   const [lastSyncedTime, setLastSyncedTime] = useState<Date>(new Date());
   const [liveSyncToast, setLiveSyncToast] = useState<{ id: string; author: string; action: string; time: string } | null>(null);
   const [showActiveUsersModal, setShowActiveUsersModal] = useState<boolean>(false);
-  const [pendingOnlineUpdates, setPendingOnlineUpdates] = useState<PendingOnlineUpdate[]>([]);
   const [updateAvailable, setUpdateAvailable] = useState<boolean>(false);
   const [bannerDismissed, setBannerDismissed] = useState<boolean>(false);
   const [newVersionString, setNewVersionString] = useState<string>('');
@@ -743,12 +741,12 @@ export default function App() {
     }
   }, [currentUser, currentEmployeeId, currentRole, view]);
 
-  // Auto-dismiss live sync toast notifications after 3.5 seconds
+  // Auto-dismiss live sync toast notifications after 2.8 seconds
   useEffect(() => {
     if (liveSyncToast) {
       const timer = setTimeout(() => {
         setLiveSyncToast(null);
-      }, 3500);
+      }, 2800);
       return () => clearTimeout(timer);
     }
   }, [liveSyncToast]);
@@ -2654,35 +2652,9 @@ export default function App() {
                 // Apply state update in the background for consistency
                 applyChange();
 
-                // If modified by another user/workstation, prompt the operator with the online update prompt modal
+                // Auto-merged incoming record changes without requiring manual confirmation
                 const isFromOtherUser = author && author.toUpperCase() !== (currentUser || '').toUpperCase();
                 if (isFromOtherUser) {
-                  const updateId = `upd-${record.id}-${Date.now()}`;
-                  const promptItem: PendingOnlineUpdate = {
-                    id: updateId,
-                    type: (payload.type === 'DATA_CREATE' || payload.type === 'RECORD_CREATED') ? 'DATA_CREATE' : 'DATA_UPDATE',
-                    collection,
-                    record,
-                    recordId: record.id,
-                    author: author || 'Connected Operator',
-                    employeeId,
-                    device_id,
-                    stationId,
-                    actionDesc: actionDesc || `Modified ${collection} record (${record.partCode || record.id})`,
-                    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-                    systemResetVersion: Number(payload.systemResetVersion) || currentResetVer,
-                    applyUpdate: applyChange,
-                    dismissUpdate: () => {
-                      setPendingOnlineUpdates(prev => prev.filter(u => u.id !== updateId));
-                    }
-                  };
-
-                  setPendingOnlineUpdates(prev => {
-                    // Prevent duplicate prompts for exact same record
-                    const filtered = prev.filter(p => p.recordId !== record.id);
-                    return [promptItem, ...filtered];
-                  });
-
                   setLiveSyncToast({
                     id: record.id,
                     author,
@@ -2734,32 +2706,9 @@ export default function App() {
 
                 applyDelete();
 
+                // Auto-merged incoming record deletion without requiring manual confirmation
                 const isFromOtherUser = author && author.toUpperCase() !== (currentUser || '').toUpperCase();
                 if (isFromOtherUser) {
-                  const updateId = `del-${id}-${Date.now()}`;
-                  const promptItem: PendingOnlineUpdate = {
-                    id: updateId,
-                    type: 'DATA_DELETE',
-                    collection,
-                    recordId: id,
-                    author: author || 'Connected Operator',
-                    employeeId,
-                    device_id,
-                    stationId,
-                    actionDesc: actionDesc || `Deleted ${collection} record (${id})`,
-                    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-                    systemResetVersion: Number(payload.systemResetVersion) || currentResetVer,
-                    applyUpdate: applyDelete,
-                    dismissUpdate: () => {
-                      setPendingOnlineUpdates(prev => prev.filter(u => u.id !== updateId));
-                    }
-                  };
-
-                  setPendingOnlineUpdates(prev => {
-                    const filtered = prev.filter(p => p.recordId !== id);
-                    return [promptItem, ...filtered];
-                  });
-
                   setLiveSyncToast({
                     id,
                     author,
@@ -2861,23 +2810,6 @@ export default function App() {
               setLastSyncedTime(new Date());
               const isFromOtherUser = payload.triggeredBy && payload.triggeredBy.toUpperCase() !== (currentUser || '').toUpperCase();
               if (isFromOtherUser) {
-                const updateId = `sync-${Date.now()}`;
-                const promptItem: PendingOnlineUpdate = {
-                  id: updateId,
-                  type: 'SYNC',
-                  collection: 'Cluster Database',
-                  author: payload.triggeredBy || 'Cluster Operator',
-                  actionDesc: 'Triggered cluster-wide online data refresh',
-                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-                  applyUpdate: () => {
-                    runSyncCheck();
-                  },
-                  dismissUpdate: () => {
-                    setPendingOnlineUpdates(prev => prev.filter(u => u.id !== updateId));
-                  }
-                };
-                setPendingOnlineUpdates(prev => [promptItem, ...prev.filter(p => p.type !== 'SYNC')]);
-
                 setLiveSyncToast({
                   id: String(Date.now()),
                   author: payload.triggeredBy,
@@ -5052,19 +4984,6 @@ export default function App() {
               <Smartphone className="h-3.5 w-3.5 text-slate-600 shrink-0" />
             </button>
 
-            {/* Online Live Updates Indicator Pill */}
-            {pendingOnlineUpdates.length > 0 && (
-              <button
-                type="button"
-                onClick={() => {}}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white shadow-md shadow-amber-500/30 animate-pulse transition-all cursor-pointer"
-                title={`${pendingOnlineUpdates.length} online update(s) received from other operators`}
-              >
-                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                <span>{pendingOnlineUpdates.length} Online Update{pendingOnlineUpdates.length > 1 ? 's' : ''}</span>
-              </button>
-            )}
-
             {/* Isolated Live Date & Time Display */}
             <LiveClock />
           </div>
@@ -5345,52 +5264,30 @@ export default function App() {
         />
       )}
 
-      {/* Interactive Online Live Update Prompt Modal */}
-      {pendingOnlineUpdates.length > 0 && (
-        <OnlineUpdatePromptModal
-          pendingUpdates={pendingOnlineUpdates}
-          onAcceptUpdate={(updateId) => {
-            const upd = pendingOnlineUpdates.find(u => u.id === updateId);
-            if (upd) {
-              upd.applyUpdate();
-              setPendingOnlineUpdates(prev => prev.filter(u => u.id !== updateId));
-            }
-          }}
-          onAcceptAllUpdates={() => {
-            pendingOnlineUpdates.forEach(u => u.applyUpdate());
-            setPendingOnlineUpdates([]);
-          }}
-          onDismissUpdate={(updateId) => {
-            setPendingOnlineUpdates(prev => prev.filter(u => u.id !== updateId));
-          }}
-          onDismissAllUpdates={() => {
-            setPendingOnlineUpdates([]);
-          }}
-        />
-      )}
-
-      {/* Live Remote Activity Sync Toast */}
+      {/* Live Remote Activity Sync Toast (Minimized, Non-Interfering) */}
       {liveSyncToast && (
-        <div className="fixed bottom-6 right-6 z-50 animate-in fade-in slide-in-from-bottom-3 duration-300 pointer-events-auto">
-          <div className="bg-slate-900/95 text-white border border-emerald-500/40 rounded-xl px-4 py-3 shadow-2xl flex items-center gap-3 backdrop-blur-md">
-            <div className="p-2 bg-emerald-500/20 text-emerald-400 rounded-lg shrink-0">
-              <RefreshCw className="h-4 w-4 animate-spin text-emerald-400" />
+        <div className="fixed bottom-4 right-4 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200 pointer-events-none select-none">
+          <div className="bg-slate-900/85 hover:bg-slate-900/95 text-slate-200 border border-emerald-500/30 rounded-full px-3 py-1.5 shadow-lg flex items-center gap-2 backdrop-blur-md text-[11px] max-w-[360px] sm:max-w-md transition-all">
+            <span className="relative flex h-2 w-2 shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+            </span>
+            <RefreshCw className="h-3 w-3 animate-spin text-emerald-400 shrink-0" />
+            <div className="truncate font-sans leading-tight">
+              <span className="font-semibold text-emerald-400">{liveSyncToast.author}</span>
+              <span className="text-slate-300 ml-1.5">{liveSyncToast.action}</span>
             </div>
-            <div className="text-xs">
-              <div className="font-bold text-white flex items-center gap-1.5 font-mono">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                <span>LIVE REALTIME SYNC</span>
-                <span className="text-[10px] text-slate-400 font-mono">({liveSyncToast.time})</span>
-              </div>
-              <div className="text-slate-300 text-[11px] mt-0.5">
-                <span className="text-emerald-300 font-bold">{liveSyncToast.author}</span> {liveSyncToast.action}
-              </div>
-            </div>
+            <span className="text-[10px] font-mono text-slate-400 shrink-0 border-l border-slate-700/80 pl-2">
+              {liveSyncToast.time}
+            </span>
             <button
+              type="button"
               onClick={() => setLiveSyncToast(null)}
-              className="text-slate-400 hover:text-white ml-2 text-xs font-bold p-1"
+              className="pointer-events-auto text-slate-400 hover:text-white ml-0.5 p-0.5 rounded-full hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
+              title="Dismiss notification"
+              aria-label="Dismiss notification"
             >
-              <X className="h-3.5 w-3.5" />
+              <X className="h-3 w-3" />
             </button>
           </div>
         </div>
