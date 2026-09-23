@@ -20,6 +20,7 @@ import {
   CheckCircle2
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import { getPublicAppUrl } from '../config/serverConfig';
 
 interface MobileAppDownloadModalProps {
   isOpen: boolean;
@@ -71,7 +72,8 @@ export default function MobileAppDownloadModal({
     };
   }, [onFreshInstallSync]);
 
-  const currentUrl = typeof window !== 'undefined' ? window.location.origin : '';
+  // Clean public production URL (Guarantees no Google/Gmail account sign-in screen on mobile devices)
+  const currentUrl = getPublicAppUrl();
   const isHttps = typeof window !== 'undefined' ? window.location.protocol === 'https:' : true;
 
   const handleInstallClick = async () => {
@@ -206,6 +208,15 @@ export default function MobileAppDownloadModal({
 
             {/* Modal Body */}
             <div className="p-6 overflow-y-auto space-y-6 flex-1 text-slate-200">
+
+              {/* No Gmail Account Required Banner */}
+              <div className="p-3 bg-emerald-950/60 border border-emerald-500/40 rounded-xl flex items-center gap-2.5 text-emerald-300 text-xs">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                <span>
+                  <strong>Standalone Direct Access:</strong> No Google or Gmail account login required. Mobile scanners and tablets connect directly using internal operator credentials.
+                </span>
+              </div>
+
               {/* TAB 1: 1-Tap WebAPK Install */}
               {activeTab === 'install' && (
                 <div className="space-y-6">

@@ -50,6 +50,7 @@ interface RegisteredAccountsModuleProps {
   currentUser: string;
   currentEmployeeId: string;
   isSuperAdmin?: boolean;
+  canEdit?: boolean;
 }
 
 export default function RegisteredAccountsModule({
@@ -60,7 +61,8 @@ export default function RegisteredAccountsModule({
   onClearAllAccounts,
   currentUser,
   currentEmployeeId,
-  isSuperAdmin = false
+  isSuperAdmin = false,
+  canEdit = false
 }: RegisteredAccountsModuleProps) {
   // Search and Filter States
   const [searchQuery, setSearchQuery] = useState('');

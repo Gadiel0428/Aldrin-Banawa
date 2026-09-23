@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Plus, 
@@ -39,6 +40,7 @@ interface EnvironmentalModuleProps {
   onUpdateLocation?: (id: string, updated: Partial<MasterRegistryItem>) => void;
   onDeleteLocation?: (id: string) => void;
   isSuperAdmin?: boolean;
+  canEdit?: boolean;
   currentUserRole?: string;
   currentUser?: string;
 }
@@ -63,9 +65,11 @@ export default function EnvironmentalModule({
   onUpdateLocation,
   onDeleteLocation,
   isSuperAdmin = false,
+  canEdit = false,
   currentUserRole = '',
   currentUser = ''
 }: EnvironmentalModuleProps) {
+  const effectiveCanEdit = canEdit || isSuperAdmin;
   const [activeTab, setActiveTab] = useState<'audits' | 'locations'>('audits');
   const [showForm, setShowForm] = useState(false);
   const [confirmAction, setConfirmAction] = useState<ConfirmActionConfig | null>(null);
@@ -429,7 +433,7 @@ export default function EnvironmentalModule({
           {/* Action panel */}
           <div className="flex justify-between items-center bg-slate-50 p-4 border border-slate-200 rounded-xl">
             <h3 className="font-bold text-xs text-slate-700 uppercase tracking-wider">Zone Utilization Audits Log</h3>
-            {isSuperAdmin ? (
+            {effectiveCanEdit ? (
               <button 
                 onClick={() => setShowForm(!showForm)}
                 className="bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-2 px-4 rounded-lg flex items-center gap-1.5 cursor-pointer"
@@ -439,7 +443,7 @@ export default function EnvironmentalModule({
               </button>
             ) : (
               <span className="text-[10px] font-mono text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded font-bold uppercase">
-                🔒 View-Only Mode (Add/Edit restricted to Super Admin)
+                🔒 View-Only Mode
               </span>
             )}
           </div>
@@ -722,13 +726,19 @@ export default function EnvironmentalModule({
               </select>
             </div>
 
-            <button
-              onClick={handleOpenNewLocationModal}
-              className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 px-4 rounded-lg flex items-center justify-center gap-2 transition shadow-sm cursor-pointer shrink-0"
-              id="btn-register-location"
-            >
-              <Plus className="h-4 w-4" /> Register New Storage Location
-            </button>
+            {isSuperAdmin ? (
+              <button
+                onClick={handleOpenNewLocationModal}
+                className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 px-4 rounded-lg flex items-center justify-center gap-2 transition shadow-sm cursor-pointer shrink-0"
+                id="btn-register-location"
+              >
+                <Plus className="h-4 w-4" /> Register New Storage Location
+              </button>
+            ) : (
+              <span className="text-[10px] font-mono text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded font-bold uppercase shrink-0">
+                🔒 View-Only Mode
+              </span>
+            )}
           </div>
 
           {/* Location Master Table */}
@@ -789,30 +799,34 @@ export default function EnvironmentalModule({
                         </td>
                         <td className="p-4 text-slate-500 font-mono">{loc.dateRegistered}</td>
                         <td className="p-4 text-right font-sans">
-                          <div className="flex justify-end gap-1.5">
-                            <button
-                              onClick={() => handleEditLocationModal(loc)}
-                              className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
-                              title="Edit Location"
-                            >
-                              <Edit className="h-3 w-3 text-slate-500" /> Edit
-                            </button>
-                            <button
-                              onClick={() => {
-                                setConfirmAction({
-                                  title: 'Delete Registered Storage Location',
-                                  message: `Are you sure you want to delete storage location record "${loc.name}" (${loc.code})?`,
-                                  confirmLabel: 'YES, DELETE LOCATION',
-                                  confirmVariant: 'danger',
-                                  onConfirm: () => onDeleteLocation?.(loc.id)
-                                });
-                              }}
-                              className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded text-xs font-semibold flex items-center gap-1 transition cursor-pointer border border-rose-200"
-                              title="Delete Location"
-                            >
-                              <Trash2 className="h-3 w-3 text-rose-600" /> Delete
-                            </button>
-                          </div>
+                          {isSuperAdmin ? (
+                            <div className="flex justify-end gap-1.5">
+                              <button
+                                onClick={() => handleEditLocationModal(loc)}
+                                className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
+                                title="Edit Location"
+                              >
+                                <Edit className="h-3 w-3 text-slate-500" /> Edit
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setConfirmAction({
+                                    title: 'Delete Registered Storage Location',
+                                    message: `Are you sure you want to delete storage location record "${loc.name}" (${loc.code})?`,
+                                    confirmLabel: 'YES, DELETE LOCATION',
+                                    confirmVariant: 'danger',
+                                    onConfirm: () => onDeleteLocation?.(loc.id)
+                                  });
+                                }}
+                                className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded text-xs font-semibold flex items-center gap-1 transition cursor-pointer border border-rose-200"
+                                title="Delete Location"
+                              >
+                                <Trash2 className="h-3 w-3 text-rose-600" /> Delete
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 italic text-[10px] font-semibold">Super Admin Only</span>
+                          )}
                         </td>
                       </tr>
                     ))
@@ -825,15 +839,15 @@ export default function EnvironmentalModule({
       )}
 
       {/* Location Registration Modal */}
-      <AnimatePresence>
-        {showLocationModal && (
+      {typeof document !== 'undefined' && showLocationModal && createPortal(
+        <AnimatePresence>
           <motion.div
             key="location-modal-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4"
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-3 sm:p-4 overflow-y-auto"
           >
             <motion.div
               key="location-modal-content"
@@ -841,7 +855,7 @@ export default function EnvironmentalModule({
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.94, y: 16 }}
               transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-              className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4"
+              className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 my-auto"
             >
               <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                 <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
@@ -923,8 +937,9 @@ export default function EnvironmentalModule({
               </form>
             </motion.div>
           </motion.div>
-        )}
-      </AnimatePresence>
+        </AnimatePresence>,
+        document.body
+      )}
     </div>
   );
 }

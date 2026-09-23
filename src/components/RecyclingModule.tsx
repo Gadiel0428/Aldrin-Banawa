@@ -23,14 +23,17 @@ interface RecyclingModuleProps {
   onAddRecycling: (record: RecyclingRecord) => void;
   onDeleteRecycling: (id: string) => void;
   isSuperAdmin?: boolean;
+  canEdit?: boolean;
 }
 
 export default function RecyclingModule({
   recycling,
   onAddRecycling,
   onDeleteRecycling,
-  isSuperAdmin = false
+  isSuperAdmin = false,
+  canEdit = false
 }: RecyclingModuleProps) {
+  const effectiveCanEdit = canEdit || isSuperAdmin;
   const [searchQuery, setSearchQuery] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [confirmAction, setConfirmAction] = useState<ConfirmActionConfig | null>(null);
@@ -158,17 +161,17 @@ export default function RecyclingModule({
           />
         </div>
 
-        {isSuperAdmin ? (
+        {effectiveCanEdit ? (
           <button 
             onClick={() => setShowForm(!showForm)}
-            className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-2 px-4 rounded-lg flex items-center justify-center gap-1.5"
+            className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-2 px-4 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
             id="btn-add-recycling-log"
           >
             <Plus className="h-4 w-4" /> Log Sorting Activity Sheet
           </button>
         ) : (
           <span className="text-[10px] font-mono text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded font-bold uppercase">
-            🔒 View-Only Mode (Log Sorting restricted to Super Admin)
+            🔒 View-Only Mode
           </span>
         )}
       </div>

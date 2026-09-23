@@ -65,6 +65,7 @@ interface ReceivingModuleProps {
   onDeleteReturn?: (id: string) => void;
   stocks?: MaterialStockItem[];
   isSuperAdmin?: boolean;
+  canEdit?: boolean;
   registries?: MasterRegistryItem[];
   onOpenRegisterModal?: (type?: RegistryType) => void;
 }
@@ -82,9 +83,11 @@ export default function ReceivingModule({
   onDeleteReturn,
   stocks = [],
   isSuperAdmin = false,
+  canEdit = false,
   registries = [],
   onOpenRegisterModal
 }: ReceivingModuleProps) {
+  const effectiveCanEdit = canEdit || isSuperAdmin;
   const [activeTab, setActiveTab] = useState<'external-internal' | 'returns'>('external-internal');
   const [searchQuery, setSearchQuery] = useState('');
   const [classificationFilter, setClassificationFilter] = useState<string>('ALL');
@@ -937,7 +940,7 @@ export default function ReceivingModule({
                 <ScanLine className="h-4 w-4" /> Scan
               </button>
 
-              {isSuperAdmin ? (
+              {effectiveCanEdit ? (
                 <button 
                   onClick={() => setShowAddForm(!showAddForm)}
                   className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-2 px-4 rounded-lg flex items-center justify-center gap-1.5 shrink-0"
@@ -1759,7 +1762,7 @@ export default function ReceivingModule({
                             )}
                           </td>
                           <td className="p-4" data-no-expand="true">
-                            {isSuperAdmin ? (
+                            {effectiveCanEdit || isSuperAdmin ? (
                               <select
                                 defaultValue=""
                                 onChange={(e) => {
@@ -1780,8 +1783,10 @@ export default function ReceivingModule({
                                       confirmVariant: 'danger',
                                       onConfirm: () => onUpdateIqc(r.id, 'REJECTED_IQC')
                                     });
-                                  } else if (val === 'EDIT') setEditingReceiving({ ...r });
-                                  else if (val === 'DELETE') {
+                                  } else if (val === 'EDIT') {
+                                    setEditingReceiving({ ...r });
+                                  } else if (val === 'DELETE') {
+                                    if (!isSuperAdmin) return;
                                     setConfirmAction({
                                       title: 'Delete Receiving Record',
                                       message: `Are you sure you want to delete receiving record ${r.rrNumber || r.id} (${r.partCode})?`,
@@ -1803,10 +1808,12 @@ export default function ReceivingModule({
                                   </>
                                 )}
                                 <option value="EDIT">📝 Edit Record</option>
-                                <option value="DELETE">🗑️ Delete Record</option>
+                                {isSuperAdmin && (
+                                  <option value="DELETE">🗑️ Delete Record</option>
+                                )}
                               </select>
                             ) : (
-                              <span className="text-slate-400 italic font-semibold text-[10px]">Super Admin Only</span>
+                              <span className="text-slate-400 italic font-semibold text-[10px]">Read-Only</span>
                             )}
                           </td>
                         </tr>
@@ -2022,7 +2029,7 @@ export default function ReceivingModule({
                                             </div>
                                           </div>
 
-                                          {isSuperAdmin && r.iqcStatus === 'PENDING_IQC' && (
+                                          {effectiveCanEdit && r.iqcStatus === 'PENDING_IQC' && (
                                             <div className="pt-2 flex items-center gap-2" data-no-expand="true">
                                               <button
                                                 type="button"
@@ -2090,7 +2097,7 @@ export default function ReceivingModule({
               />
             </div>
 
-            {isSuperAdmin ? (
+            {effectiveCanEdit ? (
               <button 
                 onClick={() => setShowReturnForm(!showReturnForm)}
                 className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-2 px-4 rounded-lg flex items-center justify-center gap-1.5"
@@ -2100,7 +2107,7 @@ export default function ReceivingModule({
               </button>
             ) : (
               <span className="text-[10px] font-mono text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded font-bold uppercase">
-                🔒 View-Only Mode (Log Return restricted to Super Admin)
+                🔒 View-Only Mode
               </span>
             )}
           </div>
@@ -2510,7 +2517,7 @@ export default function ReceivingModule({
                             )}
                           </td>
                           <td className="p-4" data-no-expand="true">
-                            {isSuperAdmin ? (
+                            {effectiveCanEdit || isSuperAdmin ? (
                               <select
                                 defaultValue=""
                                 onChange={(e) => {
@@ -2523,8 +2530,10 @@ export default function ReceivingModule({
                                       confirmVariant: 'primary',
                                       onConfirm: () => onUpdateReturnStatus(r.id, 'APPROVED')
                                     });
-                                  } else if (val === 'EDIT') setEditingReturn({ ...r });
-                                  else if (val === 'DELETE') {
+                                  } else if (val === 'EDIT') {
+                                    setEditingReturn({ ...r });
+                                  } else if (val === 'DELETE') {
+                                    if (!isSuperAdmin) return;
                                     setConfirmAction({
                                       title: 'Delete Return Record',
                                       message: `Are you sure you want to delete return record ${r.returnSlipFormNumber} (${r.partCode})?`,
@@ -2543,10 +2552,12 @@ export default function ReceivingModule({
                                   <option value="APPROVE">✅ Pass Quality & Approve</option>
                                 )}
                                 <option value="EDIT">📝 Edit Record</option>
-                                <option value="DELETE">🗑️ Delete Record</option>
+                                {isSuperAdmin && (
+                                  <option value="DELETE">🗑️ Delete Record</option>
+                                )}
                               </select>
                             ) : (
-                              <span className="text-slate-400 italic font-semibold text-[10px]">Super Admin Only</span>
+                              <span className="text-slate-400 italic font-semibold text-[10px]">Read-Only</span>
                             )}
                           </td>
                         </tr>
@@ -2680,7 +2691,7 @@ export default function ReceivingModule({
                                             </div>
                                           </div>
 
-                                          {isSuperAdmin && r.status === 'QUARANTINED' && (
+                                          {effectiveCanEdit && r.status === 'QUARANTINED' && (
                                             <div className="pt-2" data-no-expand="true">
                                               <button
                                                 type="button"

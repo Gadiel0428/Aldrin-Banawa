@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Plus, 
   Search, 
@@ -45,6 +46,7 @@ interface IssuanceModuleProps {
   onEditIssuance?: (record: IssuanceRecord) => void;
   onDeleteIssuance?: (id: string) => void;
   isSuperAdmin?: boolean;
+  canEdit?: boolean;
   registries?: MasterRegistryItem[];
   currentUser?: string;
 }
@@ -57,9 +59,11 @@ export default function IssuanceModule({
   onEditIssuance,
   onDeleteIssuance,
   isSuperAdmin = false,
+  canEdit = false,
   registries = [],
   currentUser = ''
 }: IssuanceModuleProps) {
+  const effectiveCanEdit = canEdit || isSuperAdmin;
   const [searchQuery, setSearchQuery] = useState('');
   const [showScannerModal, setShowScannerModal] = useState(false);
   const [editingIssuance, setEditingIssuance] = useState<IssuanceRecord | null>(null);
@@ -361,7 +365,7 @@ export default function IssuanceModule({
           </div>
 
           <div className="flex items-center sm:ml-auto shrink-0">
-            {isSuperAdmin ? (
+            {effectiveCanEdit ? (
               <button 
                 onClick={() => setShowForm(!showForm)}
                 className="bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold py-2 px-4 rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer whitespace-nowrap shrink-0"
@@ -696,41 +700,44 @@ export default function IssuanceModule({
                         <div className="flex items-center gap-1"><CornerDownRight className="h-3 w-3 text-slate-400" /> <span className="text-[10px]">Recv:</span> {iss.receivedBy}</div>
                       </td>
                       <td className="p-4" data-no-expand="true">
-                        {isSuperAdmin ? (
-                          <select
-                            defaultValue=""
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              if (val === 'PRINT_MRS') {
-                                setPrintInitialView('OFFICIAL_DOC');
-                                setSelectedPickingDocIssuance(iss);
-                              } else if (val === 'PRINT_PL') {
-                                setPrintInitialView('PICKING_LIST');
-                                setSelectedPickingDocIssuance(iss);
-                              } else if (val === 'EDIT') setEditingIssuance({ ...iss });
-                              else if (val === 'DELETE') {
-                                setConfirmAction({
-                                  title: 'Delete Issuance Record',
-                                  message: `Are you sure you want to delete issuance record ${iss.id} (${iss.requisitionNumber})?`,
-                                  confirmLabel: 'YES, DELETE RECORD',
-                                  confirmVariant: 'danger',
-                                  onConfirm: () => onDeleteIssuance?.(iss.id)
-                                });
-                              }
-                              e.target.value = '';
-                            }}
-                            className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
-                            id={`action-select-iss-${iss.id}`}
-                          >
-                            <option value="" disabled>Actions...</option>
-                            <option value="PRINT_MRS">📄 Print Requisition Slip (MRS)</option>
-                            <option value="PRINT_PL">📋 Print Picking List</option>
+                        <select
+                          defaultValue=""
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val === 'PRINT_MRS') {
+                              setPrintInitialView('OFFICIAL_DOC');
+                              setSelectedPickingDocIssuance(iss);
+                            } else if (val === 'PRINT_PL') {
+                              setPrintInitialView('PICKING_LIST');
+                              setSelectedPickingDocIssuance(iss);
+                            } else if (val === 'EDIT') {
+                              if (!effectiveCanEdit) return;
+                              setEditingIssuance({ ...iss });
+                            } else if (val === 'DELETE') {
+                              if (!isSuperAdmin) return;
+                              setConfirmAction({
+                                title: 'Delete Issuance Record',
+                                message: `Are you sure you want to delete issuance record ${iss.id} (${iss.requisitionNumber})?`,
+                                confirmLabel: 'YES, DELETE RECORD',
+                                confirmVariant: 'danger',
+                                onConfirm: () => onDeleteIssuance?.(iss.id)
+                              });
+                            }
+                            e.target.value = '';
+                          }}
+                          className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
+                          id={`action-select-iss-${iss.id}`}
+                        >
+                          <option value="" disabled>Actions...</option>
+                          <option value="PRINT_MRS">📄 Print Requisition Slip (MRS)</option>
+                          <option value="PRINT_PL">📋 Print Picking List</option>
+                          {effectiveCanEdit && (
                             <option value="EDIT">📝 Edit Record</option>
+                          )}
+                          {isSuperAdmin && (
                             <option value="DELETE">🗑️ Delete Record</option>
-                          </select>
-                        ) : (
-                          <span className="text-slate-400 italic text-[10px]">Super Admin Only</span>
-                        )}
+                          )}
+                        </select>
                       </td>
                     </tr>
 
@@ -917,15 +924,15 @@ export default function IssuanceModule({
       </div>
 
       {/* Edit Issuance Modal (Super Admin) */}
-      <AnimatePresence>
-        {editingIssuance && (
+      {typeof document !== 'undefined' && editingIssuance && createPortal(
+        <AnimatePresence>
           <motion.div
             key="editing-issuance-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50"
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 z-[100] overflow-y-auto"
           >
             <motion.div
               key="editing-issuance-content"
@@ -933,7 +940,7 @@ export default function IssuanceModule({
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.94, y: 16 }}
               transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-              className="bg-white rounded-xl shadow-xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[90vh] overflow-y-auto"
+              className="bg-white rounded-2xl shadow-2xl border border-slate-200 p-6 max-w-lg w-full space-y-4 max-h-[calc(100vh-2rem)] my-auto overflow-y-auto"
             >
               <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                 <div>
@@ -1091,8 +1098,9 @@ export default function IssuanceModule({
               </div>
             </motion.div>
           </motion.div>
-        )}
-      </AnimatePresence>
+        </AnimatePresence>,
+        document.body
+      )}
       {/* Barcode / QR Code Scanner Modal */}
       <BarcodeScannerModal 
         isOpen={showScannerModal}

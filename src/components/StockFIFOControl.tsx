@@ -60,6 +60,7 @@ interface StockFIFOControlProps {
   onEditStock?: (item: MaterialStockItem) => void;
   onDeleteStock?: (id: string) => void;
   isSuperAdmin?: boolean;
+  canEdit?: boolean;
   receiving?: ReceivingRecord[];
   issuances?: IssuanceRecord[];
   returns?: ReturnRecord[];
@@ -73,10 +74,12 @@ export default function StockFIFOControl({
   onEditStock,
   onDeleteStock,
   isSuperAdmin = false,
+  canEdit = false,
   receiving = [],
   issuances = [],
   returns = []
 }: StockFIFOControlProps) {
+  const effectiveCanEdit = canEdit || isSuperAdmin;
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedType, setSelectedType] = useState<MaterialType | 'ALL'>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<MaterialStockItem['status'] | 'ALL'>('ALL');
@@ -475,10 +478,10 @@ export default function StockFIFOControl({
             <Download className="h-3.5 w-3.5" /> Export CSV
           </button>
 
-          {isSuperAdmin && (
+          {effectiveCanEdit && (
             <button 
               onClick={() => setShowAddForm(!showAddForm)}
-              className="bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-1.5 px-3.5 rounded-lg flex items-center gap-1"
+              className="bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-1.5 px-3.5 rounded-lg flex items-center gap-1 cursor-pointer"
             >
               <Plus className="h-3.5 w-3.5" /> Add Stock Manually
             </button>
@@ -1002,7 +1005,7 @@ export default function StockFIFOControl({
                               <span>{isExpanded ? 'Hide Card' : 'Details'}</span>
                             </button>
 
-                            {isSuperAdmin && (
+                            {(effectiveCanEdit || isSuperAdmin) ? (
                               <select
                                 defaultValue=""
                                 onClick={(e) => e.stopPropagation()}
@@ -1012,11 +1015,14 @@ export default function StockFIFOControl({
                                   if (val === 'HISTORY') {
                                     setHistoryStockItem(item);
                                   } else if (val === 'ADJUST') {
+                                    if (!effectiveCanEdit) return;
                                     setShowAdjustModal(item.id);
                                     setAdjustQty(item.quantity);
                                   } else if (val === 'EDIT') {
+                                    if (!effectiveCanEdit) return;
                                     setEditingStockItem({ ...item });
                                   } else if (val === 'RELEASE') {
+                                    if (!effectiveCanEdit) return;
                                     setConfirmAction({
                                       title: 'Release Stock Item',
                                       message: `Are you sure you want to release stock item ${item.partCode} (Lot: ${item.lotNumber}) to active inventory?`,
@@ -1025,6 +1031,7 @@ export default function StockFIFOControl({
                                       onConfirm: () => onUpdateStockStatus(item.id, 'APPROVED')
                                     });
                                   } else if (val === 'QUARANTINE') {
+                                    if (!effectiveCanEdit) return;
                                     setConfirmAction({
                                       title: 'Quarantine Stock Item',
                                       message: `Are you sure you want to place stock item ${item.partCode} (Lot: ${item.lotNumber}) into Quarantine?`,
@@ -1033,6 +1040,7 @@ export default function StockFIFOControl({
                                       onConfirm: () => onUpdateStockStatus(item.id, 'QUARANTINE')
                                     });
                                   } else if (val === 'DELETE') {
+                                    if (!isSuperAdmin) return;
                                     setConfirmAction({
                                       title: 'Delete Stock Item',
                                       message: `Are you sure you want to delete registered stock item ${item.partCode} (Lot: ${item.lotNumber})?`,
@@ -1048,15 +1056,32 @@ export default function StockFIFOControl({
                               >
                                 <option value="" disabled>Actions...</option>
                                 <option value="HISTORY">📜 Modal View</option>
-                                <option value="ADJUST">✏️ Adjust Quantity</option>
-                                <option value="EDIT">📝 Edit Details</option>
-                                {item.status !== 'APPROVED' ? (
-                                  <option value="RELEASE">✅ Release Stock</option>
-                                ) : (
-                                  <option value="QUARANTINE">⚠️ Quarantine Stock</option>
+                                {effectiveCanEdit && (
+                                  <>
+                                    <option value="ADJUST">✏️ Adjust Quantity</option>
+                                    <option value="EDIT">📝 Edit Details</option>
+                                    {item.status !== 'APPROVED' ? (
+                                      <option value="RELEASE">✅ Release Stock</option>
+                                    ) : (
+                                      <option value="QUARANTINE">⚠️ Quarantine Stock</option>
+                                    )}
+                                  </>
                                 )}
-                                <option value="DELETE">🗑️ Delete Item</option>
+                                {isSuperAdmin && (
+                                  <option value="DELETE">🗑️ Delete Item</option>
+                                )}
                               </select>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setHistoryStockItem(item);
+                                }}
+                                className="text-[10px] text-indigo-600 hover:underline font-semibold"
+                              >
+                                Modal View
+                              </button>
                             )}
                           </div>
                       </td>
@@ -1097,7 +1122,7 @@ export default function StockFIFOControl({
                               </div>
 
                               <div className="flex items-center gap-2">
-                                {isSuperAdmin && (
+                                {effectiveCanEdit && (
                                   <>
                                     <button
                                       type="button"

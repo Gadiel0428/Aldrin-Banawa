@@ -50,7 +50,10 @@ import {
   Smartphone,
   Radio,
   Activity,
-  Server
+  Server,
+  ShieldCheck,
+  Info,
+  ExternalLink
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -1710,6 +1713,14 @@ export default function App() {
       staleKeys.forEach(k => {
         try { localStorage.removeItem(k); } catch (e) {}
       });
+
+      // Purge any legacy Cloud Run or dev server addresses to ensure zero Google/Gmail account login prompt
+      try {
+        const cachedServer = localStorage.getItem('juwei_wms_server_address');
+        if (cachedServer && (cachedServer.includes('.run.app') || cachedServer.includes('ais-dev-') || cachedServer.includes('ais-pre-'))) {
+          localStorage.setItem('juwei_wms_server_address', 'https://aldrin-banawa.onrender.com');
+        }
+      } catch (e) {}
 
       // 1. Fetch fresh authoritative state from central server
       const baseUrl = getApiBaseUrl();
@@ -4470,30 +4481,35 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setShowStartupDiagnosticsModal(true)}
-                className="flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700/80 border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer text-xs"
+                className="flex items-center justify-center p-1.5 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white rounded-lg transition-colors cursor-pointer"
                 title="Startup Diagnostics & Multi-PC Synchronization Verifier"
                 aria-label="Startup Diagnostics"
                 id="btn-login-diagnostics"
               >
                 <Activity className="h-3.5 w-3.5 text-indigo-400" />
-                <span className="text-[11px] font-mono text-indigo-300 font-semibold">Diagnostics</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setShowCentralDatabaseModal(true)}
-                className="flex items-center justify-center gap-1.5 bg-slate-800 hover:bg-slate-700/80 border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer text-xs"
+                className="flex items-center justify-center p-1.5 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white rounded-lg transition-colors cursor-pointer"
                 title="Central Database • Single Source of Truth"
                 aria-label="Central Database Status"
                 id="btn-login-central-db-settings"
               >
                 <Database className="h-3.5 w-3.5 text-emerald-400" />
-                <span className="text-[11px] font-mono text-emerald-300 font-semibold">Central DB</span>
               </button>
             </div>
           </div>
 
           <div className="flex flex-col items-center text-center">
+            <div className="mb-3 flex justify-center">
+              <img 
+                src="/juwei-logo.png" 
+                alt="Juwei Logo" 
+                className="h-12 w-auto" 
+              />
+            </div>
             <span className="inline-block bg-indigo-500/10 text-indigo-300 font-mono font-semibold text-[10px] uppercase px-2.5 py-0.5 rounded-md mb-2 border border-indigo-500/20">
               JUWEI WMS GATEWAY
             </span>
@@ -4532,7 +4548,13 @@ export default function App() {
               <div className="h-px bg-slate-800 flex-1" />
             </div>
 
-            <form onSubmit={handleDirectLogin} className="space-y-3.5">
+            <form 
+              onSubmit={handleDirectLogin} 
+              autoComplete="off" 
+              data-lpignore="true" 
+              data-1p-ignore="true"
+              className="space-y-3.5"
+            >
               <div>
                 <label className="block text-[11px] font-medium text-slate-300 mb-1">
                   Employee ID
@@ -4540,6 +4562,10 @@ export default function App() {
                 <div className="relative">
                   <input
                     type="text"
+                    name="operatorEmployeeId"
+                    autoComplete="off"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
                     required
                     value={loginEmployeeId}
                     onChange={(e) => {
@@ -4559,6 +4585,10 @@ export default function App() {
                 <div className="relative">
                   <input
                     type={showPin ? "text" : "password"}
+                    name="operatorPinCode"
+                    autoComplete="one-time-code"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
                     required
                     maxLength={4}
                     pattern="\d*"
@@ -4709,6 +4739,12 @@ export default function App() {
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
           {/* Logged in Operator badge */}
           <div className="p-4 bg-slate-950/70 border-b border-slate-800/80 flex flex-col gap-2.5 backdrop-blur-md shrink-0">
+            <img 
+              src="/juwei-logo.png" 
+              alt="Juwei Logo" 
+              className="h-8 w-auto mb-2" 
+            />
+
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2.5">
                 <div className="bg-slate-800/90 border border-slate-700/80 p-2 rounded-xl text-indigo-400 shrink-0 shadow-sm">
@@ -5072,6 +5108,7 @@ export default function App() {
                   sendChatMessage={sendChatMessage}
                   registeredUsers={registeredUsers}
                   isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
+                  canEdit={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
                   registries={registries}
                 />
               )}
@@ -5090,7 +5127,8 @@ export default function App() {
                   onDeleteReturn={handleDeleteReturn}
                   stocks={stocks}
                   registries={registries}
-                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
+                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
+                  canEdit={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
                   onOpenRegisterModal={() => setView('master-registry')}
                 />
               )}
@@ -5103,7 +5141,8 @@ export default function App() {
                   onUpdateStockStatus={handleUpdateStockStatus}
                   onEditStock={handleEditStock}
                   onDeleteStock={handleDeleteStock}
-                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
+                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
+                  canEdit={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
                   receiving={receiving}
                   issuances={issuances}
                   returns={returns}
@@ -5115,7 +5154,8 @@ export default function App() {
                   recycling={recycling}
                   onAddRecycling={handleAddRecycling}
                   onDeleteRecycling={handleDeleteRecycling}
-                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
+                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
+                  canEdit={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
                 />
               )}
 
@@ -5129,7 +5169,8 @@ export default function App() {
                   onDeleteIssuance={handleDeleteIssuance}
                   registries={registries}
                   currentUser={currentUser}
-                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
+                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
+                  canEdit={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
                 />
               )}
 
@@ -5145,7 +5186,8 @@ export default function App() {
                   stocks={stocks}
                   registries={registries}
                   currentUser={currentUser}
-                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
+                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
+                  canEdit={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
                 />
               )}
 
@@ -5167,6 +5209,7 @@ export default function App() {
                   currentUserRole={currentRole}
                   currentUser={currentUser}
                   isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentRole?.toUpperCase().includes('SUPER') || currentRole?.toUpperCase().includes('SYSTEM')}
+                  canEdit={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
                 />
               )}
 
@@ -5193,7 +5236,8 @@ export default function App() {
                   onUpdateItem={handleUpdateMasterItem}
                   onDeleteItem={handleDeleteMasterItem}
                   onResetDefaults={handleResetMasterDefaults}
-                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
+                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
+                  canEdit={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
                   defaultType="ALL"
                 />
               )}
@@ -5208,6 +5252,7 @@ export default function App() {
                   currentUser={currentUser}
                   currentEmployeeId={currentEmployeeId}
                   isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
+                  canEdit={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
                 />
               )}
             </motion.div>

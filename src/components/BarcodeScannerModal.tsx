@@ -245,6 +245,10 @@ export default function BarcodeScannerModal({
                     <input
                       ref={inputRef}
                       type="password"
+                      autoComplete="off"
+                      data-lpignore="true"
+                      data-1p-ignore="true"
+                      name="barcode_scan_input"
                       value={barcodeInput}
                       onChange={(e) => setBarcodeInput(e.target.value)}
                       placeholder="Scan barcode or type code..."

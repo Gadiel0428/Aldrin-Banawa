@@ -77,11 +77,11 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({ onOpenSettings, onOpenDi
 
   return (
     <div className="relative inline-block text-xs font-medium">
-      {/* Status Pill Button - Visible Connection Status & Central Endpoint */}
+      {/* Status Pill Button - Icon Only (Connection Status & Central Endpoint) */}
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className={`inline-flex items-center gap-2 px-2.5 h-8 rounded-xl border transition-all shadow-xs hover:shadow-md cursor-pointer ${badge.bg}`}
+        className={`inline-flex items-center justify-center w-8 h-8 rounded-xl border transition-all shadow-xs hover:shadow-md cursor-pointer relative shrink-0 ${badge.bg}`}
         title={`Sync Status: ${badge.label} • Central Server: ${getCentralServerUrl()} (Click for details & diagnostics)`}
         aria-label={`Sync Status: ${badge.label}`}
       >
@@ -92,13 +92,6 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({ onOpenSettings, onOpenDi
               {status.pendingCount}
             </span>
           )}
-        </span>
-        <span className="font-semibold text-[11px] whitespace-nowrap hidden sm:inline-block">
-          {badge.label}
-        </span>
-        <span className="hidden md:inline-flex items-center gap-1 font-mono text-[10px] text-slate-500 dark:text-slate-400 border-l border-slate-200 dark:border-slate-700 pl-1.5 max-w-[130px] lg:max-w-[200px] truncate" title={getCentralServerUrl()}>
-          <Globe className="w-2.5 h-2.5 text-indigo-500 shrink-0" />
-          <span className="truncate">{getCentralServerUrl().replace(/^https?:\/\//i, '')}</span>
         </span>
       </button>
 

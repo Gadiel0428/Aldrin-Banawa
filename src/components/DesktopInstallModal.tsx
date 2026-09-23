@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Monitor, Download, X, ShieldCheck, Cpu, FileCode2 } from 'lucide-react';
-import { getCentralServerUrl } from '../config/serverConfig';
+import { Monitor, Download, X, ShieldCheck, Cpu, FileCode2, CheckCircle2 } from 'lucide-react';
+import { getPublicAppUrl } from '../config/serverConfig';
 
 interface DesktopInstallModalProps {
   isOpen: boolean;
@@ -13,8 +13,9 @@ export default function DesktopInstallModal({ isOpen, onClose }: DesktopInstallM
   const [copiedCmd, setCopiedCmd] = useState(false);
 
   const getAppUrl = () => {
-    const centralUrl = getCentralServerUrl();
-    return centralUrl.endsWith('/') ? centralUrl : `${centralUrl}/`;
+    // Authoritative public URL without developer auth proxy — zero Google/Gmail account login required
+    const publicUrl = getPublicAppUrl();
+    return publicUrl.endsWith('/') ? publicUrl : `${publicUrl}/`;
   };
 
   // 1. Download 1-Click Windows BAT Installer (Works 100% on any Windows PC without PowerShell ExecutionPolicy restrictions)
@@ -476,6 +477,14 @@ $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
 
             {/* Body Content */}
             <div className="p-6 space-y-4 text-xs overflow-y-auto">
+
+              {/* No Google / Gmail Login Notice */}
+              <div className="p-3 bg-emerald-950/60 border border-emerald-500/40 rounded-xl flex items-center gap-2.5 text-emerald-300">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                <span className="text-[11px] font-medium leading-snug">
+                  <strong>Standalone Direct Access:</strong> No Gmail or Google account login is required on fresh install, launch, or update. Operators sign in directly with internal credentials.
+                </span>
+              </div>
 
               {/* OPTION 1: 1-CLICK BAT INSTALLER (RECOMMENDED) */}
               <div className="p-4 bg-blue-950 border-2 border-emerald-500/80 rounded-xl space-y-3 shadow-lg">

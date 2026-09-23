@@ -10,9 +10,38 @@
  * or a local database for production synchronization.
  */
 
-// Authoritative Cloud Production URL
-export const DEFAULT_PRODUCTION_SERVER_HOST = 'ais-dev-vmhtsbs5lyqg4e3o5qf35l-327128958892.asia-southeast1.run.app';
+// Authoritative Cloud Production URL (Render Cloud Production - No Google / Gmail Login Required)
+export const DEFAULT_PRODUCTION_SERVER_HOST = 'aldrin-banawa.onrender.com';
 export const DEFAULT_PRODUCTION_SERVER_URL = `https://${DEFAULT_PRODUCTION_SERVER_HOST}`;
+
+/**
+ * Ensures any URL or host that contains legacy Google Cloud Run or dev domains
+ * is automatically replaced with the authoritative Render production URL.
+ */
+export function sanitizePublicAppUrl(urlOrHost: string): string {
+  if (!urlOrHost) return DEFAULT_PRODUCTION_SERVER_URL;
+  if (urlOrHost.includes('.run.app') || urlOrHost.includes('ais-dev-') || urlOrHost.includes('ais-pre-')) {
+    return DEFAULT_PRODUCTION_SERVER_URL;
+  }
+  return urlOrHost;
+}
+
+/**
+ * Returns the clean, authoritative application URL that NEVER requires or prompts for a Gmail account.
+ * Used for Desktop .BAT installer, Windows shortcuts, Mobile QR codes, and PWA downloads.
+ */
+export function getPublicAppUrl(): string {
+  if (typeof window !== 'undefined' && window.location && window.location.origin) {
+    const origin = window.location.origin;
+    if (origin.includes('.run.app') || origin.includes('ais-dev-') || origin.includes('ais-pre-')) {
+      return DEFAULT_PRODUCTION_SERVER_URL;
+    }
+    if (!isLocalhostAddress(origin)) {
+      return origin;
+    }
+  }
+  return DEFAULT_PRODUCTION_SERVER_URL;
+}
 
 /**
  * Returns whether a given host or address is a forbidden local address
@@ -98,7 +127,8 @@ export function getCentralServerUrl(): string {
 
   // 1. Check Electron injected API (Source: Electron config)
   if (typeof window !== 'undefined' && (window as any).electronAPI?.centralServerUrl) {
-    const electronUrl = String((window as any).electronAPI.centralServerUrl).trim();
+    const rawElectronUrl = String((window as any).electronAPI.centralServerUrl).trim();
+    const electronUrl = sanitizePublicAppUrl(rawElectronUrl);
     if (electronUrl && !isLocalhostAddress(electronUrl)) {
       return finalize(electronUrl.replace(/\/+$/, ''), 'Electron config');
     }
@@ -112,9 +142,13 @@ export function getCentralServerUrl(): string {
         console.warn('[JUWEI-WMS] Disallowed localhost found in cached server address. Purging and redirecting to Central Cloud Server.');
         localStorage.removeItem('juwei_wms_server_address');
       } else {
-        const cleanCached = sanitizeServerHost(cached);
+        const sanitizedCached = sanitizePublicAppUrl(cached);
+        if (sanitizedCached !== cached) {
+          localStorage.setItem('juwei_wms_server_address', sanitizedCached);
+        }
+        const cleanCached = sanitizeServerHost(sanitizedCached);
         if (cleanCached && cleanCached.length > 0) {
-          const isHttps = isSecureHost(cleanCached, cached);
+          const isHttps = isSecureHost(cleanCached, sanitizedCached);
           return finalize(`${isHttps ? 'https:' : 'http:'}//${cleanCached}`, 'cached localStorage');
         }
       }
@@ -147,7 +181,7 @@ export function getCentralServerHost(): string {
 }
 
 /**
- * Returns the Base API URL (e.g. https://ais-dev-...run.app)
+ * Returns the Base API URL (e.g. https://aldrin-banawa.onrender.com)
  */
 export function getApiBaseUrl(): string {
   return getCentralServerUrl();

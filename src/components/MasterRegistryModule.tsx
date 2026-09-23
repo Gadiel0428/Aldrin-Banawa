@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Building2, 
   Tag, 
@@ -42,6 +43,7 @@ interface MasterRegistryModuleProps {
   onDeleteItem: (id: string) => void;
   onResetDefaults?: () => void;
   isSuperAdmin?: boolean;
+  canEdit?: boolean;
   defaultType?: RegistryType | 'ALL';
 }
 
@@ -51,7 +53,8 @@ export default function MasterRegistryModule({
   onUpdateItem,
   onDeleteItem,
   onResetDefaults,
-  isSuperAdmin = true,
+  isSuperAdmin = false,
+  canEdit = false,
   defaultType = 'ALL'
 }: MasterRegistryModuleProps) {
   const [selectedType, setSelectedType] = useState<RegistryType | 'ALL'>(defaultType);
@@ -219,31 +222,39 @@ export default function MasterRegistryModule({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {onResetDefaults && (
-            <button
-              type="button"
-              onClick={() => {
-                setConfirmAction({
-                  title: 'Clear All Master Registries',
-                  message: 'Are you sure you want to clear all customers, suppliers, and locations to zero?',
-                  confirmLabel: 'YES, RESET ALL TO ZERO',
-                  confirmVariant: 'danger',
-                  onConfirm: () => onResetDefaults()
-                });
-              }}
-              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-rose-300 border border-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
-              title="Clear all master registry entries"
-            >
-              <RefreshCw className="h-3.5 w-3.5" /> Clear All to 0
-            </button>
-          )}
+          {isSuperAdmin ? (
+            <>
+              {onResetDefaults && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmAction({
+                      title: 'Clear All Master Registries',
+                      message: 'Are you sure you want to clear all customers, suppliers, and locations to zero?',
+                      confirmLabel: 'YES, RESET ALL TO ZERO',
+                      confirmVariant: 'danger',
+                      onConfirm: () => onResetDefaults()
+                    });
+                  }}
+                  className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-rose-300 border border-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                  title="Clear all master registry entries"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" /> Clear All to 0
+                </button>
+              )}
 
-          <button
-            onClick={() => handleOpenNew()}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold flex items-center gap-2 shadow-sm transition cursor-pointer"
-          >
-            <Plus className="h-4 w-4" /> Register New Option
-          </button>
+              <button
+                onClick={() => handleOpenNew()}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold flex items-center gap-2 shadow-sm transition cursor-pointer"
+              >
+                <Plus className="h-4 w-4" /> Register New Option
+              </button>
+            </>
+          ) : (
+            <span className="text-[10px] font-mono text-indigo-400 bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg font-bold uppercase">
+              🔒 View-Only Mode
+            </span>
+          )}
         </div>
       </div>
 
@@ -439,28 +450,32 @@ export default function MasterRegistryModule({
                       {item.dateRegistered}
                     </td>
                     <td className="p-3 text-right">
-                      <select
-                        defaultValue=""
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          if (val === 'EDIT') handleOpenEdit(item);
-                          else if (val === 'DELETE') {
-                            setConfirmAction({
-                              title: 'Delete Master Registry Item',
-                              message: `Are you sure you want to delete registered item "${item.name}" (${item.code || item.id})?`,
-                              confirmLabel: 'YES, DELETE',
-                              onConfirm: () => onDeleteItem(item.id)
-                            });
-                          }
-                          e.target.value = '';
-                        }}
-                        className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
-                        id={`action-select-reg-${item.id}`}
-                      >
-                        <option value="" disabled>Actions...</option>
-                        <option value="EDIT">📝 Edit Registration</option>
-                        <option value="DELETE">🗑️ Delete Option</option>
-                      </select>
+                      {isSuperAdmin ? (
+                        <select
+                          defaultValue=""
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val === 'EDIT') handleOpenEdit(item);
+                            else if (val === 'DELETE') {
+                              setConfirmAction({
+                                title: 'Delete Master Registry Item',
+                                message: `Are you sure you want to delete registered item "${item.name}" (${item.code || item.id})?`,
+                                confirmLabel: 'YES, DELETE',
+                                onConfirm: () => onDeleteItem(item.id)
+                              });
+                            }
+                            e.target.value = '';
+                          }}
+                          className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
+                          id={`action-select-reg-${item.id}`}
+                        >
+                          <option value="" disabled>Actions...</option>
+                          <option value="EDIT">📝 Edit Registration</option>
+                          <option value="DELETE">🗑️ Delete Option</option>
+                        </select>
+                      ) : (
+                        <span className="text-slate-400 italic text-[10px] font-semibold">Super Admin Only</span>
+                      )}
                     </td>
                   </tr>
                 ))
@@ -471,15 +486,15 @@ export default function MasterRegistryModule({
       </div>
 
       {/* Registration Modal */}
-      <AnimatePresence>
-        {showRegisterModal && (
+      {typeof document !== 'undefined' && showRegisterModal && createPortal(
+        <AnimatePresence>
           <motion.div
             key="register-modal-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[100] flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
           >
             <motion.div
               key="register-modal-content"
@@ -487,9 +502,9 @@ export default function MasterRegistryModule({
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.94, y: 16 }}
               transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-              className={`bg-white rounded-xl shadow-xl border border-slate-200 w-full ${formType === 'BARCODE_PRESET' ? 'max-w-lg' : 'max-w-md'} overflow-hidden`}
+              className={`bg-white rounded-2xl shadow-2xl border border-slate-200 w-full ${formType === 'BARCODE_PRESET' ? 'max-w-lg' : 'max-w-md'} overflow-hidden my-auto max-h-[calc(100vh-2rem)] flex flex-col`}
             >
-              <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between">
+              <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-2">
                   <Plus className="h-4 w-4 text-indigo-400" />
                   <h3 className="font-bold text-sm">
@@ -498,7 +513,7 @@ export default function MasterRegistryModule({
                 </div>
                 <button 
                   onClick={() => setShowRegisterModal(false)}
-                  className="text-slate-400 hover:text-white text-lg leading-none"
+                  className="text-slate-400 hover:text-white text-lg leading-none cursor-pointer"
                 >
                   &times;
                 </button>
@@ -620,19 +635,20 @@ export default function MasterRegistryModule({
               </form>
             </motion.div>
           </motion.div>
-        )}
-      </AnimatePresence>
+        </AnimatePresence>,
+        document.body
+      )}
 
       {/* Yes / No Action Confirmation Modal */}
-      <AnimatePresence>
-        {confirmAction && (
+      {typeof document !== 'undefined' && confirmAction && createPortal(
+        <AnimatePresence>
           <motion.div
             key="confirm-action-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[120] flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
           >
             <motion.div
               key="confirm-action-content"
@@ -640,7 +656,7 @@ export default function MasterRegistryModule({
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.94, y: 16 }}
               transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
-              className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden"
+              className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden my-auto"
             >
               <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -649,7 +665,7 @@ export default function MasterRegistryModule({
                 </div>
                 <button 
                   onClick={() => setConfirmAction(null)} 
-                  className="text-slate-400 hover:text-white transition"
+                  className="text-slate-400 hover:text-white transition cursor-pointer"
                 >
                   <X className="h-5 w-5" />
                 </button>
@@ -669,7 +685,7 @@ export default function MasterRegistryModule({
                   <button
                     type="button"
                     onClick={() => setConfirmAction(null)}
-                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5"
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
                   >
                     <XCircle className="h-4 w-4 text-slate-500" />
                     NO
@@ -680,7 +696,7 @@ export default function MasterRegistryModule({
                       confirmAction.onConfirm();
                       setConfirmAction(null);
                     }}
-                    className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shadow-sm"
+                    className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shadow-sm cursor-pointer"
                   >
                     <CheckCircle2 className="h-4 w-4 text-white" />
                     {confirmAction.confirmLabel || 'YES'}
@@ -689,8 +705,9 @@ export default function MasterRegistryModule({
               </div>
             </motion.div>
           </motion.div>
-        )}
-      </AnimatePresence>
+        </AnimatePresence>,
+        document.body
+      )}
     </div>
   );
 }

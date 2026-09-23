@@ -71,6 +71,7 @@ interface DashboardOverviewProps {
   sendChatMessage: (text: string) => void;
   registeredUsers?: RegisteredAccount[];
   isSuperAdmin?: boolean;
+  canEdit?: boolean;
   registries?: MasterRegistryItem[];
 }
 
@@ -89,6 +90,7 @@ export default function DashboardOverview({
   sendChatMessage,
   registeredUsers = [],
   isSuperAdmin = false,
+  canEdit = false,
   registries = []
 }: DashboardOverviewProps) {
   

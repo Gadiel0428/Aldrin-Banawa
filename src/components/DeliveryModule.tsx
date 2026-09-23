@@ -47,6 +47,7 @@ interface DeliveryModuleProps {
   onEditDelivery?: (item: DeliveryRecord) => void;
   onDeleteDelivery?: (id: string) => void;
   isSuperAdmin?: boolean;
+  canEdit?: boolean;
   stocks?: MaterialStockItem[];
   registries?: MasterRegistryItem[];
   currentUser?: string;
@@ -61,10 +62,12 @@ export default function DeliveryModule({
   onEditDelivery,
   onDeleteDelivery,
   isSuperAdmin = false,
+  canEdit = false,
   stocks = [],
   registries = [],
   currentUser = ''
 }: DeliveryModuleProps) {
+  const effectiveCanEdit = canEdit || isSuperAdmin;
   const [searchQuery, setSearchQuery] = useState('');
   const [editingDelivery, setEditingDelivery] = useState<DeliveryRecord | null>(null);
   const [activeSubTab, setActiveSubTab] = useState<'shipments' | 'forklift'>('shipments');
@@ -299,7 +302,7 @@ export default function DeliveryModule({
               </div>
 
               <div className="flex items-center sm:ml-auto shrink-0">
-                {isSuperAdmin ? (
+                {effectiveCanEdit ? (
                   <button 
                     onClick={() => setShowPickForm(!showPickForm)}
                     className="bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold py-2 px-4 rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer whitespace-nowrap shrink-0"
@@ -547,57 +550,63 @@ export default function DeliveryModule({
                             )}
                           </td>
                           <td className="p-4" data-no-expand="true">
-                            {isSuperAdmin ? (
-                              <select
-                                defaultValue=""
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  if (val === 'PRINT_DR') {
-                                    setPrintInitialView('OFFICIAL_DOC');
-                                    setSelectedPickingDocDelivery(d);
-                                  } else if (val === 'PRINT_DPL') {
-                                    setPrintInitialView('PICKING_LIST');
-                                    setSelectedPickingDocDelivery(d);
-                                  } else if (val === 'LOAD') {
-                                    if (!isForkliftPrechecked) {
-                                      alert('Cannot load pallets! Standard operating procedure requires completing the Daily Forklift Checklist first.');
-                                      e.target.value = '';
-                                      return;
-                                    }
-                                    onUpdateDeliveryStatus(d.id, 'LOADED');
-                                  } else if (val === 'GATE_PASS') {
-                                    setShowGatePassModal(d.id);
-                                  } else if (val === 'EDIT') {
-                                    setEditingDelivery({ ...d });
-                                  } else if (val === 'DELETE') {
-                                    setConfirmAction({
-                                      title: 'Delete Delivery Shipment',
-                                      message: `Are you sure you want to delete delivery shipment ${d.gatePassNumber} (${d.modelName})?`,
-                                      confirmLabel: 'YES, DELETE SHIPMENT',
-                                      confirmVariant: 'danger',
-                                      onConfirm: () => onDeleteDelivery?.(d.id)
-                                    });
+                            <select
+                              defaultValue=""
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === 'PRINT_DR') {
+                                  setPrintInitialView('OFFICIAL_DOC');
+                                  setSelectedPickingDocDelivery(d);
+                                } else if (val === 'PRINT_DPL') {
+                                  setPrintInitialView('PICKING_LIST');
+                                  setSelectedPickingDocDelivery(d);
+                                } else if (val === 'LOAD') {
+                                  if (!effectiveCanEdit) return;
+                                  if (!isForkliftPrechecked) {
+                                    alert('Cannot load pallets! Standard operating procedure requires completing the Daily Forklift Checklist first.');
+                                    e.target.value = '';
+                                    return;
                                   }
-                                  e.target.value = '';
-                                }}
-                                className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
-                                id={`action-select-del-${d.id}`}
-                              >
-                                <option value="" disabled>Actions...</option>
-                                <option value="PRINT_DR">📄 Print Delivery Receipt & Gate Pass</option>
-                                <option value="PRINT_DPL">📋 Print Picking List (DPL)</option>
-                                {d.status === 'PREPARING' && (
-                                  <option value="LOAD">📦 Load Pallets</option>
-                                )}
-                                {d.status === 'LOADED' && (
-                                  <option value="GATE_PASS">📄 Gate Release Pass</option>
-                                )}
-                                <option value="EDIT">📝 Edit Shipment</option>
+                                  onUpdateDeliveryStatus(d.id, 'LOADED');
+                                } else if (val === 'GATE_PASS') {
+                                  if (!effectiveCanEdit) return;
+                                  setShowGatePassModal(d.id);
+                                } else if (val === 'EDIT') {
+                                  if (!effectiveCanEdit) return;
+                                  setEditingDelivery({ ...d });
+                                } else if (val === 'DELETE') {
+                                  if (!isSuperAdmin) return;
+                                  setConfirmAction({
+                                    title: 'Delete Delivery Shipment',
+                                    message: `Are you sure you want to delete delivery shipment ${d.gatePassNumber} (${d.modelName})?`,
+                                    confirmLabel: 'YES, DELETE SHIPMENT',
+                                    confirmVariant: 'danger',
+                                    onConfirm: () => onDeleteDelivery?.(d.id)
+                                  });
+                                }
+                                e.target.value = '';
+                              }}
+                              className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
+                              id={`action-select-del-${d.id}`}
+                            >
+                              <option value="" disabled>Actions...</option>
+                              <option value="PRINT_DR">📄 Print Delivery Receipt & Gate Pass</option>
+                              <option value="PRINT_DPL">📋 Print Picking List (DPL)</option>
+                              {effectiveCanEdit && (
+                                <>
+                                  {d.status === 'PREPARING' && (
+                                    <option value="LOAD">📦 Load Pallets</option>
+                                  )}
+                                  {d.status === 'LOADED' && (
+                                    <option value="GATE_PASS">📄 Gate Release Pass</option>
+                                  )}
+                                  <option value="EDIT">📝 Edit Shipment</option>
+                                </>
+                              )}
+                              {isSuperAdmin && (
                                 <option value="DELETE">🗑️ Delete Shipment</option>
-                              </select>
-                            ) : (
-                              <span className="text-slate-400 italic text-[10px] font-semibold">Super Admin Action Pending</span>
-                            )}
+                              )}
+                            </select>
                           </td>
                         </tr>
 
@@ -793,17 +802,17 @@ export default function DeliveryModule({
               </p>
             </div>
 
-            {isSuperAdmin ? (
+            {effectiveCanEdit ? (
               <button 
                 onClick={() => setShowForkliftForm(!showForkliftForm)}
-                className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-2 px-4 rounded-lg flex items-center justify-center gap-1.5"
+                className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-2 px-4 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
                 id="btn-log-forklift"
               >
                 <Plus className="h-4 w-4" /> Create Daily Pre-Check
               </button>
             ) : (
               <span className="text-[10px] font-mono text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded font-bold uppercase">
-                🔒 View-Only Mode (Inspection restricted to Super Admin)
+                🔒 View-Only Mode
               </span>
             )}
           </div>
