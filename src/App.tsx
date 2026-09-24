@@ -113,13 +113,13 @@ import {
 } from './data';
 
 import DashboardOverview from './components/DashboardOverview';
-import ReceivingModule from './components/ReceivingModule';
+import ReceivingModule, { DEFAULT_RECEIVING_CATEGORIES } from './components/ReceivingModule';
 import StockFIFOControl from './components/StockFIFOControl';
 import RecyclingModule from './components/RecyclingModule';
 import IssuanceModule from './components/IssuanceModule';
 import DeliveryModule from './components/DeliveryModule';
 import EnvironmentalModule from './components/EnvironmentalModule';
-import RegisteredAccountsModule from './components/RegisteredAccountsModule';
+import RegisteredAccountsModule, { DEFAULT_OPERATIONAL_ROLES } from './components/RegisteredAccountsModule';
 import MasterRegistryModule, { DEFAULT_MASTER_REGISTRIES } from './components/MasterRegistryModule';
 import VersionUpdateBanner from './components/VersionUpdateBanner';
 
@@ -552,6 +552,22 @@ export default function App() {
                 case 'forkliftChecks': setForkliftChecks(prev => reconcileCollection('forkliftChecks', prev, norm)); break;
                 case 'registries': setRegistries(prev => reconcileCollection('registries', prev, norm)); break;
                 case 'registeredUsers': setRegisteredUsers(prev => reconcileUsers(prev, data)); break;
+                case 'operationalRoles': {
+                  const cleaned = Array.from(new Set<string>(data.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+                  if (cleaned.length > 0) {
+                    setOperationalRoles(cleaned);
+                    try { localStorage.setItem('juwei_wms_operationalRoles', JSON.stringify(cleaned)); } catch (e) {}
+                  }
+                  break;
+                }
+                case 'receivingCategories': {
+                  const cleaned = Array.from(new Set<string>(data.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+                  if (cleaned.length > 0) {
+                    setReceivingCategories(cleaned);
+                    try { localStorage.setItem('juwei_wms_receivingCategories', JSON.stringify(cleaned)); } catch (e) {}
+                  }
+                  break;
+                }
               }
               setLastSyncedTime(new Date());
             }
@@ -870,6 +886,173 @@ export default function App() {
   };
 
   const [registeredUsers, setRegisteredUsers] = useState<RegisteredAccount[]>([superAdminAccount]);
+
+  // Operational Roles state centrally managed and synced
+  const [operationalRoles, setOperationalRoles] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('juwei_wms_operationalRoles');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return Array.from(new Set<string>(parsed.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+        }
+      }
+    } catch (e) {}
+    return DEFAULT_OPERATIONAL_ROLES;
+  });
+
+  const handleUpdateOperationalRoles = async (newRoles: string[]) => {
+    const cleaned = Array.from(new Set<string>(newRoles.map(r => String(r || '').trim().toUpperCase()).filter(Boolean)));
+    if (cleaned.length === 0) return;
+    setOperationalRoles(cleaned);
+    try {
+      localStorage.setItem('juwei_wms_operationalRoles', JSON.stringify(cleaned));
+    } catch (e) {}
+
+    // Broadcast cross-tab immediately
+    try {
+      syncChannelRef.current?.postMessage({
+        type: 'collection_updated',
+        collection: 'operationalRoles',
+        data: cleaned
+      });
+    } catch (e) {}
+
+    // Send WebSocket notification to central server
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      try {
+        socket.send(JSON.stringify({
+          type: 'update_roles',
+          roles: cleaned,
+          author: currentUser || 'Super Admin',
+          permission: currentPermission,
+          timestamp: new Date().toISOString()
+        }));
+      } catch (e) {}
+    }
+
+    // REST API persistence fallback
+    try {
+      const baseUrl = getApiBaseUrl();
+      await fetch(`${baseUrl}/api/roles`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-permission': currentPermission || '',
+          'x-employee-id': currentEmployeeId || ''
+        },
+        body: JSON.stringify({
+          roles: cleaned,
+          author: currentUser
+        })
+      });
+    } catch (e) {
+      console.warn('Failed to sync roles via REST fallback:', e);
+    }
+  };
+
+  // Receiving Categories state centrally managed and synced
+  const [receivingCategories, setReceivingCategories] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('juwei_wms_receivingCategories');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return Array.from(new Set<string>(parsed.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+        }
+      }
+    } catch (e) {}
+    return DEFAULT_RECEIVING_CATEGORIES;
+  });
+
+  const handleUpdateReceivingCategories = async (newCategories: string[], renameData?: { oldCat: string; newCat: string }) => {
+    const cleaned = Array.from(new Set<string>(newCategories.map(r => String(r || '').trim().toUpperCase()).filter(Boolean)));
+    if (cleaned.length === 0) return;
+    setReceivingCategories(cleaned);
+    try {
+      localStorage.setItem('juwei_wms_receivingCategories', JSON.stringify(cleaned));
+    } catch (e) {}
+
+    // Cascade rename to local state immediately if renaming
+    if (renameData && renameData.oldCat && renameData.newCat) {
+      const cleanOld = renameData.oldCat.trim().toUpperCase();
+      const cleanNew = renameData.newCat.trim().toUpperCase();
+      if (cleanOld && cleanNew && cleanOld !== cleanNew) {
+        setReceiving(prev => prev.map(r => {
+          let ch = false;
+          const up = { ...r };
+          if ((r.supplierOrDept || '').trim().toUpperCase() === cleanOld) {
+            up.supplierOrDept = cleanNew;
+            ch = true;
+          }
+          if (((r as any).category || '').trim().toUpperCase() === cleanOld) {
+            (up as any).category = cleanNew;
+            ch = true;
+          }
+          return ch ? { ...up, version: (r.version || 1) + 1, updated_at: new Date().toISOString() } : r;
+        }));
+
+        setReturns(prev => prev.map(ret => {
+          if ((ret.category || '').trim().toUpperCase() === cleanOld) {
+            return { ...ret, category: cleanNew, version: (ret.version || 1) + 1, updated_at: new Date().toISOString() };
+          }
+          return ret;
+        }));
+
+        setStocks(prev => prev.map(s => {
+          if (((s as any).category || '').trim().toUpperCase() === cleanOld) {
+            return { ...s, category: cleanNew, version: (s.version || 1) + 1, updated_at: new Date().toISOString() } as any;
+          }
+          return s;
+        }));
+      }
+    }
+
+    // Broadcast cross-tab immediately
+    try {
+      syncChannelRef.current?.postMessage({
+        type: 'collection_updated',
+        collection: 'receivingCategories',
+        data: cleaned
+      });
+    } catch (e) {}
+
+    // Send WebSocket notification to central server
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      try {
+        socket.send(JSON.stringify({
+          type: 'update_categories',
+          categories: cleaned,
+          renameData,
+          author: currentUser || 'Super Admin',
+          permission: currentPermission,
+          timestamp: new Date().toISOString()
+        }));
+      } catch (e) {}
+    }
+
+    // REST API persistence fallback
+    try {
+      const baseUrl = getApiBaseUrl();
+      await fetch(`${baseUrl}/api/categories`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-permission': currentPermission || '',
+          'x-employee-id': currentEmployeeId || ''
+        },
+        body: JSON.stringify({
+          action: renameData ? 'rename' : 'set',
+          categories: cleaned,
+          oldCat: renameData?.oldCat,
+          newCat: renameData?.newCat,
+          author: currentUser
+        })
+      });
+    } catch (e) {
+      console.warn('Failed to sync categories via REST fallback:', e);
+    }
+  };
 
   // Keep active logged-in user's role, permissions, and status in sync with live registered accounts directory
   useEffect(() => {
@@ -1343,6 +1526,20 @@ export default function App() {
     if (Array.isArray(serverUsers) && serverUsers.length > 0) {
       setRegisteredUsers(reconcileUsers([], serverUsers));
     }
+    if (Array.isArray(dataPayload.operationalRoles) && dataPayload.operationalRoles.length > 0) {
+      const opClean = Array.from(new Set<string>(dataPayload.operationalRoles.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+      if (opClean.length > 0) {
+        setOperationalRoles(opClean);
+        try { localStorage.setItem('juwei_wms_operationalRoles', JSON.stringify(opClean)); } catch (e) {}
+      }
+    }
+    if (Array.isArray(dataPayload.receivingCategories) && dataPayload.receivingCategories.length > 0) {
+      const catClean = Array.from(new Set<string>(dataPayload.receivingCategories.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+      if (catClean.length > 0) {
+        setReceivingCategories(catClean);
+        try { localStorage.setItem('juwei_wms_receivingCategories', JSON.stringify(catClean)); } catch (e) {}
+      }
+    }
     if (Array.isArray(msgs)) setChatMessages(msgs);
     if (activePresenceList && Array.isArray(activePresenceList)) {
       setWsPresence(activePresenceList);
@@ -1755,6 +1952,20 @@ export default function App() {
             if (Array.isArray(fc)) setForkliftChecks(normalizeRecords('forkliftChecks', fc));
             if (Array.isArray(reg)) setRegistries(normalizeRecords('registries', reg));
             if (Array.isArray(ru) && ru.length > 0) setRegisteredUsers(reconcileUsers([], ru));
+            if (Array.isArray(json.data.operationalRoles) && json.data.operationalRoles.length > 0) {
+              const opClean = Array.from(new Set<string>(json.data.operationalRoles.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+              if (opClean.length > 0) {
+                setOperationalRoles(opClean);
+                try { localStorage.setItem('juwei_wms_operationalRoles', JSON.stringify(opClean)); } catch (e) {}
+              }
+            }
+            if (Array.isArray(json.data.receivingCategories) && json.data.receivingCategories.length > 0) {
+              const catClean = Array.from(new Set<string>(json.data.receivingCategories.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+              if (catClean.length > 0) {
+                setReceivingCategories(catClean);
+                try { localStorage.setItem('juwei_wms_receivingCategories', JSON.stringify(catClean)); } catch (e) {}
+              }
+            }
             if (Array.isArray(cm) && cm.length > 0) setChatMessages(cm);
           }
         }
@@ -2078,6 +2289,20 @@ export default function App() {
             if (Array.isArray(f)) setForkliftChecks(prev => reconcileCollection('forkliftChecks', prev, normalizeRecords('forkliftChecks', f)));
             if (Array.isArray(reg)) setRegistries(prev => reconcileCollection('registries', prev, normalizeRecords('registries', reg)));
             if (Array.isArray(ru)) setRegisteredUsers(prev => reconcileUsers(prev, ru));
+            if (Array.isArray(json.data.operationalRoles) && json.data.operationalRoles.length > 0) {
+              const opClean = Array.from(new Set<string>(json.data.operationalRoles.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+              if (opClean.length > 0) {
+                setOperationalRoles(opClean);
+                try { localStorage.setItem('juwei_wms_operationalRoles', JSON.stringify(opClean)); } catch (e) {}
+              }
+            }
+            if (Array.isArray(json.data.receivingCategories) && json.data.receivingCategories.length > 0) {
+              const catClean = Array.from(new Set<string>(json.data.receivingCategories.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+              if (catClean.length > 0) {
+                setReceivingCategories(catClean);
+                try { localStorage.setItem('juwei_wms_receivingCategories', JSON.stringify(catClean)); } catch (e) {}
+              }
+            }
             if (Array.isArray(cm) && cm.length > 0) setChatMessages(cm);
             if (json.activePresence && Array.isArray(json.activePresence)) {
               setWsPresence(json.activePresence);
@@ -2122,6 +2347,20 @@ export default function App() {
               if (Array.isArray(f)) setForkliftChecks(prev => reconcileCollection('forkliftChecks', prev, normalizeRecords('forkliftChecks', f)));
               if (Array.isArray(reg)) setRegistries(prev => reconcileCollection('registries', prev, normalizeRecords('registries', reg)));
               if (Array.isArray(ru)) setRegisteredUsers(prev => reconcileUsers(prev, ru));
+              if (Array.isArray(json.data.operationalRoles) && json.data.operationalRoles.length > 0) {
+                const opClean = Array.from(new Set<string>(json.data.operationalRoles.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+                if (opClean.length > 0) {
+                  setOperationalRoles(opClean);
+                  try { localStorage.setItem('juwei_wms_operationalRoles', JSON.stringify(opClean)); } catch (e) {}
+                }
+              }
+              if (Array.isArray(json.data.receivingCategories) && json.data.receivingCategories.length > 0) {
+                const catClean = Array.from(new Set<string>(json.data.receivingCategories.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+                if (catClean.length > 0) {
+                  setReceivingCategories(catClean);
+                  try { localStorage.setItem('juwei_wms_receivingCategories', JSON.stringify(catClean)); } catch (e) {}
+                }
+              }
               if (Array.isArray(cm) && cm.length > 0) setChatMessages(cm);
               if (json.activePresence && Array.isArray(json.activePresence)) {
                 setWsPresence(json.activePresence);
@@ -2194,6 +2433,20 @@ export default function App() {
       
       if (Array.isArray(serverUsers)) {
         setRegisteredUsers(prev => reconcileUsers(prev, serverUsers));
+      }
+      if (Array.isArray(dataPayload.operationalRoles) && dataPayload.operationalRoles.length > 0) {
+        const opClean = Array.from(new Set<string>(dataPayload.operationalRoles.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+        if (opClean.length > 0) {
+          setOperationalRoles(opClean);
+          try { localStorage.setItem('juwei_wms_operationalRoles', JSON.stringify(opClean)); } catch (e) {}
+        }
+      }
+      if (Array.isArray(dataPayload.receivingCategories) && dataPayload.receivingCategories.length > 0) {
+        const catClean = Array.from(new Set<string>(dataPayload.receivingCategories.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+        if (catClean.length > 0) {
+          setReceivingCategories(catClean);
+          try { localStorage.setItem('juwei_wms_receivingCategories', JSON.stringify(catClean)); } catch (e) {}
+        }
       }
       if (msgs && Array.isArray(msgs)) setChatMessages(msgs);
       if (activePresenceList && Array.isArray(activePresenceList)) {
@@ -2735,6 +2988,44 @@ export default function App() {
                   case 'forkliftChecks': setForkliftChecks(prev => reconcileCollection('forkliftChecks', prev, norm)); break;
                   case 'registries': setRegistries(prev => reconcileCollection('registries', prev, norm)); break;
                   case 'registeredUsers': setRegisteredUsers(prev => reconcileUsers(prev, data)); break;
+                  case 'operationalRoles': {
+                    const cleaned = Array.from(new Set<string>(data.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+                    if (cleaned.length > 0) {
+                      setOperationalRoles(cleaned);
+                      try { localStorage.setItem('juwei_wms_operationalRoles', JSON.stringify(cleaned)); } catch (e) {}
+                    }
+                    break;
+                  }
+                  case 'receivingCategories': {
+                    const cleaned = Array.from(new Set<string>(data.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+                    if (cleaned.length > 0) {
+                      setReceivingCategories(cleaned);
+                      try { localStorage.setItem('juwei_wms_receivingCategories', JSON.stringify(cleaned)); } catch (e) {}
+                    }
+                    break;
+                  }
+                }
+              }
+              break;
+            }
+            case 'roles_updated': {
+              const { roles } = payload;
+              if (Array.isArray(roles)) {
+                const cleaned = Array.from(new Set<string>(roles.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+                if (cleaned.length > 0) {
+                  setOperationalRoles(cleaned);
+                  try { localStorage.setItem('juwei_wms_operationalRoles', JSON.stringify(cleaned)); } catch (e) {}
+                }
+              }
+              break;
+            }
+            case 'categories_updated': {
+              const { categories } = payload;
+              if (Array.isArray(categories)) {
+                const cleaned = Array.from(new Set<string>(categories.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+                if (cleaned.length > 0) {
+                  setReceivingCategories(cleaned);
+                  try { localStorage.setItem('juwei_wms_receivingCategories', JSON.stringify(cleaned)); } catch (e) {}
                 }
               }
               break;
@@ -4558,49 +4849,7 @@ export default function App() {
               </button>
             </form>
           </div>
-
-          <div className="pt-4 border-t border-slate-800 flex flex-col items-center gap-2.5 text-center">
-            <p className="text-[10px] text-slate-500 font-mono">
-              JUWEI PLASTIC MOULDING PHILS. INC.
-            </p>
-            <div className="flex items-center gap-2 flex-wrap justify-center">
-              <button
-                type="button"
-                onClick={() => setShowMobileInstallModal(true)}
-                className="text-[11px] text-slate-400 hover:text-slate-200 bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 px-3 py-1 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer font-mono"
-              >
-                <Smartphone className="h-3 w-3 text-emerald-400" />
-                <span>Mobile App</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowDesktopInstallModal(true)}
-                className="text-[11px] text-slate-400 hover:text-slate-200 bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 px-3 py-1 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer font-mono"
-              >
-                <Monitor className="h-3 w-3 text-indigo-400" />
-                <span>Desktop App</span>
-              </button>
-            </div>
-          </div>
         </motion.div>
-
-        {/* Mobile APK / App Installer Modal */}
-        {showMobileInstallModal && (
-          <MobileAppDownloadModal
-            isOpen={showMobileInstallModal}
-            onClose={() => setShowMobileInstallModal(false)}
-            serverAddress={serverAddress}
-            onFreshInstallSync={() => performFreshInstallAndSync(true)}
-          />
-        )}
-
-        {/* Desktop Application Installer Modal */}
-        {showDesktopInstallModal && (
-          <DesktopInstallModal
-            isOpen={showDesktopInstallModal}
-            onClose={() => setShowDesktopInstallModal(false)}
-          />
-        )}
 
         {/* Gateway QR Code Scanner Modal */}
         {showLoginQrScanner && (
@@ -5049,6 +5298,8 @@ export default function App() {
                   isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
                   canEdit={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
                   onOpenRegisterModal={() => setView('master-registry')}
+                  receivingCategories={receivingCategories}
+                  onUpdateReceivingCategories={handleUpdateReceivingCategories}
                 />
               )}
 
@@ -5164,6 +5415,8 @@ export default function App() {
               {view === 'accounts' && (currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002' || (currentUser || '').toUpperCase().includes('ALDRIN') || (currentRole || '').toUpperCase().includes('SUPER')) && (
                 <RegisteredAccountsModule 
                   accounts={registeredUsers}
+                  operationalRoles={operationalRoles}
+                  onUpdateOperationalRoles={handleUpdateOperationalRoles}
                   onAddAccount={handleRegister}
                   onUpdateAccount={handleUpdateAccount}
                   onRemoveAccount={handleRemoveUser}

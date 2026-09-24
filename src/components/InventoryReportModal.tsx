@@ -123,7 +123,7 @@ export default function InventoryReportModal({
           animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
           exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
           transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-          className="frosted-glass-modal-light w-full max-w-5xl rounded-3xl shadow-2xl border border-white/80 flex flex-col max-h-[calc(100vh-2rem)] my-auto print:max-h-none print:border-none print:shadow-none print:rounded-none print:my-0 overflow-hidden backdrop-blur-3xl"
+          className="frosted-glass-modal-light w-full max-w-5xl rounded-3xl shadow-2xl border border-white/80 flex flex-col max-h-[calc(100vh-2rem)] my-auto print:max-h-none print:border-none print:shadow-none print:rounded-none print:my-0 overflow-hidden print:overflow-visible backdrop-blur-3xl"
         >
           {/* Modal Header (Hidden during Print) */}
           <div className="bg-slate-950/90 backdrop-blur-md text-white px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 shrink-0 print:hidden">
@@ -251,7 +251,7 @@ export default function InventoryReportModal({
           </div>
 
           {/* Scrollable Report Body */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-6 print:p-0 print:overflow-visible">
+          <div className="flex-1 overflow-y-auto p-6 space-y-6 print:p-0 print:overflow-visible printable-area" id="printable-inventory-report">
             
             {/* Printable Report Header */}
             <div className="border-b-2 border-slate-900 pb-4">

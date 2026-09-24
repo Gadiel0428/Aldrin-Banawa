@@ -193,6 +193,41 @@ async function startServer() {
     };
   }
 
+  // Default Operational Roles for warehouse account assignments
+  const DEFAULT_OPERATIONAL_ROLES: string[] = [
+    "SYSTEM ADMINISTRATOR",
+    "WAREHOUSE TEAM LEADER",
+    "WAREHOUSE SUPERVISOR",
+    "WAREHOUSE MANAGER",
+    "WAREHOUSE CLERK",
+    "WAREHOUSE INVENTORY SPECIALIST",
+    "WAREHOUSE PERSONNEL",
+    "INJECTION MATERIAL HANDLER",
+    "PRINTING MATERIAL HANDLER",
+    "HR/ADMIN",
+    "INJECTION (PRODUCTION)",
+    "QUALITY INSPECTOR",
+    "SALES",
+    "PURCHASING",
+    "IMPEX",
+    "LOGISTIC",
+    "PRINTING AND ASSEMBLY (PRODUCTION)",
+    "FINANCE/ACCOUNTING",
+    "INTERNAL AUDITOR"
+  ];
+
+  // Default Receiving and Return Categories
+  const DEFAULT_RECEIVING_CATEGORIES: string[] = [
+    "RESIN/RAW MATERIALS",
+    "INDIRECT BOM",
+    "DIRECT BOM",
+    "CONSUMABLES",
+    "PACKAGING MATERIALS",
+    "WIP (WORK IN PROGRESS)",
+    "FG (FINISHED GOOD)",
+    "OFFICE SUPPLIES"
+  ];
+
   // Central Database In-Memory Collections (Single Source of Truth)
   const state: {
     stocks: any[];
@@ -206,6 +241,8 @@ async function startServer() {
     registries: any[];
     registeredUsers: ServerUser[];
     stockMovements: any[];
+    operationalRoles: string[];
+    receivingCategories: string[];
   } = {
     stocks: INITIAL_STOCK.map((item: any) => normalizeRecord(item)),
     receiving: INITIAL_RECEIVING.map((item: any) => normalizeRecord(item)),
@@ -218,6 +255,8 @@ async function startServer() {
     registries: [],
     registeredUsers: [{ ...defaultSuperAdmin }],
     stockMovements: [],
+    operationalRoles: [...DEFAULT_OPERATIONAL_ROLES],
+    receivingCategories: [...DEFAULT_RECEIVING_CATEGORIES],
   };
 
   /**
@@ -246,6 +285,8 @@ async function startServer() {
         registries: state.registries || [],
         registeredUsers: state.registeredUsers || [],
         stockMovements: state.stockMovements || [],
+        operationalRoles: state.operationalRoles || [...DEFAULT_OPERATIONAL_ROLES],
+        receivingCategories: state.receivingCategories || [...DEFAULT_RECEIVING_CATEGORIES],
         authorizedDevices: Array.from(authorizedDevicesMap.values()),
         deletedRecordTombstones: Array.from(deletedRecordTombstones),
         deletedUserTombstones: Array.from(deletedUserTombstones),
@@ -286,6 +327,8 @@ async function startServer() {
           registries: state.registries || [],
           registeredUsers: state.registeredUsers || [],
           stockMovements: state.stockMovements || [],
+          operationalRoles: state.operationalRoles || [...DEFAULT_OPERATIONAL_ROLES],
+          receivingCategories: state.receivingCategories || [...DEFAULT_RECEIVING_CATEGORIES],
           authorizedDevices: Array.from(authorizedDevicesMap.values())
         }, null, 2), "utf-8");
         return true;
@@ -322,15 +365,35 @@ async function startServer() {
           if (parsed.state && typeof parsed.state === "object") {
             Object.keys(parsed.state).forEach((key) => {
               if (key in state && Array.isArray(parsed.state[key])) {
-                // Ensure all loaded records have mandatory fields
-                (state as any)[key] = parsed.state[key].map((rec: any) => normalizeRecord(rec));
+                if (key === 'operationalRoles') {
+                  state.operationalRoles = Array.from(new Set<string>(parsed.state[key].map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+                } else if (key === 'receivingCategories') {
+                  state.receivingCategories = Array.from(new Set<string>(parsed.state[key].map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+                } else {
+                  // Ensure all loaded records have mandatory fields
+                  (state as any)[key] = parsed.state[key].map((rec: any) => normalizeRecord(rec));
+                }
               }
             });
           }
           for (const key of Object.keys(state)) {
-            if (Array.isArray(parsed[key]) && (!(parsed.state && key in parsed.state))) {
+            if (key === 'operationalRoles') {
+              if (Array.isArray(parsed.operationalRoles) && parsed.operationalRoles.length > 0) {
+                state.operationalRoles = Array.from(new Set<string>(parsed.operationalRoles.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+              }
+            } else if (key === 'receivingCategories') {
+              if (Array.isArray(parsed.receivingCategories) && parsed.receivingCategories.length > 0) {
+                state.receivingCategories = Array.from(new Set<string>(parsed.receivingCategories.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+              }
+            } else if (Array.isArray(parsed[key]) && (!(parsed.state && key in parsed.state))) {
               (state as any)[key] = parsed[key].map((rec: any) => normalizeRecord(rec));
             }
+          }
+          if (!Array.isArray(state.operationalRoles) || state.operationalRoles.length === 0) {
+            state.operationalRoles = [...DEFAULT_OPERATIONAL_ROLES];
+          }
+          if (!Array.isArray(state.receivingCategories) || state.receivingCategories.length === 0) {
+            state.receivingCategories = [...DEFAULT_RECEIVING_CATEGORIES];
           }
 
           if (Array.isArray(parsed.deletedRecordTombstones)) {
@@ -1983,6 +2046,52 @@ async function startServer() {
               break;
             }
 
+            if (col === 'operationalRoles') {
+              if (Array.isArray(payload.data)) {
+                const cleaned = Array.from(new Set<string>(payload.data.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+                if (cleaned.length > 0) {
+                  state.operationalRoles = cleaned;
+                  stateRevision++;
+                  commitDatabase();
+                  broadcast({
+                    type: "roles_updated",
+                    roles: state.operationalRoles,
+                    systemResetVersion
+                  });
+                  broadcast({
+                    type: "collection_updated",
+                    collection: "operationalRoles",
+                    data: state.operationalRoles,
+                    systemResetVersion
+                  });
+                }
+              }
+              break;
+            }
+
+            if (col === 'receivingCategories') {
+              if (Array.isArray(payload.data)) {
+                const cleaned = Array.from(new Set<string>(payload.data.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+                if (cleaned.length > 0) {
+                  state.receivingCategories = cleaned;
+                  stateRevision++;
+                  commitDatabase();
+                  broadcast({
+                    type: "categories_updated",
+                    categories: state.receivingCategories,
+                    systemResetVersion
+                  });
+                  broadcast({
+                    type: "collection_updated",
+                    collection: "receivingCategories",
+                    data: state.receivingCategories,
+                    systemResetVersion
+                  });
+                }
+              }
+              break;
+            }
+
             const items: any[] = Array.isArray(payload.data) ? payload.data : [];
             const currentList: any[] = (state as any)[col] || [];
             const listMap = new Map<string, any>(currentList.map(item => [String(item.id || item.record_id), item]));
@@ -2384,6 +2493,131 @@ async function startServer() {
             break;
           }
 
+          case "update_roles":
+          case "manage_roles": {
+            if (Array.isArray(payload.roles)) {
+              const cleaned = Array.from(new Set<string>(payload.roles.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+              if (cleaned.length > 0) {
+                state.operationalRoles = cleaned;
+                stateRevision++;
+                commitDatabase();
+                broadcast({
+                  type: "roles_updated",
+                  roles: state.operationalRoles,
+                  systemResetVersion
+                });
+                broadcast({
+                  type: "collection_updated",
+                  collection: "operationalRoles",
+                  data: state.operationalRoles,
+                  systemResetVersion
+                });
+              }
+            }
+            break;
+          }
+
+          case "update_categories":
+          case "manage_categories": {
+            let recModified = false;
+            let retModified = false;
+            let stocksModified = false;
+            let categoriesModified = false;
+
+            if (payload.renameData && payload.renameData.oldCat && payload.renameData.newCat) {
+              const cleanOld = String(payload.renameData.oldCat).trim().toUpperCase();
+              const cleanNew = String(payload.renameData.newCat).trim().toUpperCase();
+              if (cleanOld && cleanNew && cleanOld !== cleanNew) {
+                // Update receiving records
+                state.receiving = state.receiving.map(r => {
+                  let ch = false;
+                  const up = { ...r };
+                  if ((r.supplierOrDept || '').trim().toUpperCase() === cleanOld) {
+                    up.supplierOrDept = cleanNew;
+                    ch = true;
+                  }
+                  if ((r.category || '').trim().toUpperCase() === cleanOld) {
+                    up.category = cleanNew;
+                    ch = true;
+                  }
+                  if (ch) {
+                    recModified = true;
+                    return { ...up, version: (r.version || 1) + 1, updated_at: new Date().toISOString() };
+                  }
+                  return r;
+                });
+
+                // Update return records
+                state.returns = state.returns.map(ret => {
+                  if ((ret.category || '').trim().toUpperCase() === cleanOld) {
+                    retModified = true;
+                    return { ...ret, category: cleanNew, version: (ret.version || 1) + 1, updated_at: new Date().toISOString() };
+                  }
+                  return ret;
+                });
+
+                // Update stocks
+                state.stocks = state.stocks.map(s => {
+                  if (((s as any).category || '').trim().toUpperCase() === cleanOld) {
+                    stocksModified = true;
+                    return { ...s, category: cleanNew, version: (s.version || 1) + 1, updated_at: new Date().toISOString() };
+                  }
+                  return s;
+                });
+              }
+            }
+
+            if (Array.isArray(payload.categories)) {
+              const cleaned = Array.from(new Set<string>(payload.categories.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+              if (cleaned.length > 0) {
+                state.receivingCategories = cleaned;
+                categoriesModified = true;
+              }
+            }
+
+            if (categoriesModified || recModified || retModified || stocksModified) {
+              stateRevision++;
+              commitDatabase();
+              broadcast({
+                type: "categories_updated",
+                categories: state.receivingCategories,
+                systemResetVersion
+              });
+              broadcast({
+                type: "collection_updated",
+                collection: "receivingCategories",
+                data: state.receivingCategories,
+                systemResetVersion
+              });
+
+              if (recModified) {
+                broadcast({
+                  type: "collection_updated",
+                  collection: "receiving",
+                  data: state.receiving,
+                  systemResetVersion
+                });
+              }
+              if (retModified) {
+                broadcast({
+                  type: "collection_updated",
+                  collection: "returns",
+                  data: state.returns,
+                  systemResetVersion
+                });
+              }
+              if (stocksModified) {
+                broadcast({
+                  type: "collection_updated",
+                  collection: "stocks",
+                  data: state.stocks,
+                  systemResetVersion
+                });
+              }
+            }
+            break;
+          }
+
           case "client_installed": {
             const { stationId, installId, username, employeeId, platform, timestamp } = payload;
             console.log(`[CENTRAL-DB] Client installed: Station ${stationId} by ${username} (${employeeId}) on ${platform}`);
@@ -2632,6 +2866,52 @@ async function startServer() {
       const clientPermission = (req.headers['x-user-permission'] || req.body.permission || '').toString().toUpperCase();
       if (clientPermission === 'VIEW_ONLY') {
         return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
+      }
+
+      if (collection === 'operationalRoles') {
+        if (Array.isArray(data)) {
+          const cleaned = Array.from(new Set<string>(data.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+          if (cleaned.length > 0) {
+            state.operationalRoles = cleaned;
+            stateRevision++;
+            commitDatabase();
+            broadcast({
+              type: "roles_updated",
+              roles: state.operationalRoles,
+              systemResetVersion
+            });
+            broadcast({
+              type: "collection_updated",
+              collection: "operationalRoles",
+              data: state.operationalRoles,
+              systemResetVersion
+            });
+          }
+        }
+        return res.json({ success: true, count: state.operationalRoles.length, systemResetVersion });
+      }
+
+      if (collection === 'receivingCategories') {
+        if (Array.isArray(data)) {
+          const cleaned = Array.from(new Set<string>(data.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+          if (cleaned.length > 0) {
+            state.receivingCategories = cleaned;
+            stateRevision++;
+            commitDatabase();
+            broadcast({
+              type: "categories_updated",
+              categories: state.receivingCategories,
+              systemResetVersion
+            });
+            broadcast({
+              type: "collection_updated",
+              collection: "receivingCategories",
+              data: state.receivingCategories,
+              systemResetVersion
+            });
+          }
+        }
+        return res.json({ success: true, count: state.receivingCategories.length, systemResetVersion });
       }
 
       const items: any[] = Array.isArray(data) ? data : [];
@@ -3449,6 +3729,267 @@ async function startServer() {
       });
 
       return res.json({ success: true, count: 1, accounts: state.registeredUsers });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // REST API: Get Operational Roles
+  app.get("/api/roles", (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.json({
+      success: true,
+      roles: state.operationalRoles || DEFAULT_OPERATIONAL_ROLES
+    });
+  });
+
+  // REST API: Manage / Update Operational Roles (Super Admin)
+  app.post("/api/roles", async (req, res) => {
+    try {
+      const { action, role, oldRole, newRole, roles, updateExistingAccounts } = req.body;
+      let modified = false;
+      let usersModified = false;
+
+      if (action === 'add' && role) {
+        const clean = String(role).trim().toUpperCase();
+        if (clean && !state.operationalRoles.includes(clean)) {
+          state.operationalRoles.push(clean);
+          modified = true;
+        }
+      } else if (action === 'rename' && oldRole && newRole) {
+        const cleanOld = String(oldRole).trim().toUpperCase();
+        const cleanNew = String(newRole).trim().toUpperCase();
+        if (cleanOld && cleanNew) {
+          const idx = state.operationalRoles.indexOf(cleanOld);
+          if (idx !== -1) {
+            state.operationalRoles[idx] = cleanNew;
+            modified = true;
+          } else if (!state.operationalRoles.includes(cleanNew)) {
+            state.operationalRoles.push(cleanNew);
+            modified = true;
+          }
+
+          if (updateExistingAccounts !== false) {
+            state.registeredUsers = state.registeredUsers.map(u => {
+              if ((u.role || '').toUpperCase().trim() === cleanOld) {
+                usersModified = true;
+                return {
+                  ...u,
+                  role: cleanNew,
+                  version: (u.version || 1) + 1,
+                  updated_at: new Date().toISOString()
+                };
+              }
+              return u;
+            });
+          }
+        }
+      } else if (action === 'delete' && role) {
+        const clean = String(role).trim().toUpperCase();
+        if (clean) {
+          state.operationalRoles = state.operationalRoles.filter(r => r !== clean);
+          modified = true;
+        }
+      } else if (Array.isArray(roles)) {
+        const cleaned = Array.from(new Set<string>(roles.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+        if (cleaned.length > 0) {
+          state.operationalRoles = cleaned;
+          modified = true;
+        }
+      }
+
+      if (modified || usersModified) {
+        stateRevision++;
+        commitDatabase();
+
+        broadcast({
+          type: "roles_updated",
+          roles: state.operationalRoles,
+          systemResetVersion
+        });
+
+        broadcast({
+          type: "collection_updated",
+          collection: "operationalRoles",
+          data: state.operationalRoles,
+          systemResetVersion
+        });
+
+        if (usersModified) {
+          broadcast({
+            type: "collection_updated",
+            collection: "registeredUsers",
+            data: state.registeredUsers,
+            systemResetVersion
+          });
+        }
+      }
+
+      return res.json({
+        success: true,
+        roles: state.operationalRoles,
+        accountsUpdated: usersModified
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // REST API: Get Receiving Categories
+  app.get("/api/categories", (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.json({
+      success: true,
+      categories: state.receivingCategories || DEFAULT_RECEIVING_CATEGORIES
+    });
+  });
+
+  // REST API: Manage / Update Receiving Categories (Super Admin)
+  app.post("/api/categories", async (req, res) => {
+    try {
+      const { action, category, oldCategory, newCategory, oldCat, newCat, categories, updateExistingRecords } = req.body;
+      let modified = false;
+      let recModified = false;
+      let retModified = false;
+      let stocksModified = false;
+
+      if (action === 'add' && category) {
+        const clean = String(category).trim().toUpperCase();
+        if (clean && !state.receivingCategories.includes(clean)) {
+          state.receivingCategories.push(clean);
+          modified = true;
+        }
+      } else if (action === 'rename') {
+        const cleanOld = String(oldCategory || oldCat || '').trim().toUpperCase();
+        const cleanNew = String(newCategory || newCat || '').trim().toUpperCase();
+        if (cleanOld && cleanNew && cleanOld !== cleanNew) {
+          const idx = state.receivingCategories.indexOf(cleanOld);
+          if (idx !== -1) {
+            state.receivingCategories[idx] = cleanNew;
+            modified = true;
+          } else if (!state.receivingCategories.includes(cleanNew)) {
+            state.receivingCategories.push(cleanNew);
+            modified = true;
+          }
+
+          if (updateExistingRecords !== false) {
+            state.receiving = state.receiving.map(r => {
+              let ch = false;
+              const up = { ...r };
+              if ((r.supplierOrDept || '').trim().toUpperCase() === cleanOld) {
+                up.supplierOrDept = cleanNew;
+                ch = true;
+              }
+              if ((r.category || '').trim().toUpperCase() === cleanOld) {
+                up.category = cleanNew;
+                ch = true;
+              }
+              if (ch) {
+                recModified = true;
+                return { ...up, version: (r.version || 1) + 1, updated_at: new Date().toISOString() };
+              }
+              return r;
+            });
+
+            state.returns = state.returns.map(ret => {
+              if ((ret.category || '').trim().toUpperCase() === cleanOld) {
+                retModified = true;
+                return { ...ret, category: cleanNew, version: (ret.version || 1) + 1, updated_at: new Date().toISOString() };
+              }
+              return ret;
+            });
+
+            state.stocks = state.stocks.map(s => {
+              if (((s as any).category || '').trim().toUpperCase() === cleanOld) {
+                stocksModified = true;
+                return { ...s, category: cleanNew, version: (s.version || 1) + 1, updated_at: new Date().toISOString() };
+              }
+              return s;
+            });
+          }
+        }
+      } else if (action === 'delete' && category) {
+        const clean = String(category).trim().toUpperCase();
+        if (clean) {
+          // Block deleting if any existing record still uses it
+          const recCount = state.receiving.filter(r => (r.supplierOrDept || '').trim().toUpperCase() === clean || (r.category || '').trim().toUpperCase() === clean).length;
+          const retCount = state.returns.filter(ret => (ret.category || '').trim().toUpperCase() === clean).length;
+          const stockCount = state.stocks.filter(s => ((s as any).category || '').trim().toUpperCase() === clean).length;
+          const inUseCount = recCount + retCount + stockCount;
+
+          if (inUseCount > 0) {
+            return res.status(400).json({
+              success: false,
+              error: `Cannot delete category "${clean}" because it is currently assigned to ${inUseCount} active record(s) (${recCount} receiving, ${retCount} returns). You must reassign or remove these records first.`,
+              inUseCount,
+              recCount,
+              retCount,
+              stockCount
+            });
+          }
+
+          state.receivingCategories = state.receivingCategories.filter(c => c !== clean);
+          modified = true;
+        }
+      } else if (action === 'reset') {
+        state.receivingCategories = [...DEFAULT_RECEIVING_CATEGORIES];
+        modified = true;
+      } else if (Array.isArray(categories)) {
+        const cleaned = Array.from(new Set<string>(categories.map((c: any) => String(c || '').trim().toUpperCase()).filter(Boolean)));
+        if (cleaned.length > 0) {
+          state.receivingCategories = cleaned;
+          modified = true;
+        }
+      }
+
+      if (modified || recModified || retModified || stocksModified) {
+        stateRevision++;
+        commitDatabase();
+
+        broadcast({
+          type: "categories_updated",
+          categories: state.receivingCategories,
+          systemResetVersion
+        });
+
+        broadcast({
+          type: "collection_updated",
+          collection: "receivingCategories",
+          data: state.receivingCategories,
+          systemResetVersion
+        });
+
+        if (recModified) {
+          broadcast({
+            type: "collection_updated",
+            collection: "receiving",
+            data: state.receiving,
+            systemResetVersion
+          });
+        }
+        if (retModified) {
+          broadcast({
+            type: "collection_updated",
+            collection: "returns",
+            data: state.returns,
+            systemResetVersion
+          });
+        }
+        if (stocksModified) {
+          broadcast({
+            type: "collection_updated",
+            collection: "stocks",
+            data: state.stocks,
+            systemResetVersion
+          });
+        }
+      }
+
+      return res.json({
+        success: true,
+        categories: state.receivingCategories,
+        recordsUpdated: recModified || retModified || stocksModified
+      });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }

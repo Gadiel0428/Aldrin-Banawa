@@ -44,6 +44,8 @@ import {
   Activity,
   Info,
   Check,
+  Pencil,
+  AlertCircle,
   ExternalLink
 } from 'lucide-react';
 import { ReceivingRecord, ReturnRecord, MaterialStockItem, getCustomerForPart, UOM_OPTIONS, MasterRegistryItem, RegistryType } from '../types';
@@ -51,6 +53,18 @@ import { FIFO_COLORS_BY_MONTH } from '../data';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAuthoritativeId } from '../lib/idGenerator';
+
+// Default Receiving and Return Categories
+export const DEFAULT_RECEIVING_CATEGORIES: string[] = [
+  "RESIN/RAW MATERIALS",
+  "INDIRECT BOM",
+  "DIRECT BOM",
+  "CONSUMABLES",
+  "PACKAGING MATERIALS",
+  "WIP (WORK IN PROGRESS)",
+  "FG (FINISHED GOOD)",
+  "OFFICE SUPPLIES"
+];
 
 interface ReceivingModuleProps {
   receiving: ReceivingRecord[];
@@ -68,6 +82,8 @@ interface ReceivingModuleProps {
   canEdit?: boolean;
   registries?: MasterRegistryItem[];
   onOpenRegisterModal?: (type?: RegistryType) => void;
+  receivingCategories?: string[];
+  onUpdateReceivingCategories?: (categories: string[], renameData?: { oldCat: string; newCat: string }) => void;
 }
 
 export default function ReceivingModule({
@@ -85,7 +101,9 @@ export default function ReceivingModule({
   isSuperAdmin = false,
   canEdit = false,
   registries = [],
-  onOpenRegisterModal
+  onOpenRegisterModal,
+  receivingCategories,
+  onUpdateReceivingCategories
 }: ReceivingModuleProps) {
   const effectiveCanEdit = canEdit || isSuperAdmin;
   const [activeTab, setActiveTab] = useState<'external-internal' | 'returns'>('external-internal');
@@ -138,6 +156,127 @@ export default function ReceivingModule({
     confirmVariant?: 'danger' | 'primary';
     onConfirm: () => void;
   } | null>(null);
+
+  // Centralized Managed Categories (Single source of truth)
+  const managedCategories = useMemo(() => {
+    if (Array.isArray(receivingCategories) && receivingCategories.length > 0) {
+      return Array.from(new Set(receivingCategories.map(c => String(c || '').trim().toUpperCase()).filter(Boolean)));
+    }
+    return DEFAULT_RECEIVING_CATEGORIES;
+  }, [receivingCategories]);
+
+  // Manage Categories Modal States (Super Admin)
+  const [showCategoriesModal, setShowCategoriesModal] = useState(false);
+  const [newCategoryInput, setNewCategoryInput] = useState('');
+  const [editingCategoryOriginal, setEditingCategoryOriginal] = useState<string | null>(null);
+  const [editingCategoryNewValue, setEditingCategoryNewValue] = useState('');
+  const [categorySearchQuery, setCategorySearchQuery] = useState('');
+  const [categoryModalError, setCategoryModalError] = useState('');
+  const [categoryModalSuccess, setCategoryModalSuccess] = useState('');
+
+  // Category Management Handlers
+  const handleAddCategory = (catToAdd?: string): string | false => {
+    const candidate = String(catToAdd !== undefined ? catToAdd : newCategoryInput).trim().toUpperCase();
+    if (!candidate) {
+      setCategoryModalError("Please enter a valid category name.");
+      return false;
+    }
+    if (managedCategories.some(c => c.toUpperCase() === candidate)) {
+      setCategoryModalError(`Category "${candidate}" already exists.`);
+      return false;
+    }
+
+    const updated = [...managedCategories, candidate];
+    if (onUpdateReceivingCategories) {
+      onUpdateReceivingCategories(updated);
+    }
+    setNewCategoryInput('');
+    setCategoryModalError('');
+    setCategoryModalSuccess(`Category "${candidate}" added successfully.`);
+    setTimeout(() => setCategoryModalSuccess(''), 3000);
+    return candidate;
+  };
+
+  const handleRenameCategory = (oldCat: string, newCat: string) => {
+    const cleanOld = oldCat.trim().toUpperCase();
+    const cleanNew = newCat.trim().toUpperCase();
+    if (!cleanNew) {
+      setCategoryModalError("Category name cannot be empty.");
+      return;
+    }
+    if (cleanNew !== cleanOld && managedCategories.some(c => c.toUpperCase() === cleanNew)) {
+      setCategoryModalError(`Category "${cleanNew}" already exists.`);
+      return;
+    }
+
+    const updated = managedCategories.map(c => c.toUpperCase() === cleanOld ? cleanNew : c);
+    if (onUpdateReceivingCategories) {
+      onUpdateReceivingCategories(updated, { oldCat: cleanOld, newCat: cleanNew });
+    }
+
+    // Cascade rename to local form drafts if currently selected
+    if (supplierOrDept.toUpperCase() === cleanOld) {
+      setSupplierOrDept(cleanNew);
+    }
+    if (retCategory.toUpperCase() === cleanOld) {
+      setRetCategory(cleanNew);
+    }
+    if (classificationFilter.toUpperCase() === cleanOld) {
+      setClassificationFilter(cleanNew);
+    }
+
+    setEditingCategoryOriginal(null);
+    setEditingCategoryNewValue('');
+    setCategoryModalError('');
+    setCategoryModalSuccess(`Renamed "${cleanOld}" to "${cleanNew}" across all records.`);
+    setTimeout(() => setCategoryModalSuccess(''), 3000);
+  };
+
+  const handleDeleteCategory = (catToDelete: string) => {
+    const clean = catToDelete.trim().toUpperCase();
+
+    // Block deleting a category if any existing record still uses it
+    const recCount = receiving.filter(r => (r.supplierOrDept || '').trim().toUpperCase() === clean || ((r as any).category || '').trim().toUpperCase() === clean).length;
+    const retCount = returns.filter(ret => (ret.category || '').trim().toUpperCase() === clean).length;
+    const stockCount = stocks.filter(s => ((s as any).category || '').trim().toUpperCase() === clean).length;
+    const inUseCount = recCount + retCount + stockCount;
+
+    if (inUseCount > 0) {
+      setCategoryModalError(`Cannot delete category "${clean}": It is currently assigned to ${inUseCount} active record(s) (${recCount} receiving, ${retCount} returns${stockCount > 0 ? `, ${stockCount} stock` : ''}). You must reassign or remove these records first.`);
+      return;
+    }
+
+    setConfirmAction({
+      title: `DELETE CATEGORY: ${clean}`,
+      message: `Are you sure you want to delete the category "${clean}"? This will remove it from the managed category list.`,
+      confirmVariant: "danger",
+      confirmLabel: "YES, DELETE",
+      onConfirm: () => {
+        const updated = managedCategories.filter(c => c.toUpperCase() !== clean);
+        if (onUpdateReceivingCategories) {
+          onUpdateReceivingCategories(updated);
+        }
+        setCategoryModalSuccess(`Category "${clean}" deleted successfully.`);
+        setTimeout(() => setCategoryModalSuccess(''), 3000);
+      }
+    });
+  };
+
+  const handleResetCategoriesToDefaults = () => {
+    setConfirmAction({
+      title: "RESET CATEGORIES TO DEFAULTS",
+      message: "Are you sure you want to restore the 8 factory default categories? Any records using other categories will retain their data.",
+      confirmVariant: "danger",
+      confirmLabel: "YES, RESET",
+      onConfirm: () => {
+        if (onUpdateReceivingCategories) {
+          onUpdateReceivingCategories([...DEFAULT_RECEIVING_CATEGORIES]);
+        }
+        setCategoryModalSuccess("Reset categories to standard defaults.");
+        setTimeout(() => setCategoryModalSuccess(''), 3000);
+      }
+    });
+  };
 
   // Handle scanned barcode / QR code result
   const handleScanResult = (scannedCode: string) => {
@@ -911,21 +1050,10 @@ export default function ReceivingModule({
                   onChange={e => setClassificationFilter(e.target.value)}
                   className="w-full sm:w-auto px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-700 focus:ring-1 focus:ring-slate-400 focus:outline-none cursor-pointer"
                 >
-                  <option value="ALL">ALL CATEGORIES</option>
-                  <option value="RESIN/RAW MATERIALS">RESIN/RAW MATERIALS</option>
-                  <option value="INDIRECT BOM">INDIRECT BOM</option>
-                  <option value="DIRECT BOM">DIRECT BOM</option>
-                  <option value="CONSUMABLES">CONSUMABLES</option>
-                  <option value="PACKAGING MATERIALS">PACKAGING MATERIALS</option>
-                  <option value="WIP (WORK IN PROGRESS)">WIP (WORK IN PROGRESS)</option>
-                  <option value="FG (FINISHED GOOD)">FG (FINISHED GOOD)</option>
-                  <option value="OFFICE SUPPLIES">OFFICE SUPPLIES</option>
-                  {registries
-                    .filter(r => r.type === 'CATEGORY' && r.status === 'ACTIVE' && 
-                      !['RESIN/RAW MATERIALS', 'INDIRECT BOM', 'DIRECT BOM', 'CONSUMABLES', 'PACKAGING MATERIALS', 'WIP (WORK IN PROGRESS)', 'FG (FINISHED GOOD)', 'OFFICE SUPPLIES'].includes(r.name))
-                    .map(cat => (
-                      <option key={cat.id} value={cat.name}>{cat.name}</option>
-                    ))}
+                  <option value="ALL">ALL CATEGORIES ({managedCategories.length})</option>
+                  {managedCategories.map(cat => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -983,33 +1111,42 @@ export default function ReceivingModule({
 
               {/* Category Selector at Top */}
               <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 space-y-2">
-                <label className="block text-xs font-bold text-indigo-900 uppercase tracking-wider">
-                  Select Category *
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-indigo-900 uppercase tracking-wider">
+                    Select Category *
+                  </label>
+                  {isSuperAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => setShowCategoriesModal(true)}
+                      className="text-[11px] font-mono font-bold text-indigo-700 hover:text-indigo-950 bg-indigo-100/90 hover:bg-indigo-200 border border-indigo-200/80 px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                      title="Manage categories list (Super Admin)"
+                    >
+                      <Tag className="h-3.5 w-3.5 text-indigo-600" />
+                      <span>Manage Categories</span>
+                    </button>
+                  )}
+                </div>
                 <select 
                   required
                   value={supplierOrDept}
                   onChange={e => {
                     const cat = e.target.value;
+                    if (cat === '__ADD_NEW__') {
+                      setShowCategoriesModal(true);
+                      return;
+                    }
                     setSupplierOrDept(cat);
                   }}
                   className="w-full px-3.5 py-2.5 bg-white border border-indigo-200 rounded-lg text-xs font-bold text-indigo-950 focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer shadow-2xs"
                 >
                   <option value="">-- Select Category --</option>
-                  <option value="RESIN/RAW MATERIALS">RESIN/RAW MATERIALS</option>
-                  <option value="INDIRECT BOM">INDIRECT BOM</option>
-                  <option value="DIRECT BOM">DIRECT BOM</option>
-                  <option value="CONSUMABLES">CONSUMABLES</option>
-                  <option value="PACKAGING MATERIALS">PACKAGING MATERIALS</option>
-                  <option value="WIP (WORK IN PROGRESS)">WIP (WORK IN PROGRESS)</option>
-                  <option value="FG (FINISHED GOOD)">FG (FINISHED GOOD)</option>
-                  <option value="OFFICE SUPPLIES">OFFICE SUPPLIES</option>
-                  {registries
-                    .filter(r => r.type === 'CATEGORY' && r.status === 'ACTIVE' && 
-                      !['RESIN/RAW MATERIALS', 'INDIRECT BOM', 'DIRECT BOM', 'CONSUMABLES', 'PACKAGING MATERIALS', 'WIP (WORK IN PROGRESS)', 'FG (FINISHED GOOD)', 'OFFICE SUPPLIES', 'RAW MATERIALS / RESINS', 'WIP / SUB-PARTS'].includes(r.name))
-                    .map(cat => (
-                      <option key={cat.id} value={cat.name}>{cat.name}</option>
-                    ))}
+                  {managedCategories.map(cat => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                  {isSuperAdmin && (
+                    <option value="__ADD_NEW__" className="text-indigo-600 font-bold bg-indigo-50/60">+ Add new category...</option>
+                  )}
                 </select>
                 <p className="text-[11px] text-indigo-600 font-medium">
                   {supplierOrDept ? `Form details tailored for category: "${supplierOrDept}"` : 'Selecting a category will automatically customize required arrival fields.'}
@@ -2139,30 +2276,42 @@ export default function ReceivingModule({
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {/* Category Selector at Top of Return Form */}
                 <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 space-y-2 col-span-1 md:col-span-3">
-                  <label className="block text-xs font-bold text-indigo-900 uppercase tracking-wider">
-                    Select Category *
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-bold text-indigo-900 uppercase tracking-wider">
+                      Select Category *
+                    </label>
+                    {isSuperAdmin && (
+                      <button
+                        type="button"
+                        onClick={() => setShowCategoriesModal(true)}
+                        className="text-[11px] font-mono font-bold text-indigo-700 hover:text-indigo-950 bg-indigo-100/90 hover:bg-indigo-200 border border-indigo-200/80 px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                        title="Manage categories list (Super Admin)"
+                      >
+                        <Tag className="h-3.5 w-3.5 text-indigo-600" />
+                        <span>Manage Categories</span>
+                      </button>
+                    )}
+                  </div>
                   <select 
                     required
                     value={retCategory}
-                    onChange={e => setRetCategory(e.target.value)}
+                    onChange={e => {
+                      const cat = e.target.value;
+                      if (cat === '__ADD_NEW__') {
+                        setShowCategoriesModal(true);
+                        return;
+                      }
+                      setRetCategory(cat);
+                    }}
                     className="w-full px-3.5 py-2.5 bg-white border border-indigo-200 rounded-lg text-xs font-bold text-indigo-950 focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer shadow-2xs"
                   >
                     <option value="">-- Select Category --</option>
-                    <option value="RESIN/RAW MATERIALS">RESIN/RAW MATERIALS</option>
-                    <option value="INDIRECT BOM">INDIRECT BOM</option>
-                    <option value="DIRECT BOM">DIRECT BOM</option>
-                    <option value="CONSUMABLES">CONSUMABLES</option>
-                    <option value="PACKAGING MATERIALS">PACKAGING MATERIALS</option>
-                    <option value="WIP (WORK IN PROGRESS)">WIP (WORK IN PROGRESS)</option>
-                    <option value="FG (FINISHED GOOD)">FG (FINISHED GOOD)</option>
-                    <option value="OFFICE SUPPLIES">OFFICE SUPPLIES</option>
-                    {registries
-                      .filter(r => r.type === 'CATEGORY' && r.status === 'ACTIVE' && 
-                        !['RESIN/RAW MATERIALS', 'INDIRECT BOM', 'DIRECT BOM', 'CONSUMABLES', 'PACKAGING MATERIALS', 'WIP (WORK IN PROGRESS)', 'FG (FINISHED GOOD)', 'OFFICE SUPPLIES', 'RAW MATERIALS / RESINS', 'WIP / SUB-PARTS'].includes(r.name))
-                      .map(cat => (
-                        <option key={cat.id} value={cat.name}>{cat.name}</option>
-                      ))}
+                    {managedCategories.map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                    {isSuperAdmin && (
+                      <option value="__ADD_NEW__" className="text-indigo-600 font-bold bg-indigo-50/60">+ Add new category...</option>
+                    )}
                   </select>
                   <p className="text-[11px] text-indigo-600 font-medium">
                     {retCategory ? `Return category set to: "${retCategory}"` : 'Selecting a category specifies the material classification for shop-floor return.'}
@@ -2845,19 +2994,9 @@ export default function ReceivingModule({
                     className="w-full border border-slate-200 px-3 py-1.5 rounded text-xs focus:ring-1 focus:ring-indigo-500 font-medium text-slate-700 cursor-pointer"
                   >
                     <option value="">Select Category...</option>
-                    {registries.filter(r => r.type === 'CATEGORY' && r.status === 'ACTIVE').map(cat => (
-                      <option key={cat.id} value={cat.name}>{cat.name}</option>
+                    {managedCategories.map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
                     ))}
-                    {!registries.some(r => r.type === 'CATEGORY' && r.status === 'ACTIVE') && (
-                      <>
-                        <option value="RAW MATERIALS / RESINS">RAW MATERIALS / RESINS</option>
-                        <option value="PACKAGING MATERIALS">PACKAGING MATERIALS</option>
-                        <option value="CONSUMABLES">CONSUMABLES</option>
-                        <option value="PRODUCTION SUPPLIES">PRODUCTION SUPPLIES</option>
-                        <option value="OFFICE SUPPLIES">OFFICE SUPPLIES</option>
-                        <option value="WIP / SUB-PARTS">WIP / SUB-PARTS</option>
-                      </>
-                    )}
                   </select>
                 </div>
 
@@ -3080,22 +3219,12 @@ export default function ReceivingModule({
                   <select 
                     value={editingReturn.category || ''}
                     onChange={e => setEditingReturn({ ...editingReturn, category: e.target.value })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-bold text-xs"
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-bold text-xs cursor-pointer"
                   >
                     <option value="">Select Category...</option>
-                    <option value="RESIN/RAW MATERIALS">RESIN/RAW MATERIALS</option>
-                    <option value="INDIRECT BOM">INDIRECT BOM</option>
-                    <option value="DIRECT BOM">DIRECT BOM</option>
-                    <option value="CONSUMABLES">CONSUMABLES</option>
-                    <option value="PACKAGING MATERIALS">PACKAGING MATERIALS</option>
-                    <option value="WIP (WORK IN PROGRESS)">WIP (WORK IN PROGRESS)</option>
-                    <option value="FG (FINISHED GOOD)">FG (FINISHED GOOD)</option>
-                    <option value="OFFICE SUPPLIES">OFFICE SUPPLIES</option>
-                    {registries
-                      .filter(r => r.type === 'CATEGORY' && r.status === 'ACTIVE')
-                      .map(cat => (
-                        <option key={cat.id} value={cat.name}>{cat.name}</option>
-                      ))}
+                    {managedCategories.map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
                   </select>
                 </div>
 
@@ -3248,6 +3377,238 @@ export default function ReceivingModule({
             </motion.div>
           </motion.div>
         </AnimatePresence>,
+        document.body
+      )}
+
+      {/* Super Admin Manage Categories Modal Portal */}
+      {typeof document !== 'undefined' && showCategoriesModal && isSuperAdmin && createPortal(
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 z-[999998]">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white p-5 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300">
+                  <Tag className="h-5 w-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold tracking-tight">MANAGE RECEIVING & RETURN CATEGORIES</h3>
+                    <span className="bg-indigo-500/30 text-indigo-200 text-[10px] font-mono font-bold px-2 py-0.5 rounded-md border border-indigo-400/30">
+                      {managedCategories.length} CATEGORIES
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 mt-0.5">
+                    Centralized category definitions synced across all workstations and operator forms
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCategoriesModal(false);
+                  setEditingCategoryOriginal(null);
+                  setCategoryModalError('');
+                  setCategoryModalSuccess('');
+                  setCategorySearchQuery('');
+                }}
+                className="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-white/10 transition cursor-pointer"
+                title="Close"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 overflow-y-auto flex-1 space-y-4">
+              {/* Alert / Notification banners */}
+              {categoryModalError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2 animate-fadeIn font-semibold">
+                  <AlertCircle className="h-4 w-4 shrink-0 text-rose-500" />
+                  <span>{categoryModalError}</span>
+                </div>
+              )}
+              {categoryModalSuccess && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-xl flex items-center gap-2 animate-fadeIn font-semibold">
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                  <span>{categoryModalSuccess}</span>
+                </div>
+              )}
+
+              {/* Add New Category Form */}
+              <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-xl">
+                <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
+                  Create New Category
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="E.G. PACKAGING ACCESSORIES, SUB-ASSEMBLY..."
+                    value={newCategoryInput}
+                    onChange={e => {
+                      setNewCategoryInput(e.target.value.toUpperCase());
+                      setCategoryModalError('');
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddCategory();
+                      }
+                    }}
+                    className="flex-1 border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 uppercase font-semibold text-slate-800 bg-white text-xs font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleAddCategory()}
+                    className="bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 shadow-xs cursor-pointer uppercase font-mono"
+                  >
+                    <Plus className="h-4 w-4" />
+                    <span>Add Category</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Search filter for categories */}
+              <div className="relative">
+                <Search className="h-4 w-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="FILTER CATEGORIES LIST..."
+                  value={categorySearchQuery}
+                  onChange={e => setCategorySearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-3.5 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 text-xs font-mono uppercase bg-slate-50/50"
+                />
+              </div>
+
+              {/* Categories List */}
+              <div className="border border-slate-200 rounded-xl divide-y divide-slate-100 max-h-[280px] overflow-y-auto bg-white shadow-inner">
+                {managedCategories
+                  .filter(c => !categorySearchQuery || c.toLowerCase().includes(categorySearchQuery.toLowerCase()))
+                  .map(cat => {
+                    const clean = cat.trim().toUpperCase();
+                    const recCount = receiving.filter(r => (r.supplierOrDept || '').trim().toUpperCase() === clean || ((r as any).category || '').trim().toUpperCase() === clean).length;
+                    const retCount = returns.filter(ret => (ret.category || '').trim().toUpperCase() === clean).length;
+                    const stockCount = stocks.filter(s => ((s as any).category || '').trim().toUpperCase() === clean).length;
+                    const inUseCount = recCount + retCount + stockCount;
+                    const isEditing = editingCategoryOriginal === cat;
+
+                    return (
+                      <div key={cat} className="p-3 flex items-center justify-between gap-2 hover:bg-slate-50/80 transition-colors">
+                        {isEditing ? (
+                          <div className="flex-1 flex items-center gap-2">
+                            <input
+                              type="text"
+                              autoFocus
+                              value={editingCategoryNewValue}
+                              onChange={e => setEditingCategoryNewValue(e.target.value.toUpperCase())}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleRenameCategory(cat, editingCategoryNewValue);
+                                } else if (e.key === 'Escape') {
+                                  setEditingCategoryOriginal(null);
+                                }
+                              }}
+                              className="flex-1 border border-indigo-300 px-3 py-1.5 rounded-lg focus:ring-2 focus:ring-indigo-500 uppercase font-semibold text-slate-800 bg-indigo-50/30 text-xs font-mono"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleRenameCategory(cat, editingCategoryNewValue)}
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white p-1.5 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
+                              title="Save rename"
+                            >
+                              <Check className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingCategoryOriginal(null)}
+                              className="bg-slate-200 hover:bg-slate-300 text-slate-700 p-1.5 rounded-lg text-xs font-bold transition cursor-pointer shrink-0"
+                              title="Cancel"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="h-2 w-2 rounded-full bg-indigo-500 shrink-0" />
+                              <span className="font-mono font-bold text-xs text-slate-800 uppercase truncate">
+                                {cat}
+                              </span>
+                              <span className={`text-[10px] font-mono px-2 py-0.5 rounded-md font-semibold shrink-0 ${
+                                inUseCount > 0 
+                                  ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' 
+                                  : 'bg-slate-100 text-slate-500'
+                              }`}>
+                                {inUseCount} {inUseCount === 1 ? 'record' : 'records'}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingCategoryOriginal(cat);
+                                  setEditingCategoryNewValue(cat);
+                                  setCategoryModalError('');
+                                }}
+                                className="text-slate-500 hover:text-indigo-600 p-1.5 rounded-lg hover:bg-indigo-50 transition cursor-pointer"
+                                title={`Rename ${cat}`}
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteCategory(cat)}
+                                className={`p-1.5 rounded-lg transition cursor-pointer ${
+                                  inUseCount > 0 
+                                    ? 'text-slate-300 hover:text-slate-400 hover:bg-slate-100' 
+                                    : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
+                                }`}
+                                title={inUseCount > 0 ? `Cannot delete: in use by ${inUseCount} records` : `Delete ${cat}`}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                {managedCategories.filter(c => !categorySearchQuery || c.toLowerCase().includes(categorySearchQuery.toLowerCase())).length === 0 && (
+                  <div className="p-6 text-center text-slate-400 text-xs font-mono">
+                    No matching categories found.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={handleResetCategoriesToDefaults}
+                className="text-xs text-slate-500 hover:text-slate-800 font-mono font-bold flex items-center gap-1.5 hover:underline cursor-pointer"
+                title="Restore default factory categories list"
+              >
+                <RotateCcw className="h-3.5 w-3.5" /> Reset Defaults
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCategoriesModal(false);
+                  setEditingCategoryOriginal(null);
+                  setCategoryModalError('');
+                  setCategoryModalSuccess('');
+                  setCategorySearchQuery('');
+                }}
+                className="bg-slate-800 hover:bg-slate-900 text-white px-5 py-2 rounded-xl text-xs font-bold transition font-mono uppercase cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>,
         document.body
       )}
     </div>

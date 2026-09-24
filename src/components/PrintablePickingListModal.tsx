@@ -190,7 +190,7 @@ export default function PrintablePickingListModal({
         </div>
 
         {/* Printable Document Sheet Body */}
-        <div className="p-6 sm:p-10 overflow-y-auto flex-1 bg-white" id="printable-document-container">
+        <div className="p-6 sm:p-10 overflow-y-auto flex-1 bg-white printable-area" id="printable-document-container">
           <div className="max-w-4xl mx-auto space-y-6 text-slate-900 font-sans">
 
             {/* ========================================================================= */}

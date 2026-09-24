@@ -236,7 +236,7 @@ export default function ReceivingVsIssuanceReportModal({
         </div>
 
         {/* Printable Document Body */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6 print:p-0 print:space-y-4 print:overflow-visible bg-slate-100/60 print:bg-white" id="printable-summary-content">
+        <div className="flex-1 overflow-y-auto p-6 space-y-6 print:p-0 print:space-y-4 print:overflow-visible bg-slate-100/60 print:bg-white printable-area" id="printable-summary-content">
           
           {/* Official Letterhead & Document Header (Visible in UI and Print) */}
           <div className="bg-white border border-slate-200 print:border-none rounded-xl p-5 shadow-xs space-y-4">

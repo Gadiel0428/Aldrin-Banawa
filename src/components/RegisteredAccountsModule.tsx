@@ -26,15 +26,44 @@ import {
   Clock, 
   CircleDot,
   User,
-  ShieldAlert
+  ShieldAlert,
+  Tag,
+  Plus,
+  Pencil,
+  RotateCcw
 } from 'lucide-react';
 import AccountQRBadgeModal from './AccountQRBadgeModal';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { RegisteredAccount } from '../types';
 export type { RegisteredAccount };
 
+// Centralized default operational roles
+export const DEFAULT_OPERATIONAL_ROLES: string[] = [
+  "SYSTEM ADMINISTRATOR",
+  "WAREHOUSE TEAM LEADER",
+  "WAREHOUSE SUPERVISOR",
+  "WAREHOUSE MANAGER",
+  "WAREHOUSE CLERK",
+  "WAREHOUSE INVENTORY SPECIALIST",
+  "WAREHOUSE PERSONNEL",
+  "INJECTION MATERIAL HANDLER",
+  "PRINTING MATERIAL HANDLER",
+  "HR/ADMIN",
+  "INJECTION (PRODUCTION)",
+  "QUALITY INSPECTOR",
+  "SALES",
+  "PURCHASING",
+  "IMPEX",
+  "LOGISTIC",
+  "PRINTING AND ASSEMBLY (PRODUCTION)",
+  "FINANCE/ACCOUNTING",
+  "INTERNAL AUDITOR"
+];
+
 interface RegisteredAccountsModuleProps {
   accounts: RegisteredAccount[];
+  operationalRoles?: string[];
+  onUpdateOperationalRoles?: (roles: string[]) => void;
   onAddAccount: (
     username: string, 
     role: string, 
@@ -55,6 +84,8 @@ interface RegisteredAccountsModuleProps {
 
 export default function RegisteredAccountsModule({
   accounts,
+  operationalRoles,
+  onUpdateOperationalRoles,
   onAddAccount,
   onUpdateAccount,
   onRemoveAccount,
@@ -64,6 +95,14 @@ export default function RegisteredAccountsModule({
   isSuperAdmin = false,
   canEdit = false
 }: RegisteredAccountsModuleProps) {
+  // Centralized managed operational roles list
+  const managedRoles = useMemo(() => {
+    if (Array.isArray(operationalRoles) && operationalRoles.length > 0) {
+      return Array.from(new Set(operationalRoles.map(r => String(r || '').trim().toUpperCase()).filter(Boolean)));
+    }
+    return DEFAULT_OPERATIONAL_ROLES;
+  }, [operationalRoles]);
+
   // Search and Filter States
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'PENDING' | 'INACTIVE'>('ALL');
@@ -80,6 +119,21 @@ export default function RegisteredAccountsModule({
   const [revealAllPins, setRevealAllPins] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
+  // Manage Roles Modal States (Super Admin)
+  const [showRolesModal, setShowRolesModal] = useState(false);
+  const [newRoleInput, setNewRoleInput] = useState('');
+  const [editingRoleOriginal, setEditingRoleOriginal] = useState<string | null>(null);
+  const [editingRoleNewValue, setEditingRoleNewValue] = useState('');
+  const [roleSearchQuery, setRoleSearchQuery] = useState('');
+  const [roleModalError, setRoleModalError] = useState('');
+  const [roleModalSuccess, setRoleModalSuccess] = useState('');
+
+  // Inline Add Role states for modals
+  const [showEditInlineAddRole, setShowEditInlineAddRole] = useState(false);
+  const [editInlineRoleInput, setEditInlineRoleInput] = useState('');
+  const [showAddInlineRole, setShowAddInlineRole] = useState(false);
+  const [addInlineRoleInput, setAddInlineRoleInput] = useState('');
+
   // Quick inline phone edit state
   const [editingPhoneEmpId, setEditingPhoneEmpId] = useState<string | null>(null);
   const [editingPhoneValue, setEditingPhoneValue] = useState<string>('');
@@ -89,19 +143,131 @@ export default function RegisteredAccountsModule({
   const [newEmployeeId, setNewEmployeeId] = useState('');
   const [newPhoneNumber, setNewPhoneNumber] = useState('');
   const [newCustomPin, setNewCustomPin] = useState('');
-  const [newRole, setNewRole] = useState('WAREHOUSE CLERK');
+  const [newRole, setNewRole] = useState(() => managedRoles[4] || 'WAREHOUSE CLERK');
   const [newPermission, setNewPermission] = useState('LIMITED_ACCESS');
   const [newStatus, setNewStatus] = useState<'ACTIVE' | 'PENDING' | 'INACTIVE'>('ACTIVE');
   const [addError, setAddError] = useState<string>('');
 
-  // Distinct roles available in system for filter dropdown
-  const distinctRoles = useMemo(() => {
-    const roles = new Set<string>();
-    accounts.forEach(a => {
-      if (a.role) roles.add(a.role.toUpperCase());
+  // Managed roles for Edit dropdown (ensuring current account role is always an option)
+  const editDropdownRoles = useMemo(() => {
+    const set = new Set<string>(managedRoles);
+    if (editingAccount?.role) {
+      set.add(editingAccount.role.toUpperCase().trim());
+    }
+    return Array.from(set).filter(Boolean).sort();
+  }, [managedRoles, editingAccount?.role]);
+
+  // Managed roles for Add dropdown (ensuring newRole is always an option)
+  const addDropdownRoles = useMemo(() => {
+    const set = new Set<string>(managedRoles);
+    if (newRole) {
+      set.add(newRole.toUpperCase().trim());
+    }
+    return Array.from(set).filter(Boolean).sort();
+  }, [managedRoles, newRole]);
+
+  // Role Management Operations
+  const handleAddManagedRole = (roleNameToAdd?: string): string | false => {
+    const candidate = String(roleNameToAdd !== undefined ? roleNameToAdd : newRoleInput).trim().toUpperCase();
+    if (!candidate) {
+      setRoleModalError("Please enter a valid operational role name.");
+      return false;
+    }
+    if (managedRoles.some(r => r.toUpperCase() === candidate)) {
+      setRoleModalError(`Role "${candidate}" already exists.`);
+      return false;
+    }
+
+    const updated = [...managedRoles, candidate];
+    if (onUpdateOperationalRoles) {
+      onUpdateOperationalRoles(updated);
+    }
+    setNewRoleInput('');
+    setRoleModalError('');
+    setRoleModalSuccess(`Role "${candidate}" created successfully.`);
+    setTimeout(() => setRoleModalSuccess(''), 3000);
+    return candidate;
+  };
+
+  const handleRenameManagedRole = (oldRole: string, newRole: string) => {
+    const cleanOld = oldRole.trim().toUpperCase();
+    const cleanNew = newRole.trim().toUpperCase();
+    if (!cleanNew) {
+      setRoleModalError("Role name cannot be empty.");
+      return;
+    }
+    if (cleanNew !== cleanOld && managedRoles.some(r => r.toUpperCase() === cleanNew)) {
+      setRoleModalError(`Role "${cleanNew}" already exists.`);
+      return;
+    }
+
+    const updated = managedRoles.map(r => r.toUpperCase() === cleanOld ? cleanNew : r);
+    if (onUpdateOperationalRoles) {
+      onUpdateOperationalRoles(updated);
+    }
+
+    // Cascade rename to any existing accounts assigned this role
+    accounts.forEach(acc => {
+      if ((acc.role || '').toUpperCase().trim() === cleanOld) {
+        onUpdateAccount(acc.employeeId, { ...acc, role: cleanNew });
+      }
     });
-    return Array.from(roles).sort();
-  }, [accounts]);
+
+    setEditingRoleOriginal(null);
+    setEditingRoleNewValue('');
+    setRoleModalError('');
+    setRoleModalSuccess(`Renamed "${cleanOld}" to "${cleanNew}".`);
+    setTimeout(() => setRoleModalSuccess(''), 3000);
+  };
+
+  const handleDeleteManagedRole = (roleToDelete: string) => {
+    const clean = roleToDelete.trim().toUpperCase();
+    const assignedCount = accounts.filter(a => (a.role || '').toUpperCase().trim() === clean).length;
+
+    setConfirmAction({
+      title: `DELETE ROLE: ${clean}`,
+      message: assignedCount > 0
+        ? `Warning: "${clean}" is currently assigned to ${assignedCount} operator account(s). Deleting it will remove it from the operational role list. Assigned accounts will retain their label until updated. Proceed?`
+        : `Are you sure you want to delete the operational role "${clean}"?`,
+      confirmVariant: "danger",
+      confirmLabel: "DELETE ROLE",
+      onConfirm: () => {
+        const updated = managedRoles.filter(r => r.toUpperCase() !== clean);
+        if (onUpdateOperationalRoles) {
+          onUpdateOperationalRoles(updated);
+        }
+        setRoleModalSuccess(`Role "${clean}" removed from managed list.`);
+        setTimeout(() => setRoleModalSuccess(''), 3000);
+        setConfirmAction(null);
+      }
+    });
+  };
+
+  const handleResetRolesToDefaults = () => {
+    setConfirmAction({
+      title: "RESET TO DEFAULT OPERATIONAL ROLES",
+      message: "This will reset the operational roles list back to the standard JUWEI factory default roles. Any custom added roles will be removed. Are you sure?",
+      confirmVariant: "danger",
+      confirmLabel: "RESET TO DEFAULTS",
+      onConfirm: () => {
+        if (onUpdateOperationalRoles) {
+          onUpdateOperationalRoles([...DEFAULT_OPERATIONAL_ROLES]);
+        }
+        setRoleModalSuccess("Operational roles reset to JUWEI factory defaults.");
+        setTimeout(() => setRoleModalSuccess(''), 3000);
+        setConfirmAction(null);
+      }
+    });
+  };
+
+  // Distinct roles available in system for filter dropdown (backed by managedRoles + existing account roles)
+  const distinctRoles = useMemo(() => {
+    const roles = new Set<string>(managedRoles.map(r => r.toUpperCase().trim()));
+    accounts.forEach(a => {
+      if (a.role) roles.add(a.role.toUpperCase().trim());
+    });
+    return Array.from(roles).filter(Boolean).sort();
+  }, [managedRoles, accounts]);
 
   // Status computation and counts
   const accountStats = useMemo(() => {
@@ -391,6 +557,20 @@ export default function RegisteredAccountsModule({
 
             {isSuperAdmin && (
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowRolesModal(true);
+                    setRoleModalError('');
+                    setRoleModalSuccess('');
+                  }}
+                  className="bg-slate-800/90 hover:bg-slate-700 active:bg-slate-800 text-indigo-300 hover:text-white border border-indigo-500/40 px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs uppercase font-mono cursor-pointer shrink-0"
+                  id="btn-manage-roles"
+                  title="Manage operational role definitions"
+                >
+                  <Tag className="h-3.5 w-3.5 text-indigo-400" />
+                  <span className="whitespace-nowrap">Manage Roles</span>
+                </button>
                 {onClearAllAccounts && (accounts.length > 1 || accounts.some(u => (u.employeeId || '').toUpperCase() !== 'JPMP-002')) && (
                   <button
                     type="button"
@@ -1072,34 +1252,94 @@ export default function RegisteredAccountsModule({
               {/* Operational Role & Initial Status */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
-                    Operational Role <span className="text-rose-500">*</span>
-                  </label>
-                  <select
-                    value={newRole}
-                    onChange={e => setNewRole(e.target.value)}
-                    className="w-full border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none uppercase font-semibold text-slate-800 bg-white text-xs"
-                  >
-                    <option value="SYSTEM ADMINISTRATOR">SYSTEM ADMINISTRATOR</option>
-                    <option value="WAREHOUSE TEAM LEADER">WAREHOUSE TEAM LEADER</option>
-                    <option value="WAREHOUSE SUPERVISOR">WAREHOUSE SUPERVISOR</option>
-                    <option value="WAREHOUSE MANAGER">WAREHOUSE MANAGER</option>
-                    <option value="WAREHOUSE CLERK">WAREHOUSE CLERK</option>
-                    <option value="WAREHOUSE INVENTORY SPECIALIST">WAREHOUSE INVENTORY SPECIALIST</option>
-                    <option value="WAREHOUSE PERSONNEL">WAREHOUSE PERSONNEL</option>
-                    <option value="INJECTION MATERIAL HANDLER">INJECTION MATERIAL HANDLER</option>
-                    <option value="PRINTING MATERIAL HANDLER">PRINTING MATERIAL HANDLER</option>
-                    <option value="HR/ADMIN">HR/ADMIN</option>
-                    <option value="INJECTION (PRODUCTION)">INJECTION (PRODUCTION)</option>
-                    <option value="QUALITY INSPECTOR">QUALITY INSPECTOR</option>
-                    <option value="SALES">SALES</option>
-                    <option value="PURCHASING">PURCHASING</option>
-                    <option value="IMPEX">IMPEX</option>
-                    <option value="LOGISTIC">LOGISTIC</option>
-                    <option value="PRINTING AND ASSEMBLY (PRODUCTION)">PRINTING AND ASSEMBLY (PRODUCTION)</option>
-                    <option value="FINANCE/ACCOUNTING">FINANCE/ACCOUNTING</option>
-                    <option value="INTERNAL AUDITOR">INTERNAL AUDITOR</option>
-                  </select>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono">
+                      Operational Role <span className="text-rose-500">*</span>
+                    </label>
+                    {isSuperAdmin && !showAddInlineRole && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAddInlineRole(true);
+                          setAddInlineRoleInput('');
+                        }}
+                        className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold flex items-center gap-0.5 hover:underline cursor-pointer"
+                      >
+                        <Plus className="h-3 w-3" /> Add role
+                      </button>
+                    )}
+                  </div>
+
+                  {showAddInlineRole ? (
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="text"
+                        autoFocus
+                        placeholder="ENTER NEW ROLE..."
+                        value={addInlineRoleInput}
+                        onChange={e => setAddInlineRoleInput(e.target.value.toUpperCase())}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const added = handleAddManagedRole(addInlineRoleInput);
+                            if (added) {
+                              setNewRole(added);
+                              setShowAddInlineRole(false);
+                              setAddInlineRoleInput('');
+                            }
+                          } else if (e.key === 'Escape') {
+                            setShowAddInlineRole(false);
+                          }
+                        }}
+                        className="flex-1 border border-indigo-300 px-3 py-2 rounded-xl focus:ring-2 focus:ring-indigo-500 uppercase font-semibold text-slate-800 bg-indigo-50/40 text-xs font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const added = handleAddManagedRole(addInlineRoleInput);
+                          if (added) {
+                            setNewRole(added);
+                            setShowAddInlineRole(false);
+                            setAddInlineRoleInput('');
+                          }
+                        }}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer shrink-0"
+                        title="Save & select role"
+                      >
+                        <Check className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowAddInlineRole(false)}
+                        className="bg-slate-200 hover:bg-slate-300 text-slate-700 p-2 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0"
+                        title="Cancel"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <select
+                      value={newRole}
+                      onChange={e => {
+                        if (e.target.value === '__ADD_NEW_ROLE__') {
+                          setShowAddInlineRole(true);
+                          setAddInlineRoleInput('');
+                        } else {
+                          setNewRole(e.target.value);
+                        }
+                      }}
+                      className="w-full border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none uppercase font-semibold text-slate-800 bg-white text-xs cursor-pointer"
+                    >
+                      {addDropdownRoles.map(role => (
+                        <option key={role} value={role}>{role}</option>
+                      ))}
+                      {isSuperAdmin && (
+                        <option value="__ADD_NEW_ROLE__" className="text-indigo-600 font-bold bg-indigo-50">
+                          + Add new role...
+                        </option>
+                      )}
+                    </select>
+                  )}
                 </div>
 
                 <div>
@@ -1274,34 +1514,94 @@ export default function RegisteredAccountsModule({
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
-                  Operational Role
-                </label>
-                <select
-                  value={editingAccount.role}
-                  onChange={e => setEditingAccount({ ...editingAccount, role: e.target.value })}
-                  className="w-full border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 uppercase font-semibold text-slate-800 bg-white text-xs"
-                >
-                  <option value="SYSTEM ADMINISTRATOR">SYSTEM ADMINISTRATOR</option>
-                  <option value="WAREHOUSE TEAM LEADER">WAREHOUSE TEAM LEADER</option>
-                  <option value="WAREHOUSE SUPERVISOR">WAREHOUSE SUPERVISOR</option>
-                  <option value="WAREHOUSE MANAGER">WAREHOUSE MANAGER</option>
-                  <option value="WAREHOUSE CLERK">WAREHOUSE CLERK</option>
-                  <option value="WAREHOUSE INVENTORY SPECIALIST">WAREHOUSE INVENTORY SPECIALIST</option>
-                  <option value="WAREHOUSE PERSONNEL">WAREHOUSE PERSONNEL</option>
-                  <option value="INJECTION MATERIAL HANDLER">INJECTION MATERIAL HANDLER</option>
-                  <option value="PRINTING MATERIAL HANDLER">PRINTING MATERIAL HANDLER</option>
-                  <option value="HR/ADMIN">HR/ADMIN</option>
-                  <option value="INJECTION (PRODUCTION)">INJECTION (PRODUCTION)</option>
-                  <option value="QUALITY INSPECTOR">QUALITY INSPECTOR</option>
-                  <option value="SALES">SALES</option>
-                  <option value="PURCHASING">PURCHASING</option>
-                  <option value="IMPEX">IMPEX</option>
-                  <option value="LOGISTIC">LOGISTIC</option>
-                  <option value="PRINTING AND ASSEMBLY (PRODUCTION)">PRINTING AND ASSEMBLY (PRODUCTION)</option>
-                  <option value="FINANCE/ACCOUNTING">FINANCE/ACCOUNTING</option>
-                  <option value="INTERNAL AUDITOR">INTERNAL AUDITOR</option>
-                </select>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono">
+                    Operational Role
+                  </label>
+                  {isSuperAdmin && !showEditInlineAddRole && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowEditInlineAddRole(true);
+                        setEditInlineRoleInput('');
+                      }}
+                      className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold flex items-center gap-0.5 hover:underline cursor-pointer"
+                    >
+                      <Plus className="h-3 w-3" /> Add role
+                    </button>
+                  )}
+                </div>
+
+                {showEditInlineAddRole ? (
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      autoFocus
+                      placeholder="ENTER NEW ROLE..."
+                      value={editInlineRoleInput}
+                      onChange={e => setEditInlineRoleInput(e.target.value.toUpperCase())}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const added = handleAddManagedRole(editInlineRoleInput);
+                          if (added) {
+                            setEditingAccount({ ...editingAccount, role: added });
+                            setShowEditInlineAddRole(false);
+                            setEditInlineRoleInput('');
+                          }
+                        } else if (e.key === 'Escape') {
+                          setShowEditInlineAddRole(false);
+                        }
+                      }}
+                      className="flex-1 border border-indigo-300 px-3 py-2 rounded-xl focus:ring-2 focus:ring-indigo-500 uppercase font-semibold text-slate-800 bg-indigo-50/40 text-xs font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const added = handleAddManagedRole(editInlineRoleInput);
+                        if (added) {
+                          setEditingAccount({ ...editingAccount, role: added });
+                          setShowEditInlineAddRole(false);
+                          setEditInlineRoleInput('');
+                        }
+                      }}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer shrink-0"
+                      title="Save & select role"
+                    >
+                      <Check className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowEditInlineAddRole(false)}
+                      className="bg-slate-200 hover:bg-slate-300 text-slate-700 p-2 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0"
+                      title="Cancel"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <select
+                    value={editingAccount.role}
+                    onChange={e => {
+                      if (e.target.value === '__ADD_NEW_ROLE__') {
+                        setShowEditInlineAddRole(true);
+                        setEditInlineRoleInput('');
+                      } else {
+                        setEditingAccount({ ...editingAccount, role: e.target.value });
+                      }
+                    }}
+                    className="w-full border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 uppercase font-semibold text-slate-800 bg-white text-xs cursor-pointer"
+                  >
+                    {editDropdownRoles.map(role => (
+                      <option key={role} value={role}>{role}</option>
+                    ))}
+                    {isSuperAdmin && (
+                      <option value="__ADD_NEW_ROLE__" className="text-indigo-600 font-bold bg-indigo-50">
+                        + Add new role...
+                      </option>
+                    )}
+                  </select>
+                )}
               </div>
 
               <div>
@@ -1369,6 +1669,230 @@ export default function RegisteredAccountsModule({
 
       {/* Confirmation Modal with YES / NO options */}
       <ConfirmModal config={confirmAction} onClose={() => setConfirmAction(null)} />
+
+      {/* Manage Operational Roles Modal (Super Admin only) */}
+      {showRolesModal && isSuperAdmin && createPortal(
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 z-[999999]">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-xl w-full overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white p-5 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300">
+                  <Tag className="h-5 w-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold tracking-tight">MANAGE OPERATIONAL ROLES</h3>
+                    <span className="bg-indigo-500/30 text-indigo-200 text-[10px] font-mono font-bold px-2 py-0.5 rounded-md border border-indigo-400/30">
+                      {managedRoles.length} ROLES
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 mt-0.5">
+                    Centralized role definitions synced across all devices & operator forms
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowRolesModal(false);
+                  setEditingRoleOriginal(null);
+                  setRoleModalError('');
+                  setRoleModalSuccess('');
+                  setRoleSearchQuery('');
+                }}
+                className="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-white/10 transition cursor-pointer"
+                title="Close"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 overflow-y-auto flex-1 space-y-4">
+              {/* Alert / Notification banners */}
+              {roleModalError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2 animate-fadeIn font-semibold">
+                  <AlertCircle className="h-4 w-4 shrink-0 text-rose-500" />
+                  <span>{roleModalError}</span>
+                </div>
+              )}
+              {roleModalSuccess && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-xl flex items-center gap-2 animate-fadeIn font-semibold">
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                  <span>{roleModalSuccess}</span>
+                </div>
+              )}
+
+              {/* Add New Role Form */}
+              <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-xl">
+                <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
+                  Create New Operational Role
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="E.G. LOGISTICS COORDINATOR, QC LEAD..."
+                    value={newRoleInput}
+                    onChange={e => {
+                      setNewRoleInput(e.target.value.toUpperCase());
+                      setRoleModalError('');
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddManagedRole();
+                      }
+                    }}
+                    className="flex-1 border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 uppercase font-semibold text-slate-800 bg-white text-xs font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleAddManagedRole()}
+                    className="bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 shadow-xs cursor-pointer uppercase font-mono"
+                  >
+                    <Plus className="h-4 w-4" />
+                    <span>Add Role</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Search filter for roles */}
+              <div className="relative">
+                <Search className="h-4 w-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="FILTER ROLES LIST..."
+                  value={roleSearchQuery}
+                  onChange={e => setRoleSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-3.5 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 text-xs font-mono uppercase bg-slate-50/50"
+                />
+              </div>
+
+              {/* Roles List */}
+              <div className="border border-slate-200 rounded-xl divide-y divide-slate-100 max-h-[280px] overflow-y-auto bg-white shadow-inner">
+                {managedRoles
+                  .filter(r => !roleSearchQuery || r.toLowerCase().includes(roleSearchQuery.toLowerCase()))
+                  .map(role => {
+                    const assignedCount = accounts.filter(a => (a.role || '').toUpperCase().trim() === role.toUpperCase().trim()).length;
+                    const isEditing = editingRoleOriginal === role;
+
+                    return (
+                      <div key={role} className="p-3 flex items-center justify-between gap-2 hover:bg-slate-50/80 transition-colors">
+                        {isEditing ? (
+                          <div className="flex-1 flex items-center gap-2">
+                            <input
+                              type="text"
+                              autoFocus
+                              value={editingRoleNewValue}
+                              onChange={e => setEditingRoleNewValue(e.target.value.toUpperCase())}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleRenameManagedRole(role, editingRoleNewValue);
+                                } else if (e.key === 'Escape') {
+                                  setEditingRoleOriginal(null);
+                                }
+                              }}
+                              className="flex-1 border border-indigo-300 px-3 py-1.5 rounded-lg focus:ring-2 focus:ring-indigo-500 uppercase font-semibold text-slate-800 bg-indigo-50/30 text-xs font-mono"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleRenameManagedRole(role, editingRoleNewValue)}
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white p-1.5 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
+                              title="Save rename"
+                            >
+                              <Check className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingRoleOriginal(null)}
+                              className="bg-slate-200 hover:bg-slate-300 text-slate-700 p-1.5 rounded-lg text-xs font-bold transition cursor-pointer shrink-0"
+                              title="Cancel"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="h-2 w-2 rounded-full bg-indigo-500 shrink-0" />
+                              <span className="font-mono font-bold text-xs text-slate-800 uppercase truncate">
+                                {role}
+                              </span>
+                              <span className={`text-[10px] font-mono px-2 py-0.5 rounded-md font-semibold shrink-0 ${
+                                assignedCount > 0 
+                                  ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' 
+                                  : 'bg-slate-100 text-slate-500'
+                              }`}>
+                                {assignedCount} {assignedCount === 1 ? 'account' : 'accounts'}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingRoleOriginal(role);
+                                  setEditingRoleNewValue(role);
+                                  setRoleModalError('');
+                                }}
+                                className="text-slate-500 hover:text-indigo-600 p-1.5 rounded-lg hover:bg-indigo-50 transition cursor-pointer"
+                                title={`Rename ${role}`}
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteManagedRole(role)}
+                                className="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 transition cursor-pointer"
+                                title={`Delete ${role}`}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                {managedRoles.filter(r => !roleSearchQuery || r.toLowerCase().includes(roleSearchQuery.toLowerCase())).length === 0 && (
+                  <div className="p-6 text-center text-slate-400 text-xs font-mono">
+                    No matching roles found.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={handleResetRolesToDefaults}
+                className="text-xs text-slate-500 hover:text-slate-800 font-mono font-bold flex items-center gap-1.5 hover:underline cursor-pointer"
+                title="Restore default factory roles list"
+              >
+                <RotateCcw className="h-3.5 w-3.5" /> Reset Defaults
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowRolesModal(false);
+                  setEditingRoleOriginal(null);
+                  setRoleModalError('');
+                  setRoleModalSuccess('');
+                  setRoleSearchQuery('');
+                }}
+                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold uppercase transition shadow-xs cursor-pointer font-mono"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

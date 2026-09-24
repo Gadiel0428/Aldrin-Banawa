@@ -323,13 +323,11 @@ button, a, input, select, textarea, .transition-smooth {
     visibility: hidden;
   }
 
-  #printable-picking-document, #printable-picking-document *,
-  #printable-document-container, #printable-document-container * {
+  .printable-area, .printable-area * {
     visibility: visible !important;
   }
 
-  #printable-picking-document,
-  #printable-document-container {
+  .printable-area {
     position: absolute !important;
     left: 0 !important;
     top: 0 !important;
@@ -338,6 +336,18 @@ button, a, input, select, textarea, .transition-smooth {
     padding: 15px !important;
     background: #ffffff !important;
     color: #000000 !important;
+    box-sizing: border-box !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .printable-area:has(#badge-qr-svg-wrapper),
+  .printable-area.printable-badge {
+    max-width: 380px !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    margin: 20px auto !important;
+    border: 2px solid #1e3a8a !important;
   }
 
   body {

@@ -145,165 +145,7 @@ export default function AccountQRBadgeModal({
   };
 
   const handlePrintBadge = () => {
-    try {
-      // Find or create hidden in-page iframe to print directly without opening popup tabs
-      let printFrame = document.getElementById('badge-silent-print-frame') as HTMLIFrameElement;
-      if (!printFrame) {
-        printFrame = document.createElement('iframe');
-        printFrame.id = 'badge-silent-print-frame';
-        printFrame.style.position = 'fixed';
-        printFrame.style.right = '0';
-        printFrame.style.bottom = '0';
-        printFrame.style.width = '0';
-        printFrame.style.height = '0';
-        printFrame.style.border = '0';
-        printFrame.style.visibility = 'hidden';
-        document.body.appendChild(printFrame);
-      }
-
-      const svgContent = document.getElementById('badge-qr-svg-wrapper')?.innerHTML || '';
-
-      const frameDoc = printFrame.contentDocument || printFrame.contentWindow?.document;
-      if (frameDoc) {
-        frameDoc.open();
-        frameDoc.write(`
-          <!DOCTYPE html>
-          <html>
-            <head>
-              <title>JPMP Login QR Pass - ${account.username} (${account.employeeId})</title>
-              <style>
-                @page {
-                  size: auto;
-                  margin: 10mm;
-                }
-                body {
-                  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-                  display: flex;
-                  justify-content: center;
-                  align-items: center;
-                  min-height: 100vh;
-                  margin: 0;
-                  background-color: #ffffff;
-                  text-transform: uppercase;
-                  -webkit-print-color-adjust: exact;
-                  print-color-adjust: exact;
-                }
-                .badge {
-                  width: 320px;
-                  border: 2px solid #1e293b;
-                  border-radius: 16px;
-                  padding: 20px;
-                  background: #ffffff;
-                  text-align: center;
-                  box-sizing: border-box;
-                }
-                .header {
-                  border-bottom: 2px solid #e2e8f0;
-                  padding-bottom: 10px;
-                  margin-bottom: 12px;
-                }
-                .company {
-                  font-size: 10px;
-                  font-weight: 800;
-                  color: #2563eb;
-                  letter-spacing: 0.5px;
-                }
-                .title {
-                  font-size: 14px;
-                  font-weight: 800;
-                  color: #0f172a;
-                  margin-top: 4px;
-                }
-                .role {
-                  font-size: 10px;
-                  font-weight: 700;
-                  color: #64748b;
-                  margin-top: 2px;
-                }
-                .qr-container {
-                  background: #f8fafc;
-                  border: 1px solid #cbd5e1;
-                  border-radius: 12px;
-                  padding: 12px;
-                  display: inline-block;
-                  margin: 10px 0;
-                }
-                .user-info {
-                  background: #0f172a;
-                  color: #ffffff;
-                  border-radius: 10px;
-                  padding: 12px;
-                  margin-top: 10px;
-                }
-                .emp-name {
-                  font-size: 14px;
-                  font-weight: 800;
-                  color: #38bdf8;
-                }
-                .emp-id {
-                  font-size: 12px;
-                  font-weight: bold;
-                  color: #a5b4fc;
-                  margin-top: 2px;
-                  font-family: monospace;
-                }
-                .emp-pin {
-                  font-size: 11px;
-                  font-weight: bold;
-                  color: #fde047;
-                  margin-top: 4px;
-                  font-family: monospace;
-                }
-                .footer {
-                  font-size: 8px;
-                  color: #94a3b8;
-                  margin-top: 12px;
-                  letter-spacing: 0.5px;
-                }
-              </style>
-            </head>
-            <body>
-              <div class="badge">
-                <div class="header">
-                  <div class="company">JUWEI PLASTIC MOULDING PHILS. INC.</div>
-                  <div class="title">OFFICIAL OPERATOR QR LOGIN PASS</div>
-                  <div class="role">${account.role}</div>
-                </div>
-                
-                <div class="qr-container">
-                  ${svgContent}
-                </div>
-
-                <div class="user-info">
-                  <div class="emp-name">${account.username}</div>
-                  <div class="emp-id">ID: ${account.employeeId}</div>
-                  <div class="emp-pin">LOGIN PIN: ${account.pin || '1234'}</div>
-                  ${account.phoneNumber ? `<div style="font-size: 10px; color: #4ade80; margin-top: 3px; font-family: monospace;">MOBILE: ${account.phoneNumber}</div>` : ''}
-                </div>
-
-                <div class="footer">
-                  SECURITY CONFIDENTIAL • SCAN AT JUWEI WMS GATEWAY TO AUTO-LOGIN
-                </div>
-              </div>
-            </body>
-          </html>
-        `);
-        frameDoc.close();
-
-        setTimeout(() => {
-          try {
-            printFrame.contentWindow?.focus();
-            printFrame.contentWindow?.print();
-          } catch (e) {
-            window.print();
-          }
-        }, 300);
-      } else {
-        window.print();
-      }
-    } catch (err) {
-      window.print();
-    }
+    window.print();
   };
 
   const modalContent = (
@@ -315,7 +157,7 @@ export default function AccountQRBadgeModal({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}
-          className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-slate-950/85 backdrop-blur-md overflow-y-auto"
+          className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-slate-950/85 backdrop-blur-md overflow-y-auto print:p-0 print:bg-white print:static"
         >
           <motion.div
             key="qr-badge-content"
@@ -323,13 +165,13 @@ export default function AccountQRBadgeModal({
             animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
             exit={{ opacity: 0, scale: 0.94, y: 14, filter: 'blur(8px)' }}
             transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-            className="frosted-glass-modal rounded-3xl max-w-sm w-full shadow-2xl text-white overflow-hidden flex flex-col relative border border-white/20 max-h-[calc(100vh-2rem)] my-auto"
+            className="frosted-glass-modal rounded-3xl max-w-sm w-full shadow-2xl text-white overflow-hidden flex flex-col relative border border-white/20 max-h-[calc(100vh-2rem)] my-auto print:max-h-none print:border-none print:shadow-none print:overflow-visible print:bg-transparent"
           >
             {/* Top Accent Line */}
-            <div className="h-1 bg-gradient-to-r from-indigo-500 via-sky-400 to-emerald-400 w-full shrink-0" />
+            <div className="h-1 bg-gradient-to-r from-indigo-500 via-sky-400 to-emerald-400 w-full shrink-0 print:hidden" />
 
             {/* Modal Header */}
-            <div className="px-5 py-3.5 border-b border-white/10 flex justify-between items-center bg-slate-950/60 backdrop-blur-md shrink-0">
+            <div className="px-5 py-3.5 border-b border-white/10 flex justify-between items-center bg-slate-950/60 backdrop-blur-md shrink-0 print:hidden">
               <div className="flex items-center gap-2.5">
                 <div className="p-2 bg-indigo-500/20 text-indigo-300 rounded-xl border border-indigo-400/30 backdrop-blur-md">
                   <QrCode className="h-5 w-5" />
@@ -354,9 +196,9 @@ export default function AccountQRBadgeModal({
             </div>
 
             {/* Badge Card Body - Scrollable if screen height is constrained */}
-            <div className="p-4 sm:p-5 space-y-3.5 overflow-y-auto flex-1">
-              {/* Official Pass Badge Graphic */}
-              <div className="bg-white rounded-2xl p-4 sm:p-5 border-2 border-blue-900 shadow-xl text-blue-950 text-center space-y-2.5 relative overflow-hidden">
+            <div className="p-4 sm:p-5 space-y-3.5 overflow-y-auto flex-1 print:p-0 print:overflow-visible">
+              {/* Official Pass Badge Graphic (Full Badge Printable Area) */}
+              <div className="bg-white rounded-2xl p-4 sm:p-5 border-2 border-blue-900 shadow-xl text-blue-950 text-center space-y-2.5 relative overflow-hidden printable-area print:border-2 print:border-blue-900 print:shadow-none">
                 {/* Watermark / Header */}
                 <div className="border-b-2 border-blue-100 pb-2">
                   <div className="text-[10px] font-extrabold text-blue-800 font-mono tracking-widest uppercase">
@@ -402,13 +244,16 @@ export default function AccountQRBadgeModal({
                       <Lock className="h-3 w-3 text-blue-300 shrink-0" /> LOGIN PIN:
                     </span>
                     <div className="flex items-center gap-1.5">
-                      <span className="text-sm font-mono font-black text-white bg-blue-900 px-2.5 py-0.5 rounded border border-blue-500 tracking-widest min-w-[58px] text-center">
+                      <span className="text-sm font-mono font-black text-white bg-blue-900 px-2.5 py-0.5 rounded border border-blue-500 tracking-widest min-w-[58px] text-center print:hidden">
                         {showPin ? (account.pin || '1234') : '••••'}
+                      </span>
+                      <span className="text-sm font-mono font-black text-white bg-blue-900 px-2.5 py-0.5 rounded border border-blue-500 tracking-widest min-w-[58px] text-center hidden print:inline">
+                        {account.pin || '1234'}
                       </span>
                       <button
                         type="button"
                         onClick={() => setShowPin(!showPin)}
-                        className="p-1 text-blue-300 hover:text-white transition cursor-pointer"
+                        className="p-1 text-blue-300 hover:text-white transition cursor-pointer print:hidden"
                         title={showPin ? "Hide PIN" : "Reveal PIN"}
                       >
                         {showPin ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
@@ -423,7 +268,7 @@ export default function AccountQRBadgeModal({
               </div>
 
               {/* Action Buttons */}
-              <div className="space-y-2 pt-0.5">
+              <div className="space-y-2 pt-0.5 print:hidden">
                 {onDirectLogin && (
                   <button
                     type="button"
