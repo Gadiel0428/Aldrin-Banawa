@@ -54,6 +54,20 @@ export default function ReceivingVsIssuanceReportModal({
   const [partFilter, setPartFilter] = useState('');
   const [isExporting, setIsExporting] = useState(false);
 
+  // Editable Signatories State (Defaulted to current user & system defaults, user-customizable)
+  const todayStr = new Date().toISOString().split('T')[0];
+  const [signatories, setSignatories] = useState({
+    preparedByName: currentUser || 'Aldrin Banawa',
+    preparedByTitle: 'Super Administrator (JPMP-002)',
+    preparedByDate: todayStr,
+    auditorName: 'QA / IQC Inspector',
+    auditorTitle: 'IQC Section • Material Compliance',
+    auditorDate: todayStr,
+    approvedByName: 'Warehouse Operations Head',
+    approvedByTitle: 'Juwei Plastic Moulding Corp',
+    approvedByDate: todayStr,
+  });
+
   // Extract unique customers
   const customers = useMemo(() => {
     const custSet = new Set<string>();
@@ -70,8 +84,9 @@ export default function ReceivingVsIssuanceReportModal({
     partFilter: partFilter || undefined,
     generatedBy: currentUser,
     userRole: isSuperAdmin ? 'Super Administrator' : 'Warehouse Manager',
-    employeeId: 'JPMP-002'
-  }), [dateRange, startDate, endDate, customerFilter, partFilter, currentUser, isSuperAdmin]);
+    employeeId: 'JPMP-002',
+    ...signatories
+  }), [dateRange, startDate, endDate, customerFilter, partFilter, currentUser, isSuperAdmin, signatories]);
 
   const summary = useMemo(() => {
     return filterReceivingAndIssuanceData(receiving, issuances, stocks, filterOptions);
@@ -577,39 +592,129 @@ export default function ReceivingVsIssuanceReportModal({
 
           {/* Section 4: ISO 9001:2015 Quality & Operations Sign-off Block */}
           <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4 print:border-slate-300">
-            <h4 className="font-bold text-xs uppercase tracking-wider text-slate-500 font-mono">
-              MANAGER AUTHORIZATION & AUDIT SIGN-OFF BLOCK
-            </h4>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2">
-              <div className="border border-slate-200 rounded-xl p-3.5 space-y-3 bg-slate-50/50">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-200 pb-2">
+              <h4 className="font-bold text-xs uppercase tracking-wider text-slate-700 font-mono">
+                MANAGER AUTHORIZATION & AUDIT SIGN-OFF BLOCK
+              </h4>
+              <span className="text-[11px] font-medium text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-lg px-2 py-0.5 no-print">
+                ✍️ Editable Signatories (Review before printing/exporting)
+              </span>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
+              {/* Signatory 1 */}
+              <div className="border border-slate-200 rounded-xl p-3.5 space-y-2 bg-slate-50/50 print:bg-transparent print:border-slate-300">
                 <span className="text-[10px] font-extrabold uppercase text-slate-500 block">
                   1. PREPARED & AUDITED BY:
                 </span>
-                <div className="pt-6 border-b border-slate-300 pb-1">
-                  <p className="font-bold text-xs text-slate-800">{currentUser}</p>
-                  <p className="text-[10px] text-slate-500 font-mono">Employee ID: JPMP-002 • Super Administrator</p>
+                <div className="pt-2 border-b border-slate-300 pb-1.5 space-y-1.5">
+                  <div className="space-y-0.5">
+                    <label className="text-[9px] uppercase font-bold text-slate-400 no-print block">Signatory Name</label>
+                    <input
+                      type="text"
+                      value={signatories.preparedByName}
+                      onChange={e => setSignatories(prev => ({ ...prev, preparedByName: e.target.value }))}
+                      placeholder="Prepared By Name"
+                      className="w-full font-bold text-xs text-slate-800 bg-white border border-slate-300 rounded px-2 py-1 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent print:text-black"
+                    />
+                  </div>
+                  <div className="space-y-0.5">
+                    <label className="text-[9px] uppercase font-bold text-slate-400 no-print block">Role / ID / Title</label>
+                    <input
+                      type="text"
+                      value={signatories.preparedByTitle}
+                      onChange={e => setSignatories(prev => ({ ...prev, preparedByTitle: e.target.value }))}
+                      placeholder="Title or ID"
+                      className="w-full text-[10px] font-mono text-slate-600 bg-white border border-slate-300 rounded px-2 py-0.5 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent print:text-slate-700"
+                    />
+                  </div>
+                  <div className="space-y-0.5">
+                    <label className="text-[9px] uppercase font-bold text-slate-400 no-print block">Sign-off Date</label>
+                    <input
+                      type="date"
+                      value={signatories.preparedByDate}
+                      onChange={e => setSignatories(prev => ({ ...prev, preparedByDate: e.target.value }))}
+                      className="w-full text-[10px] font-mono text-slate-700 bg-white border border-slate-300 rounded px-2 py-0.5 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent print:text-black"
+                    />
+                  </div>
                 </div>
                 <p className="text-[9px] text-slate-400">Warehouse Inventory Control Custodian</p>
               </div>
 
-              <div className="border border-slate-200 rounded-xl p-3.5 space-y-3 bg-slate-50/50">
+              {/* Signatory 2 */}
+              <div className="border border-slate-200 rounded-xl p-3.5 space-y-2 bg-slate-50/50 print:bg-transparent print:border-slate-300">
                 <span className="text-[10px] font-extrabold uppercase text-slate-500 block">
                   2. QUALITY / IQC VERIFICATION:
                 </span>
-                <div className="pt-6 border-b border-slate-300 pb-1">
-                  <p className="font-bold text-xs text-slate-800">Quality Assurance Inspector</p>
-                  <p className="text-[10px] text-slate-500 font-mono">IQC Section • Material Compliance</p>
+                <div className="pt-2 border-b border-slate-300 pb-1.5 space-y-1.5">
+                  <div className="space-y-0.5">
+                    <label className="text-[9px] uppercase font-bold text-slate-400 no-print block">Inspector Name</label>
+                    <input
+                      type="text"
+                      value={signatories.auditorName}
+                      onChange={e => setSignatories(prev => ({ ...prev, auditorName: e.target.value }))}
+                      placeholder="Auditor / Inspector Name"
+                      className="w-full font-bold text-xs text-slate-800 bg-white border border-slate-300 rounded px-2 py-1 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent print:text-black"
+                    />
+                  </div>
+                  <div className="space-y-0.5">
+                    <label className="text-[9px] uppercase font-bold text-slate-400 no-print block">Department / Role</label>
+                    <input
+                      type="text"
+                      value={signatories.auditorTitle}
+                      onChange={e => setSignatories(prev => ({ ...prev, auditorTitle: e.target.value }))}
+                      placeholder="Title or Section"
+                      className="w-full text-[10px] font-mono text-slate-600 bg-white border border-slate-300 rounded px-2 py-0.5 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent print:text-slate-700"
+                    />
+                  </div>
+                  <div className="space-y-0.5">
+                    <label className="text-[9px] uppercase font-bold text-slate-400 no-print block">Verification Date</label>
+                    <input
+                      type="date"
+                      value={signatories.auditorDate}
+                      onChange={e => setSignatories(prev => ({ ...prev, auditorDate: e.target.value }))}
+                      className="w-full text-[10px] font-mono text-slate-700 bg-white border border-slate-300 rounded px-2 py-0.5 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent print:text-black"
+                    />
+                  </div>
                 </div>
                 <p className="text-[9px] text-slate-400">ISO 9001:2015 Physical Check Endorsed</p>
               </div>
 
-              <div className="border border-slate-200 rounded-xl p-3.5 space-y-3 bg-slate-50/50">
+              {/* Signatory 3 */}
+              <div className="border border-slate-200 rounded-xl p-3.5 space-y-2 bg-slate-50/50 print:bg-transparent print:border-slate-300">
                 <span className="text-[10px] font-extrabold uppercase text-slate-500 block">
                   3. OPERATIONS MANAGER APPROVAL:
                 </span>
-                <div className="pt-6 border-b border-slate-300 pb-1">
-                  <p className="font-bold text-xs text-slate-800">Warehouse Operations Head</p>
-                  <p className="text-[10px] text-slate-500 font-mono">Juwei Plastic Moulding Corp</p>
+                <div className="pt-2 border-b border-slate-300 pb-1.5 space-y-1.5">
+                  <div className="space-y-0.5">
+                    <label className="text-[9px] uppercase font-bold text-slate-400 no-print block">Approver Name</label>
+                    <input
+                      type="text"
+                      value={signatories.approvedByName}
+                      onChange={e => setSignatories(prev => ({ ...prev, approvedByName: e.target.value }))}
+                      placeholder="Approver Name"
+                      className="w-full font-bold text-xs text-slate-800 bg-white border border-slate-300 rounded px-2 py-1 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent print:text-black"
+                    />
+                  </div>
+                  <div className="space-y-0.5">
+                    <label className="text-[9px] uppercase font-bold text-slate-400 no-print block">Position / Plant</label>
+                    <input
+                      type="text"
+                      value={signatories.approvedByTitle}
+                      onChange={e => setSignatories(prev => ({ ...prev, approvedByTitle: e.target.value }))}
+                      placeholder="Title or Plant"
+                      className="w-full text-[10px] font-mono text-slate-600 bg-white border border-slate-300 rounded px-2 py-0.5 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent print:text-slate-700"
+                    />
+                  </div>
+                  <div className="space-y-0.5">
+                    <label className="text-[9px] uppercase font-bold text-slate-400 no-print block">Approval Date</label>
+                    <input
+                      type="date"
+                      value={signatories.approvedByDate}
+                      onChange={e => setSignatories(prev => ({ ...prev, approvedByDate: e.target.value }))}
+                      className="w-full text-[10px] font-mono text-slate-700 bg-white border border-slate-300 rounded px-2 py-0.5 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent print:text-black"
+                    />
+                  </div>
                 </div>
                 <p className="text-[9px] text-slate-400">Authorized Official Release & Balance Stamp</p>
               </div>

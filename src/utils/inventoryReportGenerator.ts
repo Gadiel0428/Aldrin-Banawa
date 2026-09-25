@@ -10,6 +10,15 @@ export interface InventoryReportOptions {
   userRole?: string;
   employeeId?: string;
   reportTitle?: string;
+  auditedByName?: string;
+  auditedByTitle?: string;
+  auditedByDate?: string;
+  auditorName?: string;
+  auditorTitle?: string;
+  auditorDate?: string;
+  approvedByName?: string;
+  approvedByTitle?: string;
+  approvedByDate?: string;
 }
 
 export interface FilteredInventoryData {
@@ -452,8 +461,12 @@ export function generateInventoryReportPDF(
   doc.line(18, finalY + 14, 18 + signColWidth - 8, finalY + 14);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6.5);
-  doc.text(`${options.generatedBy || 'Aldrin Banawa'} / ${options.employeeId || 'JPMP-002'}`, 18, finalY + 17.5);
-  doc.text(`Warehouse Inventory Custodian • ${generatedTimestamp}`, 18, finalY + 20.5);
+  const auditCustName = options.auditedByName || options.generatedBy || 'Aldrin Banawa';
+  const auditCustEmp = options.employeeId || 'JPMP-002';
+  const auditCustTitle = options.auditedByTitle || `Warehouse Inventory Custodian • ${auditCustEmp}`;
+  const auditCustDate = options.auditedByDate || generatedTimestamp;
+  doc.text(auditCustName, 18, finalY + 17.5);
+  doc.text(`${auditCustTitle} • ${auditCustDate}`, 18, finalY + 20.5);
 
   // Sign-off 2: Quality Verification
   const sign2X = 14 + signColWidth;
@@ -463,8 +476,11 @@ export function generateInventoryReportPDF(
   doc.line(sign2X + 4, finalY + 14, sign2X + signColWidth - 4, finalY + 14);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6.5);
-  doc.text('Quality Assurance / IQC Inspector', sign2X + 4, finalY + 17.5);
-  doc.text('FIFO Color Rotation & Bin Quarantine Endorsed', sign2X + 4, finalY + 20.5);
+  const qaName = options.auditorName || 'Quality Assurance / IQC Inspector';
+  const qaTitle = options.auditorTitle || 'FIFO Color Rotation & Bin Quarantine Endorsed';
+  const qaDate = options.auditorDate || 'ISO 9001:2015 Physical Check Endorsed';
+  doc.text(qaName, sign2X + 4, finalY + 17.5);
+  doc.text(`${qaTitle} • ${qaDate}`, sign2X + 4, finalY + 20.5);
 
   // Sign-off 3: Operations Manager
   const sign3X = sign2X + signColWidth;
@@ -474,8 +490,11 @@ export function generateInventoryReportPDF(
   doc.line(sign3X + 4, finalY + 14, sign3X + signColWidth - 8, finalY + 14);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6.5);
-  doc.text('Warehouse Operations & Logistics Manager', sign3X + 4, finalY + 17.5);
-  doc.text('Juwei Plastic Moulding Corp Philippines Plant', sign3X + 4, finalY + 20.5);
+  const headName = options.approvedByName || 'Warehouse Operations Head';
+  const headTitle = options.approvedByTitle || 'Warehouse Operations & Logistics Manager';
+  const headDate = options.approvedByDate || 'Juwei Plastic Moulding Corp Philippines Plant';
+  doc.text(headName, sign3X + 4, finalY + 17.5);
+  doc.text(`${headTitle} • ${headDate}`, sign3X + 4, finalY + 20.5);
 
   return doc;
 }

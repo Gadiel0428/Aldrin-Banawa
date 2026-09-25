@@ -85,6 +85,44 @@ export default function PrintablePickingListModal({
   const binLocation = matchedStock?.location || matchedRegistry?.location || 'Zone A - Rack 02 - Bin B14';
   const uom = matchedRegistry?.unit || 'PCS';
 
+  // Live editable signatories state with defaults
+  const todayIso = new Date().toISOString().split('T')[0];
+
+  const [drSignatories, setDrSignatories] = useState({
+    preparedBy: targetDelivery?.preparedBy || 'Warehouse Logistics Staff',
+    preparedDate: targetDelivery?.date || todayIso,
+    approvedBy: 'Subic Gate Security Supervisor',
+    approvedDate: todayIso,
+    receivedBy: 'Carrier Driver / Received By',
+    driverDetails: 'Plate #: NXD-8192 / Carrier Logistics',
+    receivedDate: todayIso,
+  });
+
+  const [mrsSignatories, setMrsSignatories] = useState({
+    requestedBy: targetIssuance?.receivedBy || 'Department Supervisor',
+    requestedDate: targetIssuance?.date || todayIso,
+    issuedBy: targetIssuance?.issuedBy || 'Warehouse Logistics Staff',
+    issuedDate: targetIssuance?.date || todayIso,
+    approvedBy: 'Operations / Planning Manager',
+    approvedDate: todayIso,
+  });
+
+  const [pickingSignatories, setPickingSignatories] = useState({
+    pickedBy: preparedBy,
+    pickedDate: dateStr,
+    approvedBy: 'Warehouse Operations Supervisor',
+    approvedDate: todayIso,
+    receivedBy: receivedBy,
+    receivedDate: todayIso,
+  });
+
+  const [summarySignatories, setSummarySignatories] = useState({
+    preparedBy: 'Warehouse Materials Custodian',
+    preparedDate: todayIso,
+    approvedBy: 'Warehouse Operations Manager',
+    approvedDate: todayIso,
+  });
+
   const modalContent = (
     <motion.div
       key="picking-list-backdrop"
@@ -189,6 +227,26 @@ export default function PrintablePickingListModal({
           </div>
         </div>
 
+        {/* Review Before Printing Banner */}
+        <div className="bg-amber-50 border-b border-amber-200 px-5 py-2.5 flex flex-wrap items-center justify-between gap-3 no-print text-xs text-amber-950 shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="font-bold flex items-center gap-1 text-amber-900 bg-amber-200/60 px-2 py-0.5 rounded">
+              <CheckCircle2 className="h-3.5 w-3.5 text-amber-700" /> REVIEW BEFORE PRINTING
+            </span>
+            <span className="text-amber-900 font-medium">
+              All signature blocks and signatory dates below are fully editable before generating the paper/PDF document.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={handlePrint}
+            className="px-3 py-1 bg-amber-700 hover:bg-amber-800 text-white font-bold rounded-lg text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+          >
+            <Printer className="h-3 w-3" />
+            <span>Confirm & Print Now</span>
+          </button>
+        </div>
+
         {/* Printable Document Sheet Body */}
         <div className="p-6 sm:p-10 overflow-y-auto flex-1 bg-white printable-area" id="printable-document-container">
           <div className="max-w-4xl mx-auto space-y-6 text-slate-900 font-sans">
@@ -272,7 +330,7 @@ export default function PrintablePickingListModal({
                   </div>
                   <div>
                     <span className="text-[10px] uppercase font-bold text-slate-500 block">Prepared By</span>
-                    <span className="font-bold text-slate-800">{targetDelivery.preparedBy}</span>
+                    <span className="font-bold text-slate-800">{drSignatories.preparedBy}</span>
                   </div>
                 </div>
 
@@ -355,28 +413,79 @@ export default function PrintablePickingListModal({
 
                 {/* Tri-Signature Authorization Block */}
                 <div className="pt-6 border-t-2 border-slate-900 grid grid-cols-3 gap-6 text-xs text-center">
-                  <div>
-                    <div className="h-12 border-b-2 border-slate-400 flex items-end justify-center pb-1">
-                      <span className="font-bold text-slate-900">{targetDelivery.preparedBy}</span>
+                  <div className="space-y-1">
+                    <div className="border-b-2 border-slate-400 pb-1">
+                      <input
+                        type="text"
+                        value={drSignatories.preparedBy}
+                        onChange={e => setDrSignatories(prev => ({ ...prev, preparedBy: e.target.value }))}
+                        placeholder="Prepared By Name"
+                        className="w-full text-center font-bold text-slate-900 bg-white border border-slate-200 rounded px-1.5 py-0.5 text-xs focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
                     </div>
                     <span className="text-[10px] font-bold text-slate-600 uppercase mt-1 block">Prepared By / Warehouse Logistics</span>
-                    <span className="text-[9px] text-slate-500 font-mono">Date: {targetDelivery.date}</span>
+                    <div className="flex items-center justify-center gap-1 text-[9px] text-slate-500 font-mono">
+                      <span>Date:</span>
+                      <input
+                        type="date"
+                        value={drSignatories.preparedDate}
+                        onChange={e => setDrSignatories(prev => ({ ...prev, preparedDate: e.target.value }))}
+                        className="font-mono text-[9px] text-slate-700 bg-white border border-slate-200 rounded px-1 py-0.5 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
+                    </div>
                   </div>
 
-                  <div>
-                    <div className="h-12 border-b-2 border-slate-400 flex items-end justify-center pb-1">
-                      <span className="font-bold text-slate-900">Subic Gate Security Supervisor</span>
+                  <div className="space-y-1">
+                    <div className="border-b-2 border-slate-400 pb-1">
+                      <input
+                        type="text"
+                        value={drSignatories.approvedBy}
+                        onChange={e => setDrSignatories(prev => ({ ...prev, approvedBy: e.target.value }))}
+                        placeholder="Security Supervisor"
+                        className="w-full text-center font-bold text-slate-900 bg-white border border-slate-200 rounded px-1.5 py-0.5 text-xs focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
                     </div>
                     <span className="text-[10px] font-bold text-slate-600 uppercase mt-1 block">Verified & Approved By</span>
-                    <span className="text-[9px] text-slate-500 font-mono">Date: _______________</span>
+                    <div className="flex items-center justify-center gap-1 text-[9px] text-slate-500 font-mono">
+                      <span>Date:</span>
+                      <input
+                        type="date"
+                        value={drSignatories.approvedDate}
+                        onChange={e => setDrSignatories(prev => ({ ...prev, approvedDate: e.target.value }))}
+                        className="font-mono text-[9px] text-slate-700 bg-white border border-slate-200 rounded px-1 py-0.5 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
+                    </div>
                   </div>
 
-                  <div>
-                    <div className="h-12 border-b-2 border-slate-400 flex items-end justify-center pb-1">
-                      <span className="font-bold text-slate-900">Carrier Driver / Received By</span>
+                  <div className="space-y-1">
+                    <div className="border-b-2 border-slate-400 pb-1">
+                      <input
+                        type="text"
+                        value={drSignatories.receivedBy}
+                        onChange={e => setDrSignatories(prev => ({ ...prev, receivedBy: e.target.value }))}
+                        placeholder="Carrier / Driver Name"
+                        className="w-full text-center font-bold text-slate-900 bg-white border border-slate-200 rounded px-1.5 py-0.5 text-xs focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
                     </div>
-                    <span className="text-[10px] font-bold text-slate-600 uppercase mt-1 block">Driver Name / Plate #: ____________</span>
-                    <span className="text-[9px] text-slate-500 font-mono">Signature & Date: _______________</span>
+                    <span className="text-[10px] font-bold text-slate-600 uppercase mt-1 block">Carrier Driver / Received By</span>
+                    <div className="space-y-0.5">
+                      <input
+                        type="text"
+                        value={drSignatories.driverDetails}
+                        onChange={e => setDrSignatories(prev => ({ ...prev, driverDetails: e.target.value }))}
+                        placeholder="Driver Name / Plate #"
+                        className="w-full text-center text-[10px] font-semibold text-slate-600 bg-white border border-slate-200 rounded px-1 py-0.5 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
+                      <div className="flex items-center justify-center gap-1 text-[9px] text-slate-500 font-mono">
+                        <span>Date:</span>
+                        <input
+                          type="date"
+                          value={drSignatories.receivedDate}
+                          onChange={e => setDrSignatories(prev => ({ ...prev, receivedDate: e.target.value }))}
+                          className="font-mono text-[9px] text-slate-700 bg-white border border-slate-200 rounded px-1 py-0.5 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                        />
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -458,11 +567,11 @@ export default function PrintablePickingListModal({
 
                   <div>
                     <span className="text-[10px] uppercase font-bold text-slate-500 block">Issued By (Warehouse)</span>
-                    <span className="font-bold text-slate-800">{targetIssuance.issuedBy}</span>
+                    <span className="font-bold text-slate-800">{mrsSignatories.issuedBy}</span>
                   </div>
                   <div>
                     <span className="text-[10px] uppercase font-bold text-slate-500 block">Received By (Dept)</span>
-                    <span className="font-bold text-slate-800">{targetIssuance.receivedBy}</span>
+                    <span className="font-bold text-slate-800">{mrsSignatories.requestedBy}</span>
                   </div>
                   <div>
                     <span className="text-[10px] uppercase font-bold text-slate-500 block">Part / Material Code</span>
@@ -553,28 +662,70 @@ export default function PrintablePickingListModal({
 
                 {/* Signature Authorization Block */}
                 <div className="pt-6 border-t-2 border-slate-900 grid grid-cols-3 gap-6 text-xs text-center">
-                  <div>
-                    <div className="h-12 border-b-2 border-slate-400 flex items-end justify-center pb-1">
-                      <span className="font-bold text-slate-900">{targetIssuance.receivedBy}</span>
+                  <div className="space-y-1">
+                    <div className="border-b-2 border-slate-400 pb-1">
+                      <input
+                        type="text"
+                        value={mrsSignatories.requestedBy}
+                        onChange={e => setMrsSignatories(prev => ({ ...prev, requestedBy: e.target.value }))}
+                        placeholder="Dept Supervisor Name"
+                        className="w-full text-center font-bold text-slate-900 bg-white border border-slate-200 rounded px-1.5 py-0.5 text-xs focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
                     </div>
                     <span className="text-[10px] font-bold text-slate-600 uppercase mt-1 block">Requested / Received By (Dept Supervisor)</span>
-                    <span className="text-[9px] text-slate-500 font-mono">Date: {targetIssuance.date}</span>
+                    <div className="flex items-center justify-center gap-1 text-[9px] text-slate-500 font-mono">
+                      <span>Date:</span>
+                      <input
+                        type="date"
+                        value={mrsSignatories.requestedDate}
+                        onChange={e => setMrsSignatories(prev => ({ ...prev, requestedDate: e.target.value }))}
+                        className="font-mono text-[9px] text-slate-700 bg-white border border-slate-200 rounded px-1 py-0.5 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
+                    </div>
                   </div>
 
-                  <div>
-                    <div className="h-12 border-b-2 border-slate-400 flex items-end justify-center pb-1">
-                      <span className="font-bold text-slate-900">{targetIssuance.issuedBy}</span>
+                  <div className="space-y-1">
+                    <div className="border-b-2 border-slate-400 pb-1">
+                      <input
+                        type="text"
+                        value={mrsSignatories.issuedBy}
+                        onChange={e => setMrsSignatories(prev => ({ ...prev, issuedBy: e.target.value }))}
+                        placeholder="Warehouse Logistics Staff"
+                        className="w-full text-center font-bold text-slate-900 bg-white border border-slate-200 rounded px-1.5 py-0.5 text-xs focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
                     </div>
                     <span className="text-[10px] font-bold text-slate-600 uppercase mt-1 block">Issued By (Warehouse Logistics)</span>
-                    <span className="text-[9px] text-slate-500 font-mono">Date: {targetIssuance.date}</span>
+                    <div className="flex items-center justify-center gap-1 text-[9px] text-slate-500 font-mono">
+                      <span>Date:</span>
+                      <input
+                        type="date"
+                        value={mrsSignatories.issuedDate}
+                        onChange={e => setMrsSignatories(prev => ({ ...prev, issuedDate: e.target.value }))}
+                        className="font-mono text-[9px] text-slate-700 bg-white border border-slate-200 rounded px-1 py-0.5 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
+                    </div>
                   </div>
 
-                  <div>
-                    <div className="h-12 border-b-2 border-slate-400 flex items-end justify-center pb-1">
-                      <span className="font-bold text-slate-900">Operations / Planning Manager</span>
+                  <div className="space-y-1">
+                    <div className="border-b-2 border-slate-400 pb-1">
+                      <input
+                        type="text"
+                        value={mrsSignatories.approvedBy}
+                        onChange={e => setMrsSignatories(prev => ({ ...prev, approvedBy: e.target.value }))}
+                        placeholder="Planning / Operations Manager"
+                        className="w-full text-center font-bold text-slate-900 bg-white border border-slate-200 rounded px-1.5 py-0.5 text-xs focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
                     </div>
                     <span className="text-[10px] font-bold text-slate-600 uppercase mt-1 block">Verified & Approved By</span>
-                    <span className="text-[9px] text-slate-500 font-mono">Date: _______________</span>
+                    <div className="flex items-center justify-center gap-1 text-[9px] text-slate-500 font-mono">
+                      <span>Date:</span>
+                      <input
+                        type="date"
+                        value={mrsSignatories.approvedDate}
+                        onChange={e => setMrsSignatories(prev => ({ ...prev, approvedDate: e.target.value }))}
+                        className="font-mono text-[9px] text-slate-700 bg-white border border-slate-200 rounded px-1 py-0.5 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -647,7 +798,7 @@ export default function PrintablePickingListModal({
                   </div>
                   <div>
                     <span className="text-[10px] uppercase font-bold text-slate-500 block">Prepared By</span>
-                    <span className="font-bold text-slate-800">{preparedBy}</span>
+                    <span className="font-bold text-slate-800">{pickingSignatories.pickedBy}</span>
                   </div>
                 </div>
 
@@ -767,28 +918,70 @@ export default function PrintablePickingListModal({
                 </div>
 
                 <div className="pt-6 border-t border-slate-300 grid grid-cols-3 gap-6 text-xs text-center">
-                  <div>
-                    <div className="h-10 border-b border-slate-400 flex items-end justify-center pb-1">
-                      <span className="font-bold text-slate-800">{preparedBy}</span>
+                  <div className="space-y-1">
+                    <div className="border-b border-slate-400 pb-1">
+                      <input
+                        type="text"
+                        value={pickingSignatories.pickedBy}
+                        onChange={e => setPickingSignatories(prev => ({ ...prev, pickedBy: e.target.value }))}
+                        placeholder="Forklift Operator / Picker"
+                        className="w-full text-center font-bold text-slate-800 bg-white border border-slate-200 rounded px-1.5 py-0.5 text-xs focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
                     </div>
                     <span className="text-[10px] font-bold text-slate-500 uppercase mt-1 block">Picked By / Forklift Operator</span>
-                    <span className="text-[9px] text-slate-400">Date & Time: _______________</span>
+                    <div className="flex items-center justify-center gap-1 text-[9px] text-slate-500 font-mono">
+                      <span>Date:</span>
+                      <input
+                        type="date"
+                        value={pickingSignatories.pickedDate}
+                        onChange={e => setPickingSignatories(prev => ({ ...prev, pickedDate: e.target.value }))}
+                        className="font-mono text-[9px] text-slate-600 bg-white border border-slate-200 rounded px-1 py-0.5 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
+                    </div>
                   </div>
 
-                  <div>
-                    <div className="h-10 border-b border-slate-400 flex items-end justify-center pb-1">
-                      <span className="font-bold text-slate-800">Warehouse Supervisor</span>
+                  <div className="space-y-1">
+                    <div className="border-b border-slate-400 pb-1">
+                      <input
+                        type="text"
+                        value={pickingSignatories.approvedBy}
+                        onChange={e => setPickingSignatories(prev => ({ ...prev, approvedBy: e.target.value }))}
+                        placeholder="Warehouse Supervisor"
+                        className="w-full text-center font-bold text-slate-800 bg-white border border-slate-200 rounded px-1.5 py-0.5 text-xs focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
                     </div>
                     <span className="text-[10px] font-bold text-slate-500 uppercase mt-1 block">Verified & Approved By</span>
-                    <span className="text-[9px] text-slate-400">Date & Time: _______________</span>
+                    <div className="flex items-center justify-center gap-1 text-[9px] text-slate-500 font-mono">
+                      <span>Date:</span>
+                      <input
+                        type="date"
+                        value={pickingSignatories.approvedDate}
+                        onChange={e => setPickingSignatories(prev => ({ ...prev, approvedDate: e.target.value }))}
+                        className="font-mono text-[9px] text-slate-600 bg-white border border-slate-200 rounded px-1 py-0.5 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
+                    </div>
                   </div>
 
-                  <div>
-                    <div className="h-10 border-b border-slate-400 flex items-end justify-center pb-1">
-                      <span className="font-bold text-slate-800">{receivedBy}</span>
+                  <div className="space-y-1">
+                    <div className="border-b border-slate-400 pb-1">
+                      <input
+                        type="text"
+                        value={pickingSignatories.receivedBy}
+                        onChange={e => setPickingSignatories(prev => ({ ...prev, receivedBy: e.target.value }))}
+                        placeholder="Received / Gate Inspector"
+                        className="w-full text-center font-bold text-slate-800 bg-white border border-slate-200 rounded px-1.5 py-0.5 text-xs focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
                     </div>
                     <span className="text-[10px] font-bold text-slate-500 uppercase mt-1 block">Received / Gate Inspector</span>
-                    <span className="text-[9px] text-slate-400">Date & Time: _______________</span>
+                    <div className="flex items-center justify-center gap-1 text-[9px] text-slate-500 font-mono">
+                      <span>Date:</span>
+                      <input
+                        type="date"
+                        value={pickingSignatories.receivedDate}
+                        onChange={e => setPickingSignatories(prev => ({ ...prev, receivedDate: e.target.value }))}
+                        className="font-mono text-[9px] text-slate-600 bg-white border border-slate-200 rounded px-1 py-0.5 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -925,18 +1118,48 @@ export default function PrintablePickingListModal({
 
                 {/* Audit Authorization Signatures */}
                 <div className="pt-6 border-t-2 border-slate-900 grid grid-cols-2 gap-8 text-xs text-center">
-                  <div>
-                    <div className="h-10 border-b border-slate-400 flex items-end justify-center pb-1">
-                      <span className="font-bold text-slate-900">Warehouse Materials Custodian</span>
+                  <div className="space-y-1">
+                    <div className="border-b border-slate-400 pb-1">
+                      <input
+                        type="text"
+                        value={summarySignatories.preparedBy}
+                        onChange={e => setSummarySignatories(prev => ({ ...prev, preparedBy: e.target.value }))}
+                        placeholder="Materials Custodian Name"
+                        className="w-full text-center font-bold text-slate-900 bg-white border border-slate-200 rounded px-1.5 py-0.5 text-xs focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
                     </div>
                     <span className="text-[10px] font-bold text-slate-600 uppercase mt-1 block">Prepared & Audited By</span>
+                    <div className="flex items-center justify-center gap-1 text-[9px] text-slate-500 font-mono">
+                      <span>Date:</span>
+                      <input
+                        type="date"
+                        value={summarySignatories.preparedDate}
+                        onChange={e => setSummarySignatories(prev => ({ ...prev, preparedDate: e.target.value }))}
+                        className="font-mono text-[9px] text-slate-600 bg-white border border-slate-200 rounded px-1 py-0.5 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
+                    </div>
                   </div>
 
-                  <div>
-                    <div className="h-10 border-b border-slate-400 flex items-end justify-center pb-1">
-                      <span className="font-bold text-slate-900">Warehouse Operations Manager</span>
+                  <div className="space-y-1">
+                    <div className="border-b border-slate-400 pb-1">
+                      <input
+                        type="text"
+                        value={summarySignatories.approvedBy}
+                        onChange={e => setSummarySignatories(prev => ({ ...prev, approvedBy: e.target.value }))}
+                        placeholder="Operations Manager Name"
+                        className="w-full text-center font-bold text-slate-900 bg-white border border-slate-200 rounded px-1.5 py-0.5 text-xs focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
                     </div>
                     <span className="text-[10px] font-bold text-slate-600 uppercase mt-1 block">Approved & Verified By</span>
+                    <div className="flex items-center justify-center gap-1 text-[9px] text-slate-500 font-mono">
+                      <span>Date:</span>
+                      <input
+                        type="date"
+                        value={summarySignatories.approvedDate}
+                        onChange={e => setSummarySignatories(prev => ({ ...prev, approvedDate: e.target.value }))}
+                        className="font-mono text-[9px] text-slate-600 bg-white border border-slate-200 rounded px-1 py-0.5 focus:ring-1 focus:ring-indigo-500 print:border-none print:p-0 print:bg-transparent"
+                      />
+                    </div>
                   </div>
                 </div>
 

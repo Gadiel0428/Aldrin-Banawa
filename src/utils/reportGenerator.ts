@@ -11,6 +11,15 @@ export interface ReportFilterOptions {
   generatedBy?: string;
   userRole?: string;
   employeeId?: string;
+  preparedByName?: string;
+  preparedByTitle?: string;
+  preparedByDate?: string;
+  auditorName?: string;
+  auditorTitle?: string;
+  auditorDate?: string;
+  approvedByName?: string;
+  approvedByTitle?: string;
+  approvedByDate?: string;
 }
 
 export interface MaterialFlowSummary {
@@ -524,8 +533,12 @@ export function generateReceivingVsIssuancePDF(
   doc.line(18, finalY + 16, 18 + signColWidth - 8, finalY + 16);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6.5);
-  doc.text(`${options.generatedBy || 'Aldrin Banawa'} / ${options.employeeId || 'JPMP-002'}`, 18, finalY + 19.5);
-  doc.text(`Warehouse Super Administrator • ${generatedTimestamp}`, 18, finalY + 22.5);
+  const prepName = options.preparedByName || options.generatedBy || 'Aldrin Banawa';
+  const prepEmp = options.employeeId || 'JPMP-002';
+  const prepTitle = options.preparedByTitle || `Warehouse Super Administrator • ${prepEmp}`;
+  const prepDate = options.preparedByDate || generatedTimestamp;
+  doc.text(prepName, 18, finalY + 19.5);
+  doc.text(`${prepTitle} • ${prepDate}`, 18, finalY + 22.5);
 
   // Sign-off 2: Quality Verification
   const sign2X = 14 + signColWidth;
@@ -535,8 +548,11 @@ export function generateReceivingVsIssuancePDF(
   doc.line(sign2X + 4, finalY + 16, sign2X + signColWidth - 4, finalY + 16);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6.5);
-  doc.text('Quality Assurance / IQC Inspector', sign2X + 4, finalY + 19.5);
-  doc.text('ISO 9001:2015 Physical Check Endorsed', sign2X + 4, finalY + 22.5);
+  const auditName = options.auditorName || 'Quality Assurance / IQC Inspector';
+  const auditTitle = options.auditorTitle || 'IQC Section • Material Compliance';
+  const auditDate = options.auditorDate || 'ISO 9001:2015 Physical Check Endorsed';
+  doc.text(auditName, sign2X + 4, finalY + 19.5);
+  doc.text(`${auditTitle} • ${auditDate}`, sign2X + 4, finalY + 22.5);
 
   // Sign-off 3: Operations Manager
   const sign3X = sign2X + signColWidth;
@@ -546,8 +562,11 @@ export function generateReceivingVsIssuancePDF(
   doc.line(sign3X + 4, finalY + 16, sign3X + signColWidth - 8, finalY + 16);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6.5);
-  doc.text('Warehouse Operations & Logistics Head', sign3X + 4, finalY + 19.5);
-  doc.text('Juwei Plastic Moulding Corp Plant', sign3X + 4, finalY + 22.5);
+  const appName = options.approvedByName || 'Warehouse Operations Head';
+  const appTitle = options.approvedByTitle || 'Warehouse Operations & Logistics Head';
+  const appDate = options.approvedByDate || 'Juwei Plastic Moulding Corp Plant';
+  doc.text(appName, sign3X + 4, finalY + 19.5);
+  doc.text(`${appTitle} • ${appDate}`, sign3X + 4, finalY + 22.5);
 
   return doc;
 }

@@ -376,6 +376,20 @@ button, a, input, select, textarea, .transition-smooth {
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
   }
+
+  .printable-area input,
+  .printable-area select,
+  .printable-area textarea {
+    border: none !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    outline: none !important;
+    color: #000000 !important;
+    appearance: none !important;
+    -webkit-appearance: none !important;
+  }
 }
 
 /* ==========================================================================
