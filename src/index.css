@@ -313,6 +313,15 @@ button, a, input, select, textarea, .transition-smooth {
   100% { background-position: 200% 0; }
 }
 
+/* Page print settings */
+@page {
+  size: A4;
+  margin-top: 1in;
+  margin-left: 10mm;
+  margin-right: 10mm;
+  margin-bottom: 10mm;
+}
+
 /* Print-specific stylesheet */
 @media print {
   html, body, #root {
@@ -357,14 +366,14 @@ button, a, input, select, textarea, .transition-smooth {
 
   .printable-area {
     position: absolute !important;
-    left: 0 !important;
     top: 0 !important;
+    left: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
     width: 100% !important;
     height: auto !important;
     min-height: auto !important;
     overflow: visible !important;
-    margin: 0 !important;
-    padding: 15px !important;
     background: #ffffff !important;
     color: #000000 !important;
     box-sizing: border-box !important;
