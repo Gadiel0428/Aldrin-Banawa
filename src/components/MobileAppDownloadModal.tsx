@@ -27,13 +27,15 @@ interface MobileAppDownloadModalProps {
   onClose: () => void;
   serverAddress?: string;
   onFreshInstallSync?: () => void;
+  appVersion?: string;
 }
 
 export default function MobileAppDownloadModal({
   isOpen,
   onClose,
   serverAddress,
-  onFreshInstallSync
+  onFreshInstallSync,
+  appVersion
 }: MobileAppDownloadModalProps) {
   const [activeTab, setActiveTab] = useState<'install' | 'qr' | 'apk' | 'handheld'>('install');
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -386,7 +388,7 @@ export default function MobileAppDownloadModal({
                         </p>
                       </div>
                       <span className="px-2.5 py-1 bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 text-[10px] font-bold rounded-lg font-mono">
-                        v1.0.0
+                        v{appVersion || (typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.0.79')}
                       </span>
                     </div>
 

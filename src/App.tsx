@@ -348,6 +348,12 @@ export default function App() {
   const [updateAvailable, setUpdateAvailable] = useState<boolean>(false);
   const [bannerDismissed, setBannerDismissed] = useState<boolean>(false);
   const [newVersionString, setNewVersionString] = useState<string>('');
+  const [appVersion, setAppVersion] = useState<string>(() => {
+    if (typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__) {
+      return String(__APP_VERSION__).replace(/^v/i, '');
+    }
+    return '1.0.79';
+  });
   const updateAvailableRef = useRef<boolean>(false);
 
   // Cross-tab zero-latency synchronization channel
@@ -783,7 +789,29 @@ export default function App() {
       document.head.appendChild(newLink);
     } catch (e) {}
   }, []);
-  
+
+  useEffect(() => {
+    // Sync version from authoritative build-info endpoint
+    const fetchBuildInfo = async () => {
+      try {
+        const endpoints = ['/api/build-info', '/build-info.json'];
+        for (const ep of endpoints) {
+          try {
+            const res = await fetch(ep, { cache: 'no-store', headers: { Accept: 'application/json' } });
+            if (res.ok) {
+              const data = await res.json();
+              if (data?.version) {
+                setAppVersion(String(data.version).replace(/^v/i, ''));
+                break;
+              }
+            }
+          } catch (e) {}
+        }
+      } catch (e) {}
+    };
+    fetchBuildInfo();
+  }, []);
+
   // Direct employee ID and PIN login form states
   const [loginEmployeeId, setLoginEmployeeId] = useState<string>('');
   const [loginPin, setLoginPin] = useState<string>('');
@@ -2541,6 +2569,9 @@ export default function App() {
             });
             if (res.ok) {
               const data = await res.json();
+              if (data?.version) {
+                setAppVersion(String(data.version).replace(/^v/i, ''));
+              }
               const serverBuildId = data?.buildId != null ? String(data.buildId) : '';
               // If server returns fallback or empty, don't trigger false positive
               if (!serverBuildId || serverBuildId === '0' || data?.isDevelopmentFallback) {
@@ -4734,7 +4765,7 @@ export default function App() {
               />
             </div>
             <span className="inline-block bg-indigo-500/10 text-indigo-300 font-mono font-semibold text-[10px] uppercase px-2.5 py-0.5 rounded-md mb-2 border border-indigo-500/20">
-              JUWEI WMS GATEWAY
+              JUWEI WMS GATEWAY • v{appVersion}
             </span>
             <h2 className="text-xl font-bold tracking-tight text-white">
               Operator Sign In
@@ -4974,7 +5005,7 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <span className="text-white font-mono font-bold tracking-wider text-sm">JUWEI WMS</span>
                 <span className="px-1.5 py-0.5 bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-[9px] font-mono font-bold rounded">
-                  v1.0
+                  v{appVersion}
                 </span>
               </div>
               <span className="text-[10px] text-slate-400 block mt-0.5">Juwei Plastic Moulding Phils. Inc.</span>
@@ -5451,6 +5482,7 @@ export default function App() {
           onClose={() => setShowMobileInstallModal(false)}
           serverAddress={serverAddress}
           onFreshInstallSync={() => performFreshInstallAndSync(true)}
+          appVersion={appVersion}
         />
       )}
 

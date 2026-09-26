@@ -2760,7 +2760,7 @@ async function startServer() {
     // Dynamic fallback if running in dev mode or prior to write-build-info
     return res.json({
       buildId: 0,
-      version: "1.0.0",
+      version: "1.0.79",
       isDevelopmentFallback: true
     });
   });

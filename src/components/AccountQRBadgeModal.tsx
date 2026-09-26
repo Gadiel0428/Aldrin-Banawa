@@ -198,7 +198,7 @@ export default function AccountQRBadgeModal({
             {/* Badge Card Body - Scrollable if screen height is constrained */}
             <div className="p-4 sm:p-5 space-y-3.5 overflow-y-auto flex-1 print:p-0 print:overflow-visible">
               {/* Official Pass Badge Graphic (Full Badge Printable Area) */}
-              <div className="bg-white rounded-2xl p-4 sm:p-5 border-2 border-blue-900 shadow-xl text-blue-950 text-center space-y-2.5 relative overflow-hidden printable-area print:border-2 print:border-blue-900 print:shadow-none">
+              <div className="bg-white rounded-2xl p-4 sm:p-5 border-2 border-blue-900 shadow-xl text-blue-950 text-center space-y-2.5 relative overflow-hidden printable-area printable-badge print:border-2 print:border-blue-900 print:shadow-none">
                 {/* Watermark / Header */}
                 <div className="border-b-2 border-blue-100 pb-2">
                   <div className="text-[10px] font-extrabold text-blue-800 font-mono tracking-widest uppercase">

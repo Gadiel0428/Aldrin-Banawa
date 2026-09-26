@@ -138,7 +138,7 @@ export default function PrintablePickingListModal({
         animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
         exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
         transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-        className="frosted-glass-modal-light rounded-3xl shadow-2xl border border-white/80 w-full max-w-5xl max-h-[calc(100vh-2rem)] my-auto flex flex-col overflow-hidden backdrop-blur-3xl print:max-h-none print:border-none print:shadow-none print:rounded-none print:my-0"
+        className="frosted-glass-modal-light rounded-3xl shadow-2xl border border-white/80 w-full max-w-5xl max-h-[calc(100vh-2rem)] my-auto flex flex-col overflow-hidden backdrop-blur-3xl print:max-h-none print:border-none print:shadow-none print:rounded-none print:my-0 print:overflow-visible"
       >
         
         {/* On-Screen Modal Control Header (Hidden during printing) */}
@@ -248,7 +248,7 @@ export default function PrintablePickingListModal({
         </div>
 
         {/* Printable Document Sheet Body */}
-        <div className="p-6 sm:p-10 overflow-y-auto flex-1 bg-white printable-area" id="printable-document-container">
+        <div className="p-6 sm:p-10 overflow-y-auto flex-1 bg-white printable-area print:p-0 print:overflow-visible" id="printable-document-container">
           <div className="max-w-4xl mx-auto space-y-6 text-slate-900 font-sans">
 
             {/* ========================================================================= */}

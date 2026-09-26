@@ -127,7 +127,7 @@ export default function ReceivingVsIssuanceReportModal({
         animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
         exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
         transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-        className="frosted-glass-modal-light w-full max-w-5xl rounded-3xl shadow-2xl border border-white/80 flex flex-col max-h-[calc(100vh-2rem)] my-auto print:max-h-none print:border-none print:shadow-none print:rounded-none print:my-0 overflow-hidden backdrop-blur-3xl"
+        className="frosted-glass-modal-light w-full max-w-5xl rounded-3xl shadow-2xl border border-white/80 flex flex-col max-h-[calc(100vh-2rem)] my-auto print:max-h-none print:border-none print:shadow-none print:rounded-none print:my-0 print:overflow-visible overflow-hidden backdrop-blur-3xl"
       >
         
         {/* Modal Header & Navigation (Hidden in Print) */}

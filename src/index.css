@@ -315,8 +315,36 @@ button, a, input, select, textarea, .transition-smooth {
 
 /* Print-specific stylesheet */
 @media print {
-  header, nav, button, .no-print, form {
+  html, body, #root {
+    height: auto !important;
+    min-height: 100% !important;
+    width: 100% !important;
+    overflow: visible !important;
+    position: static !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  header, nav, button, .no-print, form, #sidebar-nav, #nav-list, aside {
     display: none !important;
+  }
+
+  /* Reset all modal overlays and scroll containers during print */
+  [role="dialog"],
+  .fixed,
+  [class*="backdrop-blur"],
+  [class*="overflow-"],
+  [class*="max-h-"] {
+    position: static !important;
+    overflow: visible !important;
+    max-height: none !important;
+    height: auto !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
   }
 
   body * {
@@ -332,6 +360,9 @@ button, a, input, select, textarea, .transition-smooth {
     left: 0 !important;
     top: 0 !important;
     width: 100% !important;
+    height: auto !important;
+    min-height: auto !important;
+    overflow: visible !important;
     margin: 0 !important;
     padding: 15px !important;
     background: #ffffff !important;
@@ -344,10 +375,11 @@ button, a, input, select, textarea, .transition-smooth {
   .printable-area:has(#badge-qr-svg-wrapper),
   .printable-area.printable-badge {
     max-width: 380px !important;
-    left: 50% !important;
-    transform: translateX(-50%) !important;
+    left: 0 !important;
+    right: 0 !important;
     margin: 20px auto !important;
     border: 2px solid #1e3a8a !important;
+    transform: none !important;
   }
 
   body {
@@ -356,6 +388,7 @@ button, a, input, select, textarea, .transition-smooth {
     font-size: 10pt !important;
     padding: 0 !important;
     margin: 0 !important;
+    position: relative !important;
   }
 
   table {
