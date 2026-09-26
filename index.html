@@ -48,6 +48,19 @@
         } catch(e) {}
       })();
     </script>
+    <script>
+      (function() {
+        try {
+          fetch('/build-info.json', { cache: 'no-store' })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+              if (d && d.version) {
+                document.title = 'JUWEI WAREHOUSE MANAGEMENT SYSTEM v' + d.version;
+              }
+            }).catch(function() {});
+        } catch(e) {}
+      })();
+    </script>
   </head>
   <body class="bg-slate-900 text-slate-100 antialiased selection:bg-indigo-500 selection:text-white">
     <div id="root"></div>

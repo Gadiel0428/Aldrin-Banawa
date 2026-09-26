@@ -9,11 +9,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig(() => {
   const buildTimestamp = Date.now();
-  let appVersion = '1.0.79';
+  let appVersion = '';
   try {
-    const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8'));
-    if (pkg.version) appVersion = pkg.version;
+    const buildInfoPath = path.resolve(__dirname, 'public/build-info.json');
+    if (fs.existsSync(buildInfoPath)) {
+      const bInfo = JSON.parse(fs.readFileSync(buildInfoPath, 'utf8'));
+      if (bInfo.version) appVersion = bInfo.version;
+    }
   } catch (e) {}
+
+  if (!appVersion) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8'));
+      if (pkg.version) appVersion = pkg.version;
+    } catch (e) {}
+  }
 
   return {
     base: './',

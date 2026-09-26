@@ -26,12 +26,42 @@ try {
 
 function createWindow() {
   const iconPath = path.join(__dirname, '../public/favicon.ico');
+
+  let appVersion = '';
+  try {
+    const buildInfoPaths = [
+      path.join(__dirname, '../dist/build-info.json'),
+      path.join(__dirname, '../public/build-info.json'),
+      path.join(__dirname, 'dist/build-info.json'),
+    ];
+    for (const bip of buildInfoPaths) {
+      if (fs.existsSync(bip)) {
+        const bInfo = JSON.parse(fs.readFileSync(bip, 'utf8'));
+        if (bInfo && bInfo.version) {
+          appVersion = bInfo.version;
+          break;
+        }
+      }
+    }
+  } catch (e) {}
+
+  if (!appVersion) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+      if (pkg.version) appVersion = pkg.version;
+    } catch (e) {}
+  }
+
+  const windowTitle = appVersion 
+    ? `JUWEI WAREHOUSE MANAGEMENT SYSTEM v${appVersion} (CENTRAL CLOUD CONNECTED)`
+    : 'JUWEI WAREHOUSE MANAGEMENT SYSTEM (CENTRAL CLOUD CONNECTED)';
+
   const windowOptions = {
     width: 1366,
     height: 868,
     minWidth: 1024,
     minHeight: 700,
-    title: 'JUWEI WAREHOUSE MANAGEMENT SYSTEM (CENTRAL CLOUD CONNECTED)',
+    title: windowTitle,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,

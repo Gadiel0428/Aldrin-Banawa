@@ -9,11 +9,31 @@ try {
   let version = '';
   let versionSource = '';
 
-  // 1. Try git describe --tags --abbrev=0 at build time
+  // 1. Fetch remote tags if inside a git repository (essential for shallow clones on Render or CI)
+  try {
+    execSync('git fetch --tags origin', {
+      stdio: ['ignore', 'ignore', 'ignore'],
+      timeout: 10000
+    });
+    console.log('[WRITE-BUILD-INFO] Successfully fetched tags from origin.');
+  } catch (fetchOriginErr) {
+    try {
+      execSync('git fetch --tags', {
+        stdio: ['ignore', 'ignore', 'ignore'],
+        timeout: 10000
+      });
+      console.log('[WRITE-BUILD-INFO] Successfully fetched tags.');
+    } catch (fetchErr) {
+      // Ignored if offline, shallow with no remote, or not a git repository
+    }
+  }
+
+  // 2. Try git describe --tags --abbrev=0 at build time
   try {
     const gitTag = execSync('git describe --tags --abbrev=0', {
       stdio: ['ignore', 'pipe', 'ignore'],
-      encoding: 'utf8'
+      encoding: 'utf8',
+      timeout: 5000
     }).trim();
 
     if (gitTag) {
@@ -23,13 +43,39 @@ try {
       console.log(`[WRITE-BUILD-INFO] Resolved version from git tag: ${gitTag} -> ${version}`);
     }
   } catch (gitErr) {
-    // Git clone has no tags, shallow clone, or not a git repository (e.g. Render build environment)
-    console.log('[WRITE-BUILD-INFO] git describe --tags failed or has no tags. Falling back to package.json.');
+    // If git describe fails, try getting the latest release tag from git tag -l
+    try {
+      const allTagsRaw = execSync('git tag -l "v*"', {
+        stdio: ['ignore', 'pipe', 'ignore'],
+        encoding: 'utf8',
+        timeout: 5000
+      }).trim();
+
+      const allTags = allTagsRaw.split('\n').map(t => t.trim()).filter(Boolean);
+      if (allTags.length > 0) {
+        // Sort tags by semver descending (e.g. v1.0.80 > v1.0.79)
+        allTags.sort((a, b) => {
+          const parse = (str) => str.replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+          const pa = parse(a);
+          const pb = parse(b);
+          for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+            const diff = (pb[i] || 0) - (pa[i] || 0);
+            if (diff !== 0) return diff;
+          }
+          return b.localeCompare(a);
+        });
+        version = allTags[0].replace(/^v/i, '');
+        versionSource = 'git tag -l (latest semver tag)';
+        console.log(`[WRITE-BUILD-INFO] Resolved version from latest git tag: ${allTags[0]} -> ${version}`);
+      }
+    } catch (tagErr) {
+      console.log('[WRITE-BUILD-INFO] git describe/tag failed or has no tags. Falling back to package.json.');
+    }
   }
 
-  // 2. Fall back to package.json version field
+  // 3. Fall back to package.json version field
   if (!version) {
-    version = (pkgData.version || '1.0.79').replace(/^v/i, '');
+    version = (pkgData.version || '').replace(/^v/i, '');
     versionSource = 'package.json';
     console.log(`[WRITE-BUILD-INFO] Resolved version from package.json: ${version}`);
   }

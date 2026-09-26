@@ -352,7 +352,7 @@ export default function App() {
     if (typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__) {
       return String(__APP_VERSION__).replace(/^v/i, '');
     }
-    return '1.0.79';
+    return '';
   });
   const updateAvailableRef = useRef<boolean>(false);
 
@@ -774,9 +774,11 @@ export default function App() {
   }, [liveSyncToast]);
 
   useEffect(() => {
-    // Enforce custom JUWEI WMS branding and remove any Google default favicon
+    // Enforce custom JUWEI WMS branding and dynamic tab title with live appVersion
     try {
-      document.title = 'JUWEI WAREHOUSE MANAGEMENT SYSTEM';
+      document.title = appVersion 
+        ? `JUWEI WAREHOUSE MANAGEMENT SYSTEM v${appVersion}` 
+        : 'JUWEI WAREHOUSE MANAGEMENT SYSTEM';
       const svgIcon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%231e1b4b"/><polygon points="32,10 52,21 32,32 12,21" fill="%23818cf8"/><polygon points="12,21 32,32 32,53 12,42" fill="%234338ca"/><polygon points="32,32 52,21 52,42 32,53" fill="%23312e81"/><circle cx="32" cy="21" r="5" fill="%2310b981"/></svg>';
       const dataUrl = 'data:image/svg+xml;utf8,' + svgIcon;
       const links = document.querySelectorAll("link[rel*='icon']");
@@ -788,7 +790,7 @@ export default function App() {
       newLink.href = dataUrl;
       document.head.appendChild(newLink);
     } catch (e) {}
-  }, []);
+  }, [appVersion]);
 
   useEffect(() => {
     // Sync version from authoritative build-info endpoint

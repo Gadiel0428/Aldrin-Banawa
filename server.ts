@@ -2745,6 +2745,7 @@ async function startServer() {
 
     const possiblePaths = [
       path.join(process.cwd(), "dist", "build-info.json"),
+      path.join(process.cwd(), "public", "build-info.json"),
       path.join(process.cwd(), "build-info.json"),
     ];
 
@@ -2758,9 +2759,15 @@ async function startServer() {
     }
 
     // Dynamic fallback if running in dev mode or prior to write-build-info
+    let dynamicVersion = "";
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
+      if (pkg.version) dynamicVersion = String(pkg.version).replace(/^v/i, "");
+    } catch (e) {}
+
     return res.json({
       buildId: 0,
-      version: "1.0.79",
+      version: dynamicVersion,
       isDevelopmentFallback: true
     });
   });

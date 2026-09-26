@@ -316,10 +316,7 @@ button, a, input, select, textarea, .transition-smooth {
 /* Page print settings */
 @page {
   size: A4;
-  margin-top: 1in;
-  margin-left: 10mm;
-  margin-right: 10mm;
-  margin-bottom: 10mm;
+  margin: 10mm;
 }
 
 /* Print-specific stylesheet */

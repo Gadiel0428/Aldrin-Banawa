@@ -388,7 +388,7 @@ export default function MobileAppDownloadModal({
                         </p>
                       </div>
                       <span className="px-2.5 py-1 bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 text-[10px] font-bold rounded-lg font-mono">
-                        v{appVersion || (typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.0.79')}
+                        v{appVersion || (typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__ ? __APP_VERSION__ : '')}
                       </span>
                     </div>
 
