@@ -20,8 +20,10 @@ import {
   Building2, 
   Award, 
   FileCheck,
-  Check
+  Check,
+  Eye
 } from 'lucide-react';
+import { PrintPreviewModal } from './PrintPreviewModal';
 import { DeliveryRecord, IssuanceRecord, MaterialStockItem, MasterRegistryItem } from '../types';
 
 export type DocViewMode = 'OFFICIAL_DOC' | 'PICKING_LIST' | 'SUMMARY_LOG';
@@ -58,6 +60,7 @@ export default function PrintablePickingListModal({
   const [viewMode, setViewMode] = useState<DocViewMode>(
     (!delivery && !issuance) ? 'SUMMARY_LOG' : initialView
   );
+  const [showPrintPreview, setShowPrintPreview] = useState<boolean>(false);
 
   const handlePrint = () => {
     window.print();
@@ -91,7 +94,7 @@ export default function PrintablePickingListModal({
   const [drSignatories, setDrSignatories] = useState({
     preparedBy: targetDelivery?.preparedBy || 'Warehouse Logistics Staff',
     preparedDate: targetDelivery?.date || todayIso,
-    approvedBy: 'Subic Gate Security Supervisor',
+    approvedBy: 'Warehouse Gate Security Supervisor',
     approvedDate: todayIso,
     receivedBy: 'Carrier Driver / Received By',
     driverDetails: 'Plate #: NXD-8192 / Carrier Logistics',
@@ -123,133 +126,8 @@ export default function PrintablePickingListModal({
     approvedDate: todayIso,
   });
 
-  const modalContent = (
-    <motion.div
-      key="picking-list-backdrop"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
-      className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[100] flex items-center justify-center p-2 sm:p-4 overflow-y-auto print:p-0 print:bg-white print:static"
-    >
-      <motion.div
-        key="picking-list-content"
-        initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
-        animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
-        exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
-        transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-        className="frosted-glass-modal-light rounded-3xl shadow-2xl border border-white/80 w-full max-w-5xl max-h-[calc(100vh-2rem)] my-auto flex flex-col overflow-hidden backdrop-blur-3xl print:max-h-none print:border-none print:shadow-none print:rounded-none print:my-0 print:overflow-visible"
-      >
-        
-        {/* On-Screen Modal Control Header (Hidden during printing) */}
-        <div className="bg-slate-950/90 backdrop-blur-md text-white px-5 py-3.5 flex flex-wrap items-center justify-between shrink-0 no-print border-b border-white/10 gap-3">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-indigo-500/20 border border-indigo-400/30 rounded-2xl text-indigo-300 shrink-0 backdrop-blur-md">
-              <Printer className="h-5 w-5" />
-            </div>
-            <div>
-              <h3 className="font-bold text-sm sm:text-base flex items-center gap-2">
-                {isDeliveryMode ? 'Official Delivery & Shipping Documentation' : 'Official Material Requisition & Issuance Documentation'}
-                <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-mono font-bold uppercase">
-                  Print Ready
-                </span>
-              </h3>
-              <p className="text-xs text-slate-400">
-                {isDeliveryMode ? `Ref: ${docNumber}` : `Requisition Ref: ${docNumber}`}
-              </p>
-            </div>
-          </div>
-
-          {/* Document View Switcher Tabs */}
-          <div className="flex items-center gap-1.5 bg-slate-800 p-1 rounded-xl border border-slate-700 text-xs font-semibold">
-            {(targetDelivery || targetIssuance) && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setViewMode('OFFICIAL_DOC')}
-                  className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
-                    viewMode === 'OFFICIAL_DOC' 
-                      ? 'bg-indigo-600 text-white font-bold shadow-sm' 
-                      : 'text-slate-300 hover:text-white hover:bg-slate-700/60'
-                  }`}
-                >
-                  <FileText className="h-3.5 w-3.5" />
-                  <span>{isDeliveryMode ? 'Delivery Receipt & Gate Pass' : 'Requisition Slip (MRS)'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setViewMode('PICKING_LIST')}
-                  className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
-                    viewMode === 'PICKING_LIST' 
-                      ? 'bg-indigo-600 text-white font-bold shadow-sm' 
-                      : 'text-slate-300 hover:text-white hover:bg-slate-700/60'
-                  }`}
-                >
-                  <ClipboardList className="h-3.5 w-3.5" />
-                  <span>Picking List</span>
-                </button>
-              </>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setViewMode('SUMMARY_LOG')}
-              className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
-                viewMode === 'SUMMARY_LOG' 
-                  ? 'bg-indigo-600 text-white font-bold shadow-sm' 
-                  : 'text-slate-300 hover:text-white hover:bg-slate-700/60'
-              }`}
-            >
-              <FileSpreadsheet className="h-3.5 w-3.5" />
-              <span>Summary Log Report</span>
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handlePrint}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow-lg transition flex items-center gap-2 cursor-pointer active:scale-95"
-              id="btn-print-document-sheet"
-            >
-              <Printer className="h-4 w-4" />
-              <span>PRINT (PDF / PAPER)</span>
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition cursor-pointer"
-              title="Close Document View"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-        </div>
-
-        {/* Review Before Printing Banner */}
-        <div className="bg-amber-50 border-b border-amber-200 px-5 py-2.5 flex flex-wrap items-center justify-between gap-3 no-print text-xs text-amber-950 shrink-0">
-          <div className="flex items-center gap-2">
-            <span className="font-bold flex items-center gap-1 text-amber-900 bg-amber-200/60 px-2 py-0.5 rounded">
-              <CheckCircle2 className="h-3.5 w-3.5 text-amber-700" /> REVIEW BEFORE PRINTING
-            </span>
-            <span className="text-amber-900 font-medium">
-              All signature blocks and signatory dates below are fully editable before generating the paper/PDF document.
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={handlePrint}
-            className="px-3 py-1 bg-amber-700 hover:bg-amber-800 text-white font-bold rounded-lg text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer"
-          >
-            <Printer className="h-3 w-3" />
-            <span>Confirm & Print Now</span>
-          </button>
-        </div>
-
-        {/* Printable Document Sheet Body */}
-        <div className="p-6 sm:p-10 overflow-y-auto flex-1 bg-white printable-area print:p-0 print:overflow-visible" id="printable-document-container">
-          <div className="max-w-4xl mx-auto space-y-6 text-slate-900 font-sans">
+  const documentContent = (
+  <div className="max-w-4xl mx-auto space-y-6 text-slate-900 font-sans">
 
             {/* ========================================================================= */}
             {/* VIEW MODE 1: OFFICIAL DELIVERY RECEIPT (DR) & GATE PASS SHIPPNG MANIFEST */}
@@ -263,7 +141,7 @@ export default function PrintablePickingListModal({
                       JUWEI PLASTIC MOLDING INC.
                     </div>
                     <div className="text-[10px] text-slate-600 font-semibold">
-                      Subic Bay Freeport Zone, Commercial Complex, Subic Bay, Philippines
+                      Warehouse #1 Lot 6&7 Block 1 Green Road, LISP IV, Barangay Luta Norte, Malvar, Batangas 4233, Philippines
                     </div>
                     <div className="text-[10px] text-slate-500">
                       Warehouse & Material Control Division • ISO 9001 / ISO 14001 Certified
@@ -406,7 +284,7 @@ export default function PrintablePickingListModal({
                     </div>
                     <div>
                       <span className="font-bold text-slate-900 block">Gate Pass Release Approved</span>
-                      <span className="text-[10px] text-slate-600">Verified by Subic Gate Inspector</span>
+                      <span className="text-[10px] text-slate-600">Verified by Warehouse Gate Inspector</span>
                     </div>
                   </div>
                 </div>
@@ -508,7 +386,7 @@ export default function PrintablePickingListModal({
                       JUWEI PLASTIC MOLDING INC.
                     </div>
                     <div className="text-[10px] text-slate-600 font-semibold">
-                      Subic Bay Freeport Zone, Building 3A, Commercial Complex, Philippines
+                      Warehouse #1 Lot 6&7 Block 1 Green Road, LISP IV, Barangay Luta Norte, Malvar, Batangas 4233, Philippines
                     </div>
                     <div className="text-[10px] text-slate-500">
                       Material Control & Production Planning Division
@@ -747,7 +625,7 @@ export default function PrintablePickingListModal({
                       JUWEI PLASTIC MOLDING INC.
                     </div>
                     <div className="text-[10px] text-slate-500">
-                      Subic Bay Freeport Zone • Warehouse & Material Control Division
+                      Warehouse #1 Lot 6&7 Block 1 Green Road, LISP IV, Barangay Luta Norte, Malvar, Batangas 4233, Philippines • Warehouse & Material Control Division
                     </div>
                   </div>
 
@@ -1006,7 +884,7 @@ export default function PrintablePickingListModal({
                       {isDeliveryMode ? 'DELIVERY RECORDS & GATE PASS SHIPPING SUMMARY LOG' : 'MATERIAL ISSUANCE & REQUISITION SUMMARY LOG REPORT'}
                     </div>
                     <div className="text-[10px] text-slate-500">
-                      Subic Bay Freeport Zone • Official Warehouse Audit Log Sheet
+                      Warehouse #1 Lot 6&7 Block 1 Green Road, LISP IV, Barangay Luta Norte, Malvar, Batangas 4233, Philippines • Official Warehouse Audit Log Sheet
                     </div>
                   </div>
 
@@ -1170,8 +1048,219 @@ export default function PrintablePickingListModal({
             )}
 
           </div>
+  );
+
+  const modalContent = (
+    <motion.div
+      key="picking-list-backdrop"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[100] flex items-center justify-center p-2 sm:p-4 overflow-y-auto print:p-0 print:bg-white print:static"
+    >
+      <motion.div
+        key="picking-list-content"
+        initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+        animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
+        exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+        transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+        className="frosted-glass-modal-light rounded-3xl shadow-2xl border border-white/80 w-full max-w-5xl max-h-[calc(100vh-2rem)] my-auto flex flex-col overflow-hidden backdrop-blur-3xl print:max-h-none print:border-none print:shadow-none print:rounded-none print:my-0 print:overflow-visible"
+      >
+        
+        {/* On-Screen Modal Control Header (Hidden during printing) */}
+        <div className="bg-slate-950/90 backdrop-blur-md text-white px-5 py-3.5 flex flex-wrap items-center justify-between shrink-0 no-print border-b border-white/10 gap-3">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-indigo-500/20 border border-indigo-400/30 rounded-2xl text-indigo-300 shrink-0 backdrop-blur-md">
+              <Printer className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-sm sm:text-base flex items-center gap-2">
+                {isDeliveryMode ? 'Official Delivery & Shipping Documentation' : 'Official Material Requisition & Issuance Documentation'}
+                <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-mono font-bold uppercase">
+                  Print Ready
+                </span>
+              </h3>
+              <p className="text-xs text-slate-400">
+                {isDeliveryMode ? `Ref: ${docNumber}` : `Requisition Ref: ${docNumber}`}
+              </p>
+            </div>
+          </div>
+
+          {/* Document View Switcher Tabs */}
+          <div className="flex items-center gap-1.5 bg-slate-800 p-1 rounded-xl border border-slate-700 text-xs font-semibold">
+            {(targetDelivery || targetIssuance) && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('OFFICIAL_DOC')}
+                  className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
+                    viewMode === 'OFFICIAL_DOC' 
+                      ? 'bg-indigo-600 text-white font-bold shadow-sm' 
+                      : 'text-slate-300 hover:text-white hover:bg-slate-700/60'
+                  }`}
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  <span>{isDeliveryMode ? 'Delivery Receipt & Gate Pass' : 'Requisition Slip (MRS)'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setViewMode('PICKING_LIST')}
+                  className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
+                    viewMode === 'PICKING_LIST' 
+                      ? 'bg-indigo-600 text-white font-bold shadow-sm' 
+                      : 'text-slate-300 hover:text-white hover:bg-slate-700/60'
+                  }`}
+                >
+                  <ClipboardList className="h-3.5 w-3.5" />
+                  <span>Picking List</span>
+                </button>
+              </>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setViewMode('SUMMARY_LOG')}
+              className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
+                viewMode === 'SUMMARY_LOG' 
+                  ? 'bg-indigo-600 text-white font-bold shadow-sm' 
+                  : 'text-slate-300 hover:text-white hover:bg-slate-700/60'
+              }`}
+            >
+              <FileSpreadsheet className="h-3.5 w-3.5" />
+              <span>Summary Log Report</span>
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowPrintPreview(true)}
+              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white border border-slate-700 hover:border-indigo-500/50 text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer active:scale-95"
+              title="Open A4 Print Layout Preview before printing"
+              id="btn-print-preview"
+            >
+              <Eye className="h-4 w-4 text-indigo-400" />
+              <span>PRINT PREVIEW</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handlePrint}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow-lg transition flex items-center gap-2 cursor-pointer active:scale-95"
+              id="btn-print-document-sheet"
+            >
+              <Printer className="h-4 w-4" />
+              <span>PRINT (PDF / PAPER)</span>
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition cursor-pointer"
+              title="Close Document View"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
         </div>
 
+        {/* Review Before Printing Banner */}
+        <div className="bg-amber-50 border-b border-amber-200 px-5 py-2.5 flex flex-wrap items-center justify-between gap-3 no-print text-xs text-amber-950 shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="font-bold flex items-center gap-1 text-amber-900 bg-amber-200/60 px-2 py-0.5 rounded">
+              <CheckCircle2 className="h-3.5 w-3.5 text-amber-700" /> REVIEW BEFORE PRINTING
+            </span>
+            <span className="text-amber-900 font-medium">
+              All signature blocks and signatory dates below are fully editable before generating the paper/PDF document.
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowPrintPreview(true)}
+              className="px-2.5 py-1 bg-amber-200/80 hover:bg-amber-200 text-amber-950 font-bold rounded-lg text-xs transition flex items-center gap-1 shadow-xs cursor-pointer border border-amber-300"
+            >
+              <Eye className="h-3 w-3 text-amber-800" />
+              <span>Preview A4 Page</span>
+            </button>
+            <button
+              type="button"
+              onClick={handlePrint}
+              className="px-3 py-1 bg-amber-700 hover:bg-amber-800 text-white font-bold rounded-lg text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+            >
+              <Printer className="h-3 w-3" />
+              <span>Confirm & Print Now</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Printable Document Sheet Body */}
+        <div className={`p-6 sm:p-10 overflow-y-auto flex-1 bg-white ${showPrintPreview ? "" : "printable-area"} print:p-0 print:overflow-visible`} id="printable-document-container">
+          {documentContent}
+
+        </div>
+
+
+        {showPrintPreview && (
+          <PrintPreviewModal
+            isOpen={showPrintPreview}
+            onClose={() => setShowPrintPreview(false)}
+            documentTitle={
+              viewMode === "OFFICIAL_DOC" 
+                ? (isDeliveryMode ? "Delivery Receipt & Gate Pass" : "Material Requisition Slip (MRS)")
+                : viewMode === "PICKING_LIST"
+                  ? (isDeliveryMode ? "Official Delivery Picking List (DPL)" : "Material Issuance Picking Slip")
+                  : (isDeliveryMode ? "Delivery Shipping Summary Log" : "Material Issuance Summary Log")
+            }
+            documentNumber={docNumber}
+            documentSubtitle={isDeliveryMode ? "Official Logistics Manifest" : "Material Management Documentation"}
+            extraToolbarControls={
+              <div className="flex items-center gap-1 bg-slate-950/70 border border-slate-800 p-0.5 rounded-lg text-xs font-semibold">
+                {(targetDelivery || targetIssuance) && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode("OFFICIAL_DOC")}
+                      className={`px-2.5 py-1 rounded transition cursor-pointer ${
+                        viewMode === "OFFICIAL_DOC" 
+                          ? "bg-indigo-600 text-white font-bold" 
+                          : "text-slate-400 hover:text-white"
+                      }`}
+                    >
+                      {isDeliveryMode ? "Delivery Receipt" : "Requisition Slip"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode("PICKING_LIST")}
+                      className={`px-2.5 py-1 rounded transition cursor-pointer ${
+                        viewMode === "PICKING_LIST" 
+                          ? "bg-indigo-600 text-white font-bold" 
+                          : "text-slate-400 hover:text-white"
+                      }`}
+                    >
+                      Picking List
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setViewMode("SUMMARY_LOG")}
+                  className={`px-2.5 py-1 rounded transition cursor-pointer ${
+                    viewMode === "SUMMARY_LOG" 
+                      ? "bg-indigo-600 text-white font-bold" 
+                      : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  Summary Log
+                </button>
+              </div>
+            }
+            onPrint={handlePrint}
+          >
+            {documentContent}
+          </PrintPreviewModal>
+        )}
       </motion.div>
     </motion.div>
   );

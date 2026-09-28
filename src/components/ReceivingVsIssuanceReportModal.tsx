@@ -19,8 +19,10 @@ import {
   Building,
   RefreshCw,
   Search,
-  Users
+  Users,
+  Eye
 } from 'lucide-react';
+import { PrintPreviewModal } from './PrintPreviewModal';
 import { ReceivingRecord, IssuanceRecord, MaterialStockItem, MasterRegistryItem } from '../types';
 import { 
   filterReceivingAndIssuanceData, 
@@ -53,6 +55,7 @@ export default function ReceivingVsIssuanceReportModal({
   const [customerFilter, setCustomerFilter] = useState('');
   const [partFilter, setPartFilter] = useState('');
   const [isExporting, setIsExporting] = useState(false);
+  const [showPrintPreview, setShowPrintPreview] = useState(false);
 
   // Editable Signatories State (Defaulted to current user & system defaults, user-customizable)
   const todayStr = new Date().toISOString().split('T')[0];
@@ -112,148 +115,9 @@ export default function ReceivingVsIssuanceReportModal({
   const receivedPct = totalVolume > 0 ? Math.round((summary.totalReceivedQty / totalVolume) * 100) : 50;
   const issuedPct = totalVolume > 0 ? Math.round((summary.totalIssuedQty / totalVolume) * 100) : 50;
 
-  const modalContent = (
-    <motion.div
-      key="receiving-vs-issuance-backdrop"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
-      className="fixed inset-0 z-[100] overflow-y-auto bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 print:p-0 print:bg-white print:static"
-    >
-      <motion.div
-        key="receiving-vs-issuance-content"
-        initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
-        animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
-        exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
-        transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-        className="frosted-glass-modal-light w-full max-w-5xl rounded-3xl shadow-2xl border border-white/80 flex flex-col max-h-[calc(100vh-2rem)] my-auto print:max-h-none print:border-none print:shadow-none print:rounded-none print:my-0 print:overflow-visible overflow-hidden backdrop-blur-3xl"
-      >
-        
-        {/* Modal Header & Navigation (Hidden in Print) */}
-        <div className="bg-slate-950/90 backdrop-blur-md text-white px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 shrink-0 print:hidden">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-indigo-500/20 rounded-2xl text-indigo-300 border border-indigo-400/30 shadow-md backdrop-blur-md">
-              <FileText className="h-5 w-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="bg-indigo-500/30 text-indigo-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded-full border border-indigo-500/40">
-                  ISO 9001:2015 WMS REPORT
-                </span>
-                <span className="text-emerald-400 text-[10px] font-bold font-mono flex items-center gap-1">
-                  <ShieldCheck className="h-3 w-3" /> AUDIT READY
-                </span>
-              </div>
-              <h2 className="text-base font-bold text-white tracking-tight mt-0.5">
-                Receiving vs Issuance Summary Snapshot
-              </h2>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 self-end sm:self-auto">
-            <button
-              onClick={handleExportPDF}
-              disabled={isExporting}
-              className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition shadow-sm flex items-center gap-1.5 cursor-pointer"
-              title="Download formatted vector PDF file"
-            >
-              <Download className="h-3.5 w-3.5" />
-              {isExporting ? 'Generating PDF...' : 'Export PDF Document'}
-            </button>
-            <button
-              onClick={handlePrint}
-              className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold px-3.5 py-2 rounded-xl transition border border-slate-700 flex items-center gap-1.5 cursor-pointer"
-              title="Print formatted document"
-            >
-              <Printer className="h-3.5 w-3.5" />
-              Print
-            </button>
-            <button
-              onClick={onClose}
-              className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition cursor-pointer"
-              title="Close report modal"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-        </div>
-
-        {/* Filter Controls Bar (Hidden in Print) */}
-        <div className="bg-slate-50 border-b border-slate-200 px-5 py-3 shrink-0 print:hidden">
-          <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
-            {/* Date Range Selector */}
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1 mr-1">
-                <Calendar className="h-3.5 w-3.5 text-slate-400" /> Range:
-              </span>
-              {(['today', '7days', '30days', 'all', 'custom'] as const).map(range => (
-                <button
-                  key={range}
-                  onClick={() => setDateRange(range)}
-                  className={`px-2.5 py-1 rounded-lg font-bold capitalize transition cursor-pointer ${
-                    dateRange === range
-                      ? 'bg-indigo-600 text-white shadow-xs'
-                      : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-                  }`}
-                >
-                  {range === '7days' ? 'Past 7 Days' : range === '30days' ? 'Past 30 Days' : range === 'all' ? 'All Time' : range}
-                </button>
-              ))}
-            </div>
-
-            {/* Custom Date Pickers */}
-            {dateRange === 'custom' && (
-              <div className="flex items-center gap-2">
-                <input
-                  type="date"
-                  value={startDate}
-                  onChange={e => setStartDate(e.target.value)}
-                  className="bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs text-slate-700 font-mono focus:ring-1 focus:ring-indigo-500"
-                />
-                <span className="text-slate-400 font-bold">to</span>
-                <input
-                  type="date"
-                  value={endDate}
-                  onChange={e => setEndDate(e.target.value)}
-                  className="bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs text-slate-700 font-mono focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-            )}
-
-            {/* Filter by Customer & Part Code */}
-            <div className="flex items-center gap-2 flex-1 sm:justify-end min-w-[240px]">
-              {customers.length > 0 && (
-                <select
-                  value={customerFilter}
-                  onChange={e => setCustomerFilter(e.target.value)}
-                  className="bg-white border border-slate-200 rounded-lg px-2.5 py-1 text-xs text-slate-700 focus:ring-1 focus:ring-indigo-500"
-                >
-                  <option value="">All Customers</option>
-                  {customers.map(c => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-              )}
-
-              <div className="relative flex-1 max-w-[200px]">
-                <Search className="absolute left-2.5 top-1.5 h-3.5 w-3.5 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder="Filter SKU or item..."
-                  value={partFilter}
-                  onChange={e => setPartFilter(e.target.value)}
-                  className="w-full bg-white border border-slate-200 rounded-lg pl-8 pr-2.5 py-1 text-xs text-slate-700 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-400"
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Printable Document Body */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6 print:p-0 print:space-y-4 print:overflow-visible bg-slate-100/60 print:bg-white printable-area" id="printable-summary-content">
-          
-          {/* Official Letterhead & Document Header (Visible in UI and Print) */}
+  const reportContent = (
+    <div className="space-y-6">
+      {/* Official Letterhead & Document Header (Visible in UI and Print) */}
           <div className="bg-white border border-slate-200 print:border-none rounded-xl p-5 shadow-xs space-y-4">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-4 border-b border-slate-200 gap-3">
               <div>
@@ -720,7 +584,158 @@ export default function ReceivingVsIssuanceReportModal({
               </div>
             </div>
           </div>
+    </div>
+  );
 
+  const modalContent = (
+    <motion.div
+      key="receiving-vs-issuance-backdrop"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className="fixed inset-0 z-[100] overflow-y-auto bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 print:p-0 print:bg-white print:static"
+    >
+      <motion.div
+        key="receiving-vs-issuance-content"
+        initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+        animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
+        exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+        transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+        className="frosted-glass-modal-light w-full max-w-5xl rounded-3xl shadow-2xl border border-white/80 flex flex-col max-h-[calc(100vh-2rem)] my-auto print:max-h-none print:border-none print:shadow-none print:rounded-none print:my-0 print:overflow-visible overflow-hidden backdrop-blur-3xl"
+      >
+        
+        {/* Modal Header & Navigation (Hidden in Print) */}
+        <div className="bg-slate-950/90 backdrop-blur-md text-white px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 shrink-0 print:hidden">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-indigo-500/20 rounded-2xl text-indigo-300 border border-indigo-400/30 shadow-md backdrop-blur-md">
+              <FileText className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="bg-indigo-500/30 text-indigo-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded-full border border-indigo-500/40">
+                  ISO 9001:2015 WMS REPORT
+                </span>
+                <span className="text-emerald-400 text-[10px] font-bold font-mono flex items-center gap-1">
+                  <ShieldCheck className="h-3 w-3" /> AUDIT READY
+                </span>
+              </div>
+              <h2 className="text-base font-bold text-white tracking-tight mt-0.5">
+                Receiving vs Issuance Summary Snapshot
+              </h2>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-end sm:self-auto">
+            <button
+              onClick={handleExportPDF}
+              disabled={isExporting}
+              className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition shadow-sm flex items-center gap-1.5 cursor-pointer"
+              title="Download formatted vector PDF file"
+            >
+              <Download className="h-3.5 w-3.5" />
+              {isExporting ? 'Generating PDF...' : 'Export PDF Document'}
+            </button>
+            <button
+              onClick={() => setShowPrintPreview(true)}
+              className="bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white text-xs font-bold px-3.5 py-2 rounded-xl transition border border-slate-700 flex items-center gap-1.5 cursor-pointer"
+              title="Preview report in A4 layout before opening system print dialog"
+            >
+              <Eye className="h-3.5 w-3.5 text-indigo-400" />
+              Print Preview
+            </button>
+            <button
+              onClick={handlePrint}
+              className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold px-3.5 py-2 rounded-xl transition border border-slate-700 flex items-center gap-1.5 cursor-pointer"
+              title="Print formatted document"
+            >
+              <Printer className="h-3.5 w-3.5" />
+              Print
+            </button>
+            <button
+              onClick={onClose}
+              className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition cursor-pointer"
+              title="Close report modal"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Filter Controls Bar (Hidden in Print) */}
+        <div className="bg-slate-50 border-b border-slate-200 px-5 py-3 shrink-0 print:hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+            {/* Date Range Selector */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1 mr-1">
+                <Calendar className="h-3.5 w-3.5 text-slate-400" /> Range:
+              </span>
+              {(['today', '7days', '30days', 'all', 'custom'] as const).map(range => (
+                <button
+                  key={range}
+                  onClick={() => setDateRange(range)}
+                  className={`px-2.5 py-1 rounded-lg font-bold capitalize transition cursor-pointer ${
+                    dateRange === range
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                  }`}
+                >
+                  {range === '7days' ? 'Past 7 Days' : range === '30days' ? 'Past 30 Days' : range === 'all' ? 'All Time' : range}
+                </button>
+              ))}
+            </div>
+
+            {/* Custom Date Pickers */}
+            {dateRange === 'custom' && (
+              <div className="flex items-center gap-2">
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={e => setStartDate(e.target.value)}
+                  className="bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs text-slate-700 font-mono focus:ring-1 focus:ring-indigo-500"
+                />
+                <span className="text-slate-400 font-bold">to</span>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={e => setEndDate(e.target.value)}
+                  className="bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs text-slate-700 font-mono focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+            )}
+
+            {/* Filter by Customer & Part Code */}
+            <div className="flex items-center gap-2 flex-1 sm:justify-end min-w-[240px]">
+              {customers.length > 0 && (
+                <select
+                  value={customerFilter}
+                  onChange={e => setCustomerFilter(e.target.value)}
+                  className="bg-white border border-slate-200 rounded-lg px-2.5 py-1 text-xs text-slate-700 focus:ring-1 focus:ring-indigo-500"
+                >
+                  <option value="">All Customers</option>
+                  {customers.map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              )}
+
+              <div className="relative flex-1 max-w-[200px]">
+                <Search className="absolute left-2.5 top-1.5 h-3.5 w-3.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Filter SKU or item..."
+                  value={partFilter}
+                  onChange={e => setPartFilter(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-lg pl-8 pr-2.5 py-1 text-xs text-slate-700 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-400"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Printable Document Body */}
+        <div className={`flex-1 overflow-y-auto p-6 space-y-6 print:p-0 print:space-y-4 print:overflow-visible bg-slate-100/60 print:bg-white ${showPrintPreview ? "" : "printable-area"}`} id="printable-summary-content">
+          {reportContent}
         </div>
 
         {/* Modal Footer (Hidden in Print) */}
@@ -730,11 +745,18 @@ export default function ReceivingVsIssuanceReportModal({
           </p>
           <div className="flex items-center gap-2">
             <button
-              onClick={handlePrint}
+              onClick={() => setShowPrintPreview(true)}
               className="bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold px-4 py-2 rounded-xl transition border border-slate-300 flex items-center gap-1.5 cursor-pointer"
             >
-              <Printer className="h-3.5 w-3.5" />
+              <Eye className="h-3.5 w-3.5 text-indigo-600" />
               Print Preview
+            </button>
+            <button
+              onClick={handlePrint}
+              className="bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+            >
+              <Printer className="h-3.5 w-3.5" />
+              Print Now
             </button>
             <button
               onClick={handleExportPDF}
@@ -747,6 +769,19 @@ export default function ReceivingVsIssuanceReportModal({
           </div>
         </div>
 
+
+        {showPrintPreview && (
+          <PrintPreviewModal
+            isOpen={showPrintPreview}
+            onClose={() => setShowPrintPreview(false)}
+            documentTitle="Receiving vs Issuance Material Flow Audit Snapshot"
+            documentNumber="DOC REF: JPM-WMS-REP-008"
+            documentSubtitle="ISO 9001:2015 Material Flow Audit"
+            onPrint={handlePrint}
+          >
+            {reportContent}
+          </PrintPreviewModal>
+        )}
       </motion.div>
     </motion.div>
   );

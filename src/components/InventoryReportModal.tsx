@@ -21,8 +21,10 @@ import {
   Layers, 
   Search,
   Building,
-  Check
+  Check,
+  Eye
 } from 'lucide-react';
+import { PrintPreviewModal } from './PrintPreviewModal';
 import { MaterialStockItem, getCustomerForPart } from '../types';
 import { 
   filterInventoryData, 
@@ -50,6 +52,7 @@ export default function InventoryReportModal({
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'APPROVED' | 'LOW_STOCK' | 'QUARANTINE_HOLD'>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [isExportingPDF, setIsExportingPDF] = useState(false);
+  const [showPrintPreview, setShowPrintPreview] = useState(false);
   const [isExportingCSV, setIsExportingCSV] = useState(false);
   const [copiedSuccess, setCopiedSuccess] = useState(false);
 
@@ -122,153 +125,9 @@ export default function InventoryReportModal({
     window.print();
   };
 
-  const modalContent = (
-    <AnimatePresence>
-      <motion.div
-        key="inventory-report-backdrop"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: 0.2 }}
-        className="fixed inset-0 z-[100] overflow-y-auto bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 print:p-0 print:bg-white print:static"
-      >
-        <motion.div
-          key="inventory-report-content"
-          initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
-          animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
-          exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
-          transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-          className="frosted-glass-modal-light w-full max-w-5xl rounded-3xl shadow-2xl border border-white/80 flex flex-col max-h-[calc(100vh-2rem)] my-auto print:max-h-none print:border-none print:shadow-none print:rounded-none print:my-0 overflow-hidden print:overflow-visible backdrop-blur-3xl"
-        >
-          {/* Modal Header (Hidden during Print) */}
-          <div className="bg-slate-950/90 backdrop-blur-md text-white px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 shrink-0 print:hidden">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-indigo-500/20 rounded-2xl text-indigo-300 border border-indigo-400/30 shadow-md backdrop-blur-md">
-                <FileSpreadsheet className="h-5 w-5" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h2 className="text-base font-bold text-white tracking-tight">
-                    Inventory Audit & Material Report Generator
-                  </h2>
-                  <span className="bg-indigo-500/30 text-indigo-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded-full border border-indigo-500/40">
-                    ISO 9001:2015 COMPLIANT
-                  </span>
-                  <span className="text-emerald-400 text-[10px] font-bold font-mono flex items-center gap-1">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    LIVE VIEW
-                  </span>
-                </div>
-                <p className="text-xs text-slate-300 mt-0.5">
-                  Compile current warehouse stock, customer allocations, reorder alerts, and FIFO bins into formatted PDF or CSV
-                </p>
-              </div>
-            </div>
-
-            {/* Quick Action Buttons in Modal Header */}
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={handleExportCSV}
-                disabled={isExportingCSV}
-                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer border border-emerald-400/30"
-                title="Export current view as formatted CSV Spreadsheet"
-              >
-                {copiedSuccess ? <Check className="h-3.5 w-3.5 text-white" /> : <Download className="h-3.5 w-3.5" />}
-                <span>{isExportingCSV ? 'Exporting...' : copiedSuccess ? 'CSV Exported!' : 'Export CSV'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleExportPDF}
-                disabled={isExportingPDF}
-                className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer border border-indigo-400/30"
-                title="Download formatted multi-page PDF audit report"
-              >
-                <FileText className="h-3.5 w-3.5" />
-                <span>{isExportingPDF ? 'Generating...' : 'Export PDF'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handlePrint}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border border-slate-700"
-                title="Print this report directly"
-              >
-                <Printer className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Print</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={onClose}
-                className="p-1.5 text-slate-400 hover:text-white hover:bg-white/10 rounded-xl transition cursor-pointer ml-1"
-                title="Close modal"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-          </div>
-
-          {/* Filter Toolbar (Hidden during Print) */}
-          <div className="bg-slate-50/90 border-b border-slate-200/80 px-6 py-3.5 flex flex-wrap items-center justify-between gap-3 shrink-0 print:hidden">
-            <div className="flex flex-wrap items-center gap-2.5">
-              <span className="text-xs font-bold text-slate-700 flex items-center gap-1">
-                <Filter className="h-3.5 w-3.5 text-indigo-600" /> Filter View:
-              </span>
-
-              {/* Customer Selector */}
-              <div className="flex items-center gap-1.5">
-                <label className="text-[11px] font-bold text-slate-500 uppercase font-mono">Customer:</label>
-                <select
-                  value={customerFilter}
-                  onChange={(e) => setCustomerFilter(e.target.value)}
-                  className="bg-white border border-slate-300 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-800 focus:ring-1 focus:ring-indigo-500 focus:outline-none shadow-2xs"
-                >
-                  <option value="ALL">All Customers & Accounts</option>
-                  {customers.map(c => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Status Filter */}
-              <div className="flex items-center gap-1.5">
-                <label className="text-[11px] font-bold text-slate-500 uppercase font-mono">Status:</label>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value as any)}
-                  className="bg-white border border-slate-300 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-800 focus:ring-1 focus:ring-indigo-500 focus:outline-none shadow-2xs"
-                >
-                  <option value="ALL">All Statuses</option>
-                  <option value="APPROVED">Approved Only (Ready)</option>
-                  <option value="LOW_STOCK">Low Stock Reorder Alerts</option>
-                  <option value="QUARANTINE_HOLD">Quarantine & Hold Bins</option>
-                </select>
-              </div>
-
-              {/* Search input */}
-              <div className="relative">
-                <Search className="h-3.5 w-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search SKU, lot, bin..."
-                  className="bg-white border border-slate-300 rounded-xl pl-8 pr-3 py-1 text-xs text-slate-800 placeholder:text-slate-400 focus:ring-1 focus:ring-indigo-500 focus:outline-none w-36 sm:w-44 shadow-2xs"
-                />
-              </div>
-            </div>
-
-            <div className="text-xs text-slate-500 font-mono">
-              Filtered: <span className="font-bold text-indigo-700">{summary.items.length}</span> Lots (<span className="font-bold text-slate-800">{summary.uniquePartCount}</span> SKUs)
-            </div>
-          </div>
-
-          {/* Scrollable Report Body */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-6 print:p-0 print:overflow-visible printable-area" id="printable-inventory-report">
-            
-            {/* Printable Report Header */}
+  const reportContent = (
+    <div className="space-y-6">
+      {/* Printable Report Header */}
             <div className="border-b-2 border-slate-900 pb-4">
               <div className="flex justify-between items-start">
                 <div>
@@ -611,7 +470,172 @@ export default function InventoryReportModal({
                 </div>
               </div>
             </div>
+    </div>
+  );
 
+  const modalContent = (
+    <AnimatePresence>
+      <motion.div
+        key="inventory-report-backdrop"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.2 }}
+        className="fixed inset-0 z-[100] overflow-y-auto bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 print:p-0 print:bg-white print:static"
+      >
+        <motion.div
+          key="inventory-report-content"
+          initial={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+          animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
+          exit={{ opacity: 0, scale: 0.94, y: 16, filter: 'blur(8px)' }}
+          transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+          className="frosted-glass-modal-light w-full max-w-5xl rounded-3xl shadow-2xl border border-white/80 flex flex-col max-h-[calc(100vh-2rem)] my-auto print:max-h-none print:border-none print:shadow-none print:rounded-none print:my-0 overflow-hidden print:overflow-visible backdrop-blur-3xl"
+        >
+          {/* Modal Header (Hidden during Print) */}
+          <div className="bg-slate-950/90 backdrop-blur-md text-white px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 shrink-0 print:hidden">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-indigo-500/20 rounded-2xl text-indigo-300 border border-indigo-400/30 shadow-md backdrop-blur-md">
+                <FileSpreadsheet className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="text-base font-bold text-white tracking-tight">
+                    Inventory Audit & Material Report Generator
+                  </h2>
+                  <span className="bg-indigo-500/30 text-indigo-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded-full border border-indigo-500/40">
+                    ISO 9001:2015 COMPLIANT
+                  </span>
+                  <span className="text-emerald-400 text-[10px] font-bold font-mono flex items-center gap-1">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    LIVE VIEW
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  Compile current warehouse stock, customer allocations, reorder alerts, and FIFO bins into formatted PDF or CSV
+                </p>
+              </div>
+            </div>
+
+            {/* Quick Action Buttons in Modal Header */}
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowPrintPreview(true)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border border-slate-700"
+              >
+                <Eye className="h-4 w-4 text-indigo-400" />
+                <span>Print Preview</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleExportCSV}
+                disabled={isExportingCSV}
+                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer border border-emerald-400/30"
+                title="Export current view as formatted CSV Spreadsheet"
+              >
+                {copiedSuccess ? <Check className="h-3.5 w-3.5 text-white" /> : <Download className="h-3.5 w-3.5" />}
+                <span>{isExportingCSV ? 'Exporting...' : copiedSuccess ? 'CSV Exported!' : 'Export CSV'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExportPDF}
+                disabled={isExportingPDF}
+                className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer border border-indigo-400/30"
+                title="Download formatted multi-page PDF audit report"
+              >
+                <FileText className="h-3.5 w-3.5" />
+                <span>{isExportingPDF ? 'Generating...' : 'Export PDF'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowPrintPreview(true)}
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border border-slate-700"
+                title="Preview report in A4 layout before opening system print dialog"
+              >
+                <Eye className="h-3.5 w-3.5 text-indigo-400" />
+                <span className="hidden sm:inline">Print Preview</span>
+              </button>
+              <button
+                type="button"
+                onClick={handlePrint}
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border border-slate-700"
+                title="Print this report directly"
+              >
+                <Printer className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Print</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onClose}
+                className="p-1.5 text-slate-400 hover:text-white hover:bg-white/10 rounded-xl transition cursor-pointer ml-1"
+                title="Close modal"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Filter Toolbar (Hidden during Print) */}
+          <div className="bg-slate-50/90 border-b border-slate-200/80 px-6 py-3.5 flex flex-wrap items-center justify-between gap-3 shrink-0 print:hidden">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <span className="text-xs font-bold text-slate-700 flex items-center gap-1">
+                <Filter className="h-3.5 w-3.5 text-indigo-600" /> Filter View:
+              </span>
+
+              {/* Customer Selector */}
+              <div className="flex items-center gap-1.5">
+                <label className="text-[11px] font-bold text-slate-500 uppercase font-mono">Customer:</label>
+                <select
+                  value={customerFilter}
+                  onChange={(e) => setCustomerFilter(e.target.value)}
+                  className="bg-white border border-slate-300 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-800 focus:ring-1 focus:ring-indigo-500 focus:outline-none shadow-2xs"
+                >
+                  <option value="ALL">All Customers & Accounts</option>
+                  {customers.map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Status Filter */}
+              <div className="flex items-center gap-1.5">
+                <label className="text-[11px] font-bold text-slate-500 uppercase font-mono">Status:</label>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value as any)}
+                  className="bg-white border border-slate-300 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-800 focus:ring-1 focus:ring-indigo-500 focus:outline-none shadow-2xs"
+                >
+                  <option value="ALL">All Statuses</option>
+                  <option value="APPROVED">Approved Only (Ready)</option>
+                  <option value="LOW_STOCK">Low Stock Reorder Alerts</option>
+                  <option value="QUARANTINE_HOLD">Quarantine & Hold Bins</option>
+                </select>
+              </div>
+
+              {/* Search input */}
+              <div className="relative">
+                <Search className="h-3.5 w-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search SKU, lot, bin..."
+                  className="bg-white border border-slate-300 rounded-xl pl-8 pr-3 py-1 text-xs text-slate-800 placeholder:text-slate-400 focus:ring-1 focus:ring-indigo-500 focus:outline-none w-36 sm:w-44 shadow-2xs"
+                />
+              </div>
+            </div>
+
+            <div className="text-xs text-slate-500 font-mono">
+              Filtered: <span className="font-bold text-indigo-700">{summary.items.length}</span> Lots (<span className="font-bold text-slate-800">{summary.uniquePartCount}</span> SKUs)
+            </div>
+          </div>
+
+          {/* Scrollable Report Body */}
+          <div className={`flex-1 overflow-y-auto p-6 space-y-6 ${showPrintPreview ? "" : "printable-area"} print:p-0 print:overflow-visible`} id="printable-inventory-report">
+            {reportContent}
           </div>
 
           {/* Modal Footer Controls */}
@@ -651,6 +675,19 @@ export default function InventoryReportModal({
               </button>
             </div>
           </div>
+
+        {showPrintPreview && (
+          <PrintPreviewModal
+            isOpen={showPrintPreview}
+            onClose={() => setShowPrintPreview(false)}
+            documentTitle="Warehouse Inventory Audit & Material Status Report"
+            documentNumber="DOC REF: JPM-WMS-INV-001"
+            documentSubtitle="ISO 9001:2015 Comprehensive Stock Audit"
+            onPrint={handlePrint}
+          >
+            {reportContent}
+          </PrintPreviewModal>
+        )}
         </motion.div>
       </motion.div>
     </AnimatePresence>
