@@ -1,6 +1,5 @@
 {
   "name": "JUWEI WMS Central Cloud Production Server",
-  "version": "1.0.0",
   "centralServerUrl": "https://aldrin-banawa.onrender.com",
   "centralServerHost": "aldrin-banawa.onrender.com",
   "defaultAccount": "ACC-JUWEI",

@@ -1561,7 +1561,7 @@ async function startServer() {
               role,
               ip: conn.ip,
               userAgent: conn.userAgent,
-              appVersion: '1.0.0',
+              appVersion: payload.appVersion || cachedGitHubVersion || 'Live',
               platform: devPlatform,
               connectedAt: conn.connectedAt,
               lastSeen: Date.now(),
@@ -2737,8 +2737,80 @@ async function startServer() {
     });
   });
 
+  // In-memory cache for latest GitHub release version (e.g. "v1.0.84" -> "1.0.84")
+  let cachedGitHubVersion: string | null = null;
+  let lastGitHubFetchTimestamp = 0;
+  let isFetchingGitHubRelease = false;
+  const GITHUB_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes cache
+
+  // Resolves the latest release version from GitHub Releases API
+  async function getLatestGitHubReleaseVersion(buildTimeFallback: string): Promise<string> {
+    const rawRepo = process.env.GITHUB_REPO?.trim();
+    if (!rawRepo) {
+      return cachedGitHubVersion || buildTimeFallback;
+    }
+
+    // Support both "owner/repo" and full url "https://github.com/owner/repo"
+    const cleanRepo = rawRepo.replace(/^https?:\/\/github\.com\//i, '').replace(/\/+$/, '');
+    const now = Date.now();
+
+    // Return cached value if still fresh within 5 minutes
+    if (cachedGitHubVersion && (now - lastGitHubFetchTimestamp < GITHUB_CACHE_TTL_MS)) {
+      return cachedGitHubVersion;
+    }
+
+    // Avoid stampedes if an asynchronous fetch is already in flight
+    if (isFetchingGitHubRelease) {
+      return cachedGitHubVersion || buildTimeFallback;
+    }
+
+    isFetchingGitHubRelease = true;
+    try {
+      const headers: Record<string, string> = {
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'JUWEI-WMS-Cloud-Server'
+      };
+
+      const token = process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim();
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const apiUrl = `https://api.github.com/repos/${cleanRepo}/releases/latest`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+      const resp = await fetch(apiUrl, {
+        headers,
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (resp.ok) {
+        const releaseData: any = await resp.json();
+        if (releaseData && releaseData.tag_name) {
+          const parsed = String(releaseData.tag_name).replace(/^v/i, '').trim();
+          if (parsed) {
+            cachedGitHubVersion = parsed;
+            lastGitHubFetchTimestamp = Date.now();
+            console.log(`[GITHUB RELEASE SYNC] Authoritative release tag resolved from GitHub: ${releaseData.tag_name} -> version ${parsed}`);
+          }
+        }
+      } else {
+        console.warn(`[GITHUB RELEASE SYNC] GitHub API returned HTTP ${resp.status} for ${apiUrl}`);
+      }
+    } catch (err: any) {
+      console.warn(`[GITHUB RELEASE SYNC] Request to GitHub Releases API failed:`, err?.message || err);
+    } finally {
+      isFetchingGitHubRelease = false;
+    }
+
+    // Fall back to last known cached value, or build-time fallback if nothing was ever fetched
+    return cachedGitHubVersion || buildTimeFallback;
+  }
+
   // REST API: Build Info for Live Application Updates
-  app.get(["/api/build-info", "/build-info.json"], (req, res) => {
+  app.get(["/api/build-info", "/build-info.json"], async (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
@@ -2749,25 +2821,42 @@ async function startServer() {
       path.join(process.cwd(), "build-info.json"),
     ];
 
+    let fileContent: any = null;
     for (const p of possiblePaths) {
       if (fs.existsSync(p)) {
         try {
-          const content = JSON.parse(fs.readFileSync(p, "utf8"));
-          return res.json(content);
+          fileContent = JSON.parse(fs.readFileSync(p, "utf8"));
+          if (fileContent) break;
         } catch (e) {}
       }
     }
 
     // Dynamic fallback if running in dev mode or prior to write-build-info
-    let dynamicVersion = "";
-    try {
-      const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
-      if (pkg.version) dynamicVersion = String(pkg.version).replace(/^v/i, "");
-    } catch (e) {}
+    let buildTimeVersion = "";
+    if (fileContent?.version) {
+      buildTimeVersion = String(fileContent.version).replace(/^v/i, "");
+    } else {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
+        if (pkg.version) buildTimeVersion = String(pkg.version).replace(/^v/i, "");
+      } catch (e) {}
+    }
+
+    // Resolve authoritative live version from latest GitHub Release (cached 5 min)
+    const activeVersion = await getLatestGitHubReleaseVersion(buildTimeVersion);
+
+    if (fileContent) {
+      return res.json({
+        ...fileContent,
+        version: activeVersion,
+        versionSource: cachedGitHubVersion ? "github-releases-latest" : (fileContent.versionSource || "build-info.json")
+      });
+    }
 
     return res.json({
       buildId: 0,
-      version: dynamicVersion,
+      version: activeVersion,
+      versionSource: cachedGitHubVersion ? "github-releases-latest" : "fallback",
       isDevelopmentFallback: true
     });
   });
@@ -3113,7 +3202,7 @@ async function startServer() {
         role: role || existing?.role || 'OPERATOR',
         ip,
         userAgent: req.headers['user-agent'],
-        appVersion: appVersion || '1.0.0',
+        appVersion: appVersion || cachedGitHubVersion || 'Live',
         platform: platform || 'Web',
         connectedAt: existing?.connectedAt || new Date().toISOString(),
         lastSeen: now,
@@ -4330,6 +4419,9 @@ async function startServer() {
     if (!process.env.JUWEI_DATA_DIR) {
       console.warn(`[SERVER WARNING] JUWEI_DATA_DIR is not set. Database file (${DATA_FILE}) is stored on ephemeral local disk and won't be shared across multiple server instances.`);
     }
+
+    // Warm GitHub latest release version cache asynchronously on boot
+    getLatestGitHubReleaseVersion("").catch(() => {});
   });
 }
 

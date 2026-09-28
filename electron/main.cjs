@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, ipcMain } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -15,6 +15,44 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 let mainWindow = null;
+let currentAppVersion = '';
+
+// Helper to format window title with live version
+function getFormattedWindowTitle(ver) {
+  const v = ver ? String(ver).replace(/^v/i, '').trim() : '';
+  return v 
+    ? `JUWEI WAREHOUSE MANAGEMENT SYSTEM v${v} (CENTRAL CLOUD CONNECTED)`
+    : 'JUWEI WAREHOUSE MANAGEMENT SYSTEM (CENTRAL CLOUD CONNECTED)';
+}
+
+function setElectronWindowTitle(ver) {
+  if (!mainWindow) return;
+  if (ver) {
+    currentAppVersion = String(ver).replace(/^v/i, '').trim();
+  }
+  const title = getFormattedWindowTitle(currentAppVersion);
+  if (mainWindow.getTitle() !== title) {
+    mainWindow.setTitle(title);
+  }
+}
+
+// Queries authoritative /api/build-info to reflect live GitHub release version
+async function fetchVersionAndUpdateWindowTitle() {
+  if (!mainWindow) return;
+  try {
+    const targetUrl = (CENTRAL_SERVER_URL || 'https://aldrin-banawa.onrender.com').replace(/\/+$/, '');
+    const apiUrl = `${targetUrl}/api/build-info`;
+    const response = await net.fetch(apiUrl, { cache: 'no-store' });
+    if (response.ok) {
+      const data = await response.json();
+      if (data && data.version) {
+        setElectronWindowTitle(data.version);
+      }
+    }
+  } catch (err) {
+    // quiet fallback
+  }
+}
 
 // Set safe writable data path for persistence (AppData / LocalAppData on Windows)
 try {
@@ -128,6 +166,35 @@ function createWindow() {
     return { action: 'deny' };
   });
 
+  // Intercept document.title changes to keep window title in sync with live version
+  mainWindow.webContents.on('page-title-updated', (event, title) => {
+    event.preventDefault();
+    if (title) {
+      const match = title.match(/v(\d+\.\d+\.\d+[\w.-]*)/i);
+      if (match && match[1]) {
+        currentAppVersion = match[1];
+      }
+      const formattedTitle = title.includes('(CENTRAL CLOUD CONNECTED)')
+        ? title
+        : `${title} (CENTRAL CLOUD CONNECTED)`;
+      mainWindow.setTitle(formattedTitle);
+    }
+  });
+
+  // Sync version from /api/build-info after web page loads
+  mainWindow.webContents.on('did-finish-load', () => {
+    fetchVersionAndUpdateWindowTitle();
+  });
+
+  // Periodically query /api/build-info to update window title if a new GitHub release is pushed
+  const versionPollTimer = setInterval(() => {
+    if (mainWindow) {
+      fetchVersionAndUpdateWindowTitle();
+    } else {
+      clearInterval(versionPollTimer);
+    }
+  }, 30000);
+
   // Shortcut for opening devtools during troubleshooting (Ctrl+Shift+I or F12)
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i')) {
@@ -212,3 +279,16 @@ ipcMain.handle('print-document', async (event, customHtml) => {
     return false;
   }
 });
+
+// IPC listener to update window title immediately when renderer detects a new version
+ipcMain.on('app-version-updated', (event, version) => {
+  if (version) {
+    setElectronWindowTitle(version);
+  }
+});
+
+// IPC handler to return the current known app version
+ipcMain.handle('get-app-version', () => {
+  return currentAppVersion || '';
+});
+

@@ -796,14 +796,26 @@ export default function App() {
     // Sync version from authoritative build-info endpoint
     const fetchBuildInfo = async () => {
       try {
-        const endpoints = ['/api/build-info', '/build-info.json'];
-        for (const ep of endpoints) {
+        const centralUrl = getCentralServerUrl();
+        const endpoints = [
+          '/api/build-info',
+          '/build-info.json',
+          ...(centralUrl ? [`${centralUrl}/api/build-info`, `${centralUrl}/build-info.json`] : [])
+        ];
+        const uniqueEndpoints = Array.from(new Set(endpoints.filter(Boolean)));
+        for (const ep of uniqueEndpoints) {
           try {
             const res = await fetch(ep, { cache: 'no-store', headers: { Accept: 'application/json' } });
             if (res.ok) {
               const data = await res.json();
               if (data?.version) {
-                setAppVersion(String(data.version).replace(/^v/i, ''));
+                const cleanVer = String(data.version).replace(/^v/i, '').trim();
+                if (cleanVer) {
+                  setAppVersion(cleanVer);
+                  if (typeof window !== 'undefined' && window.electronAPI?.updateAppVersion) {
+                    window.electronAPI.updateAppVersion(cleanVer);
+                  }
+                }
                 break;
               }
             }
@@ -2549,20 +2561,16 @@ export default function App() {
     };
 
     const checkBuildVersion = async () => {
-      // Do NOT re-check or re-trigger once updateAvailable is already true
-      if (updateAvailableRef.current) return;
-
       try {
-        const clientBuildId = typeof __BUILD_ID__ !== 'undefined' ? String(__BUILD_ID__) : '';
-        // If client bundle does not have a valid __BUILD_ID__, skip comparison
-        if (!clientBuildId || clientBuildId === '0') return;
-
+        const centralUrl = getCentralServerUrl();
         const endpoints = [
           '/api/build-info',
-          '/build-info.json'
+          '/build-info.json',
+          ...(centralUrl ? [`${centralUrl}/api/build-info`, `${centralUrl}/build-info.json`] : [])
         ];
+        const uniqueEndpoints = Array.from(new Set(endpoints.filter(Boolean)));
 
-        for (const ep of endpoints) {
+        for (const ep of uniqueEndpoints) {
           try {
             const res = await fetch(ep, {
               method: 'GET',
@@ -2572,23 +2580,31 @@ export default function App() {
             if (res.ok) {
               const data = await res.json();
               if (data?.version) {
-                setAppVersion(String(data.version).replace(/^v/i, ''));
-              }
-              const serverBuildId = data?.buildId != null ? String(data.buildId) : '';
-              // If server returns fallback or empty, don't trigger false positive
-              if (!serverBuildId || serverBuildId === '0' || data?.isDevelopmentFallback) {
-                break;
+                const liveVersion = String(data.version).replace(/^v/i, '').trim();
+                if (liveVersion) {
+                  setAppVersion((prev) => (prev !== liveVersion ? liveVersion : prev));
+                  if (typeof window !== 'undefined' && window.electronAPI?.updateAppVersion) {
+                    window.electronAPI.updateAppVersion(liveVersion);
+                  }
+                }
               }
 
-              if (serverBuildId !== clientBuildId) {
-                console.log(`[JUWEI WMS UPDATE] New version detected! Client __BUILD_ID__: ${clientBuildId}, Server buildId: ${serverBuildId}`);
-                updateAvailableRef.current = true;
-                setUpdateAvailable(true);
-                if (data.version) {
-                  setNewVersionString(String(data.version));
+              // Update banner detection (trigger once when newly deployed client buildId arrives)
+              if (!updateAvailableRef.current) {
+                const clientBuildId = typeof __BUILD_ID__ !== 'undefined' ? String(__BUILD_ID__) : '';
+                const serverBuildId = data?.buildId != null ? String(data.buildId) : '';
+                if (clientBuildId && clientBuildId !== '0' && serverBuildId && serverBuildId !== '0' && !data?.isDevelopmentFallback) {
+                  if (serverBuildId !== clientBuildId) {
+                    console.log(`[JUWEI WMS UPDATE] New version detected! Client __BUILD_ID__: ${clientBuildId}, Server buildId: ${serverBuildId}`);
+                    updateAvailableRef.current = true;
+                    setUpdateAvailable(true);
+                    if (data.version) {
+                      setNewVersionString(String(data.version));
+                    }
+                  }
                 }
-                break;
               }
+              break;
             }
           } catch (fetchErr) {
             // Quiet fallback

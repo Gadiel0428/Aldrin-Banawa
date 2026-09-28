@@ -53,7 +53,7 @@ try {
 
       const allTags = allTagsRaw.split('\n').map(t => t.trim()).filter(Boolean);
       if (allTags.length > 0) {
-        // Sort tags by semver descending (e.g. v1.0.80 > v1.0.79)
+        // Sort tags by semver descending
         allTags.sort((a, b) => {
           const parse = (str) => str.replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
           const pa = parse(a);
