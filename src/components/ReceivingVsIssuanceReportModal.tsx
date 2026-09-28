@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -23,7 +23,7 @@ import {
   Eye
 } from 'lucide-react';
 import { PrintPreviewModal } from './PrintPreviewModal';
-import { executePrint } from '../utils/printDocument';
+import { printElementAsA4 } from '../utils/printDocument';
 import { ReceivingRecord, IssuanceRecord, MaterialStockItem, MasterRegistryItem } from '../types';
 import { 
   filterReceivingAndIssuanceData, 
@@ -108,8 +108,23 @@ export default function ReceivingVsIssuanceReportModal({
   };
 
   const handlePrint = () => {
-    executePrint();
+    const el = (document.getElementById('printable-summary-content') as HTMLElement | null)
+      || (document.querySelector('.printable-area') as HTMLElement | null);
+    if (el) {
+      printElementAsA4(el);
+    }
   };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        handlePrint();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const isNetPositive = summary.netDelta >= 0;
   const totalVolume = summary.totalReceivedQty + summary.totalIssuedQty;
@@ -735,7 +750,7 @@ export default function ReceivingVsIssuanceReportModal({
         </div>
 
         {/* Printable Document Body */}
-        <div className={`flex-1 overflow-y-auto p-6 space-y-6 print:p-0 print:space-y-4 print:overflow-visible bg-slate-100/60 print:bg-white ${showPrintPreview ? "" : "printable-area"}`} id="printable-summary-content">
+        <div className="flex-1 overflow-y-auto p-6 space-y-6 print:p-0 print:space-y-4 print:overflow-visible bg-slate-100/60 print:bg-white printable-area" id="printable-summary-content">
           {reportContent}
         </div>
 

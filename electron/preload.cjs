@@ -5,7 +5,6 @@ const CENTRAL_SERVER_URL = process.env.CENTRAL_SERVER_URL || process.env.VITE_CE
 contextBridge.exposeInMainWorld('electronAPI', {
   isElectron: true,
   centralServerUrl: CENTRAL_SERVER_URL,
-  printDocument: (customHtml) => ipcRenderer.invoke('print-document', customHtml),
   updateAppVersion: (version) => ipcRenderer.send('app-version-updated', version),
   getAppVersion: () => ipcRenderer.invoke('get-app-version')
 });

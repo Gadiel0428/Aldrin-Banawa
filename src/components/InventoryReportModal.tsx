@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -11,7 +11,7 @@ import {
   Printer, 
   Download, 
   FileText, 
-  FileSpreadsheet,
+  FileSpreadsheet, 
   Filter, 
   TrendingUp, 
   Package, 
@@ -19,13 +19,13 @@ import {
   CheckCircle2, 
   AlertTriangle,
   Layers, 
-  Search,
-  Building,
-  Check,
-  Eye
+  Search, 
+  Building, 
+  Check, 
+  Eye 
 } from 'lucide-react';
 import { PrintPreviewModal } from './PrintPreviewModal';
-import { executePrint } from '../utils/printDocument';
+import { printElementAsA4 } from '../utils/printDocument';
 import { MaterialStockItem, getCustomerForPart } from '../types';
 import { 
   filterInventoryData, 
@@ -123,8 +123,23 @@ export default function InventoryReportModal({
   };
 
   const handlePrint = () => {
-    executePrint();
+    const el = (document.getElementById('printable-inventory-report') as HTMLElement | null)
+      || (document.querySelector('.printable-area') as HTMLElement | null);
+    if (el) {
+      printElementAsA4(el);
+    }
   };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        handlePrint();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const reportContent = (
     <div className="space-y-6">
@@ -635,7 +650,7 @@ export default function InventoryReportModal({
           </div>
 
           {/* Scrollable Report Body */}
-          <div className={`flex-1 overflow-y-auto p-6 space-y-6 ${showPrintPreview ? "" : "printable-area"} print:p-0 print:overflow-visible`} id="printable-inventory-report">
+          <div className="flex-1 overflow-y-auto p-6 space-y-6 printable-area print:p-0 print:overflow-visible" id="printable-inventory-report">
             {reportContent}
           </div>
 

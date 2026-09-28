@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'motion/react';
 import { 
@@ -24,7 +24,7 @@ import {
   Eye
 } from 'lucide-react';
 import { PrintPreviewModal } from './PrintPreviewModal';
-import { executePrint } from '../utils/printDocument';
+import { printElementAsA4 } from '../utils/printDocument';
 import { DeliveryRecord, IssuanceRecord, MaterialStockItem, MasterRegistryItem } from '../types';
 
 export type DocViewMode = 'OFFICIAL_DOC' | 'PICKING_LIST' | 'SUMMARY_LOG';
@@ -62,10 +62,37 @@ export default function PrintablePickingListModal({
     (!delivery && !issuance) ? 'SUMMARY_LOG' : initialView
   );
   const [showPrintPreview, setShowPrintPreview] = useState<boolean>(false);
+  const printableContainerRef = useRef<HTMLDivElement>(null);
 
   const handlePrint = () => {
-    executePrint();
+    // Print the currently shown .printable-area element (either preview sheet or document container)
+    let el: HTMLElement | null = null;
+    if (showPrintPreview) {
+      el = document.querySelector('.printable-area');
+    }
+    if (!el && printableContainerRef.current) {
+      el = printableContainerRef.current;
+    }
+    if (!el) {
+      el = (document.getElementById('printable-document-container') as HTMLElement | null)
+        || (document.querySelector('.printable-area') as HTMLElement | null);
+    }
+    if (el) {
+      printElementAsA4(el);
+    }
   };
+
+  // Keyboard shortcut Ctrl+P / Cmd+P within the document modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        handlePrint();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [viewMode, showPrintPreview]);
 
   // Helper variables for single record view
   const targetDelivery = delivery || deliveriesList[0] || null;
@@ -1197,9 +1224,12 @@ export default function PrintablePickingListModal({
         </div>
 
         {/* Printable Document Sheet Body */}
-        <div className={`p-6 sm:p-10 overflow-y-auto flex-1 bg-white ${showPrintPreview ? "" : "printable-area"} print:p-0 print:overflow-visible`} id="printable-document-container">
+        <div 
+          ref={printableContainerRef}
+          className="p-6 sm:p-10 overflow-y-auto flex-1 bg-white printable-area print:p-0 print:overflow-visible" 
+          id="printable-document-container"
+        >
           {documentContent}
-
         </div>
 
 

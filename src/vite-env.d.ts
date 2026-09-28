@@ -6,7 +6,6 @@ declare const __APP_VERSION__: string;
 interface ElectronAPI {
   isElectron?: boolean;
   centralServerUrl?: string;
-  printDocument: (options?: any) => Promise<boolean>;
   updateAppVersion?: (version: string) => void;
   getAppVersion?: () => string;
 }

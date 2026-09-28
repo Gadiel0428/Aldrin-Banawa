@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
@@ -11,16 +11,16 @@ import {
   Building2, 
   UserCheck, 
   Check, 
-  Copy,
-  CreditCard,
-  Sparkles,
-  Eye,
-  EyeOff,
-  Phone,
-  Download
+  Copy, 
+  CreditCard, 
+  Sparkles, 
+  Eye, 
+  EyeOff, 
+  Phone, 
+  Download 
 } from 'lucide-react';
 import { RegisteredAccount } from '../types';
-import { executePrint } from '../utils/printDocument';
+import { printElementAsA4 } from '../utils/printDocument';
 
 interface AccountQRBadgeModalProps {
   account: RegisteredAccount;
@@ -146,8 +146,24 @@ export default function AccountQRBadgeModal({
   };
 
   const handlePrintBadge = () => {
-    executePrint();
+    const el = (document.querySelector('.printable-badge') as HTMLElement | null)
+      || (document.querySelector('.printable-area') as HTMLElement | null);
+    if (el) {
+      printElementAsA4(el);
+    }
   };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        handlePrintBadge();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen]);
 
   const modalContent = (
     <AnimatePresence>

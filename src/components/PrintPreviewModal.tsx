@@ -11,7 +11,7 @@ import {
   FileText,
   RotateCcw
 } from 'lucide-react';
-import { executePrint } from '../utils/printDocument';
+import { printElementAsA4 } from '../utils/printDocument';
 
 export interface PrintPreviewModalProps {
   isOpen: boolean;
@@ -73,10 +73,10 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   }, [isOpen]);
 
   const handleExecutePrint = () => {
-    if (onPrint) {
+    if (paperSheetRef.current) {
+      printElementAsA4(paperSheetRef.current);
+    } else if (onPrint) {
       onPrint();
-    } else {
-      executePrint();
     }
   };
 
