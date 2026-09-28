@@ -23,6 +23,7 @@ import {
   Eye
 } from 'lucide-react';
 import { PrintPreviewModal } from './PrintPreviewModal';
+import { executePrint } from '../utils/printDocument';
 import { ReceivingRecord, IssuanceRecord, MaterialStockItem, MasterRegistryItem } from '../types';
 import { 
   filterReceivingAndIssuanceData, 
@@ -107,7 +108,7 @@ export default function ReceivingVsIssuanceReportModal({
   };
 
   const handlePrint = () => {
-    window.print();
+    executePrint();
   };
 
   const isNetPositive = summary.netDelta >= 0;

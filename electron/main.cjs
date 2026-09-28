@@ -157,11 +157,58 @@ app.on('window-all-closed', () => {
   }
 });
 
-// IPC handler for system printing or native actions
-ipcMain.handle('print-document', async () => {
-  if (mainWindow) {
-    mainWindow.webContents.print({ silent: false, printBackground: true });
+// IPC handler for system printing: generates PDF via printToPDF and opens in default viewer
+ipcMain.handle('print-document', async (event, customHtml) => {
+  try {
+    if (!mainWindow) return false;
+
+    let pdfData;
+    if (typeof customHtml === 'string' && customHtml.trim().length > 0) {
+      // If isolated printable HTML is provided, render in hidden BrowserWindow
+      const printWin = new BrowserWindow({
+        show: false,
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true
+        }
+      });
+      await printWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(customHtml)}`);
+      pdfData = await printWin.webContents.printToPDF({
+        pageSize: 'A4',
+        printBackground: true,
+        preferCSSPageSize: true,
+        margins: { marginType: 'default' }
+      });
+      printWin.destroy();
+    } else {
+      // Calls printToPDF on mainWindow respecting existing @media print and @page rules
+      pdfData = await mainWindow.webContents.printToPDF({
+        pageSize: 'A4',
+        printBackground: true,
+        preferCSSPageSize: true,
+        margins: { marginType: 'default' }
+      });
+    }
+
+    // Save PDF to temp file and open in default system PDF viewer for 100% / Actual Size printing
+    const tempDir = app.getPath('temp');
+    const tempFilePath = path.join(tempDir, `juwei-wms-print-${Date.now()}.pdf`);
+    fs.writeFileSync(tempFilePath, pdfData);
+
+    const openErr = await shell.openPath(tempFilePath);
+    if (openErr) {
+      console.warn('[JUWEI WMS Desktop] shell.openPath notice:', openErr);
+    }
     return true;
+  } catch (err) {
+    console.error('[JUWEI WMS Desktop] Failed in print-document handler:', err);
+    // Fallback to native print dialog if printToPDF encounters issues
+    try {
+      if (mainWindow) {
+        mainWindow.webContents.print({ silent: false, printBackground: true });
+        return true;
+      }
+    } catch (fallbackErr) {}
+    return false;
   }
-  return false;
 });

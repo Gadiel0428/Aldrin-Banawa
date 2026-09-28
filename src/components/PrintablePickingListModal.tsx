@@ -24,6 +24,7 @@ import {
   Eye
 } from 'lucide-react';
 import { PrintPreviewModal } from './PrintPreviewModal';
+import { executePrint } from '../utils/printDocument';
 import { DeliveryRecord, IssuanceRecord, MaterialStockItem, MasterRegistryItem } from '../types';
 
 export type DocViewMode = 'OFFICIAL_DOC' | 'PICKING_LIST' | 'SUMMARY_LOG';
@@ -63,7 +64,7 @@ export default function PrintablePickingListModal({
   const [showPrintPreview, setShowPrintPreview] = useState<boolean>(false);
 
   const handlePrint = () => {
-    window.print();
+    executePrint();
   };
 
   // Helper variables for single record view

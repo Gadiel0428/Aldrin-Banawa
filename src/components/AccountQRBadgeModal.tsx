@@ -20,6 +20,7 @@ import {
   Download
 } from 'lucide-react';
 import { RegisteredAccount } from '../types';
+import { executePrint } from '../utils/printDocument';
 
 interface AccountQRBadgeModalProps {
   account: RegisteredAccount;
@@ -145,7 +146,7 @@ export default function AccountQRBadgeModal({
   };
 
   const handlePrintBadge = () => {
-    window.print();
+    executePrint();
   };
 
   const modalContent = (

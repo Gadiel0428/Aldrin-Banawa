@@ -25,6 +25,7 @@ import {
   Eye
 } from 'lucide-react';
 import { PrintPreviewModal } from './PrintPreviewModal';
+import { executePrint } from '../utils/printDocument';
 import { MaterialStockItem, getCustomerForPart } from '../types';
 import { 
   filterInventoryData, 
@@ -122,7 +123,7 @@ export default function InventoryReportModal({
   };
 
   const handlePrint = () => {
-    window.print();
+    executePrint();
   };
 
   const reportContent = (
