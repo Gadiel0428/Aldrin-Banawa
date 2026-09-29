@@ -13,14 +13,16 @@ try {
   try {
     execSync('git fetch --tags origin', {
       stdio: ['ignore', 'ignore', 'ignore'],
-      timeout: 10000
+      timeout: 10000,
+      windowsHide: true
     });
     console.log('[WRITE-BUILD-INFO] Successfully fetched tags from origin.');
   } catch (fetchOriginErr) {
     try {
       execSync('git fetch --tags', {
         stdio: ['ignore', 'ignore', 'ignore'],
-        timeout: 10000
+        timeout: 10000,
+        windowsHide: true
       });
       console.log('[WRITE-BUILD-INFO] Successfully fetched tags.');
     } catch (fetchErr) {
@@ -33,7 +35,8 @@ try {
     const gitTag = execSync('git describe --tags --abbrev=0', {
       stdio: ['ignore', 'pipe', 'ignore'],
       encoding: 'utf8',
-      timeout: 5000
+      timeout: 5000,
+      windowsHide: true
     }).trim();
 
     if (gitTag) {
@@ -48,7 +51,8 @@ try {
       const allTagsRaw = execSync('git tag -l "v*"', {
         stdio: ['ignore', 'pipe', 'ignore'],
         encoding: 'utf8',
-        timeout: 5000
+        timeout: 5000,
+        windowsHide: true
       }).trim();
 
       const allTags = allTagsRaw.split('\n').map(t => t.trim()).filter(Boolean);

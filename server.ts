@@ -2737,14 +2737,40 @@ async function startServer() {
     });
   });
 
-  // In-memory cache for latest GitHub release version (e.g. "v1.0.84" -> "1.0.84")
+  // In-memory cache for latest GitHub release version (e.g. "v1.0.86" -> "1.0.86")
   let cachedGitHubVersion: string | null = null;
   let lastGitHubFetchTimestamp = 0;
   let isFetchingGitHubRelease = false;
   const GITHUB_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes cache
+  const RELEASE_PERSIST_FILE = getStorageFilePath("latest-github-release.json");
 
-  // Resolves the latest release version from GitHub Releases API
+  // Load persisted GitHub release on startup if available
+  try {
+    if (fs.existsSync(RELEASE_PERSIST_FILE)) {
+      const persisted = JSON.parse(fs.readFileSync(RELEASE_PERSIST_FILE, "utf8"));
+      if (persisted && persisted.version) {
+        cachedGitHubVersion = String(persisted.version).replace(/^v/i, "").trim();
+        lastGitHubFetchTimestamp = Date.now();
+        console.log(`[RELEASE SYNC] Loaded persisted GitHub release version: ${cachedGitHubVersion}`);
+      }
+    }
+  } catch (e) {}
+
+  // Resolves the latest release version from GitHub Releases API or disk cache
   async function getLatestGitHubReleaseVersion(buildTimeFallback: string): Promise<string> {
+    // If not cached yet in memory, try loading from disk
+    if (!cachedGitHubVersion) {
+      try {
+        if (fs.existsSync(RELEASE_PERSIST_FILE)) {
+          const persisted = JSON.parse(fs.readFileSync(RELEASE_PERSIST_FILE, "utf8"));
+          if (persisted && persisted.version) {
+            cachedGitHubVersion = String(persisted.version).replace(/^v/i, "").trim();
+            lastGitHubFetchTimestamp = Date.now();
+          }
+        }
+      } catch (e) {}
+    }
+
     const rawRepo = process.env.GITHUB_REPO?.trim();
     if (!rawRepo) {
       return cachedGitHubVersion || buildTimeFallback;
@@ -2793,6 +2819,13 @@ async function startServer() {
           if (parsed) {
             cachedGitHubVersion = parsed;
             lastGitHubFetchTimestamp = Date.now();
+            try {
+              fs.writeFileSync(RELEASE_PERSIST_FILE, JSON.stringify({
+                version: parsed,
+                tag: releaseData.tag_name,
+                updatedAt: new Date().toISOString()
+              }, null, 2), "utf8");
+            } catch (wErr) {}
             console.log(`[GITHUB RELEASE SYNC] Authoritative release tag resolved from GitHub: ${releaseData.tag_name} -> version ${parsed}`);
           }
         }
@@ -2808,6 +2841,41 @@ async function startServer() {
     // Fall back to last known cached value, or build-time fallback if nothing was ever fetched
     return cachedGitHubVersion || buildTimeFallback;
   }
+
+  // REST API: Webhook / Direct publish from GitHub Actions
+  app.post(["/api/build-info/publish", "/api/release/latest"], (req, res) => {
+    try {
+      const { version, tag, repository, releaseUrl, buildId } = req.body || {};
+      const newVersion = String(version || tag || "").replace(/^v/i, "").trim();
+      if (!newVersion) {
+        return res.status(400).json({ error: "Missing version or tag" });
+      }
+
+      cachedGitHubVersion = newVersion;
+      lastGitHubFetchTimestamp = Date.now();
+      if (repository && typeof repository === "string") {
+        process.env.GITHUB_REPO = repository;
+      }
+
+      const releaseRecord = {
+        version: newVersion,
+        tag: tag || `v${newVersion}`,
+        repository: repository || process.env.GITHUB_REPO || "",
+        releaseUrl: releaseUrl || "",
+        buildId: buildId || Date.now(),
+        updatedAt: new Date().toISOString()
+      };
+
+      try {
+        fs.writeFileSync(RELEASE_PERSIST_FILE, JSON.stringify(releaseRecord, null, 2), "utf8");
+      } catch (err) {}
+
+      console.log(`[RELEASE SYNC] Received authoritative release update from GitHub Actions: version ${newVersion} (tag: ${tag || newVersion})`);
+      return res.json({ success: true, activeVersion: newVersion, release: releaseRecord });
+    } catch (e: any) {
+      return res.status(500).json({ error: e.message });
+    }
+  });
 
   // REST API: Build Info for Live Application Updates
   app.get(["/api/build-info", "/build-info.json"], async (req, res) => {

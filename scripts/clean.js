@@ -1,26 +1,21 @@
 import fs from 'node:fs';
+import path from 'node:path';
 
-try {
-  if (fs.existsSync('dist')) {
-    fs.rmSync('dist', { recursive: true, force: true });
-  }
-} catch (err) {
-  console.error('Error removing dist:', err);
-}
+const targets = ['dist', 'release', 'server.js'];
 
-try {
-  if (fs.existsSync('release')) {
-    fs.rmSync('release', { recursive: true, force: true });
+for (const target of targets) {
+  try {
+    const fullPath = path.resolve(process.cwd(), target);
+    if (fs.existsSync(fullPath)) {
+      const stat = fs.statSync(fullPath);
+      if (stat.isDirectory()) {
+        fs.rmSync(fullPath, { recursive: true, force: true });
+      } else {
+        fs.unlinkSync(fullPath);
+      }
+    }
+  } catch (err) {
+    // Non-fatal cleanup
   }
-} catch (err) {
-  console.error('Error removing release:', err);
-}
-
-try {
-  if (fs.existsSync('server.js')) {
-    fs.unlinkSync('server.js');
-  }
-} catch (err) {
-  // ignore
 }
 

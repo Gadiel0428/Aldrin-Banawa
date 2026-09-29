@@ -57,6 +57,31 @@ jobs:
         working-directory: ${{ steps.locate.outputs.dir }}
         run: npm install
 
+      - name: Sync Version from GitHub
+        id: versioning
+        shell: pwsh
+        run: |
+          $dir = "${{ steps.locate.outputs.dir }}"
+          $tag = if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}") {
+            "${{ github.ref_name }}"
+          } else {
+            "v1.0.${{ github.run_number }}"
+          }
+          $cleanVersion = $tag.TrimStart('v').TrimStart('V')
+          Write-Host "Authoritative GitHub Release Version: $cleanVersion (Tag: $tag)"
+
+          # Update package.json version BEFORE compiling so electron-builder names the .exe binaries matching the GitHub release exactly
+          $pkgPath = "$dir/package.json"
+          if (Test-Path $pkgPath) {
+            $content = Get-Content -Raw $pkgPath | ConvertFrom-Json
+            $content.version = $cleanVersion
+            $content | ConvertTo-Json -Depth 10 | Set-Content -Path $pkgPath -Encoding utf8
+            Write-Host "Synced package.json version to $cleanVersion"
+          }
+
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$cleanVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
       - name: Build Windows EXE Setup
         working-directory: ${{ steps.locate.outputs.dir }}
         env:
@@ -97,11 +122,14 @@ jobs:
           Write-Host "Found executable files:"
           $files | ForEach-Object { Write-Host " - $_" }
 
-          $tag = if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}") {
+          $tag = if ("${{ steps.versioning.outputs.tag }}") {
+            "${{ steps.versioning.outputs.tag }}"
+          } elseif ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}") {
             "${{ github.ref_name }}"
           } else {
             "v1.0.${{ github.run_number }}"
           }
+          $cleanVersion = $tag.TrimStart('v').TrimStart('V')
 
           Write-Host "Creating GitHub Release with tag: $tag"
           
@@ -115,6 +143,32 @@ jobs:
           $releaseUrl = "https://github.com/$repo/releases/tag/$tag"
           
           Write-Host "Successfully published Windows EXE to GitHub Releases at $releaseUrl"
+
+          # Notify Central Production Server so all web clients and desktops immediately reflect the latest GitHub release
+          try {
+            $syncPayload = @{
+              version = $cleanVersion
+              tag = $tag
+              repository = $repo
+              releaseUrl = $releaseUrl
+              buildId = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            } | ConvertTo-Json
+
+            $targetServers = @(
+              "https://aldrin-banawa.onrender.com/api/build-info/publish"
+            )
+            foreach ($srv in $targetServers) {
+              try {
+                Write-Host "Notifying production server at $srv of version $cleanVersion ..."
+                $response = Invoke-RestMethod -Uri $srv -Method Post -Body $syncPayload -ContentType "application/json" -TimeoutSec 10
+                Write-Host "Server successfully synced to latest release version $cleanVersion"
+              } catch {
+                Write-Warning "Could not notify $srv : $_"
+              }
+            }
+          } catch {
+            Write-Warning "Notification step notice: $_"
+          }
 
           # Write rich download summary to GitHub Actions summary page
           $summary = @"
