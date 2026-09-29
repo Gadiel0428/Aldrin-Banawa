@@ -1955,7 +1955,7 @@ export default function App() {
       try {
         const cachedServer = localStorage.getItem('juwei_wms_server_address');
         if (cachedServer && (cachedServer.includes('.run.app') || cachedServer.includes('ais-dev-') || cachedServer.includes('ais-pre-'))) {
-          localStorage.setItem('juwei_wms_server_address', 'https://aldrin-banawa.onrender.com');
+          localStorage.setItem('juwei_wms_server_address', 'http://192.168.20.214:3000');
         }
       } catch (e) {}
 

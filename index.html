@@ -24,7 +24,7 @@
           // instantly redirect to the authoritative Render production URL
           // so operators and users are NEVER prompted for a Google/Gmail account login.
           if (window.location.hostname && (window.location.hostname.indexOf('ais-dev-') !== -1 || window.location.hostname.indexOf('run.app') !== -1) && window.self === window.top) {
-            var targetUrl = 'https://aldrin-banawa.onrender.com' + window.location.pathname + window.location.search + window.location.hash;
+            var targetUrl = 'http://192.168.20.214:3000' + window.location.pathname + window.location.search + window.location.hash;
             window.location.replace(targetUrl);
           }
         } catch(e) {}

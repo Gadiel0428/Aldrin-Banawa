@@ -2,8 +2,8 @@ const { app, BrowserWindow, shell, ipcMain, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
-// Authoritative Central Production Server URL (Single Production Configuration - No Gmail Account Required)
-const CENTRAL_SERVER_URL = process.env.CENTRAL_SERVER_URL || process.env.VITE_CENTRAL_SERVER_URL || 'https://aldrin-banawa.onrender.com';
+// Authoritative Central Production Server URL (Warehouse Local Server Host)
+const CENTRAL_SERVER_URL = process.env.CENTRAL_SERVER_URL || process.env.VITE_CENTRAL_SERVER_URL || 'http://192.168.20.214:3000';
 
 // Ensure unhandled exceptions don't crash the desktop app silently
 process.on('uncaughtException', (err) => {
@@ -40,7 +40,7 @@ function setElectronWindowTitle(ver) {
 async function fetchVersionAndUpdateWindowTitle() {
   if (!mainWindow) return;
   try {
-    const targetUrl = (CENTRAL_SERVER_URL || 'https://aldrin-banawa.onrender.com').replace(/\/+$/, '');
+    const targetUrl = (CENTRAL_SERVER_URL || 'http://192.168.20.214:3000').replace(/\/+$/, '');
     const apiUrl = `${targetUrl}/api/build-info`;
     const response = await net.fetch(apiUrl, { cache: 'no-store' });
     if (response.ok) {

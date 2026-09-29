@@ -1,7 +1,7 @@
 {
-  "name": "JUWEI WMS Central Cloud Production Server",
-  "centralServerUrl": "https://aldrin-banawa.onrender.com",
-  "centralServerHost": "aldrin-banawa.onrender.com",
+  "name": "JUWEI WMS Central Warehouse Server",
+  "centralServerUrl": "http://192.168.20.214:3000",
+  "centralServerHost": "192.168.20.214:3000",
   "defaultAccount": "ACC-JUWEI",
   "defaultWarehouse": "WH-MAIN",
   "notes": "Every installed client on any computer automatically connects to this central server and central database."

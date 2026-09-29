@@ -10,17 +10,17 @@
  * or a local database for production synchronization.
  */
 
-// Authoritative Cloud Production URL (Render Cloud Production - No Google / Gmail Login Required)
-export const DEFAULT_PRODUCTION_SERVER_HOST = 'aldrin-banawa.onrender.com';
-export const DEFAULT_PRODUCTION_SERVER_URL = `https://${DEFAULT_PRODUCTION_SERVER_HOST}`;
+// Authoritative Production Central Server URL (Warehouse Local Server Host)
+export const DEFAULT_PRODUCTION_SERVER_HOST = '192.168.20.214:3000';
+export const DEFAULT_PRODUCTION_SERVER_URL = `http://${DEFAULT_PRODUCTION_SERVER_HOST}`;
 
 /**
- * Ensures any URL or host that contains legacy Google Cloud Run or dev domains
- * is automatically replaced with the authoritative Render production URL.
+ * Ensures any URL or host that contains legacy Google Cloud Run, dev domains, or legacy Render
+ * is automatically replaced with the authoritative local production URL.
  */
 export function sanitizePublicAppUrl(urlOrHost: string): string {
   if (!urlOrHost) return DEFAULT_PRODUCTION_SERVER_URL;
-  if (urlOrHost.includes('.run.app') || urlOrHost.includes('ais-dev-') || urlOrHost.includes('ais-pre-')) {
+  if (urlOrHost.includes('.run.app') || urlOrHost.includes('ais-dev-') || urlOrHost.includes('ais-pre-') || urlOrHost.includes('aldrin-banawa.onrender.com')) {
     return DEFAULT_PRODUCTION_SERVER_URL;
   }
   return urlOrHost;
@@ -33,7 +33,7 @@ export function sanitizePublicAppUrl(urlOrHost: string): string {
 export function getPublicAppUrl(): string {
   if (typeof window !== 'undefined' && window.location && window.location.origin) {
     const origin = window.location.origin;
-    if (origin.includes('.run.app') || origin.includes('ais-dev-') || origin.includes('ais-pre-')) {
+    if (origin.includes('.run.app') || origin.includes('ais-dev-') || origin.includes('ais-pre-') || origin.includes('aldrin-banawa.onrender.com')) {
       return DEFAULT_PRODUCTION_SERVER_URL;
     }
     if (!isLocalhostAddress(origin)) {
@@ -44,7 +44,8 @@ export function getPublicAppUrl(): string {
 }
 
 /**
- * Returns whether a given host or address is a forbidden local address
+ * Returns whether a given host or address is a forbidden local loopback address.
+ * Allows warehouse LAN IPs (e.g. 192.168.20.214:3000).
  */
 export function isLocalhostAddress(addr: string): boolean {
   if (!addr) return false;
@@ -55,17 +56,7 @@ export function isLocalhostAddress(addr: string): boolean {
     clean === '0.0.0.0' ||
     clean === '::1' ||
     clean === '[::1]' ||
-    clean.startsWith('127.') ||
-    clean.startsWith('192.168.') ||
-    clean.startsWith('10.') ||
-    clean.startsWith('172.16.') ||
-    clean.startsWith('172.17.') ||
-    clean.startsWith('172.18.') ||
-    clean.startsWith('172.19.') ||
-    clean.startsWith('172.2') ||
-    clean.startsWith('172.30.') ||
-    clean.startsWith('172.31.') ||
-    clean.endsWith('.local')
+    clean.startsWith('127.')
   );
 }
 
@@ -85,16 +76,17 @@ export function sanitizeServerHost(raw: string): string {
  * Determines whether a host should connect via secure protocol (HTTPS / WSS)
  */
 export function isSecureHost(cleanHost: string, rawInput: string = ''): boolean {
-  if (!cleanHost) return true;
+  if (!cleanHost) return false;
   if (/^https:\/\//i.test(rawInput) || /^wss:\/\//i.test(rawInput)) return true;
-  if (cleanHost.includes('.run.app') || cleanHost.includes('cloud') || cleanHost.includes('appspot') || cleanHost.includes('render.com')) {
+  if (/^http:\/\//i.test(rawInput) || /^ws:\/\//i.test(rawInput)) return false;
+  if (cleanHost.includes('.run.app') || cleanHost.includes('render.com') || cleanHost.includes('cloud')) {
     return true;
   }
-  if (isLocalhostAddress(cleanHost)) {
+  // Local network IP addresses (such as 192.168.20.214:3000) or loopback default to standard HTTP / WS
+  if (/^\d+\.\d+\.\d+\.\d+/.test(cleanHost) || cleanHost.includes(':3000') || isLocalhostAddress(cleanHost)) {
     return typeof window !== 'undefined' && window.location && window.location.protocol === 'https:';
   }
-  // Default to secure HTTPS/WSS for all remote enterprise hosts
-  return true;
+  return false;
 }
 
 let hasLoggedResolution = false;
@@ -181,7 +173,7 @@ export function getCentralServerHost(): string {
 }
 
 /**
- * Returns the Base API URL (e.g. https://aldrin-banawa.onrender.com)
+ * Returns the Base API URL (e.g. http://192.168.20.214:3000)
  */
 export function getApiBaseUrl(): string {
   return getCentralServerUrl();
