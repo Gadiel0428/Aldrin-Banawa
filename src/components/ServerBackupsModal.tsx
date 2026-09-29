@@ -190,7 +190,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                Automatic 24-hour snapshots & startup backups. Retains the latest 14 snapshots inside JUWEI_DATA_DIR.
+                Automatic 1-hour snapshots & startup backups. Retains every single backup permanently without deletion inside JUWEI_DATA_DIR.
               </p>
             </div>
           </div>
@@ -214,7 +214,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
 
           <div className="flex items-center gap-3">
             <span className="text-[11px] text-slate-400 flex items-center gap-1">
-              <Clock className="h-3.5 w-3.5 text-indigo-400" /> Retention: <strong>Last 14 Backups</strong>
+              <Clock className="h-3.5 w-3.5 text-indigo-400" /> Interval: <strong>Every 1 Hour</strong> • Retention: <strong>Permanent (All Kept)</strong>
             </span>
             <button
               onClick={handleCreateBackup}
@@ -285,7 +285,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
               <div className="py-14 text-center space-y-3">
                 <Archive className="h-10 w-10 text-slate-600 mx-auto" />
                 <p className="text-sm font-medium text-slate-400">No backup snapshots found in backups directory.</p>
-                <p className="text-xs text-slate-500">Backups are automatically created on server startup and every 24 hours.</p>
+                <p className="text-xs text-slate-500">Backups are automatically created on server startup and every 1 hour (non-blocking, permanently kept).</p>
                 <button
                   onClick={handleCreateBackup}
                   disabled={isCreating}

@@ -440,10 +440,11 @@ async function startServer() {
 
   // =========================================================================
   // AUTOMATED DATABASE BACKUPS SUBSYSTEM (JUWEI_DATA_DIR / backups)
-  // 1. Backs up database to backups folder every 24h & once on server startup.
-  // 2. Format: central-database-YYYY-MM-DD-HHmm.json (e.g. central-database-2026-09-30-0600.json).
-  // 3. Retains last 14 backups and prunes older ones automatically.
-  // 4. Logs every backup created and restore performed.
+  // 1. Backs up database to backups folder every 1 hour & once on server startup.
+  // 2. Format: central-database-YYYY-MM-DD-HHmm.json (e.g. central-database-2026-09-30-1400.json).
+  // 3. Permanent retention: keeps EVERY backup, with NO cap on count and NO age limit.
+  // 4. Non-blocking async file copying ensuring zero disruption to normal app operations.
+  // 5. Logs every backup created and restore performed.
   // =========================================================================
 
   const BACKUPS_DIR = process.env.JUWEI_DATA_DIR 
@@ -534,7 +535,8 @@ async function startServer() {
     return filename;
   }
 
-  function pruneOldBackups(maxRetained: number = 14): BackupItemRecord[] {
+  // Lists all existing backups sorted newest first. Permanently keeps all backups with zero automatic deletion.
+  function getAllBackupRecords(): BackupItemRecord[] {
     try {
       if (!fs.existsSync(BACKUPS_DIR)) return [];
       const entries = fs.readdirSync(BACKUPS_DIR, { withFileTypes: true });
@@ -563,31 +565,24 @@ async function startServer() {
 
       // Sort newest first
       backups.sort((a, b) => b.mtime - a.mtime || b.filename.localeCompare(a.filename));
-
-      if (backups.length > maxRetained) {
-        const toDelete = backups.slice(maxRetained);
-        for (const b of toDelete) {
-          try {
-            fs.unlinkSync(b.filePath);
-            console.log(`[BACKUP ROTATION] Auto-pruned old backup beyond last ${maxRetained}: ${b.filename}`);
-            logBackupAudit("PRUNE", b.filename, "AUTOMATIC_ROTATION", `Pruned old snapshot beyond retention limit of ${maxRetained}`);
-          } catch (delErr: any) {
-            console.warn(`[BACKUP ROTATION] Failed to remove ${b.filename}:`, delErr?.message);
-          }
-        }
-        return backups.slice(0, maxRetained);
-      }
       return backups;
     } catch (err: any) {
-      console.error("[BACKUP ROTATION] Error during backup pruning:", err);
+      console.error("[DATABASE BACKUP] Error reading backups list:", err);
       return [];
     }
   }
 
-  function createDatabaseBackup(reason: string = "SCHEDULED", author: string = "SYSTEM"): { success: boolean; filename?: string; error?: string } {
+  // Non-blocking asynchronous backup creator: copies file in background without blocking requests
+  let isBackupInProgress = false;
+  async function createDatabaseBackup(reason: string = "SCHEDULED", author: string = "SYSTEM"): Promise<{ success: boolean; filename?: string; error?: string }> {
+    if (isBackupInProgress) {
+      console.log(`[DATABASE BACKUP] Backup already in progress, skipping concurrent trigger (${reason})`);
+      return { success: false, error: "A backup is already in progress" };
+    }
+    isBackupInProgress = true;
     try {
       if (!fs.existsSync(BACKUPS_DIR)) {
-        fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+        await fs.promises.mkdir(BACKUPS_DIR, { recursive: true });
       }
 
       // Ensure disk database is current with memory state
@@ -601,16 +596,19 @@ async function startServer() {
       const filename = getNextBackupFilename();
       const targetPath = path.join(BACKUPS_DIR, filename);
 
-      fs.copyFileSync(DATA_FILE, targetPath);
-      const stat = fs.statSync(targetPath);
+      // Asynchronous copy on libuv background worker thread pool to prevent blocking the event loop
+      await fs.promises.copyFile(DATA_FILE, targetPath);
+      const stat = await fs.promises.stat(targetPath);
 
       logBackupAudit("BACKUP_CREATED", filename, author, reason, stat.size);
-      pruneOldBackups(14);
+      // Permanent retention: keep every single backup with no age limit and no count cap
 
       return { success: true, filename };
     } catch (err: any) {
       console.error("[DATABASE BACKUP] Failed to create database backup:", err);
       return { success: false, error: err?.message || String(err) };
+    } finally {
+      isBackupInProgress = false;
     }
   }
 
@@ -689,21 +687,17 @@ async function startServer() {
   }
 
   // 1. Initial backup right after server starts
-  try {
-    createDatabaseBackup("SERVER_STARTUP", "SYSTEM_BOOT");
-  } catch (bErr) {
+  createDatabaseBackup("SERVER_STARTUP", "SYSTEM_BOOT").catch(bErr => {
     console.error("[SERVER STARTUP] Initial backup error:", bErr);
-  }
+  });
 
-  // 2. Schedule recurring automated backup every 24 hours
-  const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+  // 2. Schedule recurring automated non-blocking backup every 1 hour
+  const ONE_HOUR_MS = 60 * 60 * 1000;
   setInterval(() => {
-    try {
-      createDatabaseBackup("AUTOMATIC_24H_SCHEDULE", "SYSTEM_SCHEDULER");
-    } catch (bErr) {
-      console.error("[SCHEDULED BACKUP] Error executing 24h backup:", bErr);
-    }
-  }, TWENTY_FOUR_HOURS_MS);
+    createDatabaseBackup("AUTOMATIC_1H_SCHEDULE", "SYSTEM_SCHEDULER").catch(bErr => {
+      console.error("[SCHEDULED BACKUP] Error executing 1h backup:", bErr);
+    });
+  }, ONE_HOUR_MS);
 
   // Active Device Registry
   interface ConnectedDevice {
@@ -3818,43 +3812,16 @@ async function startServer() {
         fs.mkdirSync(BACKUPS_DIR, { recursive: true });
       }
 
-      const entries = fs.readdirSync(BACKUPS_DIR, { withFileTypes: true });
-      const backups = entries
-        .filter(e => e.isFile() && e.name.startsWith("central-database-") && e.name.endsWith(".json"))
-        .map(e => {
-          const filePath = path.join(BACKUPS_DIR, e.name);
-          let mtime = 0;
-          let birthtime = 0;
-          let size = 0;
-          try {
-            const stat = fs.statSync(filePath);
-            mtime = stat.mtimeMs;
-            birthtime = stat.birthtimeMs || stat.mtimeMs;
-            size = stat.size;
-          } catch (stErr) {}
-
-          const sizeFormatted = size > 1024 * 1024 
-            ? `${(size / (1024 * 1024)).toFixed(2)} MB` 
-            : `${(size / 1024).toFixed(1)} KB`;
-
-          return {
-            filename: e.name,
-            sizeBytes: size,
-            sizeFormatted,
-            createdAt: new Date(birthtime || mtime).toISOString(),
-            mtime
-          };
-        });
-
-      // Sort newest first
-      backups.sort((a, b) => b.mtime - a.mtime || b.filename.localeCompare(a.filename));
+      const backups = getAllBackupRecords();
 
       return res.json({
         success: true,
         backupsDir: BACKUPS_DIR,
-        maxRetained: 14,
+        intervalHours: 1,
+        retentionPolicy: "PERMANENT_NO_DELETION",
+        maxRetained: null,
         backups,
-        auditLogs: backupAuditLogs.slice(0, 30)
+        auditLogs: backupAuditLogs.slice(0, 50)
       });
     } catch (err: any) {
       return res.status(500).json({ error: err?.message || "Failed to list backups" });
@@ -3862,7 +3829,7 @@ async function startServer() {
   });
 
   // 2. Trigger on-demand backup
-  app.post("/api/admin/backups/create", (req, res) => {
+  app.post("/api/admin/backups/create", async (req, res) => {
     try {
       if (!isAuthorizedSuperAdmin(req)) {
         return res.status(403).json({ 
@@ -3870,7 +3837,7 @@ async function startServer() {
         });
       }
       const author = req.body?.author || "SUPER_ADMIN";
-      const result = createDatabaseBackup("MANUAL_ON_DEMAND", author);
+      const result = await createDatabaseBackup("MANUAL_ON_DEMAND", author);
       if (result.success) {
         return res.json({ 
           success: true, 
