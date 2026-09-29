@@ -30,7 +30,8 @@ import {
   Tag,
   Plus,
   Pencil,
-  RotateCcw
+  RotateCcw,
+  Archive
 } from 'lucide-react';
 import AccountQRBadgeModal from './AccountQRBadgeModal';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
@@ -76,6 +77,7 @@ interface RegisteredAccountsModuleProps {
   onUpdateAccount: (oldEmpId: string, updated: RegisteredAccount) => void;
   onRemoveAccount: (employeeId: string) => void;
   onClearAllAccounts?: () => void;
+  onOpenBackups?: () => void;
   currentUser: string;
   currentEmployeeId: string;
   isSuperAdmin?: boolean;
@@ -90,6 +92,7 @@ export default function RegisteredAccountsModule({
   onUpdateAccount,
   onRemoveAccount,
   onClearAllAccounts,
+  onOpenBackups,
   currentUser,
   currentEmployeeId,
   isSuperAdmin = false,
@@ -571,6 +574,18 @@ export default function RegisteredAccountsModule({
                   <Tag className="h-3.5 w-3.5 text-indigo-400" />
                   <span className="whitespace-nowrap">Manage Roles</span>
                 </button>
+                {onOpenBackups && (
+                  <button
+                    type="button"
+                    onClick={onOpenBackups}
+                    className="bg-emerald-950/60 hover:bg-emerald-900/80 active:bg-emerald-850 text-emerald-300 hover:text-white border border-emerald-500/40 px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs uppercase font-mono cursor-pointer shrink-0"
+                    id="btn-server-backups"
+                    title="Automated 24h backups & disaster recovery restore"
+                  >
+                    <Archive className="h-3.5 w-3.5 text-emerald-400" />
+                    <span className="whitespace-nowrap">Server Backups</span>
+                  </button>
+                )}
                 {onClearAllAccounts && (accounts.length > 1 || accounts.some(u => (u.employeeId || '').toUpperCase() !== 'JPMP-002')) && (
                   <button
                     type="button"

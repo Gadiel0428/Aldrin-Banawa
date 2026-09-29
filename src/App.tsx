@@ -46,6 +46,7 @@ import {
   Check,
   X,
   Database,
+  Archive,
   Phone,
   Smartphone,
   Radio,
@@ -63,6 +64,7 @@ import MobileAppDownloadModal from './components/MobileAppDownloadModal';
 import { ConfirmModal, ConfirmActionConfig } from './components/ConfirmModal';
 import BarcodeScannerModal from './components/BarcodeScannerModal';
 import CentralDatabaseModal from './components/CentralDatabaseModal';
+import { ServerBackupsModal } from './components/ServerBackupsModal';
 import ActiveUsersModal from './components/ActiveUsersModal';
 import { SyncStatus } from './components/SyncStatus';
 import { StockMovementView } from './components/StockMovement';
@@ -257,6 +259,8 @@ export default function App() {
 
   // Central Database modal state
   const [showCentralDatabaseModal, setShowCentralDatabaseModal] = useState<boolean>(false);
+  // Super Admin Server Automated Backups modal state
+  const [showBackupsModal, setShowBackupsModal] = useState<boolean>(false);
   // Startup Diagnostics and Multi-PC Real-Time Sync Verifier modal state
   const [showStartupDiagnosticsModal, setShowStartupDiagnosticsModal] = useState<boolean>(false);
 
@@ -5177,8 +5181,16 @@ export default function App() {
         {/* Sidebar Footer with system values */}
         <div className="p-4 border-t border-slate-800/80 space-y-2 bg-slate-950/60 backdrop-blur-md">
           <div className="space-y-1.5">
-            {currentEmployeeId === 'JPMP-002' ? (
+            {(currentEmployeeId === 'JPMP-002' || currentPermission === 'FULL_ACCESS') ? (
               <>
+                <button 
+                  onClick={() => setShowBackupsModal(true)}
+                  className="w-full bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-300 hover:text-emerald-100 py-2 px-3 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1.5 border border-emerald-500/40 transition-colors cursor-pointer shadow-sm"
+                  title="Super Admin: Automated 24h backups & snapshot disaster recovery"
+                >
+                  <Archive className="h-3.5 w-3.5 text-emerald-400" /> Automated Server Backups
+                </button>
+
                 <button 
                   onClick={handleExportBackup}
                   className="w-full bg-slate-800/80 hover:bg-slate-800 text-slate-300 hover:text-white py-2 px-3 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1.5 border border-slate-700/60 transition-colors cursor-pointer"
@@ -5470,6 +5482,7 @@ export default function App() {
                   onUpdateAccount={handleUpdateAccount}
                   onRemoveAccount={handleRemoveUser}
                   onClearAllAccounts={handleClearAllAccountsExceptSuperAdmin}
+                  onOpenBackups={() => setShowBackupsModal(true)}
                   currentUser={currentUser}
                   currentEmployeeId={currentEmployeeId}
                   isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
@@ -5523,6 +5536,14 @@ export default function App() {
         isManualSyncing={isManualSyncing}
         totalRecordsCount={stocks.length + receiving.length + returns.length + recycling.length + issuances.length + deliveries.length}
         totalUsersCount={registeredUsers.length}
+      />
+
+      {/* Super Admin Automated Server Backups & Recovery Modal */}
+      <ServerBackupsModal
+        isOpen={showBackupsModal}
+        onClose={() => setShowBackupsModal(false)}
+        currentUser={currentUser}
+        currentEmployeeId={currentEmployeeId}
       />
 
       {/* Central Startup Diagnostics & Multi-PC Synchronization Verifier Modal */}
