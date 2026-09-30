@@ -250,8 +250,17 @@ export default function App() {
     try {
       const stored = localStorage.getItem('juwei_wms_isLoggedIn');
       const user = localStorage.getItem('juwei_wms_currentUser');
-      return stored === 'true' && Boolean(user);
+      const empId = localStorage.getItem('juwei_wms_employeeId');
+      const role = localStorage.getItem('juwei_wms_userRole');
+      const shouldRestore = stored === 'true' && Boolean(user);
+      if (shouldRestore) {
+        console.log(`[AUTH STARTUP] Restoring persistent login session for user: ${user} (${empId || 'NO_ID'}), role: ${role || 'NO_ROLE'}`);
+      } else {
+        console.log(`[AUTH STARTUP] Landing on login screen (storedLoggedIn=${stored}, storedUser=${user || 'NONE'})`);
+      }
+      return shouldRestore;
     } catch (e) {
+      console.warn('[AUTH STARTUP] Error reading stored session from localStorage:', e);
       return false;
     }
   });
@@ -263,6 +272,8 @@ export default function App() {
   const [showBackupsModal, setShowBackupsModal] = useState<boolean>(false);
   // Startup Diagnostics and Multi-PC Real-Time Sync Verifier modal state
   const [showStartupDiagnosticsModal, setShowStartupDiagnosticsModal] = useState<boolean>(false);
+  // User Logout Confirmation modal state
+  const [showLogoutConfirmModal, setShowLogoutConfirmModal] = useState<boolean>(false);
 
   // Persistent Device Identifier across sessions
   const getPersistentDeviceId = (): string => {
@@ -830,8 +841,21 @@ export default function App() {
     fetchBuildInfo();
   }, []);
 
-  // Direct employee ID and PIN login form states
-  const [loginEmployeeId, setLoginEmployeeId] = useState<string>('');
+  // Direct employee ID and PIN login form states with Remember Login
+  const [loginEmployeeId, setLoginEmployeeId] = useState<string>(() => {
+    try {
+      return localStorage.getItem('juwei_wms_rememberedEmployeeId') || '';
+    } catch (e) {
+      return '';
+    }
+  });
+  const [rememberLogin, setRememberLogin] = useState<boolean>(() => {
+    try {
+      return Boolean(localStorage.getItem('juwei_wms_rememberedEmployeeId'));
+    } catch (e) {
+      return false;
+    }
+  });
   const [loginPin, setLoginPin] = useState<string>('');
   const [loginError, setLoginError] = useState<string>('');
   const [showPin, setShowPin] = useState<boolean>(false);
@@ -1106,20 +1130,24 @@ export default function App() {
     const cleanId = currentEmployeeId.toUpperCase();
     const currentRecord = registeredUsers.find(u => (u.employeeId || '').toUpperCase() === cleanId);
     
-    if (currentRecord) {
-      // Update role / permissions if modified by Super Admin
-      if (currentRecord.permission && currentRecord.permission !== currentPermission) {
-        setCurrentPermission(currentRecord.permission);
-        localStorage.setItem('juwei_wms_userPermission', currentRecord.permission);
-      }
-      if (currentRecord.role && currentRecord.role !== currentRole) {
-        setCurrentRole(currentRecord.role);
-        localStorage.setItem('juwei_wms_userRole', currentRecord.role);
-      }
-      if (currentRecord.username && currentRecord.username !== currentUser) {
-        setCurrentUser(currentRecord.username);
-        localStorage.setItem('juwei_wms_currentUser', currentRecord.username);
-      }
+    // Safety guard: If the account is not found in registeredUsers yet (e.g. during the first few seconds after reconnect
+    // while the account list loads from server/WebSocket), do NOT log the user out. Only skip updating until account list arrives.
+    if (!currentRecord) {
+      return;
+    }
+
+    // Update role / permissions if modified by Super Admin
+    if (currentRecord.permission && currentRecord.permission !== currentPermission) {
+      setCurrentPermission(currentRecord.permission);
+      localStorage.setItem('juwei_wms_userPermission', currentRecord.permission);
+    }
+    if (currentRecord.role && currentRecord.role !== currentRole) {
+      setCurrentRole(currentRecord.role);
+      localStorage.setItem('juwei_wms_userRole', currentRecord.role);
+    }
+    if (currentRecord.username && currentRecord.username !== currentUser) {
+      setCurrentUser(currentRecord.username);
+      localStorage.setItem('juwei_wms_currentUser', currentRecord.username);
     }
   }, [registeredUsers, isLoggedIn, currentEmployeeId, currentPermission, currentRole, currentUser]);
 
@@ -3733,9 +3761,20 @@ export default function App() {
 
     if (foundUser) {
       setIsLoggingIn(true);
+      const empIdToRemember = (foundUser.employeeId || loginEmployeeId).trim().toUpperCase();
+      if (rememberLogin) {
+        try {
+          localStorage.setItem('juwei_wms_rememberedEmployeeId', empIdToRemember);
+        } catch (e) {}
+      } else {
+        try {
+          localStorage.removeItem('juwei_wms_rememberedEmployeeId');
+        } catch (e) {}
+      }
       setTimeout(() => {
         handleLogin(foundUser!);
-        setLoginEmployeeId('');
+        const remembered = localStorage.getItem('juwei_wms_rememberedEmployeeId');
+        setLoginEmployeeId(remembered || '');
         setLoginPin('');
         setLoginError('');
         setIsLoggingIn(false);
@@ -3854,6 +3893,17 @@ export default function App() {
     setCurrentPermission(cleanPermission);
     setIsLoggedIn(true);
 
+    // Persist authenticated operator session to localStorage across window close and app restarts
+    try {
+      localStorage.setItem('juwei_wms_isLoggedIn', 'true');
+      localStorage.setItem('juwei_wms_currentUser', cleanUsername);
+      localStorage.setItem('juwei_wms_userRole', cleanRole);
+      localStorage.setItem('juwei_wms_employeeId', cleanEmployeeId);
+      localStorage.setItem('juwei_wms_userPermission', cleanPermission);
+    } catch (e) {
+      console.warn('Failed to persist user session to localStorage:', e);
+    }
+
     // Generate new unique authenticated session for this login
     clientSessionId.current = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     if (wsOpen(socket)) {
@@ -3933,6 +3983,22 @@ export default function App() {
     setIsLoggedIn(false);
     try {
       localStorage.removeItem('juwei_wms_isLoggedIn');
+      localStorage.removeItem('juwei_wms_currentUser');
+      localStorage.removeItem('juwei_wms_userRole');
+      localStorage.removeItem('juwei_wms_employeeId');
+      localStorage.removeItem('juwei_wms_userPermission');
+    } catch (e) {}
+
+    // Pre-fill remembered Employee ID on login form if user previously enabled Remember Login
+    try {
+      const remembered = localStorage.getItem('juwei_wms_rememberedEmployeeId');
+      if (remembered) {
+        setLoginEmployeeId(remembered);
+        setRememberLogin(true);
+      } else {
+        setLoginEmployeeId('');
+        setRememberLogin(false);
+      }
     } catch (e) {}
   };
 
@@ -4888,6 +4954,19 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Remember My Login Checkbox */}
+              <div className="flex items-center justify-between pt-0.5">
+                <label className="flex items-center gap-2 cursor-pointer select-none text-slate-300 hover:text-white text-xs">
+                  <input
+                    type="checkbox"
+                    checked={rememberLogin}
+                    onChange={(e) => setRememberLogin(e.target.checked)}
+                    className="h-3.5 w-3.5 rounded border-slate-700 bg-slate-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-slate-900 cursor-pointer"
+                  />
+                  <span>Remember my login</span>
+                </label>
+              </div>
+
               {loginError && (
                 <div className="bg-rose-950/40 border border-rose-500/30 text-rose-300 px-3 py-2 rounded-lg text-xs text-center font-medium font-mono">
                   {loginError}
@@ -4995,7 +5074,7 @@ export default function App() {
                 </div>
               </div>
               <button
-                onClick={handleLogout}
+                onClick={() => setShowLogoutConfirmModal(true)}
                 title="Log Out / Switch Operator"
                 className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800/90 border border-slate-700/60 rounded-xl transition-all cursor-pointer"
               >
@@ -5545,6 +5624,66 @@ export default function App() {
         currentUser={currentUser}
         currentEmployeeId={currentEmployeeId}
       />
+
+      {/* Logout Confirmation Dialog Modal */}
+      {showLogoutConfirmModal && (
+        <div 
+          className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-150"
+          onClick={() => setShowLogoutConfirmModal(false)}
+        >
+          <div 
+            className="bg-slate-900 border border-slate-700/90 rounded-2xl w-full max-w-sm p-5 shadow-2xl text-slate-100 flex flex-col gap-4 animate-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                  <LogOut className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white tracking-tight">Confirm Sign Out</h3>
+                  <p className="text-xs text-slate-400">Are you sure you want to log out?</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowLogoutConfirmModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="bg-slate-950/70 rounded-xl p-3 border border-slate-800 text-xs flex flex-col gap-0.5">
+              <span className="text-[10px] text-slate-400 uppercase tracking-wider font-mono">Active Operator Session:</span>
+              <span className="font-bold text-white text-xs">{currentUser || 'OPERATOR'}</span>
+              <span className="text-[11px] text-indigo-400 font-mono">({currentEmployeeId || 'JPMP-002'}) • {currentRole || 'WAREHOUSE CLERK'}</span>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowLogoutConfirmModal(false)}
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700/80 border border-slate-700 transition cursor-pointer"
+              >
+                No / Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLogoutConfirmModal(false);
+                  handleLogout();
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-rose-600 hover:bg-rose-500 transition shadow-sm cursor-pointer flex items-center gap-1.5"
+              >
+                <LogOut className="h-3.5 w-3.5" /> Yes, Log Out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Central Startup Diagnostics & Multi-PC Synchronization Verifier Modal */}
       {showStartupDiagnosticsModal && (

@@ -19,6 +19,7 @@
     "appId": "com.juwei.wms.desktop",
     "productName": "JUWEI WMS Desktop System",
     "copyright": "Copyright © 2026 JUWEI Moulding Corp",
+    "icon": "public/juwei-icon.ico",
     "asar": true,
     "directories": {
       "output": "release"
@@ -30,6 +31,7 @@
       "package.json"
     ],
     "win": {
+      "icon": "public/juwei-icon.ico",
       "signAndEditExecutable": false,
       "target": [
         "nsis",

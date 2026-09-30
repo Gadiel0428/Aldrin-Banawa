@@ -63,7 +63,8 @@ try {
 }
 
 function createWindow() {
-  const iconPath = path.join(__dirname, '../public/favicon.ico');
+  const iconPath = path.join(__dirname, '..', 'public', 'juwei-icon.ico');
+  const fallbackIconPath = path.join(__dirname, '../public/favicon.ico');
 
   let appVersion = '';
   try {
@@ -100,6 +101,7 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 700,
     title: windowTitle,
+    icon: path.join(__dirname, '..', 'public', 'juwei-icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
@@ -112,8 +114,8 @@ function createWindow() {
     show: false,
   };
 
-  if (fs.existsSync(iconPath)) {
-    windowOptions.icon = iconPath;
+  if (!fs.existsSync(iconPath) && fs.existsSync(fallbackIconPath)) {
+    windowOptions.icon = fallbackIconPath;
   }
 
   mainWindow = new BrowserWindow(windowOptions);

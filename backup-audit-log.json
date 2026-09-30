@@ -1,0 +1,119 @@
+[
+  {
+    "id": "BA-1790733340926-3aph",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-09-30-0155.json",
+    "author": "SYSTEM_BOOT",
+    "timestamp": "2026-09-30T01:55:40.926Z",
+    "details": "SERVER_STARTUP",
+    "fileSizeBytes": 8854
+  },
+  {
+    "id": "BA-1790733340700-f41s",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-PRE-STARTUP-2026-09-30-0155.json",
+    "author": "SYSTEM_PRE_STARTUP",
+    "timestamp": "2026-09-30T01:55:40.700Z",
+    "details": "Mandatory pre-startup safety copy taken before server code loads or touches data",
+    "fileSizeBytes": 8854
+  },
+  {
+    "id": "BA-1790733043425-oe72",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-09-30-0150-1.json",
+    "author": "SYSTEM_BOOT",
+    "timestamp": "2026-09-30T01:50:43.425Z",
+    "details": "SERVER_STARTUP",
+    "fileSizeBytes": 8854
+  },
+  {
+    "id": "BA-1790733038640-vvvi",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-09-30-0150.json",
+    "author": "SYSTEM_BOOT",
+    "timestamp": "2026-09-30T01:50:38.640Z",
+    "details": "SERVER_STARTUP",
+    "fileSizeBytes": 8854
+  },
+  {
+    "id": "BA-1790732830678-mk06",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-09-30-0147-1.json",
+    "author": "SYSTEM_BOOT",
+    "timestamp": "2026-09-30T01:47:10.679Z",
+    "details": "SERVER_STARTUP",
+    "fileSizeBytes": 8854
+  },
+  {
+    "id": "BA-1790732826144-byi3",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-09-30-0147.json",
+    "author": "SYSTEM_BOOT",
+    "timestamp": "2026-09-30T01:47:06.144Z",
+    "details": "SERVER_STARTUP",
+    "fileSizeBytes": 8854
+  },
+  {
+    "id": "BA-1790732049098-rngl",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-09-30-0134-1.json",
+    "author": "SYSTEM_BOOT",
+    "timestamp": "2026-09-30T01:34:09.098Z",
+    "details": "SERVER_STARTUP",
+    "fileSizeBytes": 8854
+  },
+  {
+    "id": "BA-1790732042060-73ep",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-09-30-0134.json",
+    "author": "SYSTEM_BOOT",
+    "timestamp": "2026-09-30T01:34:02.060Z",
+    "details": "SERVER_STARTUP",
+    "fileSizeBytes": 8854
+  },
+  {
+    "id": "BA-1790728543662-bwmh",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-09-30-0035-1.json",
+    "author": "SYSTEM_BOOT",
+    "timestamp": "2026-09-30T00:35:43.662Z",
+    "details": "SERVER_STARTUP",
+    "fileSizeBytes": 8854
+  },
+  {
+    "id": "BA-1790728538734-bizy",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-09-30-0035.json",
+    "author": "SYSTEM_BOOT",
+    "timestamp": "2026-09-30T00:35:38.734Z",
+    "details": "SERVER_STARTUP",
+    "fileSizeBytes": 8854
+  },
+  {
+    "id": "BA-1790728122638-mbwv",
+    "action": "DATABASE_RESTORED",
+    "filename": "central-database-2026-09-30-0027.json",
+    "author": "ALDRIN BANAWA (JPMP-002)",
+    "timestamp": "2026-09-30T00:28:42.638Z",
+    "details": "Overwrote live database with backup central-database-2026-09-30-0027.json",
+    "fileSizeBytes": 4376
+  },
+  {
+    "id": "BA-1790728122637-63jz",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-09-30-0028.json",
+    "author": "SYSTEM_SAFETY",
+    "timestamp": "2026-09-30T00:28:42.637Z",
+    "details": "Pre-restore safety snapshot before overwriting database",
+    "fileSizeBytes": 11044
+  },
+  {
+    "id": "BA-1790728040190-apry",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-09-30-0027.json",
+    "author": "SYSTEM_BOOT",
+    "timestamp": "2026-09-30T00:27:20.190Z",
+    "details": "SERVER_STARTUP",
+    "fileSizeBytes": 4376
+  }
+]

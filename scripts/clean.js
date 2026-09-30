@@ -1,6 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+// SAFETY GUARANTEE:
+// This build cleanup script ONLY deletes ephemeral build output directories ('dist', 'release', 'server.js')
+// inside the project root repository. It NEVER accesses, modifies, or deletes anything inside
+// JUWEI_DATA_DIR, backups, or persistent database locations.
+
 const targets = ['dist', 'release', 'server.js'];
 
 for (const target of targets) {

@@ -56,6 +56,30 @@ async function startServer() {
   // Authoritative Central Database File
   const DATA_FILE = getStorageFilePath("central-database.json");
 
+  // =========================================================================
+  // STORAGE CONFIGURATION GUARD RAIL:
+  // Verifies that JUWEI_DATA_DIR is set to an external safe location,
+  // preventing database files from residing in the ephemeral project source folder.
+  // =========================================================================
+  const resolvedDataFile = path.resolve(DATA_FILE);
+  const projectRootDir = path.resolve(process.cwd());
+  const configuredDataDir = process.env.JUWEI_DATA_DIR ? path.resolve(process.env.JUWEI_DATA_DIR) : null;
+  const isInsideProjectSource = resolvedDataFile.startsWith(projectRootDir) && (!configuredDataDir || !resolvedDataFile.startsWith(configuredDataDir));
+
+  if (!configuredDataDir || isInsideProjectSource) {
+    const bannerBorder = "=".repeat(100);
+    console.warn(`\n${bannerBorder}`);
+    console.warn("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+    console.warn("WARNING: JUWEI_DATA_DIR is not set correctly — data is NOT being saved to the safe location and WILL be lost on the next update.");
+    console.warn(`Resolved Database File: ${resolvedDataFile}`);
+    console.warn(`Configured JUWEI_DATA_DIR: ${process.env.JUWEI_DATA_DIR || "(NOT SET)"}`);
+    console.warn("Action Required: Set environment variable JUWEI_DATA_DIR to an external persistent folder (e.g. C:\\JuweiData or /var/juwei-data) before deploying updates!");
+    console.warn("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+    console.warn(`${bannerBorder}\n`);
+  } else {
+    console.log(`[STORAGE CONFIG] Persistent safe storage verified at: ${configuredDataDir} (Database: ${resolvedDataFile})`);
+  }
+
   interface AuthorizedDeviceRecord {
     deviceId: string;
     deviceName: string;
@@ -692,7 +716,60 @@ async function startServer() {
     }
   }
 
-  // Load database state (or auto-recover from backups if needed) on server initialization
+  // =========================================================================
+  // MANDATORY PRE-STARTUP DATABASE SAFETY BACKUP:
+  // Before loading the database or executing any new code that touches data,
+  // create a dedicated safety backup copy of the current live database file.
+  // Format: central-database-PRE-STARTUP-YYYY-MM-DD-HHmm.json
+  // =========================================================================
+  function createPreStartupBackup(): { success: boolean; filename?: string } {
+    try {
+      if (!fs.existsSync(BACKUPS_DIR)) {
+        fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+      }
+
+      if (!fs.existsSync(DATA_FILE)) {
+        console.log("[DATABASE PRE-STARTUP BACKUP] No existing live database file found on disk (fresh install) — skipping pre-startup backup.");
+        return { success: false };
+      }
+
+      const stat = fs.statSync(DATA_FILE);
+      if (stat.size === 0) {
+        console.log("[DATABASE PRE-STARTUP BACKUP] Existing live database file is empty (0 bytes) — skipping pre-startup backup.");
+        return { success: false };
+      }
+
+      const base = `central-database-PRE-STARTUP-${formatBackupTimestamp(new Date())}`;
+      let filename = `${base}.json`;
+      let counter = 1;
+      while (fs.existsSync(path.join(BACKUPS_DIR, filename))) {
+        filename = `${base}-${counter}.json`;
+        counter++;
+      }
+      const targetPath = path.join(BACKUPS_DIR, filename);
+
+      fs.copyFileSync(DATA_FILE, targetPath);
+      const backupStat = fs.statSync(targetPath);
+
+      logBackupAudit(
+        "BACKUP_CREATED",
+        filename,
+        "SYSTEM_PRE_STARTUP",
+        "Mandatory pre-startup safety copy taken before server code loads or touches data",
+        backupStat.size
+      );
+      console.log(`[DATABASE PRE-STARTUP BACKUP] Safety backup created: '${filename}' (${backupStat.size} bytes). Taken before server code touches data.`);
+      return { success: true, filename };
+    } catch (err: any) {
+      console.error("[DATABASE PRE-STARTUP BACKUP] Failed to create pre-startup safety backup:", err);
+      return { success: false };
+    }
+  }
+
+  // 1. Mandatory safety backup created BEFORE loading the database normally
+  createPreStartupBackup();
+
+  // 2. Load database state (or auto-recover from backups if needed) on server initialization
   loadDatabaseFromDisk();
 
   function restoreDatabaseFromBackup(filename: string, author: string): { success: boolean; error?: string; recordCounts?: any } {
