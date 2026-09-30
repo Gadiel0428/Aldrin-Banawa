@@ -339,112 +339,14 @@ async function startServer() {
     }
   }
 
-  // Load persisted state from disk on server initialization
-  function loadDatabaseFromDisk() {
-    try {
-      if (fs.existsSync(DATA_FILE)) {
-        const raw = fs.readFileSync(DATA_FILE, "utf-8");
-        const parsed = JSON.parse(raw);
-
-        if (parsed) {
-          if (parsed.installationId) installationId = String(parsed.installationId);
-          if (parsed.primaryDeviceId) primaryDeviceId = String(parsed.primaryDeviceId);
-          if (parsed.systemResetVersion) systemResetVersion = Number(parsed.systemResetVersion) || 1;
-          if (parsed.systemResetTimestamp) systemResetTimestamp = String(parsed.systemResetTimestamp);
-          if (parsed.systemResetId) systemResetId = String(parsed.systemResetId);
-          if (parsed.systemResetBy) systemResetBy = String(parsed.systemResetBy);
-          if (parsed.stateRevision) stateRevision = Number(parsed.stateRevision) || 1;
-
-          if (Array.isArray(parsed.authorizedDevices)) {
-            authorizedDevicesMap.clear();
-            parsed.authorizedDevices.forEach((dev: AuthorizedDeviceRecord) => {
-              if (dev && dev.deviceId) authorizedDevicesMap.set(dev.deviceId, dev);
-            });
-          }
-
-          if (parsed.state && typeof parsed.state === "object") {
-            Object.keys(parsed.state).forEach((key) => {
-              if (key in state && Array.isArray(parsed.state[key])) {
-                if (key === 'operationalRoles') {
-                  state.operationalRoles = Array.from(new Set<string>(parsed.state[key].map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
-                } else if (key === 'receivingCategories') {
-                  state.receivingCategories = Array.from(new Set<string>(parsed.state[key].map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
-                } else {
-                  // Ensure all loaded records have mandatory fields
-                  (state as any)[key] = parsed.state[key].map((rec: any) => normalizeRecord(rec));
-                }
-              }
-            });
-          }
-          for (const key of Object.keys(state)) {
-            if (key === 'operationalRoles') {
-              if (Array.isArray(parsed.operationalRoles) && parsed.operationalRoles.length > 0) {
-                state.operationalRoles = Array.from(new Set<string>(parsed.operationalRoles.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
-              }
-            } else if (key === 'receivingCategories') {
-              if (Array.isArray(parsed.receivingCategories) && parsed.receivingCategories.length > 0) {
-                state.receivingCategories = Array.from(new Set<string>(parsed.receivingCategories.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
-              }
-            } else if (Array.isArray(parsed[key]) && (!(parsed.state && key in parsed.state))) {
-              (state as any)[key] = parsed[key].map((rec: any) => normalizeRecord(rec));
-            }
-          }
-          if (!Array.isArray(state.operationalRoles) || state.operationalRoles.length === 0) {
-            state.operationalRoles = [...DEFAULT_OPERATIONAL_ROLES];
-          }
-          if (!Array.isArray(state.receivingCategories) || state.receivingCategories.length === 0) {
-            state.receivingCategories = [...DEFAULT_RECEIVING_CATEGORIES];
-          }
-
-          if (Array.isArray(parsed.deletedRecordTombstones)) {
-            parsed.deletedRecordTombstones.forEach((id: string) => markRecordTombstone(id));
-          }
-          if (Array.isArray(parsed.deletedUserTombstones)) {
-            parsed.deletedUserTombstones.forEach((empId: string) => markUserTombstone(empId));
-          }
-          if (Array.isArray(parsed.chatMessages)) {
-            chatMessages.length = 0;
-            chatMessages.push(...parsed.chatMessages);
-          }
-
-          console.log(`JUWEI WMS: Central Database loaded from disk. Reset Version: v${systemResetVersion} (${systemResetId})`);
-        }
-      } else {
-        // Save initial seed state
-        commitDatabase();
-        console.log(`JUWEI WMS: Central Database initialized with seed datasets.`);
-      }
-
-      // Ensure Super Administrator JPMP-002 is always present and active, bound to primary device
-      const superAdminIndex = state.registeredUsers.findIndex(
-        u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002'
-      );
-      if (superAdminIndex === -1) {
-        state.registeredUsers.unshift({ ...defaultSuperAdmin, deviceId: primaryDeviceId });
-        commitDatabase();
-      } else {
-        const existing = state.registeredUsers[superAdminIndex];
-        state.registeredUsers[superAdminIndex] = {
-          ...existing,
-          deviceId: existing.deviceId || primaryDeviceId,
-          isPrimaryAdminDevice: true,
-          authorizedDevices: Array.from(new Set([...(existing.authorizedDevices || []), primaryDeviceId]))
-        };
-      }
-    } catch (err) {
-      console.warn("JUWEI WMS: Notice loading database from disk:", err);
-    }
-  }
-
-  loadDatabaseFromDisk();
-
   // =========================================================================
-  // AUTOMATED DATABASE BACKUPS SUBSYSTEM (JUWEI_DATA_DIR / backups)
+  // AUTOMATED DATABASE BACKUPS & RECOVERY SUBSYSTEM (JUWEI_DATA_DIR / backups)
   // 1. Backs up database to backups folder every 1 hour & once on server startup.
   // 2. Format: central-database-YYYY-MM-DD-HHmm.json (e.g. central-database-2026-09-30-1400.json).
   // 3. Permanent retention: keeps EVERY backup, with NO cap on count and NO age limit.
   // 4. Non-blocking async file copying ensuring zero disruption to normal app operations.
-  // 5. Logs every backup created and restore performed.
+  // 5. Automatic recovery on server startup from most recent backup if live file is missing/corrupted.
+  // 6. Logs every backup created, restore performed, and startup load/recovery action.
   // =========================================================================
 
   const BACKUPS_DIR = process.env.JUWEI_DATA_DIR 
@@ -611,6 +513,187 @@ async function startServer() {
       isBackupInProgress = false;
     }
   }
+
+  // Parse and apply database JSON payload into in-memory state
+  function parseAndApplyDatabaseJson(raw: string): boolean {
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return false;
+
+      if (parsed.installationId) installationId = String(parsed.installationId);
+      if (parsed.primaryDeviceId) primaryDeviceId = String(parsed.primaryDeviceId);
+      if (parsed.systemResetVersion) systemResetVersion = Number(parsed.systemResetVersion) || 1;
+      if (parsed.systemResetTimestamp) systemResetTimestamp = String(parsed.systemResetTimestamp);
+      if (parsed.systemResetId) systemResetId = String(parsed.systemResetId);
+      if (parsed.systemResetBy) systemResetBy = String(parsed.systemResetBy);
+      if (parsed.stateRevision) stateRevision = Number(parsed.stateRevision) || 1;
+
+      if (Array.isArray(parsed.authorizedDevices)) {
+        authorizedDevicesMap.clear();
+        parsed.authorizedDevices.forEach((dev: AuthorizedDeviceRecord) => {
+          if (dev && dev.deviceId) authorizedDevicesMap.set(dev.deviceId, dev);
+        });
+      }
+
+      if (parsed.state && typeof parsed.state === "object") {
+        Object.keys(parsed.state).forEach((key) => {
+          if (key in state && Array.isArray(parsed.state[key])) {
+            if (key === 'operationalRoles') {
+              state.operationalRoles = Array.from(new Set<string>(parsed.state[key].map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+            } else if (key === 'receivingCategories') {
+              state.receivingCategories = Array.from(new Set<string>(parsed.state[key].map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+            } else {
+              // Ensure all loaded records have mandatory fields
+              (state as any)[key] = parsed.state[key].map((rec: any) => normalizeRecord(rec));
+            }
+          }
+        });
+      }
+      for (const key of Object.keys(state)) {
+        if (key === 'operationalRoles') {
+          if (Array.isArray(parsed.operationalRoles) && parsed.operationalRoles.length > 0) {
+            state.operationalRoles = Array.from(new Set<string>(parsed.operationalRoles.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+          }
+        } else if (key === 'receivingCategories') {
+          if (Array.isArray(parsed.receivingCategories) && parsed.receivingCategories.length > 0) {
+            state.receivingCategories = Array.from(new Set<string>(parsed.receivingCategories.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+          }
+        } else if (Array.isArray(parsed[key]) && (!(parsed.state && key in parsed.state))) {
+          (state as any)[key] = parsed[key].map((rec: any) => normalizeRecord(rec));
+        }
+      }
+      if (!Array.isArray(state.operationalRoles) || state.operationalRoles.length === 0) {
+        state.operationalRoles = [...DEFAULT_OPERATIONAL_ROLES];
+      }
+      if (!Array.isArray(state.receivingCategories) || state.receivingCategories.length === 0) {
+        state.receivingCategories = [...DEFAULT_RECEIVING_CATEGORIES];
+      }
+
+      if (Array.isArray(parsed.deletedRecordTombstones)) {
+        parsed.deletedRecordTombstones.forEach((id: string) => markRecordTombstone(id));
+      }
+      if (Array.isArray(parsed.deletedUserTombstones)) {
+        parsed.deletedUserTombstones.forEach((empId: string) => markUserTombstone(empId));
+      }
+      if (Array.isArray(parsed.chatMessages)) {
+        chatMessages.length = 0;
+        chatMessages.push(...parsed.chatMessages);
+      }
+
+      // Ensure Super Administrator JPMP-002 is registered in memory
+      const superAdminIndex = state.registeredUsers.findIndex(
+        u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002'
+      );
+      if (superAdminIndex === -1) {
+        state.registeredUsers.unshift({ ...defaultSuperAdmin, deviceId: primaryDeviceId });
+      } else {
+        const existing = state.registeredUsers[superAdminIndex];
+        state.registeredUsers[superAdminIndex] = {
+          ...existing,
+          deviceId: existing.deviceId || primaryDeviceId,
+          isPrimaryAdminDevice: true,
+          authorizedDevices: Array.from(new Set([...(existing.authorizedDevices || []), primaryDeviceId]))
+        };
+      }
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Load persisted state from disk on server initialization with automatic backup recovery
+  function loadDatabaseFromDisk() {
+    // 1. Try to load and parse the live database file as normal.
+    if (fs.existsSync(DATA_FILE)) {
+      try {
+        const raw = fs.readFileSync(DATA_FILE, "utf-8");
+        // Verify non-empty and valid JSON structure
+        if (raw && raw.trim().length > 0) {
+          if (parseAndApplyDatabaseJson(raw)) {
+            // 3. Log clearly: "Live database loaded normally"
+            // 4. If live database loads successfully and normally, do NOT touch it or restore anything — leave it exactly as-is.
+            console.log("Live database loaded normally");
+            return;
+          }
+        }
+      } catch (err) {
+        // Corrupted or unreadable, fall through to auto-recovery
+      }
+    }
+
+    // 2. If it's missing, empty, or fails to parse (corrupted), do NOT start with a blank database.
+    // Instead, look in the backups folder, find the most recent backup file by filename/timestamp,
+    // and load that one as the starting database instead.
+    let autoRestoredBackupFilename: string | null = null;
+    try {
+      if (fs.existsSync(BACKUPS_DIR)) {
+        const entries = fs.readdirSync(BACKUPS_DIR, { withFileTypes: true });
+        const backupCandidates = entries
+          .filter(e => e.isFile() && e.name.startsWith("central-database-") && e.name.endsWith(".json"))
+          .map(e => {
+            const filePath = path.join(BACKUPS_DIR, e.name);
+            let mtime = 0;
+            try {
+              mtime = fs.statSync(filePath).mtimeMs;
+            } catch (stErr) {}
+            return { filename: e.name, filePath, mtime };
+          });
+
+        // Sort by most recent timestamp descending, then filename descending
+        backupCandidates.sort((a, b) => b.mtime - a.mtime || b.filename.localeCompare(a.filename));
+
+        for (const candidate of backupCandidates) {
+          try {
+            const rawBackup = fs.readFileSync(candidate.filePath, "utf-8");
+            if (rawBackup && rawBackup.trim().length > 0) {
+              if (parseAndApplyDatabaseJson(rawBackup)) {
+                autoRestoredBackupFilename = candidate.filename;
+
+                // Overwrite the missing/corrupted live database with this valid backup
+                try {
+                  fs.copyFileSync(candidate.filePath, DATA_FILE);
+                } catch (copyErr) {
+                  commitDatabase();
+                }
+
+                // 3. Log clearly: "Live database missing/corrupted — auto-restored from backup '<filename>'"
+                console.log(`Live database missing/corrupted — auto-restored from backup '${candidate.filename}'`);
+                logBackupAudit(
+                  "DATABASE_RESTORED",
+                  candidate.filename,
+                  "SYSTEM_AUTO_RECOVERY",
+                  "Live database missing or corrupted on startup — automatically recovered from latest backup",
+                  fs.statSync(candidate.filePath).size
+                );
+                break;
+              }
+            }
+          } catch (candErr) {
+            // If candidate file is corrupted, move to the next most recent candidate
+          }
+        }
+      }
+    } catch (scanErr) {
+      console.error("[AUTO RECOVERY] Error scanning backups directory:", scanErr);
+    }
+
+    // 5. If there are no backups available AND the live database is also missing/corrupted,
+    // start with an empty database as it does now, and log a clear warning that no recovery was possible.
+    if (!autoRestoredBackupFilename) {
+      console.warn("WARNING: Live database is missing/corrupted and no backup files are available in backups folder. Starting with an empty database. No recovery was possible.");
+      commitDatabase();
+      const superAdminIndex = state.registeredUsers.findIndex(
+        u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002'
+      );
+      if (superAdminIndex === -1) {
+        state.registeredUsers.unshift({ ...defaultSuperAdmin, deviceId: primaryDeviceId });
+        commitDatabase();
+      }
+    }
+  }
+
+  // Load database state (or auto-recover from backups if needed) on server initialization
+  loadDatabaseFromDisk();
 
   function restoreDatabaseFromBackup(filename: string, author: string): { success: boolean; error?: string; recordCounts?: any } {
     try {
