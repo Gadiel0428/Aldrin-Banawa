@@ -9,3 +9,4 @@ coverage/
 central-database.json
 central-database.json.tmp.*
 data-store.json
+public/build-info.json

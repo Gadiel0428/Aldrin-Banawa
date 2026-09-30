@@ -4582,16 +4582,65 @@ export default function App() {
     sendSystemActivity(`SUPER ADMIN ${currentUser} deleted delivery record ${id}.`);
   };
 
-  // Export JSON Backup helper
-  const handleExportBackup = () => {
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({
-      stocks, receiving, returns, recycling, issuances, deliveries, envLogs, forkliftChecks
-    }, null, 2));
-    const dlAnchorElem = document.createElement('a');
-    dlAnchorElem.setAttribute("href", dataStr);
-    dlAnchorElem.setAttribute("download", "juwei_wms_iso_backup.json");
-    dlAnchorElem.click();
+  // Export Full Current State JSON helper with current date in filename
+  const handleExportCurrentData = () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const dateStr = `${year}-${month}-${day}`;
+    const filename = `juwei-wms-current-data-${dateStr}.json`;
+
+    const exportPayload = {
+      meta: {
+        system: "JUWEI WAREHOUSE MANAGEMENT SYSTEM",
+        exportDate: dateStr,
+        exportedAt: now.toISOString(),
+        exportedBy: `${currentUser || 'JUWEI OPERATOR'} (${currentEmployeeId || 'JPMP-002'})`,
+        systemResetVersion: Number(localStorage.getItem('juwei_wms_system_reset_version')) || 1,
+        totalRecords: {
+          stocks: stocks.length,
+          receiving: receiving.length,
+          returns: returns.length,
+          recycling: recycling.length,
+          issuances: issuances.length,
+          deliveries: deliveries.length,
+          envLogs: envLogs.length,
+          forkliftChecks: forkliftChecks.length,
+          registries: registries.length,
+          registeredUsers: registeredUsers.length
+        }
+      },
+      stocks,
+      receiving,
+      returns,
+      recycling,
+      issuances,
+      deliveries,
+      envLogs,
+      forkliftChecks,
+      registries,
+      registeredUsers
+    };
+
+    try {
+      const jsonStr = JSON.stringify(exportPayload, null, 2);
+      const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8;' });
+      const blobUrl = URL.createObjectURL(blob);
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.href = blobUrl;
+      downloadAnchor.download = filename;
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      document.body.removeChild(downloadAnchor);
+      URL.revokeObjectURL(blobUrl);
+    } catch (e) {
+      console.error('Failed to export current data JSON:', e);
+      alert('Failed to generate export file. Please check console for details.');
+    }
   };
+
+  const handleExportBackup = handleExportCurrentData;
 
   // Import JSON Backup helper
   const handleImportBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -5260,7 +5309,16 @@ export default function App() {
         {/* Sidebar Footer with system values */}
         <div className="p-4 border-t border-slate-800/80 space-y-2 bg-slate-950/60 backdrop-blur-md">
           <div className="space-y-1.5">
-            {(currentEmployeeId === 'JPMP-002' || currentPermission === 'FULL_ACCESS') ? (
+            <button 
+              onClick={handleExportCurrentData}
+              id="btn-sidebar-export-current-data"
+              className="w-full bg-slate-800/90 hover:bg-slate-700 text-slate-200 hover:text-white py-2 px-3 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1.5 border border-slate-700/80 transition-colors cursor-pointer shadow-xs active:scale-95"
+              title="Download full current state (stocks, receiving, returns, etc.) as formatted JSON"
+            >
+              <Download className="h-3.5 w-3.5 text-indigo-400" /> Export Current Data
+            </button>
+
+            {(currentEmployeeId === 'JPMP-002' || currentPermission === 'FULL_ACCESS') && (
               <>
                 <button 
                   onClick={() => setShowBackupsModal(true)}
@@ -5268,13 +5326,6 @@ export default function App() {
                   title="Super Admin: Automated 24h backups & snapshot disaster recovery"
                 >
                   <Archive className="h-3.5 w-3.5 text-emerald-400" /> Automated Server Backups
-                </button>
-
-                <button 
-                  onClick={handleExportBackup}
-                  className="w-full bg-slate-800/80 hover:bg-slate-800 text-slate-300 hover:text-white py-2 px-3 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1.5 border border-slate-700/60 transition-colors cursor-pointer"
-                >
-                  <Download className="h-3.5 w-3.5 text-indigo-400" /> Export DB Backup
                 </button>
                 
                 <label className="w-full bg-slate-800/80 hover:bg-slate-800 text-slate-300 hover:text-white py-2 px-3 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer border border-slate-700/60 transition-colors">
@@ -5312,10 +5363,6 @@ export default function App() {
                   <Trash2 className="h-3 w-3" /> Wipe operator accounts
                 </button>
               </>
-            ) : (
-              <div className="text-center py-2 text-[10px] text-slate-500 font-mono">
-                Operator Session Active
-              </div>
             )}
           </div>
         </div>

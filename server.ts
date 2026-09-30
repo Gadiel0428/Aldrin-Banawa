@@ -3350,6 +3350,29 @@ async function startServer() {
     });
   });
 
+  // REST API: Direct Installer Download Redirect (downloads JUWEI.WMS.Desktop.System.Setup.1.0.XX.exe directly)
+  app.get("/api/download/latest-installer", async (req, res) => {
+    let targetVer = "";
+    if (fs.existsSync(RELEASE_PERSIST_FILE)) {
+      try {
+        const persisted = JSON.parse(fs.readFileSync(RELEASE_PERSIST_FILE, "utf8"));
+        if (persisted?.version) targetVer = String(persisted.version).replace(/^v/i, "").trim();
+      } catch (e) {}
+    }
+    if (!targetVer) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
+        if (pkg.version) targetVer = String(pkg.version).replace(/^v/i, "").trim();
+      } catch (e) {}
+    }
+    const cleanVer = targetVer || "1.0.93";
+    const rawRepo = process.env.GITHUB_REPO?.trim() || "Gadiel0428/Aldrin-Banawa";
+    const cleanRepo = rawRepo.replace(/^https?:\/\/github\.com\//i, "").replace(/\/+$/, "");
+    const assetName = `JUWEI.WMS.Desktop.System.Setup.${cleanVer}.exe`;
+    const directDownloadUrl = `https://github.com/${cleanRepo}/releases/download/v${cleanVer}/${assetName}`;
+    return res.redirect(302, directDownloadUrl);
+  });
+
   // REST API: Health Check
   app.get("/api/health", (req, res) => {
     res.json({

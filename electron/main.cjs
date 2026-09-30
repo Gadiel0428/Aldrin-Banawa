@@ -239,3 +239,12 @@ ipcMain.handle('get-app-version', () => {
   return currentAppVersion || '';
 });
 
+// IPC handler to safely launch external URLs in the system's default browser
+ipcMain.handle('open-external', async (event, url) => {
+  if (url && (typeof url === 'string') && (url.startsWith('https:') || url.startsWith('http:'))) {
+    await shell.openExternal(url);
+    return true;
+  }
+  return false;
+});
+
