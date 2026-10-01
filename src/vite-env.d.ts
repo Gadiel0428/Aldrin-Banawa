@@ -7,7 +7,9 @@ interface ElectronAPI {
   isElectron?: boolean;
   centralServerUrl?: string;
   updateAppVersion?: (version: string) => void;
-  getAppVersion?: () => string;
+  getAppVersion?: () => Promise<string> | string;
+  openExternal?: (url: string) => Promise<boolean> | boolean;
+  openGeneratedPDF?: (pdfData: ArrayBuffer | Uint8Array | string, filename?: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
 }
 
 interface Window {

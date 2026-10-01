@@ -9,9 +9,10 @@ import {
   Eye, 
   EyeOff, 
   FileText,
-  RotateCcw
+  RotateCcw,
+  Loader2
 } from 'lucide-react';
-import { printElementAsA4 } from '../utils/printDocument';
+import { exportElementAsPDF } from '../utils/printDocument';
 
 export interface PrintPreviewModalProps {
   isOpen: boolean;
@@ -38,6 +39,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   const [scale, setScale] = useState<number>(1.0);
   const [showMarginGuides, setShowMarginGuides] = useState<boolean>(true);
   const [fitMode, setFitMode] = useState<'custom' | 'fit-width' | 'actual'>('actual');
+  const [isExportingPDF, setIsExportingPDF] = useState<boolean>(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const paperSheetRef = useRef<HTMLDivElement>(null);
 
@@ -72,9 +74,18 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     }
   }, [isOpen]);
 
-  const handleExecutePrint = () => {
+  const handleExecutePrint = async () => {
+    if (isExportingPDF) return;
     if (paperSheetRef.current) {
-      printElementAsA4(paperSheetRef.current);
+      setIsExportingPDF(true);
+      try {
+        const filename = `${documentNumber ? `JUWEI-${documentNumber}` : 'JUWEI-Document'}.pdf`;
+        await exportElementAsPDF(paperSheetRef.current, filename);
+      } catch (err) {
+        console.error('[PrintPreviewModal] PDF export error:', err);
+      } finally {
+        setIsExportingPDF(false);
+      }
     } else if (onPrint) {
       onPrint();
     }
@@ -232,11 +243,21 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
             <button
               type="button"
               onClick={handleExecutePrint}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-bold text-xs rounded-xl shadow-lg transition flex items-center gap-2 cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-400"
-              title="Open System Print Dialog (Ctrl+P)"
+              disabled={isExportingPDF}
+              className={`px-4 py-2 ${isExportingPDF ? 'bg-indigo-800 text-indigo-300 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white cursor-pointer'} font-bold text-xs rounded-xl shadow-lg transition flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-indigo-400`}
+              title="Generate real A4 PDF file and open directly (Ctrl+P)"
             >
-              <Printer className="h-4 w-4" />
-              <span className="whitespace-nowrap font-mono tracking-tight">PRINT DOCUMENT</span>
+              {isExportingPDF ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin text-amber-300" />
+                  <span className="whitespace-nowrap font-mono tracking-tight">GENERATING PDF...</span>
+                </>
+              ) : (
+                <>
+                  <Printer className="h-4 w-4" />
+                  <span className="whitespace-nowrap font-mono tracking-tight">PRINT DOCUMENT</span>
+                </>
+              )}
             </button>
 
             <button

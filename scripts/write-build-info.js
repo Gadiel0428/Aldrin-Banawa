@@ -77,7 +77,22 @@ try {
     }
   }
 
-  // 3. Fall back to package.json version field
+  // 3. Fall back to latest-github-release.json if present
+  if (!version) {
+    try {
+      const relPath = path.resolve(process.cwd(), 'latest-github-release.json');
+      if (fs.existsSync(relPath)) {
+        const relData = JSON.parse(fs.readFileSync(relPath, 'utf8'));
+        if (relData && relData.version) {
+          version = String(relData.version).replace(/^v/i, '');
+          versionSource = 'latest-github-release.json';
+          console.log(`[WRITE-BUILD-INFO] Resolved version from latest-github-release.json: ${version}`);
+        }
+      }
+    } catch (relErr) {}
+  }
+
+  // 4. Fall back to package.json version field
   if (!version) {
     version = (pkgData.version || '').replace(/^v/i, '');
     versionSource = 'package.json';

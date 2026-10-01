@@ -2548,6 +2548,9 @@ async function startServer() {
                   device_id: effectiveDevId,
                   reset_version: systemResetVersion
                 };
+                if (col === 'registeredUsers' && existing.pin) {
+                  updatedRec.pin = existing.pin;
+                }
                 listMap.set(recId, updatedRec);
                 modifiedCount++;
               } else {
@@ -2564,6 +2567,12 @@ async function startServer() {
                   device_id: effectiveDevId,
                   reset_version: systemResetVersion
                 };
+                if (col === 'registeredUsers') {
+                  const existingByEmpId = state.registeredUsers.find(u => (u.employeeId || '').toUpperCase() === (item.employeeId || '').toUpperCase());
+                  if (existingByEmpId && existingByEmpId.pin) {
+                    newRec.pin = existingByEmpId.pin;
+                  }
+                }
                 listMap.set(recId, newRec);
                 modifiedCount++;
               }
@@ -2771,6 +2780,16 @@ async function startServer() {
             unmarkUserTombstone(cleanEmpId);
 
             const existingIdx = state.registeredUsers.findIndex(u => u.employeeId.toUpperCase() === cleanEmpId);
+            const existingUser = existingIdx !== -1 ? state.registeredUsers[existingIdx] : null;
+            const finalPin = (newUser.pin && String(newUser.pin).trim()) 
+              ? String(newUser.pin).trim().slice(0, 4) 
+              : (existingUser?.pin || (cleanEmpId === 'JPMP-002' ? '0423' : ''));
+
+            if (!finalPin) {
+              console.warn(`[SECURITY] Rejecting register_account for ${cleanEmpId} because no PIN was provided and account does not exist.`);
+              break;
+            }
+
             const userToStore: ServerUser = {
               id: newUser.id || `USR-${cleanEmpId}`,
               employeeId: cleanEmpId,
@@ -2778,12 +2797,12 @@ async function startServer() {
               role: String(newUser.role || 'WAREHOUSE CLERK').trim().toUpperCase(),
               phoneNumber: newUser.phoneNumber ? String(newUser.phoneNumber).trim() : '',
               permission: String(newUser.permission || 'LIMITED_ACCESS').trim(),
-              pin: String(newUser.pin || '1234').trim().slice(0, 4),
+              pin: finalPin,
               status: 'ACTIVE',
               registeredBy: payload.author || newUser.registeredBy || 'JPMP-002 (ALDRIN BANAWA)',
               registeredBySuperAdmin: true,
               registeredAt: newUser.registeredAt || new Date().toISOString(),
-              version: 1,
+              version: (existingUser?.version || 0) + 1,
               updated_at: new Date().toISOString(),
               reset_version: systemResetVersion
             };
@@ -3556,6 +3575,9 @@ async function startServer() {
             device_id: effectiveDevId,
             reset_version: systemResetVersion
           };
+          if (collection === 'registeredUsers' && existing.pin) {
+            updatedRec.pin = existing.pin;
+          }
           listMap.set(recId, updatedRec);
           modifiedCount++;
         } else {
@@ -3572,6 +3594,12 @@ async function startServer() {
             device_id: effectiveDevId,
             reset_version: systemResetVersion
           };
+          if (collection === 'registeredUsers') {
+            const existingByEmpId = state.registeredUsers.find(u => (u.employeeId || '').toUpperCase() === (item.employeeId || '').toUpperCase());
+            if (existingByEmpId && existingByEmpId.pin) {
+              newRec.pin = existingByEmpId.pin;
+            }
+          }
           listMap.set(recId, newRec);
           modifiedCount++;
         }
@@ -4163,17 +4191,21 @@ async function startServer() {
   // REST API: Update Account PIN
   app.post("/api/accounts/update-pin", async (req, res) => {
     try {
-      const { employeeId, currentPin, newPin, requesterEmployeeId } = req.body;
+      const { employeeId, currentPin, newPin, requesterEmployeeId, confirmed } = req.body;
       const cleanEmpId = String(employeeId || '').trim().toUpperCase();
       const cleanNewPin = String(newPin || '').trim();
       const cleanCurrentPin = String(currentPin || '').trim();
-      const requesterId = String(requesterEmployeeId || cleanEmpId).trim().toUpperCase();
+      const requesterId = String(requesterEmployeeId || req.headers['x-user-employee-id'] || cleanEmpId).trim().toUpperCase();
+      const requesterPermission = String(req.headers['x-user-permission'] || '').trim().toUpperCase();
 
       if (!cleanEmpId || !cleanNewPin) {
         return res.status(400).json({ error: "Operator ID and new PIN are required" });
       }
       if (!/^\d{4,6}$/.test(cleanNewPin)) {
         return res.status(400).json({ error: "PIN must be between 4 and 6 numeric digits" });
+      }
+      if (confirmed !== true) {
+        return res.status(400).json({ error: "CONFIRMATION_REQUIRED: PIN modification requires explicit confirmed=true flag." });
       }
 
       const target = state.registeredUsers.find(u => u.employeeId.toUpperCase().trim() === cleanEmpId);
@@ -4182,11 +4214,13 @@ async function startServer() {
       }
 
       // Verification: must match current PIN or be Super Admin requester
-      const isSuperAdminRequester = requesterId === 'JPMP-002';
+      const isSuperAdminRequester = requesterId === 'JPMP-002' || requesterPermission === 'FULL_ACCESS';
       if (!isSuperAdminRequester && target.pin !== cleanCurrentPin) {
-        return res.status(403).json({ error: "INCORRECT_PIN: Current PIN does not match." });
+        console.warn(`[SECURITY VIOLATION] Unauthorized attempt to change PIN for ${cleanEmpId} by requester ${requesterId}`);
+        return res.status(403).json({ error: "INCORRECT_PIN: Current PIN does not match or unauthorized requester." });
       }
 
+      const oldPin = target.pin;
       target.pin = cleanNewPin;
       target.version = (target.version || 1) + 1;
       target.updated_at = new Date().toISOString();
@@ -4197,6 +4231,17 @@ async function startServer() {
       if (!commitOk) {
         return res.status(500).json({ error: "Failed to persist PIN change to central database" });
       }
+
+      // Security Audit Trail Logging (Requirement 4)
+      const auditLogText = `SECURITY AUDIT: Operator PIN for account ${cleanEmpId} (${target.username}) was changed by ${requesterId || 'Super Admin'} at ${new Date().toISOString()}.`;
+      console.log(`[PIN AUDIT] ${auditLogText}`);
+      chatMessages.push({
+        id: `audit-pin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        sender: 'SYSTEM SECURITY AUDIT',
+        text: auditLogText,
+        timestamp: new Date().toISOString(),
+        isSystem: true
+      });
 
       broadcast({
         type: "account_updated",
@@ -4211,7 +4256,7 @@ async function startServer() {
         systemResetVersion
       });
 
-      return res.json({ success: true, message: "PIN updated successfully in central database", user: target });
+      return res.json({ success: true, message: "PIN updated and audited successfully in central database", user: target });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }

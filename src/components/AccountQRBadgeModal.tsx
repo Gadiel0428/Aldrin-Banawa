@@ -17,10 +17,11 @@ import {
   Eye, 
   EyeOff, 
   Phone, 
-  Download 
+  Download,
+  Loader2 
 } from 'lucide-react';
 import { RegisteredAccount } from '../types';
-import { printElementAsA4 } from '../utils/printDocument';
+import { exportElementAsPDF } from '../utils/printDocument';
 
 interface AccountQRBadgeModalProps {
   account: RegisteredAccount;
@@ -145,11 +146,23 @@ export default function AccountQRBadgeModal({
     }
   };
 
-  const handlePrintBadge = () => {
+  const [isExportingPDF, setIsExportingPDF] = useState(false);
+
+  const handlePrintBadge = async () => {
+    if (isExportingPDF) return;
     const el = (document.querySelector('.printable-badge') as HTMLElement | null)
       || (document.querySelector('.printable-area') as HTMLElement | null);
     if (el) {
-      printElementAsA4(el);
+      setIsExportingPDF(true);
+      try {
+        const empId = account.employeeId || 'operator';
+        const filename = `JUWEI-Badge-${empId}.pdf`;
+        await exportElementAsPDF(el, filename);
+      } catch (err) {
+        console.error('[AccountQRBadgeModal] PDF export error:', err);
+      } finally {
+        setIsExportingPDF(false);
+      }
     }
   };
 
@@ -163,7 +176,7 @@ export default function AccountQRBadgeModal({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen]);
+  }, [isOpen, isExportingPDF, account]);
 
   const modalContent = (
     <AnimatePresence>
@@ -303,10 +316,19 @@ export default function AccountQRBadgeModal({
                   <button
                     type="button"
                     onClick={handlePrintBadge}
-                    className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-1 rounded-xl text-[11px] transition flex items-center justify-center gap-1 shadow-sm uppercase cursor-pointer whitespace-nowrap"
-                    title="Direct in-app print pass"
+                    disabled={isExportingPDF}
+                    className={`bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-1 rounded-xl text-[11px] transition flex items-center justify-center gap-1 shadow-sm uppercase ${isExportingPDF ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'} whitespace-nowrap`}
+                    title="Generate real A4 PDF badge and open directly (Ctrl+P)"
                   >
-                    <Printer className="h-3.5 w-3.5 shrink-0" /> PRINT
+                    {isExportingPDF ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300 shrink-0" /> PDF...
+                      </>
+                    ) : (
+                      <>
+                        <Printer className="h-3.5 w-3.5 shrink-0" /> PRINT
+                      </>
+                    )}
                   </button>
 
                   <button

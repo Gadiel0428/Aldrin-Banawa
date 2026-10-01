@@ -43,6 +43,11 @@ export const VersionUpdateBanner: React.FC<VersionUpdateBannerProps> = ({
     const directDownloadUrl = `https://github.com/${repo}/releases/download/v${targetVer}/${filename}`;
 
     try {
+      localStorage.setItem('juwei_wms_installed_version', targetVer);
+      localStorage.setItem('juwei_wms_downloaded_version', targetVer);
+    } catch (e) {}
+
+    try {
       if (typeof window !== 'undefined' && (window as any).electronAPI?.openExternal) {
         (window as any).electronAPI.openExternal(directDownloadUrl);
         return;

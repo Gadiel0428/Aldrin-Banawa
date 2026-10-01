@@ -20,6 +20,16 @@ export default defineConfig(() => {
 
   if (!appVersion) {
     try {
+      const relPath = path.resolve(__dirname, 'latest-github-release.json');
+      if (fs.existsSync(relPath)) {
+        const rInfo = JSON.parse(fs.readFileSync(relPath, 'utf8'));
+        if (rInfo.version) appVersion = rInfo.version;
+      }
+    } catch (e) {}
+  }
+
+  if (!appVersion) {
+    try {
       const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8'));
       if (pkg.version) appVersion = pkg.version;
     } catch (e) {}

@@ -68,21 +68,32 @@ function createWindow() {
 
   let appVersion = '';
   try {
-    const buildInfoPaths = [
-      path.join(__dirname, '../dist/build-info.json'),
-      path.join(__dirname, '../public/build-info.json'),
-      path.join(__dirname, 'dist/build-info.json'),
-    ];
-    for (const bip of buildInfoPaths) {
-      if (fs.existsSync(bip)) {
-        const bInfo = JSON.parse(fs.readFileSync(bip, 'utf8'));
-        if (bInfo && bInfo.version) {
-          appVersion = bInfo.version;
-          break;
-        }
+    if (app && typeof app.getVersion === 'function') {
+      const v = app.getVersion();
+      if (v && v !== '0.0.0') {
+        appVersion = v;
       }
     }
   } catch (e) {}
+
+  if (!appVersion) {
+    try {
+      const buildInfoPaths = [
+        path.join(__dirname, '../dist/build-info.json'),
+        path.join(__dirname, '../public/build-info.json'),
+        path.join(__dirname, 'dist/build-info.json'),
+      ];
+      for (const bip of buildInfoPaths) {
+        if (fs.existsSync(bip)) {
+          const bInfo = JSON.parse(fs.readFileSync(bip, 'utf8'));
+          if (bInfo && bInfo.version) {
+            appVersion = bInfo.version;
+            break;
+          }
+        }
+      }
+    } catch (e) {}
+  }
 
   if (!appVersion) {
     try {
@@ -236,6 +247,12 @@ ipcMain.on('app-version-updated', (event, version) => {
 
 // IPC handler to return the current known app version
 ipcMain.handle('get-app-version', () => {
+  try {
+    if (app && typeof app.getVersion === 'function') {
+      const v = app.getVersion();
+      if (v && v !== '0.0.0') return v;
+    }
+  } catch (e) {}
   return currentAppVersion || '';
 });
 
@@ -246,5 +263,38 @@ ipcMain.handle('open-external', async (event, url) => {
     return true;
   }
   return false;
+});
+
+// IPC handler to write generated PDF to a temp file and open with host default viewer
+ipcMain.handle('open-generated-pdf', async (event, { pdfData, filename }) => {
+  try {
+    const tempDir = app.getPath('temp');
+    const safeFilename = (filename || 'juwei-wms-document.pdf').replace(/[/\\?%*:|"<>]/g, '_');
+    const finalFilename = safeFilename.endsWith('.pdf') ? safeFilename : `${safeFilename}.pdf`;
+    const filePath = path.join(tempDir, finalFilename);
+
+    let buffer;
+    if (Buffer.isBuffer(pdfData)) {
+      buffer = pdfData;
+    } else if (pdfData instanceof ArrayBuffer || ArrayBuffer.isView(pdfData)) {
+      buffer = Buffer.from(pdfData);
+    } else if (typeof pdfData === 'string') {
+      const base64Data = pdfData.replace(/^data:application\/pdf;base64,/, '');
+      buffer = Buffer.from(base64Data, 'base64');
+    } else {
+      buffer = Buffer.from(pdfData);
+    }
+
+    fs.writeFileSync(filePath, buffer);
+    const result = await shell.openPath(filePath);
+    if (result) {
+      console.warn('[JUWEI Electron] shell.openPath warning:', result);
+      return { success: false, error: result };
+    }
+    return { success: true, filePath };
+  } catch (err) {
+    console.error('[JUWEI Electron] Error opening generated PDF:', err);
+    return { success: false, error: err?.message || String(err) };
+  }
 });
 

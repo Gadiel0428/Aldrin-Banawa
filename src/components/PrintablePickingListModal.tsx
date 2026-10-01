@@ -21,10 +21,11 @@ import {
   Award, 
   FileCheck,
   Check,
-  Eye
+  Eye,
+  Loader2
 } from 'lucide-react';
 import { PrintPreviewModal } from './PrintPreviewModal';
-import { printElementAsA4 } from '../utils/printDocument';
+import { exportElementAsPDF } from '../utils/printDocument';
 import { DeliveryRecord, IssuanceRecord, MaterialStockItem, MasterRegistryItem } from '../types';
 
 export type DocViewMode = 'OFFICIAL_DOC' | 'PICKING_LIST' | 'SUMMARY_LOG';
@@ -62,9 +63,19 @@ export default function PrintablePickingListModal({
     (!delivery && !issuance) ? 'SUMMARY_LOG' : initialView
   );
   const [showPrintPreview, setShowPrintPreview] = useState<boolean>(false);
+  const [isExportingPDF, setIsExportingPDF] = useState<boolean>(false);
   const printableContainerRef = useRef<HTMLDivElement>(null);
 
-  const handlePrint = () => {
+  // Helper variables for single record view
+  const targetDelivery = delivery || deliveriesList[0] || null;
+  const targetIssuance = issuance || issuancesList[0] || null;
+
+  const docNumber = isDeliveryMode 
+    ? (targetDelivery?.drNumber || targetDelivery?.pickingListNumber || targetDelivery?.gatePassNumber || 'N/A')
+    : (targetIssuance?.requisitionNumber || 'N/A');
+
+  const handlePrint = async () => {
+    if (isExportingPDF) return;
     // Print the currently shown .printable-area element (either preview sheet or document container)
     let el: HTMLElement | null = null;
     if (showPrintPreview) {
@@ -78,7 +89,16 @@ export default function PrintablePickingListModal({
         || (document.querySelector('.printable-area') as HTMLElement | null);
     }
     if (el) {
-      printElementAsA4(el);
+      setIsExportingPDF(true);
+      try {
+        const idStr = docNumber && docNumber !== 'N/A' ? docNumber : 'document';
+        const filename = `JUWEI-${viewMode}-${idStr}.pdf`;
+        await exportElementAsPDF(el, filename);
+      } catch (err) {
+        console.error('[PrintablePickingListModal] PDF export error:', err);
+      } finally {
+        setIsExportingPDF(false);
+      }
     }
   };
 
@@ -92,15 +112,7 @@ export default function PrintablePickingListModal({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [viewMode, showPrintPreview]);
-
-  // Helper variables for single record view
-  const targetDelivery = delivery || deliveriesList[0] || null;
-  const targetIssuance = issuance || issuancesList[0] || null;
-
-  const docNumber = isDeliveryMode 
-    ? (targetDelivery?.drNumber || targetDelivery?.pickingListNumber || targetDelivery?.gatePassNumber || 'N/A')
-    : (targetIssuance?.requisitionNumber || 'N/A');
+  }, [viewMode, showPrintPreview, docNumber, isExportingPDF]);
 
   const partCode = isDeliveryMode ? (targetDelivery?.partCode || 'N/A') : (targetIssuance?.partCode || 'N/A');
   const description = isDeliveryMode ? (targetDelivery?.modelName || 'N/A') : (targetIssuance?.description || 'N/A');
@@ -1176,11 +1188,22 @@ export default function PrintablePickingListModal({
             <button
               type="button"
               onClick={handlePrint}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow-lg transition flex items-center gap-2 cursor-pointer active:scale-95"
+              disabled={isExportingPDF}
+              className={`px-4 py-2 ${isExportingPDF ? 'bg-indigo-800 text-indigo-300 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white cursor-pointer'} text-xs font-bold rounded-xl shadow-lg transition flex items-center gap-2`}
               id="btn-print-document-sheet"
+              title="Generate real A4 PDF file and open directly (Ctrl+P)"
             >
-              <Printer className="h-4 w-4" />
-              <span>PRINT (PDF / PAPER)</span>
+              {isExportingPDF ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin text-amber-300" />
+                  <span>GENERATING PDF...</span>
+                </>
+              ) : (
+                <>
+                  <Printer className="h-4 w-4" />
+                  <span>PRINT DOCUMENT</span>
+                </>
+              )}
             </button>
             <button
               type="button"
@@ -1215,10 +1238,20 @@ export default function PrintablePickingListModal({
             <button
               type="button"
               onClick={handlePrint}
-              className="px-3 py-1 bg-amber-700 hover:bg-amber-800 text-white font-bold rounded-lg text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+              disabled={isExportingPDF}
+              className={`px-3 py-1 ${isExportingPDF ? 'bg-amber-900/80 text-amber-300 cursor-not-allowed' : 'bg-amber-700 hover:bg-amber-800 text-white cursor-pointer'} font-bold rounded-lg text-xs transition flex items-center gap-1.5 shadow-xs`}
             >
-              <Printer className="h-3 w-3" />
-              <span>Confirm & Print Now</span>
+              {isExportingPDF ? (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  <span>Generating PDF...</span>
+                </>
+              ) : (
+                <>
+                  <Printer className="h-3 w-3" />
+                  <span>Confirm & Print Document</span>
+                </>
+              )}
             </button>
           </div>
         </div>

@@ -20,10 +20,11 @@ import {
   RefreshCw,
   Search,
   Users,
-  Eye
+  Eye,
+  Loader2
 } from 'lucide-react';
 import { PrintPreviewModal } from './PrintPreviewModal';
-import { printElementAsA4 } from '../utils/printDocument';
+import { exportElementAsPDF } from '../utils/printDocument';
 import { ReceivingRecord, IssuanceRecord, MaterialStockItem, MasterRegistryItem } from '../types';
 import { 
   filterReceivingAndIssuanceData, 
@@ -107,11 +108,23 @@ export default function ReceivingVsIssuanceReportModal({
     }
   };
 
-  const handlePrint = () => {
+  const [isExportingPrintPDF, setIsExportingPrintPDF] = useState<boolean>(false);
+
+  const handlePrint = async () => {
+    if (isExportingPrintPDF) return;
     const el = (document.getElementById('printable-summary-content') as HTMLElement | null)
       || (document.querySelector('.printable-area') as HTMLElement | null);
     if (el) {
-      printElementAsA4(el);
+      setIsExportingPrintPDF(true);
+      try {
+        const dateStr = new Date().toISOString().split('T')[0];
+        const filename = `JUWEI-Receiving-vs-Issuance-${dateStr}.pdf`;
+        await exportElementAsPDF(el, filename);
+      } catch (err) {
+        console.error('[ReceivingVsIssuanceReportModal] PDF export error:', err);
+      } finally {
+        setIsExportingPrintPDF(false);
+      }
     }
   };
 
@@ -124,7 +137,7 @@ export default function ReceivingVsIssuanceReportModal({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [isExportingPrintPDF]);
 
   const isNetPositive = summary.netDelta >= 0;
   const totalVolume = summary.totalReceivedQty + summary.totalIssuedQty;
@@ -662,11 +675,21 @@ export default function ReceivingVsIssuanceReportModal({
             </button>
             <button
               onClick={handlePrint}
-              className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold px-3.5 py-2 rounded-xl transition border border-slate-700 flex items-center gap-1.5 cursor-pointer"
-              title="Print formatted document"
+              disabled={isExportingPrintPDF}
+              className={`bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold px-3.5 py-2 rounded-xl transition border border-slate-700 flex items-center gap-1.5 ${isExportingPrintPDF ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
+              title="Generate real A4 PDF file and open directly (Ctrl+P)"
             >
-              <Printer className="h-3.5 w-3.5" />
-              Print
+              {isExportingPrintPDF ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300" />
+                  Generating PDF...
+                </>
+              ) : (
+                <>
+                  <Printer className="h-3.5 w-3.5" />
+                  Print Document
+                </>
+              )}
             </button>
             <button
               onClick={onClose}
@@ -769,10 +792,20 @@ export default function ReceivingVsIssuanceReportModal({
             </button>
             <button
               onClick={handlePrint}
-              className="bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+              disabled={isExportingPrintPDF}
+              className={`bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition flex items-center gap-1.5 ${isExportingPrintPDF ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
             >
-              <Printer className="h-3.5 w-3.5" />
-              Print Now
+              {isExportingPrintPDF ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300" />
+                  Generating PDF...
+                </>
+              ) : (
+                <>
+                  <Printer className="h-3.5 w-3.5" />
+                  Print Document
+                </>
+              )}
             </button>
             <button
               onClick={handleExportPDF}

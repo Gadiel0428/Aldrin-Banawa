@@ -1,7 +1,7 @@
 {
   "name": "juwei-wms-desktop",
   "private": true,
-  "version": "1.0.86",
+  "version": "1.0.94",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -50,6 +50,7 @@
     "@google/genai": "^2.4.0",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
+    "html2canvas": "^1.4.1",
     "html5-qrcode": "^2.3.8",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",

@@ -363,6 +363,13 @@ export default function App() {
   const [updateAvailable, setUpdateAvailable] = useState<boolean>(false);
   const [bannerDismissed, setBannerDismissed] = useState<boolean>(false);
   const [newVersionString, setNewVersionString] = useState<string>('');
+  const [installedDesktopVersion, setInstalledDesktopVersion] = useState<string>(() => {
+    try {
+      return localStorage.getItem('juwei_wms_installed_version') || '';
+    } catch (e) {
+      return '';
+    }
+  });
   const [appVersion, setAppVersion] = useState<string>(() => {
     if (typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__) {
       return String(__APP_VERSION__).replace(/^v/i, '');
@@ -370,6 +377,26 @@ export default function App() {
     return '';
   });
   const updateAvailableRef = useRef<boolean>(false);
+
+  // Accurate semver comparator: returns true ONLY if candidate is strictly newer than current
+  const isNewerVersion = (candidateVer?: string, currentVer?: string): boolean => {
+    if (!candidateVer || !currentVer) return false;
+    const s = String(candidateVer).replace(/^v/i, '').trim();
+    const c = String(currentVer).replace(/^v/i, '').trim();
+    if (!s || !c || s === c) return false;
+
+    const sParts = s.split('.').map(n => parseInt(n, 10) || 0);
+    const cParts = c.split('.').map(n => parseInt(n, 10) || 0);
+    const maxLen = Math.max(sParts.length, cParts.length);
+
+    for (let i = 0; i < maxLen; i++) {
+      const sVal = sParts[i] || 0;
+      const cVal = cParts[i] || 0;
+      if (sVal > cVal) return true;
+      if (sVal < cVal) return false;
+    }
+    return false;
+  };
 
   // Cross-tab zero-latency synchronization channel
   const syncChannelRef = useRef<BroadcastChannel | null>(null);
@@ -839,6 +866,22 @@ export default function App() {
       } catch (e) {}
     };
     fetchBuildInfo();
+
+    // Query installed desktop version from Electron if running inside Electron wrapper
+    if (typeof window !== 'undefined' && window.electronAPI?.getAppVersion) {
+      try {
+        Promise.resolve(window.electronAPI.getAppVersion()).then((ver) => {
+          if (ver) {
+            const cleanVer = String(ver).replace(/^v/i, '').trim();
+            console.log('[JUWEI WMS] Installed Electron Desktop version:', cleanVer);
+            setInstalledDesktopVersion(cleanVer);
+            try {
+              localStorage.setItem('juwei_wms_installed_version', cleanVer);
+            } catch (e) {}
+          }
+        }).catch(() => {});
+      } catch (e) {}
+    }
   }, []);
 
   // Direct employee ID and PIN login form states with Remember Login
@@ -1875,7 +1918,8 @@ export default function App() {
 
       const isSuper = empId === 'JPMP-002';
       const localUser = safeCurrent.find(cu => (cu.employeeId || '').toUpperCase() === empId);
-      const cleanPin = resolveAccountPin({ ...localUser, ...u }, empId);
+      // SECURITY FIX: Retain known local PIN if server sent sanitized account payload without PIN on logout/reconnect
+      const cleanPin = (u.pin && String(u.pin).trim()) || (localUser?.pin && String(localUser.pin).trim()) || (isSuper ? '0423' : '');
 
       userMap.set(empId, {
         username: (u.username || localUser?.username || (isSuper ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
@@ -2611,30 +2655,60 @@ export default function App() {
             });
             if (res.ok) {
               const data = await res.json();
-              if (data?.version) {
-                const liveVersion = String(data.version).replace(/^v/i, '').trim();
-                if (liveVersion) {
-                  setAppVersion((prev) => (prev !== liveVersion ? liveVersion : prev));
-                  if (typeof window !== 'undefined' && window.electronAPI?.updateAppVersion) {
-                    window.electronAPI.updateAppVersion(liveVersion);
-                  }
+              const serverVer = data?.version ? String(data.version).replace(/^v/i, '').trim() : '';
+              if (serverVer) {
+                setAppVersion((prev) => (prev !== serverVer ? serverVer : prev));
+                if (typeof window !== 'undefined' && window.electronAPI?.updateAppVersion) {
+                  window.electronAPI.updateAppVersion(serverVer);
                 }
               }
 
-              // Update banner detection (trigger once when newly deployed client buildId arrives)
-              if (!updateAvailableRef.current) {
-                const clientBuildId = typeof __BUILD_ID__ !== 'undefined' ? String(__BUILD_ID__) : '';
-                const serverBuildId = data?.buildId != null ? String(data.buildId) : '';
-                if (clientBuildId && clientBuildId !== '0' && serverBuildId && serverBuildId !== '0' && !data?.isDevelopmentFallback) {
-                  if (serverBuildId !== clientBuildId) {
-                    console.log(`[JUWEI WMS UPDATE] New version detected! Client __BUILD_ID__: ${clientBuildId}, Server buildId: ${serverBuildId}`);
-                    updateAvailableRef.current = true;
-                    setUpdateAvailable(true);
-                    if (data.version) {
-                      setNewVersionString(String(data.version));
-                    }
-                  }
+              // Determine current installed/running app version:
+              // 1. Electron installed desktop version (from OS desktop installation)
+              // 2. Previously acknowledged/saved version in localStorage
+              // 3. Static __APP_VERSION__ defined at build time
+              let currentInstalled = (installedDesktopVersion || '').replace(/^v/i, '').trim();
+              if (!currentInstalled) {
+                try {
+                  currentInstalled = (localStorage.getItem('juwei_wms_installed_version') || '').replace(/^v/i, '').trim();
+                } catch (e) {}
+              }
+              if (!currentInstalled && typeof __APP_VERSION__ !== 'undefined') {
+                currentInstalled = String(__APP_VERSION__).replace(/^v/i, '').trim();
+              }
+
+              // =========================================================================
+              // MANDATORY RULE: Once app is installed / updated to the latest version,
+              // ALWAYS REMOVE THIS BANNER!
+              // =========================================================================
+              const isUpToDate = Boolean(
+                (currentInstalled && serverVer && !isNewerVersion(serverVer, currentInstalled)) ||
+                (serverVer && currentInstalled && serverVer === currentInstalled)
+              );
+
+              if (isUpToDate) {
+                if (updateAvailable || updateAvailableRef.current) {
+                  console.log(`[JUWEI WMS UPDATE] Installed app (${currentInstalled}) is up-to-date with server (${serverVer}). Removing banner.`);
+                  updateAvailableRef.current = false;
+                  setUpdateAvailable(false);
+                  setNewVersionString('');
                 }
+                break;
+              }
+
+              // ONLY show update banner if the server version is strictly NEWER than current version
+              if (serverVer && currentInstalled && isNewerVersion(serverVer, currentInstalled)) {
+                if (!updateAvailableRef.current) {
+                  console.log(`[JUWEI WMS UPDATE] Update available: server ${serverVer} > client ${currentInstalled}`);
+                  updateAvailableRef.current = true;
+                  setUpdateAvailable(true);
+                  setNewVersionString(serverVer);
+                }
+              } else if (!isNewerVersion(serverVer, currentInstalled)) {
+                // Not newer: ensure banner is removed
+                updateAvailableRef.current = false;
+                setUpdateAvailable(false);
+                setNewVersionString('');
               }
               break;
             }
@@ -3649,7 +3723,7 @@ export default function App() {
           role: (updated.role || '').toUpperCase(),
           phoneNumber: updated.phoneNumber !== undefined ? updated.phoneNumber : (u.phoneNumber || ''),
           permission: updated.permission || u.permission || 'LIMITED_ACCESS',
-          pin: (updated.pin || u.pin || '1234').slice(0, 4),
+          pin: (updated.pin && String(updated.pin).trim()) ? String(updated.pin).trim().slice(0, 4) : (u.pin || ''),
           status: updated.status || u.status || 'ACTIVE',
           lastActive: updated.lastActive !== undefined ? updated.lastActive : u.lastActive
         };
@@ -3706,16 +3780,22 @@ export default function App() {
           body: JSON.stringify(targetUpdatedUser)
         }).catch(() => {});
 
-        fetch(`${baseUrl}/api/accounts/update-pin`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ employeeId: cleanNewId, pin: targetUpdatedUser.pin || '1234' })
-        }).catch(() => {});
+        // ONLY trigger update-pin if PIN was explicitly changed by Super Admin
+        const oldUser = registeredUsers.find(u => (u.employeeId || '').toUpperCase() === cleanOldId);
+        if (updated.pin && String(updated.pin).trim() !== (oldUser?.pin || '')) {
+          fetch(`${baseUrl}/api/accounts/update-pin`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              employeeId: cleanNewId,
+              newPin: String(updated.pin).trim(),
+              requesterEmployeeId: currentEmployeeId || 'JPMP-002',
+              confirmed: true
+            })
+          }).catch(() => {});
+        }
       } catch (e) {}
-
     }
-
-    syncCollection('registeredUsers', nextUsers);
   };
 
   const handleDirectLogin = async (e: React.FormEvent) => {
@@ -3942,7 +4022,6 @@ export default function App() {
       try {
         localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(updated));
       } catch (e) {}
-      syncCollection('registeredUsers', updated);
       return updated;
     });
     
@@ -4722,8 +4801,24 @@ export default function App() {
         {updateAvailable && !bannerDismissed && (
           <div className="fixed top-0 left-0 right-0 z-50">
             <VersionUpdateBanner
-              onReload={() => window.location.reload()}
-              onLater={() => setBannerDismissed(true)}
+              onReload={() => {
+                if (newVersionString) {
+                  try {
+                    localStorage.setItem('juwei_wms_installed_version', newVersionString);
+                  } catch (e) {}
+                }
+                setUpdateAvailable(false);
+                updateAvailableRef.current = false;
+                window.location.reload();
+              }}
+              onLater={() => {
+                setBannerDismissed(true);
+                if (newVersionString) {
+                  try {
+                    localStorage.setItem('juwei_wms_installed_version', newVersionString);
+                  } catch (e) {}
+                }
+              }}
               newVersion={newVersionString}
             />
           </div>
@@ -5373,8 +5468,24 @@ export default function App() {
         {/* Dismissible Version Update Notification Banner */}
         {updateAvailable && !bannerDismissed && (
           <VersionUpdateBanner
-            onReload={() => window.location.reload()}
-            onLater={() => setBannerDismissed(true)}
+            onReload={() => {
+              if (newVersionString) {
+                try {
+                  localStorage.setItem('juwei_wms_installed_version', newVersionString);
+                } catch (e) {}
+              }
+              setUpdateAvailable(false);
+              updateAvailableRef.current = false;
+              window.location.reload();
+            }}
+            onLater={() => {
+              setBannerDismissed(true);
+              if (newVersionString) {
+                try {
+                  localStorage.setItem('juwei_wms_installed_version', newVersionString);
+                } catch (e) {}
+              }
+            }}
             newVersion={newVersionString}
           />
         )}

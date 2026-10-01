@@ -22,10 +22,11 @@ import {
   Search, 
   Building, 
   Check, 
-  Eye 
+  Eye,
+  Loader2 
 } from 'lucide-react';
 import { PrintPreviewModal } from './PrintPreviewModal';
-import { printElementAsA4 } from '../utils/printDocument';
+import { exportElementAsPDF } from '../utils/printDocument';
 import { MaterialStockItem, getCustomerForPart } from '../types';
 import { 
   filterInventoryData, 
@@ -122,11 +123,23 @@ export default function InventoryReportModal({
     }
   };
 
-  const handlePrint = () => {
+  const [isPrintingPDF, setIsPrintingPDF] = useState<boolean>(false);
+
+  const handlePrint = async () => {
+    if (isPrintingPDF) return;
     const el = (document.getElementById('printable-inventory-report') as HTMLElement | null)
       || (document.querySelector('.printable-area') as HTMLElement | null);
     if (el) {
-      printElementAsA4(el);
+      setIsPrintingPDF(true);
+      try {
+        const dateStr = new Date().toISOString().split('T')[0];
+        const filename = `JUWEI-Inventory-Report-${dateStr}.pdf`;
+        await exportElementAsPDF(el, filename);
+      } catch (err) {
+        console.error('[InventoryReportModal] PDF export error:', err);
+      } finally {
+        setIsPrintingPDF(false);
+      }
     }
   };
 
@@ -139,7 +152,7 @@ export default function InventoryReportModal({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [isPrintingPDF]);
 
   const reportContent = (
     <div className="space-y-6">
@@ -576,11 +589,21 @@ export default function InventoryReportModal({
               <button
                 type="button"
                 onClick={handlePrint}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border border-slate-700"
-                title="Print this report directly"
+                disabled={isPrintingPDF}
+                className={`px-3 py-1.5 ${isPrintingPDF ? 'bg-slate-800 text-slate-400 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer'} rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-slate-700`}
+                title="Generate real A4 PDF file and open directly (Ctrl+P)"
               >
-                <Printer className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Print</span>
+                {isPrintingPDF ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300" />
+                    <span className="hidden sm:inline">Generating PDF...</span>
+                  </>
+                ) : (
+                  <>
+                    <Printer className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Print Document</span>
+                  </>
+                )}
               </button>
 
               <button
