@@ -1918,8 +1918,7 @@ export default function App() {
 
       const isSuper = empId === 'JPMP-002';
       const localUser = safeCurrent.find(cu => (cu.employeeId || '').toUpperCase() === empId);
-      // SECURITY FIX: Retain known local PIN if server sent sanitized account payload without PIN on logout/reconnect
-      const cleanPin = (u.pin && String(u.pin).trim()) || (localUser?.pin && String(localUser.pin).trim()) || (isSuper ? '0423' : '');
+      const cleanPin = resolveAccountPin({ ...localUser, ...u }, empId);
 
       userMap.set(empId, {
         username: (u.username || localUser?.username || (isSuper ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
@@ -3723,7 +3722,7 @@ export default function App() {
           role: (updated.role || '').toUpperCase(),
           phoneNumber: updated.phoneNumber !== undefined ? updated.phoneNumber : (u.phoneNumber || ''),
           permission: updated.permission || u.permission || 'LIMITED_ACCESS',
-          pin: (updated.pin && String(updated.pin).trim()) ? String(updated.pin).trim().slice(0, 4) : (u.pin || ''),
+          pin: (updated.pin || u.pin || '1234').slice(0, 4),
           status: updated.status || u.status || 'ACTIVE',
           lastActive: updated.lastActive !== undefined ? updated.lastActive : u.lastActive
         };
@@ -3780,22 +3779,16 @@ export default function App() {
           body: JSON.stringify(targetUpdatedUser)
         }).catch(() => {});
 
-        // ONLY trigger update-pin if PIN was explicitly changed by Super Admin
-        const oldUser = registeredUsers.find(u => (u.employeeId || '').toUpperCase() === cleanOldId);
-        if (updated.pin && String(updated.pin).trim() !== (oldUser?.pin || '')) {
-          fetch(`${baseUrl}/api/accounts/update-pin`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              employeeId: cleanNewId,
-              newPin: String(updated.pin).trim(),
-              requesterEmployeeId: currentEmployeeId || 'JPMP-002',
-              confirmed: true
-            })
-          }).catch(() => {});
-        }
+        fetch(`${baseUrl}/api/accounts/update-pin`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ employeeId: cleanNewId, pin: targetUpdatedUser.pin || '1234' })
+        }).catch(() => {});
       } catch (e) {}
+
     }
+
+    syncCollection('registeredUsers', nextUsers);
   };
 
   const handleDirectLogin = async (e: React.FormEvent) => {
@@ -4022,6 +4015,7 @@ export default function App() {
       try {
         localStorage.setItem('juwei_wms_registeredUsers', JSON.stringify(updated));
       } catch (e) {}
+      syncCollection('registeredUsers', updated);
       return updated;
     });
     

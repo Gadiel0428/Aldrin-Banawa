@@ -486,33 +486,22 @@ export default function RegisteredAccountsModule({
       cleanEmpId = `JPMP-${cleanEmpId.replace(/^EMP-/, '')}`;
     }
 
-    const rawPin = editingAccount.pin ? String(editingAccount.pin).trim() : '';
-    let cleanPin: string | undefined = undefined;
-    if (rawPin) {
-      const digits = rawPin.replace(/\D/g, '').slice(0, 4);
-      if (digits.length < 4) {
-        alert('If changing Security PIN, it must be exactly 4 numeric digits.');
-        return;
-      }
-      cleanPin = digits;
+    const cleanPin = (editingAccount.pin || '1234').replace(/\D/g, '').slice(0, 4);
+    if (cleanPin.length < 4) {
+      alert('Security PIN must be exactly 4 digits.');
+      return;
     }
 
     const formatted = formatPhoneNumber(editingAccount.phoneNumber || '');
     const oldId = originalEmployeeId || editingAccount.employeeId;
 
-    const payload: RegisteredAccount = {
+    onUpdateAccount(oldId, {
       ...editingAccount,
       employeeId: cleanEmpId,
       phoneNumber: formatted,
+      pin: cleanPin,
       status: editingAccount.status || 'ACTIVE'
-    };
-    if (cleanPin) {
-      payload.pin = cleanPin;
-    } else {
-      delete payload.pin; // Do not overwrite existing PIN on server
-    }
-
-    onUpdateAccount(oldId, payload);
+    });
 
     setEditingAccount(null);
     setOriginalEmployeeId('');
@@ -1004,15 +993,10 @@ export default function RegisteredAccountsModule({
 
                       {/* 6. 4-Digit Security PIN */}
                       <td className="py-2.5 px-3 font-mono">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className={`tracking-widest px-1.5 py-0.5 rounded text-[11px] font-bold border ${acc.pin === '1234' && acc.employeeId !== 'JPMP-002' ? 'bg-amber-100 border-amber-300 text-amber-900' : 'bg-slate-100 border-slate-200 text-slate-800'}`}>
-                            {isPinVisible ? (acc.pin || '••••') : '••••'}
+                        <div className="flex items-center gap-1.5">
+                          <span className="tracking-widest bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded text-slate-800 text-[11px] font-bold">
+                            {isPinVisible ? (acc.pin || '1234') : '••••'}
                           </span>
-                          {acc.pin === '1234' && acc.employeeId !== 'JPMP-002' && (
-                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/20 text-amber-600 border border-amber-500/30" title="This account has default PIN 1234. Click Edit to restore operator's real PIN.">
-                              <AlertTriangle className="h-2.5 w-2.5" /> RESET REQ
-                            </span>
-                          )}
                           {isSuperAdmin && (
                             <>
                               <button
@@ -1023,10 +1007,10 @@ export default function RegisteredAccountsModule({
                               >
                                 {isPinVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
                               </button>
-                              {isPinVisible && acc.pin && (
+                              {isPinVisible && (
                                 <button
                                   type="button"
-                                  onClick={() => copyToClipboard(acc.pin, `pin-${acc.employeeId}`)}
+                                  onClick={() => copyToClipboard(acc.pin || '1234', `pin-${acc.employeeId}`)}
                                   className="text-slate-400 hover:text-indigo-600 p-0.5 cursor-pointer"
                                   title="Copy PIN"
                                 >
@@ -1652,13 +1636,13 @@ export default function RegisteredAccountsModule({
 
               <div>
                 <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
-                  Change 4-Digit Security PIN (Optional)
+                  Reset 4-Digit Security PIN
                 </label>
                 <input
                   type="text"
                   maxLength={4}
                   pattern="\d*"
-                  placeholder="Leave blank to retain current PIN"
+                  required
                   value={editingAccount.pin || ''}
                   onChange={e => {
                     const digits = e.target.value.replace(/\D/g, '');
@@ -1666,9 +1650,6 @@ export default function RegisteredAccountsModule({
                   }}
                   className="w-full border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 font-mono font-bold tracking-widest text-center text-slate-800 text-xs bg-white"
                 />
-                <span className="text-[10px] text-slate-500 font-sans mt-1 block">
-                  Only enter digits if you intend to change the operator's PIN. Leave blank to keep existing PIN intact.
-                </span>
               </div>
 
               <div className="flex justify-end gap-3 text-xs font-semibold pt-4 border-t border-slate-100 shrink-0">

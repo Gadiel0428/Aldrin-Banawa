@@ -7,13 +7,11 @@ import { RegisteredAccount } from '../types';
 import { getApiBaseUrl } from '../config/serverConfig';
 
 export function resolveAccountPin(user: any, employeeId?: string): string {
-  if (user?.pin && String(user.pin).trim()) return String(user.pin).trim();
-  if (user?.pin_hash && String(user.pin_hash).trim()) return String(user.pin_hash).trim();
+  if (user?.pin) return String(user.pin).trim();
+  if (user?.pin_hash) return String(user.pin_hash).trim();
   const cleanId = (employeeId || user?.employeeId || user?.employee_id || '').toUpperCase().trim();
   if (cleanId === 'JPMP-002') return '0423';
-  // SECURITY FIX: Never silently substitute '1234' for missing/masked PINs!
-  // Return empty string so calling functions preserve local existing PINs.
-  return '';
+  return '1234';
 }
 
 export interface CentralDbSnapshot {
@@ -158,7 +156,6 @@ export async function updateCentralPin(
         currentPin,
         newPin,
         requesterEmployeeId: requesterEmployeeId || employeeId,
-        confirmed: true
       }),
     });
     const data = await res.json();
