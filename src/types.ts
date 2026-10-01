@@ -229,6 +229,9 @@ export interface RegisteredAccount {
   deviceId?: string;
   isPrimaryAdminDevice?: boolean;
   authorizedDevices?: string[];
+  isPinCompromised?: boolean;
+  pinChangedAt?: string;
+  pinChangedBy?: string;
 }
 
 export type RegistryType = 'LOCATION' | 'CATEGORY' | 'CUSTOMER' | 'SUPPLIER' | 'BARCODE_PRESET';
@@ -286,16 +289,9 @@ export interface QueuedMutation {
 }
 
 export function getCustomerForPart(partCode?: string, description?: string): string {
-  const code = (partCode || '').toUpperCase();
-  const desc = (description || '').toUpperCase();
-  
-  if (code.includes('NISSAN') || desc.includes('NISSAN')) return 'NISSAN Motors';
-  if (code.includes('SN') || desc.includes('ROUTER') || desc.includes('GATEWAY') || desc.includes('PCB') || code.includes('WP-MD')) return 'CISCO Systems';
-  if (code.includes('COP') || desc.includes('COPPER') || code.includes('RE') || desc.includes('RESIN') || desc.includes('PELLET')) return 'EPSON Precision';
-  if (code.includes('CB') || desc.includes('CARTON') || desc.includes('BOX')) return 'NISSAN Motors';
-  if (code.includes('CS') || desc.includes('SOLVENT') || desc.includes('CLEANING')) return 'General / Internal';
-  
-  return 'General / Internal';
+  // No hardcoded placeholder entries (CISCO Systems, NISSAN Motors, EPSON Precision, General / Internal removed).
+  // Return empty string; customer assignments are sourced strictly from registered master records.
+  return '';
 }
 
 // Re-export modular types for single source of truth

@@ -18,7 +18,8 @@ import {
   EyeOff, 
   Phone, 
   Download,
-  Loader2 
+  Loader2,
+  AlertTriangle 
 } from 'lucide-react';
 import { RegisteredAccount } from '../types';
 import { exportElementAsPDF } from '../utils/printDocument';
@@ -40,12 +41,15 @@ export default function AccountQRBadgeModal({
   const [showPin, setShowPin] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
 
+  const hasPin = Boolean(account?.pin && String(account.pin).trim() !== '');
+  const isCompromised = account?.pin === '1234' || !!account?.isPinCompromised;
+
   // Structured QR Payload containing Username and PIN Code
   const qrPayload = JSON.stringify({
     type: 'JPMP_WMS_LOGIN_PASS',
     employeeId: account?.employeeId || '',
     username: account?.username || '',
-    pin: account?.pin || '1234',
+    ...(hasPin ? { pin: account.pin } : {}),
     role: account?.role || ''
   });
 
@@ -119,9 +123,15 @@ export default function AccountQRBadgeModal({
         ctx.font = 'bold 13px monospace';
         ctx.fillText(`EMPLOYEE ID: ${account.employeeId}`, 200, 390);
 
-        ctx.fillStyle = '#fde047';
-        ctx.font = 'bold 13px monospace';
-        ctx.fillText(`LOGIN PIN: ${account.pin || '1234'}`, 200, 415);
+        if (isCompromised) {
+          ctx.fillStyle = '#ef4444';
+          ctx.font = 'bold 12px monospace';
+          ctx.fillText(`PIN: ⚠️ COMPROMISED (1234)`, 200, 415);
+        } else {
+          ctx.fillStyle = '#fde047';
+          ctx.font = 'bold 13px monospace';
+          ctx.fillText(`LOGIN PIN: ${hasPin ? account.pin : '(PROTECTED)'}`, 200, 415);
+        }
 
         if (account.phoneNumber) {
           ctx.fillStyle = '#4ade80';
@@ -269,26 +279,36 @@ export default function AccountQRBadgeModal({
                   </div>
 
                   {/* Security PIN Display */}
-                  <div className="pt-2 border-t border-blue-800/80 mt-1.5 flex items-center justify-between px-2">
-                    <span className="text-[9px] font-mono font-bold text-blue-200 uppercase flex items-center gap-1">
-                      <Lock className="h-3 w-3 text-blue-300 shrink-0" /> LOGIN PIN:
-                    </span>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-sm font-mono font-black text-white bg-blue-900 px-2.5 py-0.5 rounded border border-blue-500 tracking-widest min-w-[58px] text-center print:hidden">
-                        {showPin ? (account.pin || '1234') : '••••'}
+                  <div className="pt-2 border-t border-blue-800/80 mt-1.5 flex flex-col gap-1 px-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[9px] font-mono font-bold text-blue-200 uppercase flex items-center gap-1">
+                        <Lock className="h-3 w-3 text-blue-300 shrink-0" /> LOGIN PIN:
                       </span>
-                      <span className="text-sm font-mono font-black text-white bg-blue-900 px-2.5 py-0.5 rounded border border-blue-500 tracking-widest min-w-[58px] text-center hidden print:inline">
-                        {account.pin || '1234'}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setShowPin(!showPin)}
-                        className="p-1 text-blue-300 hover:text-white transition cursor-pointer print:hidden"
-                        title={showPin ? "Hide PIN" : "Reveal PIN"}
-                      >
-                        {showPin ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`text-sm font-mono font-black ${isCompromised ? 'text-rose-300 bg-rose-950 border-rose-500' : 'text-white bg-blue-900 border-blue-500'} px-2.5 py-0.5 rounded border tracking-widest min-w-[58px] text-center print:hidden`}>
+                          {showPin ? (hasPin ? account.pin : '(Protected)') : '••••'}
+                        </span>
+                        <span className="text-sm font-mono font-black text-white bg-blue-900 px-2.5 py-0.5 rounded border border-blue-500 tracking-widest min-w-[58px] text-center hidden print:inline">
+                          {hasPin ? account.pin : '(Protected)'}
+                        </span>
+                        {hasPin && (
+                          <button
+                            type="button"
+                            onClick={() => setShowPin(!showPin)}
+                            className="p-1 text-blue-300 hover:text-white transition cursor-pointer print:hidden"
+                            title={showPin ? "Hide PIN" : "Reveal PIN"}
+                          >
+                            {showPin ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                          </button>
+                        )}
+                      </div>
                     </div>
+                    {isCompromised && (
+                      <div className="text-[9px] font-bold text-rose-300 bg-rose-950/80 border border-rose-500/60 rounded px-1.5 py-0.5 text-center flex items-center justify-center gap-1">
+                        <AlertTriangle className="h-2.5 w-2.5 shrink-0 text-rose-400" />
+                        <span>⚠️ COMPROMISED DEFAULT PIN (1234) — RESET REQUIRED</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 

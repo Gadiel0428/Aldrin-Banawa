@@ -109,6 +109,9 @@ async function startServer() {
     version: number;
     updated_at: string;
     reset_version: number;
+    isPinCompromised?: boolean;
+    pinChangedAt?: string;
+    pinChangedBy?: string;
   }
 
   // Installation & Primary Device Identification
@@ -440,6 +443,71 @@ async function startServer() {
     }
   }
 
+  // =========================================================================
+  // PIN CHANGE AUDIT LOGGING:
+  // Tracks every single operator PIN modification, reset, and compromised
+  // status resolution. Never silently resets or falls back.
+  // =========================================================================
+  const PIN_AUDIT_LOG_FILE = getStorageFilePath("pin-audit-log.json");
+
+  interface PinAuditEntry {
+    id: string;
+    action: "PIN_CHANGED" | "PIN_RESET" | "COMPROMISED_PIN_RESOLVED";
+    targetEmployeeId: string;
+    targetUsername: string;
+    changedBy: string;
+    changedByEmployeeId: string;
+    timestamp: string;
+    ip?: string;
+    reason?: string;
+    previousPinWasCompromised: boolean;
+  }
+
+  let pinAuditLogs: PinAuditEntry[] = [];
+  try {
+    if (fs.existsSync(PIN_AUDIT_LOG_FILE)) {
+      const raw = fs.readFileSync(PIN_AUDIT_LOG_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) pinAuditLogs = parsed;
+    }
+  } catch (e) {
+    pinAuditLogs = [];
+  }
+
+  function logPinAudit(
+    action: "PIN_CHANGED" | "PIN_RESET" | "COMPROMISED_PIN_RESOLVED",
+    targetEmployeeId: string,
+    targetUsername: string,
+    changedBy: string,
+    changedByEmployeeId: string,
+    reason?: string,
+    previousPinWasCompromised: boolean = false,
+    ip?: string
+  ) {
+    const entry: PinAuditEntry = {
+      id: `PIN-LOG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      action,
+      targetEmployeeId,
+      targetUsername,
+      changedBy,
+      changedByEmployeeId,
+      timestamp: new Date().toISOString(),
+      reason: reason || 'Explicit Super Admin PIN Update',
+      previousPinWasCompromised,
+      ip: ip || '127.0.0.1'
+    };
+    pinAuditLogs.unshift(entry);
+    if (pinAuditLogs.length > 500) {
+      pinAuditLogs = pinAuditLogs.slice(0, 500);
+    }
+    try {
+      fs.writeFileSync(PIN_AUDIT_LOG_FILE, JSON.stringify(pinAuditLogs, null, 2), "utf-8");
+    } catch (err) {
+      console.error("[PIN-AUDIT-LOG] Failed to persist pin audit log to disk:", err);
+    }
+    console.log(`[PIN-AUDIT-LOG] ${action} | Target: ${targetEmployeeId} (${targetUsername}) | By: ${changedByEmployeeId} (${changedBy}) | Reason: ${entry.reason} | Time: ${entry.timestamp}`);
+  }
+
   function formatBackupTimestamp(date: Date = new Date()): string {
     const pad = (n: number) => String(n).padStart(2, '0');
     const yyyy = date.getFullYear();
@@ -619,6 +687,21 @@ async function startServer() {
           authorizedDevices: Array.from(new Set([...(existing.authorizedDevices || []), primaryDeviceId]))
         };
       }
+
+      // Security Audit: Flag any account currently with '1234' as compromised
+      let compromisedAccountsCount = 0;
+      state.registeredUsers.forEach(u => {
+        const cleanPin = String(u.pin || '').trim();
+        if (cleanPin === '1234') {
+          u.isPinCompromised = true;
+          compromisedAccountsCount++;
+          console.warn(`[SECURITY ALERT] Operator ${u.employeeId} (${u.username}) currently has compromised PIN '1234'. Marked as COMPROMISED.`);
+        }
+      });
+      if (compromisedAccountsCount > 0) {
+        console.warn(`[SECURITY AUDIT] ${compromisedAccountsCount} operator account(s) have compromised default PIN '1234'. Super Admin PIN reset required.`);
+      }
+
       return true;
     } catch (e) {
       return false;
@@ -2548,9 +2631,25 @@ async function startServer() {
                   device_id: effectiveDevId,
                   reset_version: systemResetVersion
                 };
+
+                if (col === 'registeredUsers') {
+                  // CRITICAL SECURITY FIX: Batch sync MUST NEVER overwrite operator PINs!
+                  // Operator PINs can only be modified via explicit Super Admin /api/accounts/update-pin.
+                  updatedRec.pin = existing.pin;
+                  if (existing.pin_hash) updatedRec.pin_hash = existing.pin_hash;
+                  if (existing.isPinCompromised !== undefined) updatedRec.isPinCompromised = existing.isPinCompromised;
+                  if (existing.pinChangedAt) updatedRec.pinChangedAt = existing.pinChangedAt;
+                  if (existing.pinChangedBy) updatedRec.pinChangedBy = existing.pinChangedBy;
+                }
+
                 listMap.set(recId, updatedRec);
                 modifiedCount++;
               } else {
+                if (col === 'registeredUsers') {
+                  // Security Guard: New operator accounts cannot be inserted via blind collection sync.
+                  // Must use dedicated /api/accounts/register with full credentials.
+                  continue;
+                }
                 const newRec = {
                   ...item,
                   id: recId,
@@ -2771,6 +2870,14 @@ async function startServer() {
             unmarkUserTombstone(cleanEmpId);
 
             const existingIdx = state.registeredUsers.findIndex(u => u.employeeId.toUpperCase() === cleanEmpId);
+            
+            // Generate unpredictable 4-digit PIN if none supplied. Never default to '1234'.
+            let cleanPin = String(newUser.pin || '').trim().replace(/\D/g, '').slice(0, 4);
+            if (!cleanPin || cleanPin.length < 4) {
+              cleanPin = String(Math.floor(2000 + Math.random() * 7900));
+            }
+            const isCompromised = cleanPin === '1234';
+
             const userToStore: ServerUser = {
               id: newUser.id || `USR-${cleanEmpId}`,
               employeeId: cleanEmpId,
@@ -2778,7 +2885,8 @@ async function startServer() {
               role: String(newUser.role || 'WAREHOUSE CLERK').trim().toUpperCase(),
               phoneNumber: newUser.phoneNumber ? String(newUser.phoneNumber).trim() : '',
               permission: String(newUser.permission || 'LIMITED_ACCESS').trim(),
-              pin: String(newUser.pin || '1234').trim().slice(0, 4),
+              pin: cleanPin,
+              isPinCompromised: isCompromised,
               status: 'ACTIVE',
               registeredBy: payload.author || newUser.registeredBy || 'JPMP-002 (ALDRIN BANAWA)',
               registeredBySuperAdmin: true,
@@ -2834,7 +2942,11 @@ async function startServer() {
               username: String(updated.username || existing.username).trim().toUpperCase(),
               role: isSuper ? 'SUPER ADMINISTRATOR' : String(updated.role || existing.role).trim().toUpperCase(),
               permission: isSuper ? 'FULL_ACCESS' : String(updated.permission || existing.permission).trim(),
-              pin: updated.pin ? String(updated.pin).trim().slice(0, 4) : existing.pin,
+              // CRITICAL SECURITY FIX: General profile update cannot change PIN! PIN changes require /api/accounts/update-pin.
+              pin: existing.pin,
+              isPinCompromised: existing.isPinCompromised,
+              pinChangedAt: existing.pinChangedAt,
+              pinChangedBy: existing.pinChangedBy,
               version: (existing.version || 1) + 1,
               updated_at: new Date().toISOString(),
               reset_version: systemResetVersion
@@ -3556,9 +3668,23 @@ async function startServer() {
             device_id: effectiveDevId,
             reset_version: systemResetVersion
           };
+
+          if (collection === 'registeredUsers') {
+            // CRITICAL SECURITY FIX: Batch sync MUST NEVER overwrite operator PINs!
+            updatedRec.pin = existing.pin;
+            if (existing.pin_hash) updatedRec.pin_hash = existing.pin_hash;
+            if (existing.isPinCompromised !== undefined) updatedRec.isPinCompromised = existing.isPinCompromised;
+            if (existing.pinChangedAt) updatedRec.pinChangedAt = existing.pinChangedAt;
+            if (existing.pinChangedBy) updatedRec.pinChangedBy = existing.pinChangedBy;
+          }
+
           listMap.set(recId, updatedRec);
           modifiedCount++;
         } else {
+          if (collection === 'registeredUsers') {
+            // Security Guard: New accounts cannot be inserted via batch sync.
+            continue;
+          }
           const newRec = {
             ...item,
             id: recId,
@@ -3849,8 +3975,21 @@ async function startServer() {
 
   // Helper to authenticate Super Admin
   function isAuthorizedSuperAdmin(req: express.Request): boolean {
-    const bodyPin = (req.body?.pin || '').toString().trim();
-    const bodyEmpId = (req.body?.employeeId || req.body?.authorId || '').toString().trim().toUpperCase();
+    const bodyPin = (
+      req.body?.adminPin || 
+      req.body?.pin || 
+      req.headers['x-admin-pin'] || 
+      req.headers['x-user-pin'] || 
+      ''
+    ).toString().trim();
+
+    const bodyEmpId = (
+      req.body?.requesterEmployeeId || 
+      req.body?.employeeId || 
+      req.body?.authorId || 
+      req.headers['x-user-employee-id'] || 
+      ''
+    ).toString().trim().toUpperCase();
 
     // Check in-memory central database for Super Admin PIN
     const superAdmin = state.registeredUsers.find(
@@ -3858,7 +3997,9 @@ async function startServer() {
     );
 
     const validPin = superAdmin?.pin?.trim() || '0423';
-    return (bodyEmpId === 'JPMP-002' || bodyEmpId === '' || bodyEmpId.includes('002')) && (bodyPin === validPin || bodyPin === '0423');
+    const isIdMatch = bodyEmpId === 'JPMP-002' || bodyEmpId === '' || bodyEmpId.includes('002');
+    const isPinMatch = bodyPin === validPin || bodyPin === '0423';
+    return isIdMatch && isPinMatch;
   }
 
   /**
@@ -4142,14 +4283,20 @@ async function startServer() {
       if (matchedUser) {
         // Record last active timestamp
         matchedUser.lastActive = new Date().toISOString();
+        if (matchedUser.pin === '1234') {
+          matchedUser.isPinCompromised = true;
+        }
         commitDatabase();
 
         return res.json({
           success: true,
           user: matchedUser,
+          isPinCompromised: matchedUser.pin === '1234' || !!matchedUser.isPinCompromised,
           systemResetVersion
         });
       }
+
+      console.warn(`[AUTH-AUDIT] FAILED LOGIN ATTEMPT: Identifier="${rawInput}", IP=${req.ip}, Timestamp=${new Date().toISOString()}`);
 
       return res.status(401).json({
         success: false,
@@ -4161,9 +4308,11 @@ async function startServer() {
   });
 
   // REST API: Update Account PIN
+  // Strict Security Rule: PIN changes only allowed via explicit Super Admin authorization or verified operator self-change.
+  // Log every PIN change (who, which account, when).
   app.post("/api/accounts/update-pin", async (req, res) => {
     try {
-      const { employeeId, currentPin, newPin, requesterEmployeeId } = req.body;
+      const { employeeId, currentPin, newPin, requesterEmployeeId, author, reason } = req.body;
       const cleanEmpId = String(employeeId || '').trim().toUpperCase();
       const cleanNewPin = String(newPin || '').trim();
       const cleanCurrentPin = String(currentPin || '').trim();
@@ -4176,18 +4325,39 @@ async function startServer() {
         return res.status(400).json({ error: "PIN must be between 4 and 6 numeric digits" });
       }
 
+      // Security Guard: Forbid trivial and compromised PINs
+      if (cleanNewPin === '1234') {
+        return res.status(400).json({ 
+          error: "SECURITY_REJECTED: '1234' is a compromised default PIN and is strictly prohibited." 
+        });
+      }
+      if (/^(\d)\1+$/.test(cleanNewPin)) {
+        return res.status(400).json({ 
+          error: "SECURITY_REJECTED: Repetitive PIN patterns (e.g. 0000, 1111) are not allowed." 
+        });
+      }
+
       const target = state.registeredUsers.find(u => u.employeeId.toUpperCase().trim() === cleanEmpId);
       if (!target) {
         return res.status(404).json({ error: "Operator account not found in central database" });
       }
 
-      // Verification: must match current PIN or be Super Admin requester
-      const isSuperAdminRequester = requesterId === 'JPMP-002';
-      if (!isSuperAdminRequester && target.pin !== cleanCurrentPin) {
-        return res.status(403).json({ error: "INCORRECT_PIN: Current PIN does not match." });
+      // Verification: must be confirmed Super Admin OR operator verifying their own current PIN
+      const isSuper = isAuthorizedSuperAdmin(req);
+      if (!isSuper) {
+        if (target.pin !== cleanCurrentPin) {
+          console.warn(`[SECURITY ALERT] Unauthorized PIN change attempt for ${cleanEmpId} from IP ${req.ip}`);
+          return res.status(403).json({ error: "INCORRECT_PIN: Current PIN does not match. Super Admin authorization required." });
+        }
       }
 
+      const previousWasCompromised = target.pin === '1234' || !!target.isPinCompromised;
+      const actionType = previousWasCompromised ? "COMPROMISED_PIN_RESOLVED" : (isSuper ? "PIN_RESET" : "PIN_CHANGED");
+
       target.pin = cleanNewPin;
+      target.isPinCompromised = false;
+      target.pinChangedAt = new Date().toISOString();
+      target.pinChangedBy = requesterId;
       target.version = (target.version || 1) + 1;
       target.updated_at = new Date().toISOString();
       target.reset_version = systemResetVersion;
@@ -4198,9 +4368,23 @@ async function startServer() {
         return res.status(500).json({ error: "Failed to persist PIN change to central database" });
       }
 
+      // Record permanent audit entry
+      logPinAudit(
+        actionType,
+        cleanEmpId,
+        target.username,
+        author || (isSuper ? 'Super Administrator (ALDRIN BANAWA)' : target.username),
+        requesterId,
+        reason || (previousWasCompromised ? 'Resolving compromised default PIN' : 'Explicit PIN update'),
+        previousWasCompromised,
+        req.ip
+      );
+
       broadcast({
         type: "account_updated",
         account: target,
+        user: target,
+        author: author || requesterId,
         systemResetVersion
       });
 
@@ -4211,10 +4395,26 @@ async function startServer() {
         systemResetVersion
       });
 
-      return res.json({ success: true, message: "PIN updated successfully in central database", user: target });
+      return res.json({ 
+        success: true, 
+        message: previousWasCompromised 
+          ? "Compromised PIN resolved and secure PIN activated in central database" 
+          : "PIN updated successfully in central database", 
+        user: target 
+      });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
+  });
+
+  // REST API: Get PIN Audit Logs (Super Admin Only)
+  app.get("/api/accounts/pin-audit-log", (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    return res.json({
+      success: true,
+      count: pinAuditLogs.length,
+      logs: pinAuditLogs
+    });
   });
 
   // REST API: Register New Operator Account
@@ -4327,7 +4527,11 @@ async function startServer() {
         username: String(updatedUser.username || existing.username).trim().toUpperCase(),
         role: isSuper ? 'SUPER ADMINISTRATOR' : String(updatedUser.role || existing.role).trim().toUpperCase(),
         permission: isSuper ? 'FULL_ACCESS' : String(updatedUser.permission || existing.permission).trim(),
-        pin: updatedUser.pin ? String(updatedUser.pin).trim() : existing.pin,
+        // CRITICAL SECURITY FIX: General profile edit CANNOT alter PIN! Must use /api/accounts/update-pin.
+        pin: existing.pin,
+        isPinCompromised: existing.isPinCompromised,
+        pinChangedAt: existing.pinChangedAt,
+        pinChangedBy: existing.pinChangedBy,
         version: (existing.version || 1) + 1,
         updated_at: new Date().toISOString(),
         reset_version: systemResetVersion

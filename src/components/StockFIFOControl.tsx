@@ -47,7 +47,7 @@ import {
   SlidersHorizontal,
   FileText
 } from 'lucide-react';
-import { MaterialStockItem, MaterialType, getCustomerForPart, UOM_OPTIONS, ReceivingRecord, IssuanceRecord, ReturnRecord } from '../types';
+import { MaterialStockItem, MaterialType, getCustomerForPart, UOM_OPTIONS, ReceivingRecord, IssuanceRecord, ReturnRecord, MasterRegistryItem } from '../types';
 import { FIFO_COLORS_BY_MONTH } from '../data';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { generateAuthoritativeId } from '../lib/idGenerator';
@@ -64,6 +64,7 @@ interface StockFIFOControlProps {
   receiving?: ReceivingRecord[];
   issuances?: IssuanceRecord[];
   returns?: ReturnRecord[];
+  registries?: MasterRegistryItem[];
 }
 
 export default function StockFIFOControl({
@@ -77,7 +78,8 @@ export default function StockFIFOControl({
   canEdit = false,
   receiving = [],
   issuances = [],
-  returns = []
+  returns = [],
+  registries = []
 }: StockFIFOControlProps) {
   const effectiveCanEdit = canEdit || isSuperAdmin;
   const [searchQuery, setSearchQuery] = useState('');
@@ -184,17 +186,28 @@ export default function StockFIFOControl({
   // Group unique SKUs by customer
   const customersWithSkuCounts = Object.entries(
     stocks.reduce((acc, item) => {
-      const customer = item.customer || getCustomerForPart(item.partCode, item.description);
-      if (!acc[customer]) {
-        acc[customer] = new Set<string>();
+      const customer = (item.customer || getCustomerForPart(item.partCode, item.description) || '').trim();
+      if (customer) {
+        if (!acc[customer]) {
+          acc[customer] = new Set<string>();
+        }
+        acc[customer].add(item.partCode);
       }
-      acc[customer].add(item.partCode);
       return acc;
     }, {} as Record<string, Set<string>>)
   ).map(([customer, partCodesSet]) => ({
     customer,
     skuCount: partCodesSet.size,
   })).sort((a, b) => b.skuCount - a.skuCount);
+
+  // Registered customer list from master registries (only genuine registered customers, no hardcoded sample data)
+  const registeredCustomers = useMemo(() => {
+    if (!registries || !Array.isArray(registries)) return [];
+    return registries
+      .filter(r => r.type === 'CUSTOMER')
+      .map(r => (r.name || '').trim())
+      .filter((name, idx, arr) => Boolean(name) && arr.indexOf(name) === idx);
+  }, [registries]);
 
   // Filter lists
   const filteredStocks = stocks.filter(item => {
@@ -596,10 +609,9 @@ export default function StockFIFOControl({
                 className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs"
               >
                 <option value="">Select Registered Customer / Client...</option>
-                <option value="CISCO Systems">CISCO Systems</option>
-                <option value="NISSAN Motors">NISSAN Motors</option>
-                <option value="EPSON Precision">EPSON Precision</option>
-                <option value="General / Internal">General / Internal</option>
+                {registeredCustomers.map(cust => (
+                  <option key={cust} value={cust}>{cust}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -1610,7 +1622,7 @@ export default function StockFIFOControl({
                     type="text" 
                     value={editingStockItem.customer || ''}
                     onChange={e => setEditingStockItem({ ...editingStockItem, customer: e.target.value })}
-                    placeholder="e.g. CISCO Systems"
+                    placeholder="Enter Customer / Client"
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
                   />
                 </div>

@@ -31,11 +31,14 @@ import {
   Plus,
   Pencil,
   RotateCcw,
-  Archive
+  Archive,
+  AlertTriangle,
+  Loader2
 } from 'lucide-react';
 import AccountQRBadgeModal from './AccountQRBadgeModal';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { RegisteredAccount } from '../types';
+import { updateCentralPin } from '../lib/centralApi';
 export type { RegisteredAccount };
 
 // Centralized default operational roles
@@ -150,6 +153,106 @@ export default function RegisteredAccountsModule({
   const [newPermission, setNewPermission] = useState('LIMITED_ACCESS');
   const [newStatus, setNewStatus] = useState<'ACTIVE' | 'PENDING' | 'INACTIVE'>('ACTIVE');
   const [addError, setAddError] = useState<string>('');
+
+  // Compromised PIN Detection: Any account with '1234' or isPinCompromised flag
+  const compromisedAccounts = useMemo(() => {
+    return accounts.filter(acc => acc.pin === '1234' || acc.isPinCompromised);
+  }, [accounts]);
+
+  // Dedicated Super Admin PIN Change Modal State
+  const [pinChangeAccount, setPinChangeAccount] = useState<RegisteredAccount | null>(null);
+  const [newPinValue, setNewPinValue] = useState<string>('');
+  const [confirmPinValue, setConfirmPinValue] = useState<string>('');
+  const [superAdminPinValue, setSuperAdminPinValue] = useState<string>('');
+  const [pinChangeReason, setPinChangeReason] = useState<string>('');
+  const [pinChangeError, setPinChangeError] = useState<string>('');
+  const [pinChangeSuccess, setPinChangeSuccess] = useState<string>('');
+  const [isSubmittingPinChange, setIsSubmittingPinChange] = useState<boolean>(false);
+
+  const handleOpenPinModal = (acc: RegisteredAccount) => {
+    setPinChangeAccount(acc);
+    setNewPinValue('');
+    setConfirmPinValue('');
+    setSuperAdminPinValue('');
+    setPinChangeReason(
+      acc.pin === '1234' || acc.isPinCompromised 
+        ? 'Resolving compromised default PIN (1234)' 
+        : 'Authorized Super Admin PIN update'
+    );
+    setPinChangeError('');
+    setPinChangeSuccess('');
+  };
+
+  const handleSubmitPinChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pinChangeAccount) return;
+    setPinChangeError('');
+    setPinChangeSuccess('');
+
+    const cleanNewPin = newPinValue.replace(/\D/g, '').slice(0, 6);
+    const cleanConfirm = confirmPinValue.replace(/\D/g, '').slice(0, 6);
+    const cleanAdminPin = superAdminPinValue.trim();
+
+    if (cleanNewPin.length < 4) {
+      setPinChangeError('New PIN must be between 4 and 6 numeric digits.');
+      return;
+    }
+    if (cleanNewPin !== cleanConfirm) {
+      setPinChangeError('Confirmation PIN does not match new PIN.');
+      return;
+    }
+    if (cleanNewPin === '1234') {
+      setPinChangeError("SECURITY REJECTED: '1234' is a compromised default PIN and is strictly prohibited.");
+      return;
+    }
+    if (/^(\d)\1+$/.test(cleanNewPin)) {
+      setPinChangeError('SECURITY REJECTED: Repetitive PIN patterns (e.g. 0000, 1111) are not allowed.');
+      return;
+    }
+    if (!cleanAdminPin) {
+      setPinChangeError('Super Administrator confirmation PIN (0423) is required to authorize this security change.');
+      return;
+    }
+
+    setIsSubmittingPinChange(true);
+    try {
+      const res = await updateCentralPin(
+        pinChangeAccount.employeeId,
+        cleanAdminPin,
+        cleanNewPin,
+        currentEmployeeId || 'JPMP-002',
+        {
+          adminPin: cleanAdminPin,
+          author: `${currentUser || 'ALDRIN BANAWA'} (${currentEmployeeId || 'JPMP-002'})`,
+          reason: pinChangeReason.trim() || 'Super Admin PIN reset'
+        }
+      );
+
+      if (res.success) {
+        setPinChangeSuccess(`PIN successfully updated for ${pinChangeAccount.username}. Audit log recorded.`);
+        if (res.user) {
+          onUpdateAccount(pinChangeAccount.employeeId, res.user);
+        } else {
+          onUpdateAccount(pinChangeAccount.employeeId, {
+            ...pinChangeAccount,
+            pin: cleanNewPin,
+            isPinCompromised: false
+          });
+        }
+        setTimeout(() => {
+          setPinChangeAccount(null);
+          setIsSubmittingPinChange(false);
+          setPinChangeSuccess('');
+        }, 1200);
+      } else {
+        setPinChangeError(res.error || 'Failed to update PIN in central database.');
+        setIsSubmittingPinChange(false);
+      }
+    } catch (err: any) {
+      setPinChangeError(err?.message || 'Network error updating PIN.');
+      setIsSubmittingPinChange(false);
+    }
+  };
 
   // Managed roles for Edit dropdown (ensuring current account role is always an option)
   const editDropdownRoles = useMemo(() => {
@@ -416,9 +519,15 @@ export default function RegisteredAccountsModule({
       return;
     }
 
-    if (newCustomPin && newCustomPin.length !== 4) {
-      setAddError('Custom Security PIN must be exactly 4 digits.');
-      return;
+    if (newCustomPin) {
+      if (newCustomPin.length !== 4) {
+        setAddError('Custom Security PIN must be exactly 4 digits.');
+        return;
+      }
+      if (newCustomPin === '1234') {
+        setAddError("SECURITY VIOLATION: '1234' is a compromised default PIN and cannot be used. Enter another PIN or leave blank to auto-generate.");
+        return;
+      }
     }
 
     const formattedPhone = newPhoneNumber.trim() ? formatPhoneNumber(newPhoneNumber.trim()) : '';
@@ -441,7 +550,7 @@ export default function RegisteredAccountsModule({
         employeeId: empId,
         phoneNumber: formattedPhone,
         permission: newPermission,
-        pin: cleanCustomPin || '1234',
+        pin: cleanCustomPin || (typeof result === 'object' && (result as any)?.pin) || '',
         status: newStatus
       };
       setSelectedQrAccount(newAccObj);
@@ -486,20 +595,15 @@ export default function RegisteredAccountsModule({
       cleanEmpId = `JPMP-${cleanEmpId.replace(/^EMP-/, '')}`;
     }
 
-    const cleanPin = (editingAccount.pin || '1234').replace(/\D/g, '').slice(0, 4);
-    if (cleanPin.length < 4) {
-      alert('Security PIN must be exactly 4 digits.');
-      return;
-    }
-
     const formatted = formatPhoneNumber(editingAccount.phoneNumber || '');
     const oldId = originalEmployeeId || editingAccount.employeeId;
 
+    // CRITICAL SECURITY FIX: Profile updates do NOT modify PIN!
+    // Operator PIN changes are strictly managed via the dedicated Super Admin PIN modal.
     onUpdateAccount(oldId, {
       ...editingAccount,
       employeeId: cleanEmpId,
       phoneNumber: formatted,
-      pin: cleanPin,
       status: editingAccount.status || 'ACTIVE'
     });
 
@@ -631,6 +735,38 @@ export default function RegisteredAccountsModule({
             <strong className="text-amber-300 uppercase font-mono">Master Computer Authority Rule:</strong> Only operator accounts registered by Super Administrator (<span className="text-white font-semibold">ALDRIN BANAWA - JPMP-002</span>) on this computer are authorized for use across all other users and warehouse terminal computers.
           </span>
         </div>
+
+        {/* Compromised PIN Security Warning Alert Banner */}
+        {compromisedAccounts.length > 0 && (
+          <div className="bg-rose-950/90 border-2 border-rose-500 rounded-xl p-3.5 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-white shadow-lg shadow-rose-950/40">
+            <div className="flex items-center gap-3">
+              <div className="h-9 w-9 rounded-lg bg-rose-600/30 border border-rose-500/50 flex items-center justify-center shrink-0">
+                <AlertTriangle className="h-5 w-5 text-rose-400 animate-pulse" />
+              </div>
+              <div>
+                <div className="text-xs font-bold text-rose-300 font-mono tracking-wide uppercase flex items-center gap-2">
+                  <span>CRITICAL SECURITY ALERT: COMPROMISED DEFAULT PIN DETECTED</span>
+                  <span className="bg-rose-500 text-white text-[9px] px-2 py-0.5 rounded-full font-bold">
+                    {compromisedAccounts.length} ACCOUNT{compromisedAccounts.length > 1 ? 'S' : ''}
+                  </span>
+                </div>
+                <p className="text-xs text-rose-100 mt-0.5">
+                  {compromisedAccounts.length} operator account(s) currently have the compromised default PIN (&quot;1234&quot;) or are marked as compromised. Default PINs are strictly prohibited and vulnerable. Super Admin must reset these PINs to unique credentials immediately.
+                </p>
+              </div>
+            </div>
+            {isSuperAdmin && (
+              <button
+                type="button"
+                onClick={() => handleOpenPinModal(compromisedAccounts[0])}
+                className="bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-mono font-bold text-xs px-3.5 py-2 rounded-xl transition flex items-center gap-1.5 shadow-md cursor-pointer uppercase shrink-0 self-end md:self-auto"
+              >
+                <KeyRound className="h-3.5 w-3.5" />
+                <span>Resolve PIN ({compromisedAccounts[0].username.split(' ')[0]})</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Main Table Card */}
@@ -793,6 +929,7 @@ export default function RegisteredAccountsModule({
                   
                   const currentStatus = acc.status || 'ACTIVE';
                   const isPinVisible = revealAllPins || !!showPins[acc.employeeId];
+                  const isCompromisedAcc = acc.pin === '1234' || !!acc.isPinCompromised;
 
                   return (
                     <motion.tr 
@@ -806,7 +943,11 @@ export default function RegisteredAccountsModule({
                         opacity: { duration: 0.22 }
                       }}
                       className={`hover:bg-slate-50/90 transition-colors group ${
-                        isSelf ? 'bg-indigo-50/30' : ''
+                        isCompromisedAcc
+                          ? 'bg-rose-50/40 border-l-4 border-l-rose-500'
+                          : isSelf
+                          ? 'bg-indigo-50/30'
+                          : ''
                       }`}
                     >
                       {/* 1. Status Indicator */}
@@ -852,6 +993,8 @@ export default function RegisteredAccountsModule({
                           <div className={`h-7 w-7 rounded-lg flex items-center justify-center font-bold text-xs uppercase shrink-0 border ${
                             isSuperAdminAcc 
                               ? 'bg-indigo-600 text-white border-indigo-700' 
+                              : isCompromisedAcc
+                              ? 'bg-rose-100 text-rose-700 border-rose-300'
                               : 'bg-slate-100 text-slate-700 border-slate-200'
                           }`}>
                             {acc.username.charAt(0)}
@@ -869,6 +1012,11 @@ export default function RegisteredAccountsModule({
                               {isSelf && (
                                 <span className="inline-block bg-indigo-100 text-indigo-700 text-[8px] px-1.5 py-0.2 rounded font-mono font-bold uppercase shrink-0">
                                   You
+                                </span>
+                              )}
+                              {isCompromisedAcc && (
+                                <span className="inline-flex items-center gap-0.5 bg-rose-100 text-rose-800 border border-rose-300 text-[8px] px-1.5 py-0.2 rounded font-mono font-bold uppercase shrink-0" title="This account has a compromised default PIN (1234)">
+                                  ⚠️ COMPROMISED PIN
                                 </span>
                               )}
                             </div>
@@ -993,37 +1141,65 @@ export default function RegisteredAccountsModule({
 
                       {/* 6. 4-Digit Security PIN */}
                       <td className="py-2.5 px-3 font-mono">
-                        <div className="flex items-center gap-1.5">
-                          <span className="tracking-widest bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded text-slate-800 text-[11px] font-bold">
-                            {isPinVisible ? (acc.pin || '1234') : '••••'}
-                          </span>
-                          {isSuperAdmin && (
-                            <>
+                        {isCompromisedAcc ? (
+                          <div className="flex flex-col gap-1 items-start">
+                            <span className="inline-flex items-center gap-1 bg-rose-100 text-rose-800 border border-rose-300 px-1.5 py-0.5 rounded text-[10px] font-bold font-mono uppercase tracking-wider">
+                              <AlertTriangle className="h-3 w-3 text-rose-600 shrink-0" />
+                              <span>COMPROMISED (1234)</span>
+                            </span>
+                            {isSuperAdmin && (
                               <button
                                 type="button"
-                                onClick={() => toggleShowPin(acc.employeeId)}
-                                className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
-                                title={isPinVisible ? 'Hide PIN' : 'Reveal PIN'}
+                                onClick={() => handleOpenPinModal(acc)}
+                                className="inline-flex items-center gap-1 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-mono font-bold text-[9px] px-2 py-0.5 rounded transition cursor-pointer shadow-2xs uppercase"
+                                title="Reset compromised PIN to secure PIN"
                               >
-                                {isPinVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                                <KeyRound className="h-2.5 w-2.5" />
+                                <span>RESET PIN</span>
                               </button>
-                              {isPinVisible && (
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5">
+                            <span className="tracking-widest bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded text-slate-800 text-[11px] font-bold">
+                              {isPinVisible ? (acc.pin || '••••') : '••••'}
+                            </span>
+                            {isSuperAdmin && (
+                              <>
                                 <button
                                   type="button"
-                                  onClick={() => copyToClipboard(acc.pin || '1234', `pin-${acc.employeeId}`)}
-                                  className="text-slate-400 hover:text-indigo-600 p-0.5 cursor-pointer"
-                                  title="Copy PIN"
+                                  onClick={() => toggleShowPin(acc.employeeId)}
+                                  className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                                  title={isPinVisible ? 'Hide PIN' : 'Reveal PIN'}
                                 >
-                                  {copiedId === `pin-${acc.employeeId}` ? (
-                                    <Check className="h-3 w-3 text-emerald-600" />
-                                  ) : (
-                                    <Copy className="h-3 w-3" />
-                                  )}
+                                  {isPinVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
                                 </button>
-                              )}
-                            </>
-                          )}
-                        </div>
+                                {isPinVisible && acc.pin && (
+                                  <button
+                                    type="button"
+                                    onClick={() => copyToClipboard(acc.pin, `pin-${acc.employeeId}`)}
+                                    className="text-slate-400 hover:text-indigo-600 p-0.5 cursor-pointer"
+                                    title="Copy PIN"
+                                  >
+                                    {copiedId === `pin-${acc.employeeId}` ? (
+                                      <Check className="h-3 w-3 text-emerald-600" />
+                                    ) : (
+                                      <Copy className="h-3 w-3" />
+                                    )}
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenPinModal(acc)}
+                                  className="text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 p-0.5 rounded cursor-pointer transition ml-0.5"
+                                  title="Super Admin PIN Edit"
+                                >
+                                  <KeyRound className="h-3 w-3" />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        )}
                       </td>
 
                       {/* 7. Last Active */}
@@ -1082,6 +1258,23 @@ export default function RegisteredAccountsModule({
                             >
                               <Edit className="h-3 w-3 text-slate-600" />
                               <span className="hidden sm:inline">EDIT</span>
+                            </button>
+                          )}
+
+                          {/* Super Admin Explicit PIN Management Button */}
+                          {isSuperAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenPinModal(acc)}
+                              className={`${
+                                isCompromisedAcc
+                                  ? 'bg-rose-100 hover:bg-rose-200 text-rose-700 border-rose-300'
+                                  : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200/80'
+                              } border px-2 py-1 rounded-md text-[10px] font-bold transition flex items-center gap-1 cursor-pointer font-mono shadow-2xs`}
+                              title={isCompromisedAcc ? "Reset Compromised PIN (1234)" : "Edit Security PIN"}
+                            >
+                              <KeyRound className="h-3 w-3" />
+                              <span className="hidden sm:inline">{isCompromisedAcc ? 'RESET PIN' : 'PIN'}</span>
                             </button>
                           )}
 
@@ -1401,7 +1594,7 @@ export default function RegisteredAccountsModule({
                     <input
                       type="text"
                       maxLength={4}
-                      placeholder="e.g. 1234 (Optional)"
+                      placeholder="e.g. 8492 (Optional)"
                       value={newCustomPin}
                       onChange={e => setNewCustomPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
                       className="w-full pl-9.5 pr-3.5 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono font-bold text-slate-800 tracking-widest text-xs bg-white"
@@ -1684,6 +1877,218 @@ export default function RegisteredAccountsModule({
 
       {/* Confirmation Modal with YES / NO options */}
       <ConfirmModal config={confirmAction} onClose={() => setConfirmAction(null)} />
+
+      {/* Super Admin Explicit PIN Management & Reset Modal */}
+      {pinChangeAccount && isSuperAdmin && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4 z-[999999]">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150 max-h-[92vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white p-5 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className={`h-10 w-10 rounded-xl ${
+                  pinChangeAccount.pin === '1234' || pinChangeAccount.isPinCompromised
+                    ? 'bg-rose-500/20 border-rose-400/30 text-rose-300'
+                    : 'bg-indigo-500/20 border-indigo-400/30 text-indigo-300'
+                } border flex items-center justify-center`}>
+                  <KeyRound className="h-5 w-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold tracking-tight">
+                      {pinChangeAccount.pin === '1234' || pinChangeAccount.isPinCompromised
+                        ? 'RESOLVE COMPROMISED PIN'
+                        : 'SUPER ADMIN PIN UPDATE'}
+                    </h3>
+                    <span className="bg-indigo-500/30 text-indigo-200 text-[10px] font-mono font-bold px-2 py-0.5 rounded-md border border-indigo-400/30">
+                      STRICT AUDIT
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 mt-0.5">
+                    Target: <strong className="text-white uppercase">{pinChangeAccount.username}</strong> ({pinChangeAccount.employeeId})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setPinChangeAccount(null);
+                  setPinChangeError('');
+                  setPinChangeSuccess('');
+                }}
+                className="text-slate-400 hover:text-white transition p-1 rounded-lg hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Body Form */}
+            <form onSubmit={handleSubmitPinChange} className="p-6 space-y-4 overflow-y-auto">
+              {/* Compromised Alert Warning */}
+              {(pinChangeAccount.pin === '1234' || pinChangeAccount.isPinCompromised) && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2.5">
+                  <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="block font-semibold uppercase text-rose-900 font-mono text-[11px]">Compromised Default PIN Detected:</strong>
+                    This account was assigned the prohibited default PIN &quot;1234&quot;. Please assign a secure 4-6 digit numeric PIN to clear the security alert and protect account integrity.
+                  </div>
+                </div>
+              )}
+
+              {/* Error & Success Messages */}
+              {pinChangeError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-start gap-2">
+                  <AlertCircle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
+                  <span className="font-semibold">{pinChangeError}</span>
+                </div>
+              )}
+              {pinChangeSuccess && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-start gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <span className="font-semibold">{pinChangeSuccess}</span>
+                </div>
+              )}
+
+              {/* Operator Summary Card */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase font-mono block">Operator Details</span>
+                  <span className="text-xs font-bold text-slate-800">{pinChangeAccount.username}</span>
+                  <span className="text-[11px] font-mono text-indigo-600 block">{pinChangeAccount.employeeId}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase font-mono block">Role</span>
+                  <span className="text-[11px] font-semibold text-slate-700 bg-white border border-slate-200 px-2 py-0.5 rounded">
+                    {pinChangeAccount.role || 'WAREHOUSE CLERK'}
+                  </span>
+                </div>
+              </div>
+
+              {/* New PIN & Confirm PIN */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase font-mono mb-1.5">
+                    New Security PIN <span className="text-rose-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      maxLength={6}
+                      autoFocus
+                      required
+                      placeholder="4 to 6 digits"
+                      value={newPinValue}
+                      onChange={e => setNewPinValue(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono font-bold text-slate-800 tracking-widest text-sm bg-white"
+                    />
+                  </div>
+                  <span className="text-[10px] text-slate-400 mt-1 block font-mono">
+                    4-6 numeric digits (no &quot;1234&quot;)
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase font-mono mb-1.5">
+                    Confirm New PIN <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="password"
+                    maxLength={6}
+                    required
+                    placeholder="Repeat new PIN"
+                    value={confirmPinValue}
+                    onChange={e => setConfirmPinValue(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono font-bold text-slate-800 tracking-widest text-sm bg-white"
+                  />
+                  <span className="text-[10px] text-slate-400 mt-1 block font-mono">
+                    Must match new PIN
+                  </span>
+                </div>
+              </div>
+
+              {/* Super Admin Authorization PIN */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase font-mono mb-1.5 flex items-center justify-between">
+                  <span>Super Admin Confirmation PIN (0423) <span className="text-rose-500">*</span></span>
+                  <span className="text-[10px] text-indigo-600 font-semibold lowercase">authorization step</span>
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                    <Lock className="h-4 w-4 text-indigo-600" />
+                  </div>
+                  <input
+                    type="password"
+                    maxLength={6}
+                    required
+                    placeholder="Enter Master Super Admin PIN (0423)"
+                    value={superAdminPinValue}
+                    onChange={e => setSuperAdminPinValue(e.target.value.trim())}
+                    className="w-full pl-9.5 pr-3.5 py-2.5 border-2 border-indigo-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none font-mono font-bold text-slate-800 tracking-widest text-xs bg-indigo-50/20"
+                  />
+                </div>
+                <span className="text-[10px] text-slate-500 mt-1 block font-mono">
+                  Super Admin authorization is required by server security policy.
+                </span>
+              </div>
+
+              {/* Change Reason Note */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase font-mono mb-1.5">
+                  Security Audit Reason / Note
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Resolving compromised default PIN"
+                  value={pinChangeReason}
+                  onChange={e => setPinChangeReason(e.target.value)}
+                  className="w-full px-3.5 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 text-xs text-slate-800 bg-white"
+                />
+              </div>
+
+              {/* Audit Notice */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-[11px] text-slate-500 flex items-start gap-2">
+                <ShieldCheck className="h-4 w-4 text-indigo-600 shrink-0 mt-0.5" />
+                <span>
+                  <strong>Server Security Policy:</strong> PIN changes are committed directly to the central database and recorded in the permanent audit log (timestamp, administrator ID, target operator, terminal IP).
+                </span>
+              </div>
+
+              {/* Modal Buttons */}
+              <div className="pt-2 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPinChangeAccount(null);
+                    setPinChangeError('');
+                    setPinChangeSuccess('');
+                  }}
+                  disabled={isSubmittingPinChange}
+                  className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50 transition cursor-pointer font-mono uppercase"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingPinChange}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white rounded-xl text-xs font-bold uppercase transition flex items-center gap-2 shadow-md cursor-pointer font-mono disabled:opacity-50"
+                >
+                  {isSubmittingPinChange ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span>Verifying & Saving...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="h-4 w-4" />
+                      <span>Confirm & Update PIN</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>,
+        document.body
+      )}
 
       {/* Manage Operational Roles Modal (Super Admin only) */}
       {showRolesModal && isSuperAdmin && createPortal(

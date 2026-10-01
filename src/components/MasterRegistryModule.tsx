@@ -554,7 +554,7 @@ export default function MasterRegistryModule({
                   <input 
                     type="text"
                     placeholder={
-                      formType === 'CUSTOMER' ? 'e.g. CUST-NIS'
+                      formType === 'CUSTOMER' ? 'e.g. CUST-001'
                       : formType === 'SUPPLIER' ? 'e.g. SUP-APX'
                       : 'e.g. LOC-ZA'
                     }
@@ -575,7 +575,7 @@ export default function MasterRegistryModule({
                     type="text"
                     required
                     placeholder={
-                      formType === 'CUSTOMER' ? 'e.g. NISSAN Motors'
+                      formType === 'CUSTOMER' ? 'e.g. Acme Corporation'
                       : formType === 'SUPPLIER' ? 'e.g. Apex Chemical Corp'
                       : 'e.g. Zone A - Raw Materials'
                     }

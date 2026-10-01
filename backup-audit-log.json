@@ -1,5 +1,131 @@
 [
   {
+    "id": "BA-1790839673771-4cny",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-10-01-0727.json",
+    "author": "SYSTEM_BOOT",
+    "timestamp": "2026-10-01T07:27:53.771Z",
+    "details": "SERVER_STARTUP",
+    "fileSizeBytes": 48539
+  },
+  {
+    "id": "BA-1790839672894-h46n",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-PRE-STARTUP-2026-10-01-0727.json",
+    "author": "SYSTEM_PRE_STARTUP",
+    "timestamp": "2026-10-01T07:27:52.894Z",
+    "details": "Mandatory pre-startup safety copy taken before server code loads or touches data",
+    "fileSizeBytes": 48539
+  },
+  {
+    "id": "BA-1790839154153-n5sv",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-10-01-0719-1.json",
+    "author": "SYSTEM_BOOT",
+    "timestamp": "2026-10-01T07:19:14.153Z",
+    "details": "SERVER_STARTUP",
+    "fileSizeBytes": 48611
+  },
+  {
+    "id": "BA-1790839153274-68gf",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-PRE-STARTUP-2026-10-01-0719-1.json",
+    "author": "SYSTEM_PRE_STARTUP",
+    "timestamp": "2026-10-01T07:19:13.275Z",
+    "details": "Mandatory pre-startup safety copy taken before server code loads or touches data",
+    "fileSizeBytes": 48611
+  },
+  {
+    "id": "BA-1790839141290-drd9",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-10-01-0719.json",
+    "author": "SYSTEM_BOOT",
+    "timestamp": "2026-10-01T07:19:01.290Z",
+    "details": "SERVER_STARTUP",
+    "fileSizeBytes": 48611
+  },
+  {
+    "id": "BA-1790839140372-u7ng",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-PRE-STARTUP-2026-10-01-0719.json",
+    "author": "SYSTEM_PRE_STARTUP",
+    "timestamp": "2026-10-01T07:19:00.372Z",
+    "details": "Mandatory pre-startup safety copy taken before server code loads or touches data",
+    "fileSizeBytes": 48611
+  },
+  {
+    "id": "BA-1790838189317-4rom",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-10-01-0703.json",
+    "author": "SYSTEM_SCHEDULER",
+    "timestamp": "2026-10-01T07:03:09.317Z",
+    "details": "AUTOMATIC_1H_SCHEDULE",
+    "fileSizeBytes": 48611
+  },
+  {
+    "id": "BA-1790834589316-sqe2",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-10-01-0603.json",
+    "author": "SYSTEM_SCHEDULER",
+    "timestamp": "2026-10-01T06:03:09.316Z",
+    "details": "AUTOMATIC_1H_SCHEDULE",
+    "fileSizeBytes": 48611
+  },
+  {
+    "id": "BA-1790830989316-sb9q",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-10-01-0503.json",
+    "author": "SYSTEM_SCHEDULER",
+    "timestamp": "2026-10-01T05:03:09.316Z",
+    "details": "AUTOMATIC_1H_SCHEDULE",
+    "fileSizeBytes": 48611
+  },
+  {
+    "id": "BA-1790827389315-3f3a",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-10-01-0403.json",
+    "author": "SYSTEM_SCHEDULER",
+    "timestamp": "2026-10-01T04:03:09.315Z",
+    "details": "AUTOMATIC_1H_SCHEDULE",
+    "fileSizeBytes": 40454
+  },
+  {
+    "id": "BA-1790823789314-g3wi",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-10-01-0303.json",
+    "author": "SYSTEM_SCHEDULER",
+    "timestamp": "2026-10-01T03:03:09.315Z",
+    "details": "AUTOMATIC_1H_SCHEDULE",
+    "fileSizeBytes": 31254
+  },
+  {
+    "id": "BA-1790820189313-lfgb",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-10-01-0203.json",
+    "author": "SYSTEM_SCHEDULER",
+    "timestamp": "2026-10-01T02:03:09.313Z",
+    "details": "AUTOMATIC_1H_SCHEDULE",
+    "fileSizeBytes": 19254
+  },
+  {
+    "id": "BA-1790816590115-9pz7",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-2026-10-01-0103.json",
+    "author": "SYSTEM_BOOT",
+    "timestamp": "2026-10-01T01:03:10.115Z",
+    "details": "SERVER_STARTUP",
+    "fileSizeBytes": 8854
+  },
+  {
+    "id": "BA-1790816589308-zerr",
+    "action": "BACKUP_CREATED",
+    "filename": "central-database-PRE-STARTUP-2026-10-01-0103.json",
+    "author": "SYSTEM_PRE_STARTUP",
+    "timestamp": "2026-10-01T01:03:09.308Z",
+    "details": "Mandatory pre-startup safety copy taken before server code loads or touches data",
+    "fileSizeBytes": 8854
+  },
+  {
     "id": "BA-1790733340926-3aph",
     "action": "BACKUP_CREATED",
     "filename": "central-database-2026-09-30-0155.json",

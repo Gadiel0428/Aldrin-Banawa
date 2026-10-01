@@ -432,7 +432,10 @@ export default function App() {
     const safePrev = Array.isArray(prev) ? prev : [superAdminAccount];
     const existingIdx = safePrev.findIndex(u => (u.employeeId || '').toUpperCase() === empId);
     const existing = existingIdx >= 0 ? safePrev[existingIdx] : null;
-    const cleanPin = resolveAccountPin({ ...existing, ...user }, empId);
+    
+    // CRITICAL: Preserve existing PIN if incoming user payload omits PIN (e.g. from session broadcast or public sync). Never fall back to '1234'.
+    const effectivePin = (user?.pin && String(user.pin).trim()) || (existing?.pin && String(existing.pin).trim()) || (empId === 'JPMP-002' ? '0423' : '');
+    const isCompromised = effectivePin === '1234' || !!user?.isPinCompromised || !!existing?.isPinCompromised;
 
     const formattedUser: RegisteredAccount = {
       username: (user.username || existing?.username || (empId === 'JPMP-002' ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
@@ -440,7 +443,8 @@ export default function App() {
       employeeId: empId,
       phoneNumber: user.phoneNumber || user.phone_number || existing?.phoneNumber || (empId === 'JPMP-002' ? '+639669858846' : ''),
       permission: user.permission || existing?.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
-      pin: cleanPin,
+      pin: effectivePin,
+      isPinCompromised: isCompromised,
       status: user.status || existing?.status || 'ACTIVE',
       lastActive: user.lastActive || user.last_active || existing?.lastActive || undefined
     };
@@ -979,7 +983,8 @@ export default function App() {
       const empId = rawEmpId.startsWith('JPMP-') ? rawEmpId : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
       if (deletedSet.has(empId) && empId !== 'JPMP-002') return;
 
-      const cleanPin = resolveAccountPin(u, empId);
+      const cleanPin = (u?.pin && String(u.pin).trim()) || (empId === 'JPMP-002' ? '0423' : '');
+      const isCompromised = cleanPin === '1234' || !!u.isPinCompromised;
       userMap.set(empId, {
         username: (u.username || 'OPERATOR').toUpperCase(),
         role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
@@ -987,6 +992,7 @@ export default function App() {
         phoneNumber: u.phoneNumber || u.phone_number || '',
         permission: u.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
         pin: cleanPin,
+        isPinCompromised: isCompromised,
         status: u.status || 'ACTIVE',
         lastActive: u.lastActive || u.last_active || undefined
       });
@@ -1918,7 +1924,11 @@ export default function App() {
 
       const isSuper = empId === 'JPMP-002';
       const localUser = safeCurrent.find(cu => (cu.employeeId || '').toUpperCase() === empId);
-      const cleanPin = resolveAccountPin({ ...localUser, ...u }, empId);
+      
+      // CRITICAL: Server intentionally strips PIN for non-superadmin connections.
+      // u may not have pin property. We MUST preserve localUser.pin! Never fall back to '1234'.
+      const cleanPin = (u?.pin && String(u.pin).trim()) || (localUser?.pin && String(localUser.pin).trim()) || (isSuper ? '0423' : '');
+      const isCompromised = cleanPin === '1234' || !!u.isPinCompromised || !!localUser?.isPinCompromised;
 
       userMap.set(empId, {
         username: (u.username || localUser?.username || (isSuper ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
@@ -1927,6 +1937,7 @@ export default function App() {
         phoneNumber: u.phoneNumber || u.phone_number || localUser?.phoneNumber || (isSuper ? '+639669858846' : ''),
         permission: u.permission || localUser?.permission || (isSuper ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
         pin: cleanPin,
+        isPinCompromised: isCompromised,
         status: u.status || localUser?.status || 'ACTIVE',
         lastActive: u.lastActive || u.last_active || localUser?.lastActive || undefined,
         registeredBy: isSuper ? 'ROOT_SUPER_ADMIN (JPMP-002)' : (u.registeredBy || localUser?.registeredBy || 'JPMP-002 (ALDRIN BANAWA)'),
@@ -1941,11 +1952,13 @@ export default function App() {
       if (!cu || !cu.employeeId) continue;
       const empId = cu.employeeId.toUpperCase().trim();
       if (!userMap.has(empId) && (!deletedSet.has(empId) || empId === 'JPMP-002')) {
-        const pin = resolveAccountPin(cu, empId);
+        const pin = (cu.pin && String(cu.pin).trim()) || (empId === 'JPMP-002' ? '0423' : '');
+        const isCompromised = pin === '1234' || !!cu.isPinCompromised;
         const isSuper = empId === 'JPMP-002';
         userMap.set(empId, { 
           ...cu, 
           pin,
+          isPinCompromised: isCompromised,
           registeredBy: isSuper ? 'ROOT_SUPER_ADMIN (JPMP-002)' : (cu.registeredBy || 'JPMP-002 (ALDRIN BANAWA)'),
           registeredBySuperAdmin: true
         });
@@ -1954,7 +1967,7 @@ export default function App() {
 
     // 3. Guarantee Super Admin JPMP-002 is always active, full access, and protected
     const admin = userMap.get('JPMP-002') || superAdminAccount;
-    const adminPin = resolveAccountPin(admin, 'JPMP-002');
+    const adminPin = (admin.pin && String(admin.pin).trim()) || '0423';
     userMap.set('JPMP-002', {
       ...superAdminAccount,
       ...admin,
@@ -1962,7 +1975,8 @@ export default function App() {
       username: admin.username || 'ALDRIN BANAWA',
       role: 'SUPER ADMINISTRATOR',
       permission: 'FULL_ACCESS',
-      pin: adminPin || '0423',
+      pin: adminPin,
+      isPinCompromised: false,
       status: 'ACTIVE',
       registeredBy: 'ROOT_SUPER_ADMIN (JPMP-002)',
       registeredBySuperAdmin: true
@@ -3525,23 +3539,23 @@ export default function App() {
       return null;
     }
 
-    // Determine 4-digit PIN (custom or unique generated)
+    // Determine 4-digit PIN (custom or unique generated) - NEVER default to 1234
     let finalPin = '';
     const cleanProvidedPin = customPin ? customPin.replace(/\D/g, '').slice(0, 4) : '';
-    if (cleanProvidedPin.length === 4) {
+    if (cleanProvidedPin.length === 4 && cleanProvidedPin !== '1234' && !/^(\d)\1+$/.test(cleanProvidedPin)) {
       finalPin = cleanProvidedPin;
     } else {
       let attempts = 0;
       while (attempts < 100) {
         const pinCandidate = Math.floor(1000 + Math.random() * 9000).toString();
-        if (!registeredUsers.some(u => u.pin === pinCandidate)) {
+        if (pinCandidate !== '1234' && !/^(\d)\1+$/.test(pinCandidate) && !registeredUsers.some(u => u.pin === pinCandidate)) {
           finalPin = pinCandidate;
           break;
         }
         attempts++;
       }
-      if (!finalPin) {
-        finalPin = Math.floor(1000 + Math.random() * 9000).toString();
+      if (!finalPin || finalPin === '1234') {
+        finalPin = '5829';
       }
     }
 
@@ -3714,6 +3728,8 @@ export default function App() {
 
     const nextUsers = registeredUsers.map(u => {
       if ((u.employeeId || '').toUpperCase() === cleanOldId) {
+        const effectivePin = (updated.pin && String(updated.pin).trim()) || (u.pin && String(u.pin).trim()) || (cleanNewId === 'JPMP-002' ? '0423' : '');
+        const isCompromised = effectivePin === '1234' || !!updated.isPinCompromised || !!u.isPinCompromised;
         return {
           ...u,
           ...updated,
@@ -3722,7 +3738,8 @@ export default function App() {
           role: (updated.role || '').toUpperCase(),
           phoneNumber: updated.phoneNumber !== undefined ? updated.phoneNumber : (u.phoneNumber || ''),
           permission: updated.permission || u.permission || 'LIMITED_ACCESS',
-          pin: (updated.pin || u.pin || '1234').slice(0, 4),
+          pin: effectivePin,
+          isPinCompromised: isCompromised,
           status: updated.status || u.status || 'ACTIVE',
           lastActive: updated.lastActive !== undefined ? updated.lastActive : u.lastActive
         };
@@ -3769,7 +3786,7 @@ export default function App() {
       }
     }
 
-    // Direct HTTP call to /api/accounts/update and /api/accounts/update-pin
+    // Direct HTTP call to /api/accounts/update
     if (targetUpdatedUser) {
       try {
         const baseUrl = getApiBaseUrl();
@@ -3778,14 +3795,7 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(targetUpdatedUser)
         }).catch(() => {});
-
-        fetch(`${baseUrl}/api/accounts/update-pin`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ employeeId: cleanNewId, pin: targetUpdatedUser.pin || '1234' })
-        }).catch(() => {});
       } catch (e) {}
-
     }
 
     syncCollection('registeredUsers', nextUsers);
@@ -5608,6 +5618,7 @@ export default function App() {
                   receiving={receiving}
                   issuances={issuances}
                   returns={returns}
+                  registries={registries}
                 />
               )}
 

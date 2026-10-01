@@ -7,11 +7,19 @@ import { RegisteredAccount } from '../types';
 import { getApiBaseUrl } from '../config/serverConfig';
 
 export function resolveAccountPin(user: any, employeeId?: string): string {
-  if (user?.pin) return String(user.pin).trim();
-  if (user?.pin_hash) return String(user.pin_hash).trim();
+  if (user?.pin && String(user.pin).trim() !== '') return String(user.pin).trim();
+  if (user?.pin_hash && String(user.pin_hash).trim() !== '') return String(user.pin_hash).trim();
   const cleanId = (employeeId || user?.employeeId || user?.employee_id || '').toUpperCase().trim();
   if (cleanId === 'JPMP-002') return '0423';
-  return '1234';
+  // NEVER fall back to '1234'. Returning empty string enforces PIN protection and prevents silent defaults.
+  return '';
+}
+
+export function isAccountPinCompromised(account?: Partial<RegisteredAccount> | null): boolean {
+  if (!account) return false;
+  if (account.isPinCompromised) return true;
+  const pin = (account.pin || '').toString().trim();
+  return pin === '1234';
 }
 
 export interface CentralDbSnapshot {
@@ -138,24 +146,32 @@ export async function updateCentralAccount(
 }
 
 /**
- * Update account PIN in the central database.
+ * Update account PIN in the central database with explicit Super Admin verification and audit trail.
  */
 export async function updateCentralPin(
   employeeId: string,
   currentPin: string,
   newPin: string,
-  requesterEmployeeId?: string
-): Promise<{ success: boolean; error?: string }> {
+  requesterEmployeeId?: string,
+  options?: { adminPin?: string; author?: string; reason?: string }
+): Promise<{ success: boolean; user?: RegisteredAccount; error?: string }> {
   try {
     const baseUrl = getApiBaseUrl();
     const res = await fetch(`${baseUrl}/api/accounts/update-pin`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'x-user-employee-id': requesterEmployeeId || 'JPMP-002',
+        ...(options?.adminPin ? { 'x-user-pin': options.adminPin } : {})
+      },
       body: JSON.stringify({
         employeeId,
         currentPin,
         newPin,
+        adminPin: options?.adminPin,
         requesterEmployeeId: requesterEmployeeId || employeeId,
+        author: options?.author,
+        reason: options?.reason
       }),
     });
     const data = await res.json();
