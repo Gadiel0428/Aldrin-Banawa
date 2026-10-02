@@ -36,6 +36,7 @@ import {
   ChevronUp,
   ChevronRight,
   ClipboardList,
+  Package,
   PackageCheck,
   Tag,
   MapPin,
@@ -1522,6 +1523,7 @@ export default function ReceivingModule({
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="bg-slate-100 text-slate-600 font-medium border-b border-slate-200 divide-x divide-slate-200/50">
+                    {/* 1. RR # */}
                     <th 
                       onClick={() => handleRecSort('rrNumber')}
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
@@ -1536,20 +1538,8 @@ export default function ReceivingModule({
                         </span>
                       </div>
                     </th>
-                    <th 
-                      onClick={() => handleRecSort('itemDescription')}
-                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
-                        recSortField === 'itemDescription' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
-                      }`}
-                      title="Sort by Internal Code"
-                    >
-                      <div className="flex items-center gap-1">
-                        <span>Internal Code</span>
-                        <span className="text-slate-400 group-hover:text-slate-700">
-                          {recSortField === 'itemDescription' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
-                        </span>
-                      </div>
-                    </th>
+
+                    {/* 2. Date Received */}
                     <th 
                       onClick={() => handleRecSort('date')}
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
@@ -1564,20 +1554,8 @@ export default function ReceivingModule({
                         </span>
                       </div>
                     </th>
-                    <th 
-                      onClick={() => handleRecSort('partCode')}
-                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
-                        recSortField === 'partCode' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
-                      }`}
-                      title="Sort by Item / Part Code"
-                    >
-                      <div className="flex items-center gap-1">
-                        <span>Item/Part Code</span>
-                        <span className="text-slate-400 group-hover:text-slate-700">
-                          {recSortField === 'partCode' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
-                        </span>
-                      </div>
-                    </th>
+
+                    {/* 3. Item Type */}
                     <th 
                       onClick={() => handleRecSort('supplierOrDept')}
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
@@ -1592,20 +1570,24 @@ export default function ReceivingModule({
                         </span>
                       </div>
                     </th>
+
+                    {/* 4. Item/Part Code */}
                     <th 
-                      onClick={() => handleRecSort('color')}
+                      onClick={() => handleRecSort('partCode')}
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
-                        recSortField === 'color' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
+                        recSortField === 'partCode' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                       }`}
-                      title="Sort by Color"
+                      title="Sort by Item / Part Code"
                     >
                       <div className="flex items-center gap-1">
-                        <span>Color</span>
+                        <span>Item/Part Code</span>
                         <span className="text-slate-400 group-hover:text-slate-700">
-                          {recSortField === 'color' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
+                          {recSortField === 'partCode' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                         </span>
                       </div>
                     </th>
+
+                    {/* 5. Quantity */}
                     <th 
                       onClick={() => handleRecSort('quantity')}
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group text-right ${
@@ -1620,6 +1602,8 @@ export default function ReceivingModule({
                         </span>
                       </div>
                     </th>
+
+                    {/* 6. FIFO Tag Color */}
                     <th 
                       onClick={() => handleRecSort('fifoColor')}
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
@@ -1634,63 +1618,11 @@ export default function ReceivingModule({
                         </span>
                       </div>
                     </th>
-                    <th 
-                      onClick={() => handleRecSort('source')}
-                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
-                        recSortField === 'source' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
-                      }`}
-                      title="Sort by Source / Supplier"
-                    >
-                      <div className="flex items-center gap-1">
-                        <span>Source</span>
-                        <span className="text-slate-400 group-hover:text-slate-700">
-                          {recSortField === 'source' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
-                        </span>
-                      </div>
-                    </th>
-                    <th 
-                      onClick={() => handleRecSort('poNumber')}
-                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
-                        recSortField === 'poNumber' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
-                      }`}
-                      title="Sort by PO #"
-                    >
-                      <div className="flex items-center gap-1">
-                        <span>PO #</span>
-                        <span className="text-slate-400 group-hover:text-slate-700">
-                          {recSortField === 'poNumber' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
-                        </span>
-                      </div>
-                    </th>
-                    <th 
-                      onClick={() => handleRecSort('drNumber')}
-                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
-                        recSortField === 'drNumber' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
-                      }`}
-                      title="Sort by DR #"
-                    >
-                      <div className="flex items-center gap-1">
-                        <span>DR #</span>
-                        <span className="text-slate-400 group-hover:text-slate-700">
-                          {recSortField === 'drNumber' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
-                        </span>
-                      </div>
-                    </th>
-                    <th 
-                      onClick={() => handleRecSort('siNumber')}
-                      className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
-                        recSortField === 'siNumber' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
-                      }`}
-                      title="Sort by SI #"
-                    >
-                      <div className="flex items-center gap-1">
-                        <span>SI #</span>
-                        <span className="text-slate-400 group-hover:text-slate-700">
-                          {recSortField === 'siNumber' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
-                        </span>
-                      </div>
-                    </th>
+
+                    {/* 7. SOP Compliance */}
                     <th className="p-3 font-semibold text-slate-600">SOP Compliance</th>
+
+                    {/* 8. IQC Status */}
                     <th 
                       onClick={() => handleRecSort('iqcStatus')}
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
@@ -1705,6 +1637,8 @@ export default function ReceivingModule({
                         </span>
                       </div>
                     </th>
+
+                    {/* 9. Action */}
                     <th className="p-3 font-semibold text-slate-600">Action</th>
                   </tr>
                 </thead>
@@ -1747,6 +1681,7 @@ export default function ReceivingModule({
                           }`}
                           title="Click row to expand receiving details & SOP metadata"
                         >
+                          {/* 1. RR # */}
                           <td className="p-4 font-mono font-semibold text-slate-900">
                             <div className="flex items-center gap-1.5">
                               <button
@@ -1769,44 +1704,31 @@ export default function ReceivingModule({
                               <span>{r.rrNumber || r.id}</span>
                             </div>
                           </td>
+
+                          {/* 2. Date Received */}
+                          <td className="p-4 text-slate-600 font-mono whitespace-nowrap">{r.date}</td>
+
+                          {/* 3. Item Type */}
                           <td className="p-4">
-                            <div className="text-slate-700 font-medium text-xs max-w-[220px]">{r.itemDescription}</div>
-                            {r.bom && r.bom.length > 0 && (
-                              <div className="mt-1.5 bg-slate-50 border border-slate-200 p-1.5 rounded-lg max-w-[240px]">
-                                <span className="text-[9px] font-bold text-indigo-700 uppercase block mb-1">BOM Components ({r.bom.length})</span>
-                                <div className="space-y-1 max-h-[80px] overflow-y-auto pr-1">
-                                  {r.bom.map((b, idx) => (
-                                    <div key={idx} className="flex justify-between items-center text-[9px] font-mono text-slate-600 leading-tight">
-                                      <span className="truncate max-w-[140px]" title={`${b.partCode}: ${b.description}`}>{b.partCode}</span>
-                                      <span className="font-bold text-slate-800">{b.quantityRequired} {b.unit}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
+                            <span className="bg-slate-100 text-slate-800 border border-slate-200 text-[10px] font-extrabold px-2 py-1 rounded font-sans uppercase tracking-tight inline-block whitespace-nowrap">
+                              {r.supplierOrDept || 'N/A'}
+                            </span>
                           </td>
-                          <td className="p-4 text-slate-600 font-mono">{r.date}</td>
+
+                          {/* 4. Item/Part Code */}
                           <td className="p-4">
                             <div className="font-mono font-semibold text-slate-800">
                               {r.partCode}
                             </div>
                           </td>
-                          <td className="p-4">
-                            <span className="bg-slate-100 text-slate-800 border border-slate-200 text-[10px] font-extrabold px-2 py-1 rounded font-sans uppercase tracking-tight inline-block">
-                              {r.supplierOrDept || 'N/A'}
-                            </span>
+
+                          {/* 5. Quantity */}
+                          <td className="p-4 text-right font-mono font-bold text-slate-800 whitespace-nowrap">
+                            {r.quantity.toLocaleString()} {(r.unit || 'PCS').toUpperCase()}
                           </td>
-                          <td className="p-4">
-                            {r.color ? (
-                              <span className="bg-purple-50 text-purple-700 text-xs font-bold px-2 py-0.5 rounded border border-purple-200 inline-block font-sans">
-                                {r.color}
-                              </span>
-                            ) : (
-                              <span className="text-slate-400 text-xs">-</span>
-                            )}
-                          </td>
-                          <td className="p-4 text-right font-mono font-bold text-slate-800">{r.quantity.toLocaleString()} {(r.unit || 'PCS').toUpperCase()}</td>
-                          <td className="p-4">
+
+                          {/* 6. FIFO Tag Color */}
+                          <td className="p-4 whitespace-nowrap">
                             <span className="flex items-center gap-1.5 font-semibold text-slate-700">
                               <span className={`h-3 w-3 rounded-full border border-slate-200 shadow-sm ${
                                 r.fifoColorCode === 'Magenta' ? 'bg-fuchsia-600' :
@@ -1824,42 +1746,16 @@ export default function ReceivingModule({
                               {r.fifoColorCode}
                             </span>
                           </td>
-                          <td className="p-4">
-                            <div className="text-slate-800 text-xs font-semibold max-w-[160px] truncate" title={r.vendorSupplier || 'N/A'}>
-                              {r.vendorSupplier && r.vendorSupplier !== 'N/A' ? r.vendorSupplier : 'N/A'}
-                            </div>
-                          </td>
-                          <td className="p-4 font-mono text-xs">
-                            {r.poNumber ? (
-                              <span className="font-semibold text-slate-800">{r.poNumber}</span>
-                            ) : r.source === 'INTERNAL' && r.transferFormNumber ? (
-                              <span className="text-[10px] text-blue-600 font-semibold">Slip: {r.transferFormNumber}</span>
-                            ) : (
-                              <span className="text-slate-400">-</span>
-                            )}
-                          </td>
-                          <td className="p-4 font-mono text-xs">
-                            {r.drNumber ? (
-                              <span className="font-semibold text-slate-800">{r.drNumber}</span>
-                            ) : (
-                              <span className="text-slate-400">-</span>
-                            )}
-                          </td>
-                          <td className="p-4 font-mono text-xs">
-                            {r.siNumber ? (
-                              <span className="font-semibold text-slate-800">{r.siNumber}</span>
-                            ) : (
-                              <span className="text-slate-400">-</span>
-                            )}
-                          </td>
+
+                          {/* 7. SOP Compliance */}
                           <td className="p-4">
                             {isPassed ? (
-                              <span className="text-emerald-600 font-medium flex items-center gap-1 text-xs">
-                                <ShieldCheck className="h-4 w-4" /> Passed {totalSopCount}/{totalSopCount} Checklist
+                              <span className="text-emerald-600 font-medium flex items-center gap-1 text-xs whitespace-nowrap">
+                                <ShieldCheck className="h-4 w-4 shrink-0" /> Passed {totalSopCount}/{totalSopCount} Checklist
                               </span>
                             ) : (
                               <div className="text-rose-600 font-medium space-y-0.5">
-                                <div className="flex items-center gap-1 text-xs"><AlertOctagon className="h-3.5 w-3.5" /> Discrepancy spotted</div>
+                                <div className="flex items-center gap-1 text-xs whitespace-nowrap"><AlertOctagon className="h-3.5 w-3.5 shrink-0" /> Discrepancy spotted</div>
                                 <div className="text-[10px] text-slate-400">
                                   {isNewSop ? (
                                     [
@@ -1881,7 +1777,9 @@ export default function ReceivingModule({
                               </div>
                             )}
                           </td>
-                          <td className="p-4">
+
+                          {/* 8. IQC Status */}
+                          <td className="p-4 whitespace-nowrap">
                             {r.iqcStatus === 'NA' ? (
                               <span className="text-slate-400 italic">N/A (Internal)</span>
                             ) : r.iqcStatus === 'PENDING_IQC' ? (
@@ -1898,6 +1796,8 @@ export default function ReceivingModule({
                               </span>
                             )}
                           </td>
+
+                          {/* 9. Action */}
                           <td className="p-4" data-no-expand="true">
                             {effectiveCanEdit || isSuperAdmin ? (
                               <select
@@ -1959,7 +1859,7 @@ export default function ReceivingModule({
                         <AnimatePresence>
                           {isExpanded && (
                             <tr>
-                              <td colSpan={15} className="p-0 bg-slate-50/80 border-b-2 border-indigo-200">
+                              <td colSpan={9} className="p-0 bg-slate-50/80 border-b-2 border-indigo-200">
                                 <motion.div
                                   initial={{ opacity: 0, height: 0 }}
                                   animate={{ opacity: 1, height: 'auto' }}
@@ -1988,7 +1888,7 @@ export default function ReceivingModule({
                                             </span>
                                           </div>
                                           <p className="text-xs text-slate-500 mt-0.5">
-                                            Item Code: <strong className="font-mono text-slate-700">{r.itemDescription}</strong> &bull; Part: <strong className="font-mono text-slate-700">{r.partCode}</strong>
+                                            Item Code: <strong className="font-mono text-slate-700">{r.itemDescription || r.partCode}</strong> &bull; Part: <strong className="font-mono text-slate-700">{r.partCode}</strong>
                                           </p>
                                         </div>
                                       </div>
@@ -2014,34 +1914,74 @@ export default function ReceivingModule({
                                       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
                                         <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
                                           <FileText className="h-4 w-4 text-indigo-500" />
-                                          <span>Traceability & Documents</span>
+                                          <span>Traceability & Shipping Documents</span>
                                         </div>
-                                        <div className="grid grid-cols-2 gap-2 text-xs">
-                                          <div>
-                                            <span className="text-slate-400 text-[11px] block">PO Number:</span>
-                                            <span className="font-mono font-semibold text-slate-800">{r.poNumber || 'N/A'}</span>
+                                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
+                                          <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
+                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">Color:</span>
+                                            {r.color ? (
+                                              <span className="bg-purple-50 text-purple-700 text-xs font-bold px-2 py-0.5 rounded border border-purple-200 inline-block font-sans">
+                                                {r.color}
+                                              </span>
+                                            ) : (
+                                              <span className="text-slate-400 font-medium">None / N/A</span>
+                                            )}
                                           </div>
-                                          <div>
-                                            <span className="text-slate-400 text-[11px] block">DR Number:</span>
+                                          <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
+                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">Supplier:</span>
+                                            <span className="font-semibold text-slate-800 truncate block" title={r.vendorSupplier && r.vendorSupplier !== 'N/A' ? r.vendorSupplier : (r.supplierOrDept || 'N/A')}>
+                                              {r.vendorSupplier && r.vendorSupplier !== 'N/A' ? r.vendorSupplier : (r.supplierOrDept || 'N/A')}
+                                            </span>
+                                          </div>
+                                          <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
+                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">PO #:</span>
+                                            <span className="font-mono font-semibold text-slate-800">
+                                              {r.poNumber ? (
+                                                r.poNumber
+                                              ) : r.source === 'INTERNAL' && r.transferFormNumber ? (
+                                                `Slip: ${r.transferFormNumber}`
+                                              ) : (
+                                                'N/A'
+                                              )}
+                                            </span>
+                                          </div>
+                                          <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
+                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">DR #:</span>
                                             <span className="font-mono font-semibold text-slate-800">{r.drNumber || 'N/A'}</span>
                                           </div>
-                                          <div>
-                                            <span className="text-slate-400 text-[11px] block">SI Number:</span>
+                                          <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
+                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">SI #:</span>
                                             <span className="font-mono font-semibold text-slate-800">{r.siNumber || 'N/A'}</span>
                                           </div>
-                                          <div>
-                                            <span className="text-slate-400 text-[11px] block">Lot / Batch #:</span>
+                                          <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
+                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">Internal Code:</span>
+                                            <span className="font-mono font-semibold text-slate-800 truncate block" title={r.itemDescription || 'N/A'}>
+                                              {r.itemDescription || 'N/A'}
+                                            </span>
+                                          </div>
+                                          <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
+                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">Lot / Batch #:</span>
                                             <span className="font-mono font-bold text-indigo-700">{r.lotNumber || 'N/A'}</span>
                                           </div>
-                                          <div>
-                                            <span className="text-slate-400 text-[11px] block">Source / Vendor:</span>
-                                            <span className="font-medium text-slate-800 truncate block">{r.vendorSupplier || r.supplierOrDept || 'N/A'}</span>
-                                          </div>
-                                          <div>
-                                            <span className="text-slate-400 text-[11px] block">Location / Aisle:</span>
+                                          <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
+                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">Location / Aisle:</span>
                                             <span className="font-mono font-semibold text-slate-800">{r.location || (matchedStock?.location) || 'Main Storage'}</span>
                                           </div>
                                         </div>
+
+                                        {r.bom && r.bom.length > 0 && (
+                                          <div className="mt-2 bg-slate-50 border border-slate-200 p-2 rounded-lg">
+                                            <span className="text-[10px] font-bold text-indigo-700 uppercase block mb-1">BOM Components ({r.bom.length})</span>
+                                            <div className="space-y-1 max-h-[85px] overflow-y-auto pr-1">
+                                              {r.bom.map((b, idx) => (
+                                                <div key={idx} className="flex justify-between items-center text-[10px] font-mono text-slate-600 leading-tight">
+                                                  <span className="truncate max-w-[150px]" title={`${b.partCode}: ${b.description}`}>{b.partCode}</span>
+                                                  <span className="font-bold text-slate-800">{b.quantityRequired} {b.unit}</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
                                       </div>
 
                                       {/* Col 2: SOP 5-Point Quality Verification */}
