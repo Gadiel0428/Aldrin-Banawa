@@ -430,7 +430,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
                 Created: {new Date(backupToRestore.createdAt).toLocaleString()} • Size: {backupToRestore.sizeFormatted}
               </div>
               <p className="text-slate-300 pt-1 border-t border-slate-800/80 leading-relaxed">
-                Overwrites the live database file (<code className="text-amber-200">central-database.sqlite</code>).
+                Overwrites the live database file (<code className="text-amber-200">central-database.json</code>).
                 All connected workstation terminals and mobile devices will be updated immediately via real-time WebSocket broadcast.
               </p>
             </div>

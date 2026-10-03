@@ -8,7 +8,5 @@ coverage/
 !.env.example
 central-database.json
 central-database.json.tmp.*
-central-database.json.migrated-*
-central-database.sqlite*
 data-store.json
 public/build-info.json
