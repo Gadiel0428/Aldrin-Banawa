@@ -255,6 +255,121 @@ async function startServer() {
     "OFFICE SUPPLIES"
   ];
 
+  const STARTER_BARCODE_PRESETS = [
+    {
+      id: 'REG-BCP-RESIN-001',
+      type: 'BARCODE_PRESET',
+      code: 'SAMPLE-RESIN-001',
+      name: 'PC/ABS CYCOLOY RESIN PELLETS',
+      description: 'High-impact flame retardant engineering plastic resin pellets for injection molding',
+      category: 'RESIN/RAW MATERIALS',
+      unit: 'KGS',
+      vendorSupplier: 'SABIC INNOVATIVE PLASTICS',
+      location: 'RAW-ZONE-A1',
+      presetSource: 'EXTERNAL',
+      status: 'ACTIVE',
+      dateRegistered: '2026-10-02'
+    },
+    {
+      id: 'REG-BCP-IND-001',
+      type: 'BARCODE_PRESET',
+      code: 'SAMPLE-IND-001',
+      name: 'THERMAL CONDUCTIVE SILICONE GREASE',
+      description: 'High-efficiency thermal interface compound for heatsink and PCB assembly',
+      category: 'INDIRECT BOM',
+      unit: 'TUBES',
+      vendorSupplier: 'SHIN-ETSU CHEMICAL CO.',
+      location: 'CHEM-SHELF-B2',
+      presetSource: 'EXTERNAL',
+      status: 'ACTIVE',
+      dateRegistered: '2026-10-02'
+    },
+    {
+      id: 'REG-BCP-DIR-001',
+      type: 'BARCODE_PRESET',
+      code: 'SAMPLE-DIR-001',
+      name: 'M3X8MM STAINLESS STEEL MACHINE SCREW',
+      description: 'Phillips pan-head SUS304 precision fastener for chassis sub-assembly',
+      category: 'DIRECT BOM',
+      unit: 'PCS',
+      vendorSupplier: 'FASTENAL INDUSTRIAL SUPPLIES',
+      location: 'FAST-BIN-C3',
+      presetSource: 'EXTERNAL',
+      status: 'ACTIVE',
+      dateRegistered: '2026-10-02'
+    },
+    {
+      id: 'REG-BCP-CON-001',
+      type: 'BARCODE_PRESET',
+      code: 'SAMPLE-CON-001',
+      name: 'ESD ANTISTATIC CLEANROOM WIPES',
+      description: '9x9 inch lint-free polyester microfiber wipes for optical and SMT cleaning',
+      category: 'CONSUMABLES',
+      unit: 'PACKS',
+      vendorSupplier: 'CLEANROOM PRO DYNAMICS',
+      location: 'CONS-RACK-D1',
+      presetSource: 'EXTERNAL',
+      status: 'ACTIVE',
+      dateRegistered: '2026-10-02'
+    },
+    {
+      id: 'REG-BCP-PKG-001',
+      type: 'BARCODE_PRESET',
+      code: 'SAMPLE-PKG-001',
+      name: 'CORRUGATED SHIPPER CARTON 400X300X250',
+      description: 'Double-wall heavy duty B/C flute export shipping carton with preprinted handling symbols',
+      category: 'PACKAGING MATERIALS',
+      unit: 'PCS',
+      vendorSupplier: 'INTERNATIONAL PACKAGING CORP',
+      location: 'PKG-MEZZ-E4',
+      presetSource: 'EXTERNAL',
+      status: 'ACTIVE',
+      dateRegistered: '2026-10-02'
+    },
+    {
+      id: 'REG-BCP-WIP-001',
+      type: 'BARCODE_PRESET',
+      code: 'SAMPLE-WIP-001',
+      name: 'MOLDED FRONT HOUSING SUB-ASSEMBLY',
+      description: 'Precision injection molded bezel frame awaiting ultrasonic brass insert staking',
+      category: 'WIP (WORK IN PROGRESS)',
+      unit: 'PCS',
+      vendorSupplier: 'PLASTICS INJECTION LINE 2',
+      location: 'WIP-STAGE-F1',
+      presetSource: 'INTERNAL',
+      status: 'ACTIVE',
+      dateRegistered: '2026-10-02'
+    },
+    {
+      id: 'REG-BCP-FG-001',
+      type: 'BARCODE_PRESET',
+      code: 'SAMPLE-FG-001',
+      name: 'SMART IOT SENSOR NODE CONTROLLER',
+      description: 'Fully assembled, calibrated and QC approved wireless industrial sensor unit',
+      category: 'FG (FINISHED GOOD)',
+      unit: 'PCS',
+      vendorSupplier: 'FINAL ASSEMBLY DEPT 1',
+      location: 'FG-AISLE-G2',
+      presetSource: 'INTERNAL',
+      status: 'ACTIVE',
+      dateRegistered: '2026-10-02'
+    },
+    {
+      id: 'REG-BCP-OFF-001',
+      type: 'BARCODE_PRESET',
+      code: 'SAMPLE-OFF-001',
+      name: 'DIRECT THERMAL BARCODE LABELS 4X6',
+      description: 'Standard perforated warehouse shipping label rolls for Zebra industrial printers',
+      category: 'OFFICE SUPPLIES',
+      unit: 'ROLLS',
+      vendorSupplier: 'OFFICE SUPPLY DEPOT PH',
+      location: 'ADMIN-CAB-H1',
+      presetSource: 'EXTERNAL',
+      status: 'ACTIVE',
+      dateRegistered: '2026-10-02'
+    }
+  ];
+
   // Central Database In-Memory Collections (Single Source of Truth)
   const state: {
     stocks: any[];
@@ -279,7 +394,7 @@ async function startServer() {
     deliveries: INITIAL_DELIVERIES.map((item: any) => normalizeRecord(item)),
     envLogs: INITIAL_ENV_LOGS.map((item: any) => normalizeRecord(item)),
     forkliftChecks: INITIAL_FORKLIFT_CHECKS.map((item: any) => normalizeRecord(item)),
-    registries: [],
+    registries: [...STARTER_BARCODE_PRESETS],
     registeredUsers: [{ ...defaultSuperAdmin }],
     stockMovements: [],
     operationalRoles: [...DEFAULT_OPERATIONAL_ROLES],
@@ -659,6 +774,15 @@ async function startServer() {
       }
       if (!Array.isArray(state.receivingCategories) || state.receivingCategories.length === 0) {
         state.receivingCategories = [...DEFAULT_RECEIVING_CATEGORIES];
+      }
+      if (!Array.isArray(state.registries) || state.registries.length === 0) {
+        state.registries = [...STARTER_BARCODE_PRESETS];
+      } else {
+        for (const preset of STARTER_BARCODE_PRESETS) {
+          if (!state.registries.some((r: any) => (r.code || '').toUpperCase() === preset.code.toUpperCase())) {
+            state.registries.push(preset);
+          }
+        }
       }
 
       if (Array.isArray(parsed.deletedRecordTombstones)) {

@@ -33,8 +33,124 @@ import { MasterRegistryItem, RegistryType, PresetSourceType } from '../types';
 import { ConfirmActionConfig } from './ConfirmModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAuthoritativeId } from '../lib/idGenerator';
+import { DEFAULT_RECEIVING_CATEGORIES } from './ReceivingModule';
 
-export const DEFAULT_MASTER_REGISTRIES: MasterRegistryItem[] = [];
+export const STARTER_BARCODE_PRESETS: MasterRegistryItem[] = [
+  {
+    id: 'REG-BCP-RESIN-001',
+    type: 'BARCODE_PRESET',
+    code: 'SAMPLE-RESIN-001',
+    name: 'PC/ABS CYCOLOY RESIN PELLETS',
+    description: 'High-impact flame retardant engineering plastic resin pellets for injection molding',
+    category: 'RESIN/RAW MATERIALS',
+    unit: 'KGS',
+    vendorSupplier: 'SABIC INNOVATIVE PLASTICS',
+    location: 'RAW-ZONE-A1',
+    presetSource: 'EXTERNAL',
+    status: 'ACTIVE',
+    dateRegistered: '2026-10-02'
+  },
+  {
+    id: 'REG-BCP-IND-001',
+    type: 'BARCODE_PRESET',
+    code: 'SAMPLE-IND-001',
+    name: 'THERMAL CONDUCTIVE SILICONE GREASE',
+    description: 'High-efficiency thermal interface compound for heatsink and PCB assembly',
+    category: 'INDIRECT BOM',
+    unit: 'TUBES',
+    vendorSupplier: 'SHIN-ETSU CHEMICAL CO.',
+    location: 'CHEM-SHELF-B2',
+    presetSource: 'EXTERNAL',
+    status: 'ACTIVE',
+    dateRegistered: '2026-10-02'
+  },
+  {
+    id: 'REG-BCP-DIR-001',
+    type: 'BARCODE_PRESET',
+    code: 'SAMPLE-DIR-001',
+    name: 'M3X8MM STAINLESS STEEL MACHINE SCREW',
+    description: 'Phillips pan-head SUS304 precision fastener for chassis sub-assembly',
+    category: 'DIRECT BOM',
+    unit: 'PCS',
+    vendorSupplier: 'FASTENAL INDUSTRIAL SUPPLIES',
+    location: 'FAST-BIN-C3',
+    presetSource: 'EXTERNAL',
+    status: 'ACTIVE',
+    dateRegistered: '2026-10-02'
+  },
+  {
+    id: 'REG-BCP-CON-001',
+    type: 'BARCODE_PRESET',
+    code: 'SAMPLE-CON-001',
+    name: 'ESD ANTISTATIC CLEANROOM WIPES',
+    description: '9x9 inch lint-free polyester microfiber wipes for optical and SMT cleaning',
+    category: 'CONSUMABLES',
+    unit: 'PACKS',
+    vendorSupplier: 'CLEANROOM PRO DYNAMICS',
+    location: 'CONS-RACK-D1',
+    presetSource: 'EXTERNAL',
+    status: 'ACTIVE',
+    dateRegistered: '2026-10-02'
+  },
+  {
+    id: 'REG-BCP-PKG-001',
+    type: 'BARCODE_PRESET',
+    code: 'SAMPLE-PKG-001',
+    name: 'CORRUGATED SHIPPER CARTON 400X300X250',
+    description: 'Double-wall heavy duty B/C flute export shipping carton with preprinted handling symbols',
+    category: 'PACKAGING MATERIALS',
+    unit: 'PCS',
+    vendorSupplier: 'INTERNATIONAL PACKAGING CORP',
+    location: 'PKG-MEZZ-E4',
+    presetSource: 'EXTERNAL',
+    status: 'ACTIVE',
+    dateRegistered: '2026-10-02'
+  },
+  {
+    id: 'REG-BCP-WIP-001',
+    type: 'BARCODE_PRESET',
+    code: 'SAMPLE-WIP-001',
+    name: 'MOLDED FRONT HOUSING SUB-ASSEMBLY',
+    description: 'Precision injection molded bezel frame awaiting ultrasonic brass insert staking',
+    category: 'WIP (WORK IN PROGRESS)',
+    unit: 'PCS',
+    vendorSupplier: 'PLASTICS INJECTION LINE 2',
+    location: 'WIP-STAGE-F1',
+    presetSource: 'INTERNAL',
+    status: 'ACTIVE',
+    dateRegistered: '2026-10-02'
+  },
+  {
+    id: 'REG-BCP-FG-001',
+    type: 'BARCODE_PRESET',
+    code: 'SAMPLE-FG-001',
+    name: 'SMART IOT SENSOR NODE CONTROLLER',
+    description: 'Fully assembled, calibrated and QC approved wireless industrial sensor unit',
+    category: 'FG (FINISHED GOOD)',
+    unit: 'PCS',
+    vendorSupplier: 'FINAL ASSEMBLY DEPT 1',
+    location: 'FG-AISLE-G2',
+    presetSource: 'INTERNAL',
+    status: 'ACTIVE',
+    dateRegistered: '2026-10-02'
+  },
+  {
+    id: 'REG-BCP-OFF-001',
+    type: 'BARCODE_PRESET',
+    code: 'SAMPLE-OFF-001',
+    name: 'DIRECT THERMAL BARCODE LABELS 4X6',
+    description: 'Standard perforated warehouse shipping label rolls for Zebra industrial printers',
+    category: 'OFFICE SUPPLIES',
+    unit: 'ROLLS',
+    vendorSupplier: 'OFFICE SUPPLY DEPOT PH',
+    location: 'ADMIN-CAB-H1',
+    presetSource: 'EXTERNAL',
+    status: 'ACTIVE',
+    dateRegistered: '2026-10-02'
+  }
+];
+
+export const DEFAULT_MASTER_REGISTRIES: MasterRegistryItem[] = [...STARTER_BARCODE_PRESETS];
 
 interface MasterRegistryModuleProps {
   registries: MasterRegistryItem[];
@@ -45,6 +161,7 @@ interface MasterRegistryModuleProps {
   isSuperAdmin?: boolean;
   canEdit?: boolean;
   defaultType?: RegistryType | 'ALL';
+  categories?: string[];
 }
 
 export default function MasterRegistryModule({
@@ -55,10 +172,24 @@ export default function MasterRegistryModule({
   onResetDefaults,
   isSuperAdmin = false,
   canEdit = false,
-  defaultType = 'ALL'
+  defaultType = 'ALL',
+  categories
 }: MasterRegistryModuleProps) {
   const [selectedType, setSelectedType] = useState<RegistryType | 'ALL'>(defaultType);
   const [searchQuery, setSearchQuery] = useState('');
+
+  const unifiedCategories = React.useMemo(() => {
+    const list = new Set<string>();
+    if (categories && Array.isArray(categories)) {
+      categories.forEach(c => { if (c) list.add(c.trim().toUpperCase()); });
+    }
+    registries.filter(r => r.type === 'CATEGORY').forEach(r => {
+      if (r.name) list.add(r.name.trim().toUpperCase());
+      else if (r.code) list.add(r.code.trim().toUpperCase());
+    });
+    DEFAULT_RECEIVING_CATEGORIES.forEach(c => list.add(c));
+    return Array.from(list);
+  }, [categories, registries]);
 
   useEffect(() => {
     setSelectedType(defaultType);
@@ -72,13 +203,13 @@ export default function MasterRegistryModule({
   const [confirmAction, setConfirmAction] = useState<ConfirmActionConfig | null>(null);
 
   // Form state
-  const [formType, setFormType] = useState<RegistryType>('SUPPLIER');
+  const [formType, setFormType] = useState<RegistryType>('BARCODE_PRESET');
   const [formCode, setFormCode] = useState('');
   const [formName, setFormName] = useState('');
   const [formDesc, setFormDesc] = useState('');
   const [formStatus, setFormStatus] = useState<'ACTIVE' | 'INACTIVE'>('ACTIVE');
   // Preset specific fields (referring to Log New Material Arrival)
-  const [formPresetSource, setFormPresetSource] = useState<PresetSourceType>('INTERNAL');
+  const [formPresetSource, setFormPresetSource] = useState<PresetSourceType>('EXTERNAL');
 
   const [formCategory, setFormCategory] = useState('');
   const [formVendorSupplier, setFormVendorSupplier] = useState('');
@@ -88,15 +219,15 @@ export default function MasterRegistryModule({
   // Open modal for new registration
   const handleOpenNew = (type?: RegistryType) => {
     setEditingItem(null);
-    let targetType = type || (selectedType !== 'ALL' && selectedType !== 'CATEGORY' && selectedType !== 'BARCODE_PRESET' ? selectedType : 'SUPPLIER');
-    if (targetType === 'CATEGORY' || targetType === 'BARCODE_PRESET') targetType = 'SUPPLIER';
+    let targetType = type || (selectedType !== 'ALL' && selectedType !== 'CATEGORY' ? selectedType : 'BARCODE_PRESET');
+    if (targetType === 'CATEGORY') targetType = 'BARCODE_PRESET';
     setFormType(targetType);
     setFormCode('');
     setFormName('');
     setFormDesc('');
     setFormStatus('ACTIVE');
-    setFormPresetSource('INTERNAL');
-    setFormCategory('');
+    setFormPresetSource('EXTERNAL');
+    setFormCategory(unifiedCategories[0] || 'RESIN/RAW MATERIALS');
     setFormVendorSupplier('');
     setFormUnit('PCS');
     setFormLocation('');
@@ -111,8 +242,8 @@ export default function MasterRegistryModule({
     setFormName(item.name);
     setFormDesc(item.description || '');
     setFormStatus(item.status);
-    setFormPresetSource(item.presetSource || 'INTERNAL');
-    setFormCategory(item.category || '');
+    setFormPresetSource(item.presetSource || 'EXTERNAL');
+    setFormCategory(item.category || unifiedCategories[0] || 'RESIN/RAW MATERIALS');
     setFormVendorSupplier(item.vendorSupplier || '');
     setFormUnit(item.unit || 'PCS');
     setFormLocation(item.location || '');
@@ -124,6 +255,14 @@ export default function MasterRegistryModule({
     e.preventDefault();
     if (!formName.trim()) {
       alert('Please provide a name for this registration entry.');
+      return;
+    }
+    if (formType === 'BARCODE_PRESET' && !formCode.trim()) {
+      alert('Please provide an Item Code / Barcode for this preset.');
+      return;
+    }
+    if (formType === 'BARCODE_PRESET' && !formCategory.trim()) {
+      alert('Please select a Category from the unified registry.');
       return;
     }
 
@@ -217,7 +356,7 @@ export default function MasterRegistryModule({
             <h1 className="text-xl font-bold tracking-tight">Master Data Register</h1>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Register and manage master lists for Customers and Suppliers across the WMS.
+            Register and manage master lists for Barcode Presets, Customers, and Suppliers across the WMS.
           </p>
         </div>
 
@@ -229,22 +368,22 @@ export default function MasterRegistryModule({
                   type="button"
                   onClick={() => {
                     setConfirmAction({
-                      title: 'Clear All Master Registries',
-                      message: 'Are you sure you want to clear all customers, suppliers, and locations to zero?',
-                      confirmLabel: 'YES, RESET ALL TO ZERO',
-                      confirmVariant: 'danger',
+                      title: 'Reset to Standard Master Defaults',
+                      message: 'Are you sure you want to reset master registries to starter defaults (8 standard barcode presets per category)?',
+                      confirmLabel: 'YES, RESET DEFAULTS',
+                      confirmVariant: 'primary',
                       onConfirm: () => onResetDefaults()
                     });
                   }}
-                  className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-rose-300 border border-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
-                  title="Clear all master registry entries"
+                  className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                  title="Reset to 8 standard starter presets"
                 >
-                  <RefreshCw className="h-3.5 w-3.5" /> Clear All to 0
+                  <RefreshCw className="h-3.5 w-3.5" /> Reset Starter Presets
                 </button>
               )}
 
               <button
-                onClick={() => handleOpenNew()}
+                onClick={() => handleOpenNew('BARCODE_PRESET')}
                 className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold flex items-center gap-2 shadow-sm transition cursor-pointer"
               >
                 <Plus className="h-4 w-4" /> Register New Option
@@ -270,7 +409,31 @@ export default function MasterRegistryModule({
       </div>
 
       {/* Quick Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {/* 1. Barcode Presets */}
+        <div 
+          onClick={() => setSelectedType(selectedType === 'BARCODE_PRESET' ? 'ALL' : 'BARCODE_PRESET')}
+          className={`p-3 rounded-xl border transition cursor-pointer ${
+            selectedType === 'BARCODE_PRESET' 
+              ? 'bg-cyan-50 border-cyan-400 ring-2 ring-cyan-400/20 shadow-sm' 
+              : 'bg-white border-slate-200 hover:border-cyan-300 hover:bg-cyan-50/30'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="p-1.5 bg-cyan-100 text-cyan-700 rounded-lg shrink-0">
+                <Barcode className="h-3.5 w-3.5" />
+              </span>
+              <div className="min-w-0">
+                <span className="text-xs font-bold text-slate-700 block truncate">Barcode Preset</span>
+                <span className="text-[10px] text-slate-500 block truncate">Auto-Fill Items</span>
+              </div>
+            </div>
+            <span className="text-base font-mono font-bold text-slate-800 shrink-0">{countByType.BARCODE_PRESET}</span>
+          </div>
+        </div>
+
+        {/* 2. Customer */}
         <div 
           onClick={() => setSelectedType(selectedType === 'CUSTOMER' ? 'ALL' : 'CUSTOMER')}
           className={`p-3 rounded-xl border transition cursor-pointer ${
@@ -293,6 +456,7 @@ export default function MasterRegistryModule({
           </div>
         </div>
 
+        {/* 3. Supplier / Vendor */}
         <div 
           onClick={() => setSelectedType(selectedType === 'SUPPLIER' ? 'ALL' : 'SUPPLIER')}
           className={`p-3 rounded-xl border transition cursor-pointer ${
@@ -315,6 +479,7 @@ export default function MasterRegistryModule({
           </div>
         </div>
 
+        {/* 4. Location */}
         <div 
           onClick={() => setSelectedType(selectedType === 'LOCATION' ? 'ALL' : 'LOCATION')}
           className={`p-3 rounded-xl border transition cursor-pointer ${
@@ -344,7 +509,7 @@ export default function MasterRegistryModule({
           <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
           <input 
             type="text"
-            placeholder="Search registered items..."
+            placeholder="Search registered presets, codes, names..."
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
@@ -359,9 +524,10 @@ export default function MasterRegistryModule({
             id="filter-registry-type-select"
             value={selectedType}
             onChange={(e) => setSelectedType(e.target.value as 'ALL' | RegistryType)}
-            className="w-full md:w-60 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 focus:bg-white focus:outline-none cursor-pointer shadow-sm transition"
+            className="w-full md:w-64 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 focus:bg-white focus:outline-none cursor-pointer shadow-sm transition"
           >
             <option value="ALL">ALL REGISTERED ({registries.length})</option>
+            <option value="BARCODE_PRESET">BARCODE PRESETS ({countByType.BARCODE_PRESET})</option>
             <option value="CUSTOMER">CUSTOMERS ({countByType.CUSTOMER})</option>
             <option value="SUPPLIER">SUPPLIERS ({countByType.SUPPLIER})</option>
             <option value="LOCATION">LOCATIONS ({countByType.LOCATION})</option>
@@ -376,7 +542,7 @@ export default function MasterRegistryModule({
             <thead>
               <tr className="bg-slate-900 text-slate-300 font-mono text-[11px] uppercase tracking-wider border-b border-slate-800">
                 <th className="p-3">Type</th>
-                <th className="p-3">Code</th>
+                <th className="p-3">Code / Barcode</th>
                 <th className="p-3">Name / Title</th>
                 <th className="p-3">Description</th>
                 <th className="p-3 text-center">Status</th>
@@ -400,15 +566,25 @@ export default function MasterRegistryModule({
                           {getTypeIcon(item.type)}
                           {item.type}
                         </span>
-                        {item.type === 'BARCODE_PRESET' && item.presetSource && (
-                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold border ${
-                            item.presetSource === 'WIP/BOM/FG(Internal)' || item.presetSource === 'INTERNAL'
-                              ? 'bg-amber-50 text-amber-800 border-amber-200'
-                              : 'bg-indigo-50 text-indigo-800 border-indigo-200'
-                          }`}>
-                            {item.presetSource === 'WIP/BOM/FG(Internal)' || item.presetSource === 'INTERNAL' ? <Building2 className="h-3 w-3" /> : <Truck className="h-3 w-3" />}
-                            {item.presetSource === 'WIP/BOM/FG(Internal)' || item.presetSource === 'INTERNAL' ? 'INTERNAL' : 'EXTERNAL'}
-                          </span>
+                        {item.type === 'BARCODE_PRESET' && (
+                          <div className="flex flex-col gap-1 mt-0.5">
+                            {item.category && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-2xs" title={`Unified Category: ${item.category}`}>
+                                <Tag className="h-3 w-3 text-indigo-500 shrink-0" />
+                                {item.category}
+                              </span>
+                            )}
+                            {item.presetSource && (
+                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold border ${
+                                item.presetSource === 'WIP/BOM/FG(Internal)' || item.presetSource === 'INTERNAL'
+                                  ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                  : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                              }`}>
+                                {item.presetSource === 'WIP/BOM/FG(Internal)' || item.presetSource === 'INTERNAL' ? <Building2 className="h-3 w-3" /> : <Truck className="h-3 w-3" />}
+                                {item.presetSource === 'WIP/BOM/FG(Internal)' || item.presetSource === 'INTERNAL' ? 'INTERNAL' : 'EXTERNAL'}
+                              </span>
+                            )}
+                          </div>
                         )}
                       </div>
                     </td>
@@ -416,12 +592,27 @@ export default function MasterRegistryModule({
                       {item.code || '-'}
                     </td>
                     <td className="p-3 font-semibold text-slate-900">
-                      <div>{item.name}</div>
-                      {item.type === 'BARCODE_PRESET' && (item.category || item.vendorSupplier) && (
-                        <div className="text-[10px] font-normal text-slate-500 mt-0.5">
-                          {item.vendorSupplier && <span className="font-medium text-slate-700">{item.vendorSupplier}</span>}
-                          {item.vendorSupplier && item.category && <span className="mx-1">•</span>}
-                          {item.category && <span>{item.category}</span>}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span>{item.name}</span>
+                        {item.type === 'BARCODE_PRESET' && item.category && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-100 text-indigo-800 border border-indigo-300 shadow-2xs">
+                            <Tag className="h-3 w-3 text-indigo-600" />
+                            {item.category}
+                          </span>
+                        )}
+                      </div>
+                      {item.type === 'BARCODE_PRESET' && (item.vendorSupplier || item.location) && (
+                        <div className="text-[10px] font-normal text-slate-500 mt-1 flex items-center gap-1.5 flex-wrap">
+                          {item.vendorSupplier && (
+                            <span className="font-medium text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                              Vendor: {item.vendorSupplier}
+                            </span>
+                          )}
+                          {item.location && (
+                            <span className="font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                              Loc: {item.location}
+                            </span>
+                          )}
                         </div>
                       )}
                     </td>
@@ -522,28 +713,62 @@ export default function MasterRegistryModule({
               <form onSubmit={handleSubmit} className="p-5 space-y-4 max-h-[85vh] overflow-y-auto">
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Registration Target *</label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(['CUSTOMER', 'SUPPLIER', 'LOCATION'] as RegistryType[]).map(t => (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {(['BARCODE_PRESET', 'CUSTOMER', 'SUPPLIER', 'LOCATION'] as RegistryType[]).map(t => (
                       <button
                         key={t}
                         type="button"
                         onClick={() => setFormType(t)}
-                        className={`px-2.5 py-2 rounded-lg text-xs font-bold border flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                        className={`px-2 py-2 rounded-lg text-xs font-bold border flex items-center justify-center gap-1.5 transition cursor-pointer ${
                           formType === t 
                             ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' 
                             : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
                         }`}
                       >
                         {getTypeIcon(t)}
-                        {t === 'CUSTOMER' ? 'Customer' : t === 'SUPPLIER' ? 'Supplier' : 'Location'}
+                        {t === 'BARCODE_PRESET' ? 'Barcode Preset' : t === 'CUSTOMER' ? 'Customer' : t === 'SUPPLIER' ? 'Supplier' : 'Location'}
                       </button>
                     ))}
                   </div>
                 </div>
 
+                {formType === 'BARCODE_PRESET' && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Source Stream *</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setFormPresetSource('EXTERNAL')}
+                        className={`px-3 py-2 rounded-lg text-xs font-bold border flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                          formPresetSource === 'EXTERNAL'
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        <Truck className="h-3.5 w-3.5" />
+                        EXTERNAL (Vendor)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormPresetSource('INTERNAL')}
+                        className={`px-3 py-2 rounded-lg text-xs font-bold border flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                          formPresetSource === 'INTERNAL'
+                            ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        <Building2 className="h-3.5 w-3.5" />
+                        INTERNAL (Production)
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    {formType === 'CUSTOMER'
+                    {formType === 'BARCODE_PRESET'
+                      ? 'Item Code / Barcode *'
+                      : formType === 'CUSTOMER'
                       ? 'Customer Code'
                       : formType === 'SUPPLIER'
                       ? 'Supplier Code'
@@ -553,8 +778,10 @@ export default function MasterRegistryModule({
                   </label>
                   <input 
                     type="text"
+                    required={formType === 'BARCODE_PRESET'}
                     placeholder={
-                      formType === 'CUSTOMER' ? 'e.g. CUST-001'
+                      formType === 'BARCODE_PRESET' ? 'e.g. SAMPLE-RESIN-001 or Barcode Value'
+                      : formType === 'CUSTOMER' ? 'e.g. CUST-001'
                       : formType === 'SUPPLIER' ? 'e.g. SUP-APX'
                       : 'e.g. LOC-ZA'
                     }
@@ -566,7 +793,8 @@ export default function MasterRegistryModule({
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    {formType === 'CUSTOMER' ? 'Customer Name *'
+                    {formType === 'BARCODE_PRESET' ? 'Item Name / Title *'
+                      : formType === 'CUSTOMER' ? 'Customer Name *'
                       : formType === 'SUPPLIER' ? 'Supplier / Vendor Name *'
                       : formType === 'LOCATION' ? 'Location / Zone Name *'
                       : 'Name / Title *'}
@@ -575,7 +803,8 @@ export default function MasterRegistryModule({
                     type="text"
                     required
                     placeholder={
-                      formType === 'CUSTOMER' ? 'e.g. Acme Corporation'
+                      formType === 'BARCODE_PRESET' ? 'e.g. PC/ABS Cycoloy Resin Pellets'
+                      : formType === 'CUSTOMER' ? 'e.g. Acme Corporation'
                       : formType === 'SUPPLIER' ? 'e.g. Apex Chemical Corp'
                       : 'e.g. Zone A - Raw Materials'
                     }
@@ -587,14 +816,16 @@ export default function MasterRegistryModule({
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    {formType === 'CUSTOMER' ? 'Customer Notes / Address'
+                    {formType === 'BARCODE_PRESET' ? 'Item Description / Notes'
+                      : formType === 'CUSTOMER' ? 'Customer Notes / Address'
                       : formType === 'SUPPLIER' ? 'Supplier Description / Notes'
                       : 'Description / Notes'}
                   </label>
                   <textarea 
                     rows={2}
                     placeholder={
-                      formType === 'CUSTOMER' ? 'e.g. Automotive molded plastic assemblies & packaging'
+                      formType === 'BARCODE_PRESET' ? 'e.g. High-impact flame retardant engineering plastic resin pellets...'
+                      : formType === 'CUSTOMER' ? 'e.g. Automotive molded plastic assemblies & packaging'
                       : formType === 'SUPPLIER' ? 'e.g. Primary resin & chemical compound supplier'
                       : 'Optional details, contacts, or specs...'
                     }
@@ -603,6 +834,80 @@ export default function MasterRegistryModule({
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                   />
                 </div>
+
+                {formType === 'BARCODE_PRESET' && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">
+                      Category * <span className="text-[10px] text-slate-400 font-normal">(from unified category registry)</span>
+                    </label>
+                    <select
+                      required
+                      value={formCategory}
+                      onChange={e => setFormCategory(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer"
+                    >
+                      <option value="" disabled>-- Select Unified Category --</option>
+                      {unifiedCategories.map(cat => (
+                        <option key={cat} value={cat}>
+                          {cat}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {formType === 'BARCODE_PRESET' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Unit of Measure (UOM) *</label>
+                      <select
+                        value={formUnit}
+                        onChange={e => setFormUnit(e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono font-bold focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer bg-white"
+                      >
+                        <option value="PCS">PCS</option>
+                        <option value="KGS">KGS</option>
+                        <option value="ROLLS">ROLLS</option>
+                        <option value="BOXES">BOXES</option>
+                        <option value="BAGS">BAGS</option>
+                        <option value="SETS">SETS</option>
+                        <option value="PACKS">PACKS</option>
+                        <option value="TUBES">TUBES</option>
+                        <option value="MTRS">MTRS</option>
+                        <option value="LTRS">LTRS</option>
+                        <option value="LOT">LOT</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Vendor / Supplier</label>
+                      <input 
+                        type="text"
+                        list="preset-suppliers-list"
+                        placeholder="e.g. Sabic Plastics"
+                        value={formVendorSupplier}
+                        onChange={e => setFormVendorSupplier(e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                      />
+                      <datalist id="preset-suppliers-list">
+                        {registries.filter(r => r.type === 'SUPPLIER').map(s => (
+                          <option key={s.id} value={s.name} />
+                        ))}
+                      </datalist>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Default Storage Location</label>
+                      <input 
+                        type="text"
+                        placeholder="e.g. RAW-ZONE-A1"
+                        value={formLocation}
+                        onChange={e => setFormLocation(e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono uppercase focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Status</label>

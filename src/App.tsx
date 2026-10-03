@@ -5712,6 +5712,7 @@ export default function App() {
                   isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
                   canEdit={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
                   defaultType="ALL"
+                  categories={receivingCategories}
                 />
               )}
 
