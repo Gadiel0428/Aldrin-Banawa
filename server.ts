@@ -9,6 +9,15 @@ import path from "path";
 import fs from "fs";
 import crypto from "crypto";
 import { WebSocketServer, WebSocket } from "ws";
+import {
+  initSqliteStore,
+  commitToSqlite,
+  readDatabaseFromSqlite,
+  validateDatabaseFile,
+  vacuumInto,
+  checkpointAndClose,
+  openSqliteDatabase
+} from "./server/sqliteStore.ts";
 
 // Ephemeral per-process instance identifiers (fresh every boot, never persisted)
 const SERVER_INSTANCE_ID = crypto.randomUUID();
@@ -54,7 +63,9 @@ async function startServer() {
   }
 
   // Authoritative Central Database File
-  const DATA_FILE = getStorageFilePath("central-database.json");
+  const DATA_FILE_SQLITE = getStorageFilePath("central-database.sqlite");
+  const DATA_FILE_JSON = getStorageFilePath("central-database.json");
+  const DATA_FILE = DATA_FILE_SQLITE;
 
   // =========================================================================
   // STORAGE CONFIGURATION GUARD RAIL:
@@ -402,82 +413,49 @@ async function startServer() {
   };
 
   /**
-   * Authoritative Disk Persistence: Synchronous Commit
+   * Helper to build complete database payload from authoritative in-memory state
+   */
+  function getDbPayload(): any {
+    return {
+      installationId,
+      primaryDeviceId,
+      systemResetVersion,
+      systemResetTimestamp,
+      systemResetId,
+      systemResetBy,
+      stateRevision,
+      state,
+      stocks: state.stocks || [],
+      receiving: state.receiving || [],
+      returns: state.returns || [],
+      recycling: state.recycling || [],
+      issuances: state.issuances || [],
+      deliveries: state.deliveries || [],
+      envLogs: state.envLogs || [],
+      forkliftChecks: state.forkliftChecks || [],
+      registries: state.registries || [],
+      registeredUsers: state.registeredUsers || [],
+      stockMovements: state.stockMovements || [],
+      operationalRoles: state.operationalRoles || [...DEFAULT_OPERATIONAL_ROLES],
+      receivingCategories: state.receivingCategories || [...DEFAULT_RECEIVING_CATEGORIES],
+      authorizedDevices: Array.from(authorizedDevicesMap.values()),
+      deletedRecordTombstones: Array.from(deletedRecordTombstones),
+      deletedUserTombstones: Array.from(deletedUserTombstones),
+      chatMessages: chatMessages.slice(-200)
+    };
+  }
+
+  /**
+   * Authoritative Disk Persistence: Synchronous Commit to SQLite
    * DATABASE COMMIT MUST ALWAYS HAPPEN BEFORE A WEBSOCKET EVENT IS BROADCAST.
    */
   function commitDatabase(): boolean {
     try {
-      const payload = JSON.stringify({
-        installationId,
-        primaryDeviceId,
-        systemResetVersion,
-        systemResetTimestamp,
-        systemResetId,
-        systemResetBy,
-        stateRevision,
-        state,
-        stocks: state.stocks || [],
-        receiving: state.receiving || [],
-        returns: state.returns || [],
-        recycling: state.recycling || [],
-        issuances: state.issuances || [],
-        deliveries: state.deliveries || [],
-        envLogs: state.envLogs || [],
-        forkliftChecks: state.forkliftChecks || [],
-        registries: state.registries || [],
-        registeredUsers: state.registeredUsers || [],
-        stockMovements: state.stockMovements || [],
-        operationalRoles: state.operationalRoles || [...DEFAULT_OPERATIONAL_ROLES],
-        receivingCategories: state.receivingCategories || [...DEFAULT_RECEIVING_CATEGORIES],
-        authorizedDevices: Array.from(authorizedDevicesMap.values()),
-        deletedRecordTombstones: Array.from(deletedRecordTombstones),
-        deletedUserTombstones: Array.from(deletedUserTombstones),
-        chatMessages: chatMessages.slice(-200)
-      }, null, 2);
-
-      const targetDir = path.dirname(DATA_FILE);
-      if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, { recursive: true });
-      }
-
-      // Write atomically using temporary file rename
-      const tempPath = `${DATA_FILE}.tmp.${Date.now()}`;
-      fs.writeFileSync(tempPath, payload, "utf-8");
-      fs.renameSync(tempPath, DATA_FILE);
-      return true;
+      const payload = getDbPayload();
+      return commitToSqlite(payload);
     } catch (err) {
-      console.error("CRITICAL: Failed atomic database commit to disk:", err);
-      try {
-        // Direct write fallback
-        fs.writeFileSync(DATA_FILE, JSON.stringify({
-          installationId,
-          primaryDeviceId,
-          systemResetVersion,
-          systemResetTimestamp,
-          systemResetId,
-          systemResetBy,
-          stateRevision,
-          state,
-          stocks: state.stocks || [],
-          receiving: state.receiving || [],
-          returns: state.returns || [],
-          recycling: state.recycling || [],
-          issuances: state.issuances || [],
-          deliveries: state.deliveries || [],
-          envLogs: state.envLogs || [],
-          forkliftChecks: state.forkliftChecks || [],
-          registries: state.registries || [],
-          registeredUsers: state.registeredUsers || [],
-          stockMovements: state.stockMovements || [],
-          operationalRoles: state.operationalRoles || [...DEFAULT_OPERATIONAL_ROLES],
-          receivingCategories: state.receivingCategories || [...DEFAULT_RECEIVING_CATEGORIES],
-          authorizedDevices: Array.from(authorizedDevicesMap.values())
-        }, null, 2), "utf-8");
-        return true;
-      } catch (fallbackErr) {
-        console.error("CRITICAL: Direct database write fallback also failed:", fallbackErr);
-        return false;
-      }
+      console.error("CRITICAL: Failed SQLite database commit to disk:", err);
+      return false;
     }
   }
 
@@ -635,22 +613,22 @@ async function startServer() {
 
   function getNextBackupFilename(date: Date = new Date()): string {
     const base = `central-database-${formatBackupTimestamp(date)}`;
-    let filename = `${base}.json`;
+    let filename = `${base}.sqlite`;
     let counter = 1;
     while (fs.existsSync(path.join(BACKUPS_DIR, filename))) {
-      filename = `${base}-${counter}.json`;
+      filename = `${base}-${counter}.sqlite`;
       counter++;
     }
     return filename;
   }
 
-  // Lists all existing backups sorted newest first. Permanently keeps all backups with zero automatic deletion.
+  // Lists all existing backups sorted newest first. Accepts both .sqlite and legacy .json backups.
   function getAllBackupRecords(): BackupItemRecord[] {
     try {
       if (!fs.existsSync(BACKUPS_DIR)) return [];
       const entries = fs.readdirSync(BACKUPS_DIR, { withFileTypes: true });
       const backups: BackupItemRecord[] = entries
-        .filter(e => e.isFile() && e.name.startsWith("central-database-") && e.name.endsWith(".json"))
+        .filter(e => e.isFile() && e.name.startsWith("central-database-") && (e.name.endsWith(".sqlite") || e.name.endsWith(".json")))
         .map(e => {
           const filePath = path.join(BACKUPS_DIR, e.name);
           let mtime = 0;
@@ -681,7 +659,7 @@ async function startServer() {
     }
   }
 
-  // Non-blocking asynchronous backup creator: copies file in background without blocking requests
+  // Non-blocking asynchronous backup creator using SQLite VACUUM INTO
   let isBackupInProgress = false;
   async function createDatabaseBackup(reason: string = "SCHEDULED", author: string = "SYSTEM"): Promise<{ success: boolean; filename?: string; error?: string }> {
     if (isBackupInProgress) {
@@ -697,21 +675,19 @@ async function startServer() {
       // Ensure disk database is current with memory state
       commitDatabase();
 
-      if (!fs.existsSync(DATA_FILE)) {
-        console.warn("[DATABASE BACKUP] Cannot create backup: DATA_FILE does not exist on disk.");
+      if (!fs.existsSync(DATA_FILE_SQLITE)) {
+        console.warn("[DATABASE BACKUP] Cannot create backup: SQLite database file does not exist on disk.");
         return { success: false, error: "Database file does not exist on disk" };
       }
 
       const filename = getNextBackupFilename();
       const targetPath = path.join(BACKUPS_DIR, filename);
 
-      // Asynchronous copy on libuv background worker thread pool to prevent blocking the event loop
-      await fs.promises.copyFile(DATA_FILE, targetPath);
+      // Consistent atomic snapshot via VACUUM INTO
+      vacuumInto(targetPath);
       const stat = await fs.promises.stat(targetPath);
 
       logBackupAudit("BACKUP_CREATED", filename, author, reason, stat.size);
-      // Permanent retention: keep every single backup with no age limit and no count cap
-
       return { success: true, filename };
     } catch (err: any) {
       console.error("[DATABASE BACKUP] Failed to create database backup:", err);
@@ -721,10 +697,9 @@ async function startServer() {
     }
   }
 
-  // Parse and apply database JSON payload into in-memory state
-  function parseAndApplyDatabaseJson(raw: string): boolean {
+  // Apply database object payload into in-memory state
+  function applyDatabaseObject(parsed: any): boolean {
     try {
-      const parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== 'object') return false;
 
       if (parsed.installationId) installationId = String(parsed.installationId);
@@ -793,7 +768,7 @@ async function startServer() {
       }
       if (Array.isArray(parsed.chatMessages)) {
         chatMessages.length = 0;
-        chatMessages.push(...parsed.chatMessages);
+        chatMessages.push(...parsed.chatMessages.slice(-200));
       }
 
       // Ensure Super Administrator JPMP-002 is registered in memory
@@ -832,75 +807,149 @@ async function startServer() {
     }
   }
 
+  // Thin JSON wrapper around applyDatabaseObject
+  function parseAndApplyDatabaseJson(raw: string): boolean {
+    try {
+      const parsed = JSON.parse(raw);
+      return applyDatabaseObject(parsed);
+    } catch (e) {
+      return false;
+    }
+  }
+
   // Load persisted state from disk on server initialization with automatic backup recovery
   function loadDatabaseFromDisk() {
-    // 1. Try to load and parse the live database file as normal.
-    if (fs.existsSync(DATA_FILE)) {
+    const timestampStr = formatBackupTimestamp(new Date());
+
+    // a) Load the live SQLite DB if it is valid.
+    if (fs.existsSync(DATA_FILE_SQLITE)) {
+      const validation = validateDatabaseFile(DATA_FILE_SQLITE);
+      if (validation.valid && validation.data) {
+        initSqliteStore(DATA_FILE_SQLITE);
+        applyDatabaseObject(validation.data);
+        console.log("Live database loaded normally");
+        return;
+      }
+
+      // b) If it is corrupt, move it aside as central-database.sqlite.corrupt-<timestamp> (never delete it).
+      console.warn(`WARNING: Live SQLite database '${DATA_FILE_SQLITE}' is corrupt or unreadable (${validation.error || 'validation failed'}). Moving aside as corrupt...`);
       try {
-        const raw = fs.readFileSync(DATA_FILE, "utf-8");
-        // Verify non-empty and valid JSON structure
-        if (raw && raw.trim().length > 0) {
-          if (parseAndApplyDatabaseJson(raw)) {
-            // 3. Log clearly: "Live database loaded normally"
-            // 4. If live database loads successfully and normally, do NOT touch it or restore anything — leave it exactly as-is.
-            console.log("Live database loaded normally");
-            return;
-          }
+        const corruptTarget = `${DATA_FILE_SQLITE}.corrupt-${timestampStr}`;
+        fs.renameSync(DATA_FILE_SQLITE, corruptTarget);
+        console.log(`[CORRUPT DB] Moved corrupt database aside to: ${corruptTarget}`);
+        if (fs.existsSync(`${DATA_FILE_SQLITE}-wal`)) {
+          try { fs.renameSync(`${DATA_FILE_SQLITE}-wal`, `${DATA_FILE_SQLITE}-wal.corrupt-${timestampStr}`); } catch (e) {}
         }
-      } catch (err) {
-        // Corrupted or unreadable, fall through to auto-recovery
+        if (fs.existsSync(`${DATA_FILE_SQLITE}-shm`)) {
+          try { fs.renameSync(`${DATA_FILE_SQLITE}-shm`, `${DATA_FILE_SQLITE}-shm.corrupt-${timestampStr}`); } catch (e) {}
+        }
+      } catch (moveErr) {
+        console.error("Failed to move corrupt SQLite file aside:", moveErr);
       }
     }
 
-    // 2. If it's missing, empty, or fails to parse (corrupted), do NOT start with a blank database.
-    // Instead, look in the backups folder, find the most recent backup file by filename/timestamp,
-    // and load that one as the starting database instead.
+    // c) If no valid SQLite DB exists but central-database.json exists, import it into SQLite and verify the copy matches.
+    // Only then rename the original to central-database.json.migrated-<timestamp> (never delete it).
+    if (fs.existsSync(DATA_FILE_JSON)) {
+      try {
+        const rawJson = fs.readFileSync(DATA_FILE_JSON, "utf-8");
+        if (rawJson && rawJson.trim().length > 0) {
+          const parsed = JSON.parse(rawJson);
+          if (applyDatabaseObject(parsed)) {
+            // Initialize fresh SQLite store
+            initSqliteStore(DATA_FILE_SQLITE);
+            // Save in-memory state to SQLite
+            commitDatabase();
+
+            // Verify the copy matches
+            const loadedFromSqlite = readDatabaseFromSqlite();
+            const stocksMatch = (loadedFromSqlite.state?.stocks?.length || 0) === (state.stocks?.length || 0);
+            const receivingMatch = (loadedFromSqlite.state?.receiving?.length || 0) === (state.receiving?.length || 0);
+            const usersMatch = (loadedFromSqlite.state?.registeredUsers?.length || 0) === (state.registeredUsers?.length || 0);
+
+            if (stocksMatch && receivingMatch && usersMatch) {
+              const migratedTarget = `${DATA_FILE_JSON}.migrated-${timestampStr}`;
+              fs.renameSync(DATA_FILE_JSON, migratedTarget);
+              console.log(`[MIGRATION SUCCESS] Legacy JSON database successfully migrated to SQLite (${DATA_FILE_SQLITE}). Original renamed to: ${migratedTarget}`);
+              return;
+            } else {
+              console.error("[MIGRATION WARNING] SQLite verification did not match in-memory state after importing legacy JSON!");
+            }
+          }
+        }
+      } catch (jsonErr) {
+        console.error("[MIGRATION ERROR] Failed to import legacy central-database.json:", jsonErr);
+      }
+    }
+
+    // d) Otherwise recover from the newest VALID backup, skipping empty or corrupt files. Backups can be .sqlite or legacy .json.
     let autoRestoredBackupFilename: string | null = null;
     try {
       if (fs.existsSync(BACKUPS_DIR)) {
         const entries = fs.readdirSync(BACKUPS_DIR, { withFileTypes: true });
         const backupCandidates = entries
-          .filter(e => e.isFile() && e.name.startsWith("central-database-") && e.name.endsWith(".json"))
+          .filter(e => e.isFile() && e.name.startsWith("central-database-") && (e.name.endsWith(".sqlite") || e.name.endsWith(".json")))
           .map(e => {
             const filePath = path.join(BACKUPS_DIR, e.name);
             let mtime = 0;
             try {
               mtime = fs.statSync(filePath).mtimeMs;
             } catch (stErr) {}
-            return { filename: e.name, filePath, mtime };
+            return { filename: e.name, filePath, mtime, isSqlite: e.name.endsWith(".sqlite") };
           });
 
-        // Sort by most recent timestamp descending, then filename descending
+        // Sort newest first
         backupCandidates.sort((a, b) => b.mtime - a.mtime || b.filename.localeCompare(a.filename));
 
         for (const candidate of backupCandidates) {
           try {
-            const rawBackup = fs.readFileSync(candidate.filePath, "utf-8");
-            if (rawBackup && rawBackup.trim().length > 0) {
-              if (parseAndApplyDatabaseJson(rawBackup)) {
-                autoRestoredBackupFilename = candidate.filename;
-
-                // Overwrite the missing/corrupted live database with this valid backup
-                try {
-                  fs.copyFileSync(candidate.filePath, DATA_FILE);
-                } catch (copyErr) {
-                  commitDatabase();
+            if (candidate.isSqlite) {
+              const validation = validateDatabaseFile(candidate.filePath);
+              if (validation.valid && validation.data) {
+                // Valid SQLite backup
+                if (fs.existsSync(DATA_FILE_SQLITE)) {
+                  try { checkpointAndClose(); } catch (e) {}
+                  try { fs.unlinkSync(DATA_FILE_SQLITE); } catch (e) {}
                 }
+                fs.copyFileSync(candidate.filePath, DATA_FILE_SQLITE);
+                initSqliteStore(DATA_FILE_SQLITE);
+                applyDatabaseObject(validation.data);
 
-                // 3. Log clearly: "Live database missing/corrupted — auto-restored from backup '<filename>'"
+                autoRestoredBackupFilename = candidate.filename;
                 console.log(`Live database missing/corrupted — auto-restored from backup '${candidate.filename}'`);
                 logBackupAudit(
                   "DATABASE_RESTORED",
                   candidate.filename,
                   "SYSTEM_AUTO_RECOVERY",
-                  "Live database missing or corrupted on startup — automatically recovered from latest backup",
+                  "Live database missing or corrupted on startup — automatically recovered from latest SQLite backup",
                   fs.statSync(candidate.filePath).size
                 );
-                break;
+                return;
+              }
+            } else {
+              // Legacy .json backup
+              const rawBackup = fs.readFileSync(candidate.filePath, "utf-8");
+              if (rawBackup && rawBackup.trim().length > 0) {
+                const parsed = JSON.parse(rawBackup);
+                if (applyDatabaseObject(parsed)) {
+                  initSqliteStore(DATA_FILE_SQLITE);
+                  commitDatabase();
+
+                  autoRestoredBackupFilename = candidate.filename;
+                  console.log(`Live database missing/corrupted — auto-restored from backup '${candidate.filename}'`);
+                  logBackupAudit(
+                    "DATABASE_RESTORED",
+                    candidate.filename,
+                    "SYSTEM_AUTO_RECOVERY",
+                    "Live database missing or corrupted on startup — automatically recovered from latest JSON backup",
+                    fs.statSync(candidate.filePath).size
+                  );
+                  return;
+                }
               }
             }
           } catch (candErr) {
-            // If candidate file is corrupted, move to the next most recent candidate
+            // Move to next candidate
           }
         }
       }
@@ -908,10 +957,10 @@ async function startServer() {
       console.error("[AUTO RECOVERY] Error scanning backups directory:", scanErr);
     }
 
-    // 5. If there are no backups available AND the live database is also missing/corrupted,
-    // start with an empty database as it does now, and log a clear warning that no recovery was possible.
+    // e) Otherwise start empty, as before.
     if (!autoRestoredBackupFilename) {
       console.warn("WARNING: Live database is missing/corrupted and no backup files are available in backups folder. Starting with an empty database. No recovery was possible.");
+      initSqliteStore(DATA_FILE_SQLITE);
       commitDatabase();
       const superAdminIndex = state.registeredUsers.findIndex(
         u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002'
@@ -927,7 +976,6 @@ async function startServer() {
   // MANDATORY PRE-STARTUP DATABASE SAFETY BACKUP:
   // Before loading the database or executing any new code that touches data,
   // create a dedicated safety backup copy of the current live database file.
-  // Format: central-database-PRE-STARTUP-YYYY-MM-DD-HHmm.json
   // =========================================================================
   function createPreStartupBackup(): { success: boolean; filename?: string } {
     try {
@@ -935,38 +983,81 @@ async function startServer() {
         fs.mkdirSync(BACKUPS_DIR, { recursive: true });
       }
 
-      if (!fs.existsSync(DATA_FILE)) {
-        console.log("[DATABASE PRE-STARTUP BACKUP] No existing live database file found on disk (fresh install) — skipping pre-startup backup.");
-        return { success: false };
+      const timestampStr = formatBackupTimestamp(new Date());
+
+      // If SQLite DB exists
+      if (fs.existsSync(DATA_FILE_SQLITE)) {
+        const validation = validateDatabaseFile(DATA_FILE_SQLITE);
+        if (validation.valid) {
+          const base = `central-database-PRE-STARTUP-${timestampStr}`;
+          let filename = `${base}.sqlite`;
+          let counter = 1;
+          while (fs.existsSync(path.join(BACKUPS_DIR, filename))) {
+            filename = `${base}-${counter}.sqlite`;
+            counter++;
+          }
+          const targetPath = path.join(BACKUPS_DIR, filename);
+
+          try {
+            const tempDb = openSqliteDatabase(DATA_FILE_SQLITE, { readonly: true });
+            if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
+            tempDb.prepare("VACUUM INTO ?;").run(targetPath);
+            tempDb.close();
+          } catch (vErr) {
+            fs.copyFileSync(DATA_FILE_SQLITE, targetPath);
+          }
+
+          const backupStat = fs.statSync(targetPath);
+          logBackupAudit(
+            "BACKUP_CREATED",
+            filename,
+            "SYSTEM_PRE_STARTUP",
+            "Mandatory pre-startup safety copy taken before server code loads or touches data",
+            backupStat.size
+          );
+          console.log(`[DATABASE PRE-STARTUP BACKUP] Safety backup created: '${filename}' (${backupStat.size} bytes). Taken before server code touches data.`);
+          return { success: true, filename };
+        } else {
+          // If the live DB is unreadable at startup, keep a raw copy named *.sqlite.unreadable
+          const unreadablePath = `${DATA_FILE_SQLITE}.unreadable`;
+          try {
+            fs.copyFileSync(DATA_FILE_SQLITE, unreadablePath);
+            console.warn(`[DATABASE PRE-STARTUP BACKUP] Live SQLite DB is unreadable. Raw copy kept at: '${unreadablePath}'`);
+          } catch (copyErr) {
+            console.error("Failed to copy unreadable SQLite DB:", copyErr);
+          }
+          return { success: false };
+        }
       }
 
-      const stat = fs.statSync(DATA_FILE);
-      if (stat.size === 0) {
-        console.log("[DATABASE PRE-STARTUP BACKUP] Existing live database file is empty (0 bytes) — skipping pre-startup backup.");
-        return { success: false };
+      // If only legacy JSON exists, copy it as a PRE-STARTUP .json backup
+      if (fs.existsSync(DATA_FILE_JSON)) {
+        const stat = fs.statSync(DATA_FILE_JSON);
+        if (stat.size > 0) {
+          const base = `central-database-PRE-STARTUP-${timestampStr}`;
+          let filename = `${base}.json`;
+          let counter = 1;
+          while (fs.existsSync(path.join(BACKUPS_DIR, filename))) {
+            filename = `${base}-${counter}.json`;
+            counter++;
+          }
+          const targetPath = path.join(BACKUPS_DIR, filename);
+          fs.copyFileSync(DATA_FILE_JSON, targetPath);
+          const backupStat = fs.statSync(targetPath);
+          logBackupAudit(
+            "BACKUP_CREATED",
+            filename,
+            "SYSTEM_PRE_STARTUP",
+            "Mandatory pre-startup safety copy of legacy JSON taken before server code loads or touches data",
+            backupStat.size
+          );
+          console.log(`[DATABASE PRE-STARTUP BACKUP] Safety legacy JSON backup created: '${filename}' (${backupStat.size} bytes).`);
+          return { success: true, filename };
+        }
       }
 
-      const base = `central-database-PRE-STARTUP-${formatBackupTimestamp(new Date())}`;
-      let filename = `${base}.json`;
-      let counter = 1;
-      while (fs.existsSync(path.join(BACKUPS_DIR, filename))) {
-        filename = `${base}-${counter}.json`;
-        counter++;
-      }
-      const targetPath = path.join(BACKUPS_DIR, filename);
-
-      fs.copyFileSync(DATA_FILE, targetPath);
-      const backupStat = fs.statSync(targetPath);
-
-      logBackupAudit(
-        "BACKUP_CREATED",
-        filename,
-        "SYSTEM_PRE_STARTUP",
-        "Mandatory pre-startup safety copy taken before server code loads or touches data",
-        backupStat.size
-      );
-      console.log(`[DATABASE PRE-STARTUP BACKUP] Safety backup created: '${filename}' (${backupStat.size} bytes). Taken before server code touches data.`);
-      return { success: true, filename };
+      console.log("[DATABASE PRE-STARTUP BACKUP] No existing live database file found on disk (fresh install) — skipping pre-startup backup.");
+      return { success: false };
     } catch (err: any) {
       console.error("[DATABASE PRE-STARTUP BACKUP] Failed to create pre-startup safety backup:", err);
       return { success: false };
@@ -988,33 +1079,52 @@ async function startServer() {
         return { success: false, error: `Backup file '${cleanName}' not found in backups directory.` };
       }
 
-      // Validate JSON content
-      const raw = fs.readFileSync(backupPath, "utf-8");
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object") {
-        return { success: false, error: "Invalid backup JSON structure" };
+      // 1. Validate the backup completely BEFORE touching live data
+      let parsedData: any = null;
+      if (cleanName.endsWith(".sqlite")) {
+        const validation = validateDatabaseFile(backupPath);
+        if (!validation.valid || !validation.data) {
+          return { success: false, error: `Invalid or corrupt SQLite backup: ${validation.error || 'validation failed'}` };
+        }
+        parsedData = validation.data;
+      } else if (cleanName.endsWith(".json")) {
+        const raw = fs.readFileSync(backupPath, "utf-8");
+        parsedData = JSON.parse(raw);
+        if (!parsedData || typeof parsedData !== "object") {
+          return { success: false, error: "Invalid backup JSON structure" };
+        }
+      } else {
+        return { success: false, error: "Unsupported backup file format. Expected .sqlite or .json" };
       }
 
-      // Create pre-restore safety backup of live database before overwriting
+      // 2. Create pre-restore safety snapshot of live database before overwriting
       try {
-        const safetyName = getNextBackupFilename();
-        fs.copyFileSync(DATA_FILE, path.join(BACKUPS_DIR, safetyName));
-        console.log(`[DATABASE RESTORE] Pre-restore safety snapshot created: ${safetyName}`);
-        logBackupAudit("BACKUP_CREATED", safetyName, "SYSTEM_SAFETY", "Pre-restore safety snapshot before overwriting database", fs.statSync(path.join(BACKUPS_DIR, safetyName)).size);
-      } catch (e) {}
+        if (fs.existsSync(DATA_FILE_SQLITE)) {
+          commitDatabase();
+          const safetyName = getNextBackupFilename();
+          const safetyPath = path.join(BACKUPS_DIR, safetyName);
+          vacuumInto(safetyPath);
+          console.log(`[DATABASE RESTORE] Pre-restore safety snapshot created: ${safetyName}`);
+          logBackupAudit("BACKUP_CREATED", safetyName, "SYSTEM_SAFETY", "Pre-restore safety snapshot before overwriting database", fs.statSync(safetyPath).size);
+        }
+      } catch (e) {
+        console.warn("[DATABASE RESTORE] Could not create safety snapshot before restore:", e);
+      }
 
-      // Overwrite live database file with selected backup
-      fs.copyFileSync(backupPath, DATA_FILE);
-
-      // Reload database from disk into memory
-      loadDatabaseFromDisk();
+      // 3. Load backup into memory
+      if (!applyDatabaseObject(parsedData)) {
+        return { success: false, error: "Failed to apply backup data structure to memory." };
+      }
       stateRevision += 1;
+
+      // 4. Commit memory state to SQLite
+      commitDatabase();
 
       // Log audit
       const stat = fs.statSync(backupPath);
       logBackupAudit("DATABASE_RESTORED", cleanName, author, `Overwrote live database with backup ${cleanName}`, stat.size);
 
-      // Broadcast sync to all active terminals
+      // 5. Broadcast sync to all active terminals
       broadcast({
         type: "GLOBAL_RESET",
         systemResetVersion,
@@ -4346,7 +4456,11 @@ async function startServer() {
         return res.status(404).json({ error: "Backup file not found" });
       }
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-      res.setHeader("Content-Type", "application/json");
+      if (filename.endsWith(".sqlite")) {
+        res.setHeader("Content-Type", "application/vnd.sqlite3");
+      } else {
+        res.setHeader("Content-Type", "application/json");
+      }
       fs.createReadStream(filePath).pipe(res);
     } catch (err: any) {
       return res.status(500).json({ error: err?.message });
@@ -5357,6 +5471,27 @@ async function startServer() {
       console.error("JUWEI WMS Server error:", err);
     }
   });
+
+  let isShuttingDown = false;
+  function handleGracefulShutdown(signal: string) {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.log(`[SERVER SHUTDOWN] Received ${signal}. Executing graceful SQLite database persistence and close...`);
+    try {
+      commitDatabase();
+    } catch (e) {
+      console.error("[SERVER SHUTDOWN] Error during final database commit:", e);
+    }
+    try {
+      checkpointAndClose();
+    } catch (e) {
+      console.error("[SERVER SHUTDOWN] Error running WAL checkpoint and closing SQLite:", e);
+    }
+    process.exit(0);
+  }
+
+  process.on("SIGINT", () => handleGracefulShutdown("SIGINT"));
+  process.on("SIGTERM", () => handleGracefulShutdown("SIGTERM"));
 
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`JUWEI WAREHOUSE MANAGEMENT SYSTEM Central Real-time Server listening on http://0.0.0.0:${PORT}`);
