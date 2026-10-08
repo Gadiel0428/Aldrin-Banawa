@@ -63,6 +63,7 @@ import DesktopInstallModal from './components/DesktopInstallModal';
 import MobileAppDownloadModal from './components/MobileAppDownloadModal';
 import { ConfirmModal, ConfirmActionConfig } from './components/ConfirmModal';
 import BarcodeScannerModal from './components/BarcodeScannerModal';
+import QuickRecordLookupModal from './components/QuickRecordLookupModal';
 import CentralDatabaseModal from './components/CentralDatabaseModal';
 import { ServerBackupsModal } from './components/ServerBackupsModal';
 import ActiveUsersModal from './components/ActiveUsersModal';
@@ -198,6 +199,43 @@ export default function App() {
   const [view, setView] = useState<string>('dashboard');
   const [showDesktopInstallModal, setShowDesktopInstallModal] = useState<boolean>(false);
   const [showMobileInstallModal, setShowMobileInstallModal] = useState<boolean>(false);
+
+  // Quick Record Lookup via Header Barcode / QR Scanner
+  const [showQuickLookupScanner, setShowQuickLookupScanner] = useState<boolean>(false);
+  const [showQuickLookupResults, setShowQuickLookupResults] = useState<boolean>(false);
+  const [quickLookupTerm, setQuickLookupTerm] = useState<string>('');
+
+  const handleQuickLookupScan = (scannedCode: string) => {
+    const clean = scannedCode.trim();
+    if (!clean) return;
+    setQuickLookupTerm(clean);
+    setShowQuickLookupScanner(false);
+    setShowQuickLookupResults(true);
+  };
+
+  const handleNavigateFromLookup = (moduleView: string, filterQuery?: string) => {
+    setView(moduleView);
+    setShowQuickLookupResults(false);
+  };
+
+  // Keyboard shortcut (Alt+S or Ctrl+B) to trigger barcode scanner
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger shortcut if typing in an input/textarea
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        if (!(e.altKey && e.key.toLowerCase() === 's')) {
+          return;
+        }
+      }
+      if ((e.altKey && e.key.toLowerCase() === 's') || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b')) {
+        e.preventDefault();
+        setShowQuickLookupScanner(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Optimistic local mutation timestamp tracker to prevent in-flight clobbering / race conditions
   const lastMutationTimes = useRef<{ [col: string]: number }>({});
@@ -5510,6 +5548,22 @@ export default function App() {
               onOpenDiagnostics={() => setShowStartupDiagnosticsModal(true)}
             />
 
+            {/* Quick Record Lookup Barcode / QR Scanner Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setQuickLookupTerm('');
+                setShowQuickLookupScanner(true);
+              }}
+              className="inline-flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white px-2.5 sm:px-3 h-8 rounded-xl text-xs font-semibold transition-all cursor-pointer shrink-0 shadow-xs shadow-indigo-500/25 border border-indigo-500/40"
+              title="Quick Record Lookup: Scan lot number, part barcode, or QR tag (Alt+S or Ctrl+B)"
+              aria-label="Quick Record Lookup Barcode / QR Scanner"
+              id="header-barcode-scanner-button"
+            >
+              <Barcode className="h-4 w-4 shrink-0" />
+              <span className="hidden sm:inline font-medium">Quick Scan</span>
+            </button>
+
             {/* Connected Workstations / Active Terminals Pill - Logo Only with Count */}
             <button
               type="button"
@@ -5888,6 +5942,39 @@ export default function App() {
           lastSyncedTime={lastSyncedTime}
           onForceSync={handleManualSync}
           isManualSyncing={isManualSyncing}
+        />
+      )}
+
+      {/* Quick Record Lookup Barcode / QR Scanner Modal */}
+      {showQuickLookupScanner && (
+        <BarcodeScannerModal
+          isOpen={showQuickLookupScanner}
+          onClose={() => setShowQuickLookupScanner(false)}
+          title="Quick Record Lookup Barcode & QR Scanner"
+          subtitle="Scan material tag, roll barcode, lot label, or requisition QR code"
+          onScanResult={handleQuickLookupScan}
+        />
+      )}
+
+      {/* Quick Record Lookup Results Modal */}
+      {showQuickLookupResults && (
+        <QuickRecordLookupModal
+          isOpen={showQuickLookupResults}
+          onClose={() => setShowQuickLookupResults(false)}
+          onOpenScanner={() => {
+            setShowQuickLookupResults(false);
+            setShowQuickLookupScanner(true);
+          }}
+          searchTerm={quickLookupTerm}
+          onSearchTermChange={setQuickLookupTerm}
+          stocks={stocks}
+          receiving={receiving}
+          issuances={issuances}
+          deliveries={deliveries}
+          returns={returns}
+          recycling={recycling}
+          registries={registries}
+          onNavigateToModule={handleNavigateFromLookup}
         />
       )}
 
