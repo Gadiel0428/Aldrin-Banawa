@@ -5,18 +5,6 @@
 
 import WebSocket from 'ws';
 import fs from 'fs';
-import path from 'path';
-import { DatabaseSync } from 'node:sqlite';
-
-function readSqliteStocks() {
-  const dbPath = process.env.JUWEI_DATA_DIR 
-    ? path.join(process.env.JUWEI_DATA_DIR, 'central-database.sqlite')
-    : 'central-database.sqlite';
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  const rows = db.prepare('SELECT data FROM stocks').all();
-  db.close();
-  return rows.map(r => JSON.parse(r.data));
-}
 
 const WS_URL = 'ws://localhost:3000/ws';
 const API_URL = 'http://localhost:3000';
@@ -184,11 +172,11 @@ async function runTest() {
     console.log(` -> Client ${i + 1} (${clients[i].username} on ${clients[i].platform}) received DATA_CREATE broadcast.`);
   }
 
-  // Verify central-database.sqlite on disk
-  const stocksInDb = readSqliteStocks();
-  const foundInDb = stocksInDb.find(s => s.id === testPartId);
+  // Verify central-database.json on disk
+  const dbData = JSON.parse(fs.readFileSync('central-database.json', 'utf8'));
+  const foundInDb = dbData.stocks?.find(s => s.id === testPartId);
   if (!foundInDb) {
-    throw new Error('Test record was not saved to central-database.sqlite!');
+    throw new Error('Test record was not saved to central-database.json!');
   }
   console.log(' [PASS] Record saved to Central Database first, then broadcast to all 4 other devices!');
 
@@ -221,8 +209,8 @@ async function runTest() {
     console.log(` -> Client ${idx + 1} (${clients[idx].username} on ${clients[idx].platform}) received DATA_UPDATE with quantity = 115.`);
   }
 
-  const stocksUpdated = readSqliteStocks();
-  const foundUpdated = stocksUpdated.find(s => s.id === testPartId);
+  const dbDataUpdated = JSON.parse(fs.readFileSync('central-database.json', 'utf8'));
+  const foundUpdated = dbDataUpdated.stocks?.find(s => s.id === testPartId);
   if (foundUpdated?.quantity !== 115) {
     throw new Error(`Central database quantity expected 115, found ${foundUpdated?.quantity}`);
   }
@@ -251,10 +239,10 @@ async function runTest() {
     console.log(` -> Client ${idx + 1} (${clients[idx].username}) received DATA_DELETE for item ${testPartId}.`);
   }
 
-  const stocksDeleted = readSqliteStocks();
-  const foundDeleted = stocksDeleted.find(s => s.id === testPartId);
+  const dbDataDeleted = JSON.parse(fs.readFileSync('central-database.json', 'utf8'));
+  const foundDeleted = dbDataDeleted.stocks?.find(s => s.id === testPartId);
   if (foundDeleted) {
-    throw new Error('Test record was not deleted from central-database.sqlite!');
+    throw new Error('Test record was not deleted from central-database.json!');
   }
   console.log(' [PASS] Real-time delete confirmed in Central Database and broadcast across platforms!');
 
