@@ -171,9 +171,23 @@ function createWindow() {
     mainWindow.show();
   });
 
-  // Handle external links safely in system default browser
+  // Handle external links safely in system default browser and allow blob: URLs in native window
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('https:') || url.startsWith('http:')) {
+    if (url && url.startsWith('blob:')) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          width: 1024,
+          height: 800,
+          autoHideMenuBar: false,
+          webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+          }
+        }
+      };
+    }
+    if (url && (url.startsWith('https:') || url.startsWith('http:'))) {
       shell.openExternal(url);
     }
     return { action: 'deny' };
@@ -288,8 +302,16 @@ ipcMain.handle('open-generated-pdf', async (event, { pdfData, filename }) => {
     fs.writeFileSync(filePath, buffer);
     const result = await shell.openPath(filePath);
     if (result) {
-      console.warn('[JUWEI Electron] shell.openPath warning:', result);
-      return { success: false, error: result };
+      console.warn('[JUWEI Electron] shell.openPath warning/error:', result);
+      // Fallback: reveal in File Explorer for manual opening if no default PDF viewer is registered
+      try {
+        shell.showItemInFolder(filePath);
+        console.log('[JUWEI Electron] Successfully revealed PDF file in folder as fallback:', filePath);
+        return { success: true, fallback: 'shown_in_folder', filePath };
+      } catch (revealErr) {
+        console.error('[JUWEI Electron] shell.showItemInFolder failed:', revealErr);
+        return { success: false, error: result };
+      }
     }
     return { success: true, filePath };
   } catch (err) {

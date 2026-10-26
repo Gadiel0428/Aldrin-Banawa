@@ -49,7 +49,7 @@ import {
   AlertCircle,
   ExternalLink
 } from 'lucide-react';
-import { ReceivingRecord, ReturnRecord, MaterialStockItem, getCustomerForPart, UOM_OPTIONS, MasterRegistryItem, RegistryType } from '../types';
+import { ReceivingRecord, ReturnRecord, MaterialStockItem, getCustomerForPart, UOM_OPTIONS, MasterRegistryItem, RegistryType, FifoColorsMap } from '../types';
 import { FIFO_COLORS_BY_MONTH } from '../data';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import { motion, AnimatePresence } from 'motion/react';
@@ -85,6 +85,7 @@ interface ReceivingModuleProps {
   onOpenRegisterModal?: (type?: RegistryType) => void;
   receivingCategories?: string[];
   onUpdateReceivingCategories?: (categories: string[], renameData?: { oldCat: string; newCat: string }) => void;
+  fifoColorsByMonth?: FifoColorsMap;
 }
 
 export default function ReceivingModule({
@@ -104,7 +105,8 @@ export default function ReceivingModule({
   registries = [],
   onOpenRegisterModal,
   receivingCategories,
-  onUpdateReceivingCategories
+  onUpdateReceivingCategories,
+  fifoColorsByMonth
 }: ReceivingModuleProps) {
   const effectiveCanEdit = canEdit || isSuperAdmin;
   const [activeTab, setActiveTab] = useState<'external-internal' | 'returns'>('external-internal');
@@ -689,9 +691,10 @@ export default function ReceivingModule({
       return;
     }
 
-    // Determine FIFO quarterly color code based on today's month
+    // Determine FIFO quarterly color code based on today's month from synced calendar
     const currentMonth = new Date().getMonth() + 1; // 1-indexed
-    const fifoColor = FIFO_COLORS_BY_MONTH[currentMonth]?.name || 'Silver';
+    const activeCalendar = fifoColorsByMonth || FIFO_COLORS_BY_MONTH;
+    const fifoColor = activeCalendar[currentMonth]?.name || 'Silver';
 
     // Discrepancy flag
     const hasConditionDiscrepancy = 

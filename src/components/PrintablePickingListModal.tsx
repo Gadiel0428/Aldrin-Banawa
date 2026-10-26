@@ -1177,11 +1177,16 @@ export default function PrintablePickingListModal({
             <button
               type="button"
               onClick={() => setShowPrintPreview(true)}
-              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white border border-slate-700 hover:border-indigo-500/50 text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer active:scale-95"
+              disabled={isExportingPDF}
+              className={`px-3.5 py-2 ${isExportingPDF ? 'bg-slate-800/60 text-slate-500 border-slate-800 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white border-slate-700 hover:border-indigo-500/50 cursor-pointer active:scale-95'} border text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5`}
               title="Open A4 Print Layout Preview before printing"
               id="btn-print-preview"
             >
-              <Eye className="h-4 w-4 text-indigo-400" />
+              {isExportingPDF ? (
+                <Loader2 className="h-4 w-4 animate-spin text-indigo-400" />
+              ) : (
+                <Eye className="h-4 w-4 text-indigo-400" />
+              )}
               <span>PRINT PREVIEW</span>
             </button>
 
@@ -1230,10 +1235,20 @@ export default function PrintablePickingListModal({
             <button
               type="button"
               onClick={() => setShowPrintPreview(true)}
-              className="px-2.5 py-1 bg-amber-200/80 hover:bg-amber-200 text-amber-950 font-bold rounded-lg text-xs transition flex items-center gap-1 shadow-xs cursor-pointer border border-amber-300"
+              disabled={isExportingPDF}
+              className={`px-2.5 py-1 ${isExportingPDF ? 'bg-amber-100/70 text-amber-700/60 border-amber-200 cursor-not-allowed' : 'bg-amber-200/80 hover:bg-amber-200 text-amber-950 cursor-pointer border-amber-300'} font-bold rounded-lg text-xs transition flex items-center gap-1 shadow-xs border`}
             >
-              <Eye className="h-3 w-3 text-amber-800" />
-              <span>Preview A4 Page</span>
+              {isExportingPDF ? (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin text-amber-700" />
+                  <span>Preparing...</span>
+                </>
+              ) : (
+                <>
+                  <Eye className="h-3 w-3 text-amber-800" />
+                  <span>Preview A4 Page</span>
+                </>
+              )}
             </button>
             <button
               type="button"
@@ -1243,7 +1258,7 @@ export default function PrintablePickingListModal({
             >
               {isExportingPDF ? (
                 <>
-                  <Loader2 className="h-3 w-3 animate-spin" />
+                  <Loader2 className="h-3 w-3 animate-spin text-amber-300" />
                   <span>Generating PDF...</span>
                 </>
               ) : (

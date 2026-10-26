@@ -39,6 +39,15 @@ export interface SystemResetInfo {
   resetBy?: string;
 }
 
+export interface FifoMonthColor {
+  name: string;
+  colorClass: string;
+  textClass: string;
+  hex?: string;
+}
+
+export type FifoColorsMap = Record<number, FifoMonthColor>;
+
 export interface MaterialStockItem extends BaseRecordAudit {
   id: string;
   partCode: string;

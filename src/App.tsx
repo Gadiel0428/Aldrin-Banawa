@@ -63,6 +63,7 @@ import DesktopInstallModal from './components/DesktopInstallModal';
 import MobileAppDownloadModal from './components/MobileAppDownloadModal';
 import { ConfirmModal, ConfirmActionConfig } from './components/ConfirmModal';
 import BarcodeScannerModal from './components/BarcodeScannerModal';
+import QuickRecordLookupModal from './components/QuickRecordLookupModal';
 import CentralDatabaseModal from './components/CentralDatabaseModal';
 import { ServerBackupsModal } from './components/ServerBackupsModal';
 import ActiveUsersModal from './components/ActiveUsersModal';
@@ -99,7 +100,9 @@ import {
   MasterRegistryItem,
   RegisteredAccount,
   ActivePresenceUser,
-  QueuedMutation
+  QueuedMutation,
+  FifoColorsMap,
+  FifoMonthColor
 } from './types';
 import { generateAuthoritativeId } from './lib/idGenerator';
 
@@ -111,7 +114,9 @@ import {
   INITIAL_ISSUANCE, 
   INITIAL_DELIVERIES, 
   INITIAL_ENV_LOGS, 
-  INITIAL_FORKLIFT_CHECKS 
+  INITIAL_FORKLIFT_CHECKS,
+  DEFAULT_FIFO_COLORS_BY_MONTH,
+  FIFO_COLORS_BY_MONTH
 } from './data';
 
 import DashboardOverview from './components/DashboardOverview';
@@ -198,6 +203,43 @@ export default function App() {
   const [view, setView] = useState<string>('dashboard');
   const [showDesktopInstallModal, setShowDesktopInstallModal] = useState<boolean>(false);
   const [showMobileInstallModal, setShowMobileInstallModal] = useState<boolean>(false);
+
+  // Quick Record Lookup via Header Barcode / QR Scanner
+  const [showQuickLookupScanner, setShowQuickLookupScanner] = useState<boolean>(false);
+  const [showQuickLookupResults, setShowQuickLookupResults] = useState<boolean>(false);
+  const [quickLookupTerm, setQuickLookupTerm] = useState<string>('');
+
+  const handleQuickLookupScan = (scannedCode: string) => {
+    const clean = scannedCode.trim();
+    if (!clean) return;
+    setQuickLookupTerm(clean);
+    setShowQuickLookupScanner(false);
+    setShowQuickLookupResults(true);
+  };
+
+  const handleNavigateFromLookup = (moduleView: string, filterQuery?: string) => {
+    setView(moduleView);
+    setShowQuickLookupResults(false);
+  };
+
+  // Keyboard shortcut (Alt+S or Ctrl+B) to trigger barcode scanner
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger shortcut if typing in an input/textarea
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        if (!(e.altKey && e.key.toLowerCase() === 's')) {
+          return;
+        }
+      }
+      if ((e.altKey && e.key.toLowerCase() === 's') || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b')) {
+        e.preventDefault();
+        setShowQuickLookupScanner(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Optimistic local mutation timestamp tracker to prevent in-flight clobbering / race conditions
   const lastMutationTimes = useRef<{ [col: string]: number }>({});
@@ -617,6 +659,14 @@ export default function App() {
                   if (cleaned.length > 0) {
                     setReceivingCategories(cleaned);
                     try { localStorage.setItem('juwei_wms_receivingCategories', JSON.stringify(cleaned)); } catch (e) {}
+                  }
+                  break;
+                }
+                case 'fifoColorsByMonth': {
+                  if (data && typeof data === 'object') {
+                    const merged = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...data };
+                    setFifoColorsByMonth(merged);
+                    try { localStorage.setItem('juwei_wms_fifoColorsByMonth', JSON.stringify(merged)); } catch (e) {}
                   }
                   break;
                 }
@@ -1173,6 +1223,85 @@ export default function App() {
     }
   };
 
+  // FIFO Color Coding Calendar (12 Months) centrally managed and synced
+  const [fifoColorsByMonth, setFifoColorsByMonth] = useState<FifoColorsMap>(() => {
+    try {
+      const saved = localStorage.getItem('juwei_wms_fifoColorsByMonth');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          return { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...parsed };
+        }
+      }
+    } catch (e) {}
+    return { ...DEFAULT_FIFO_COLORS_BY_MONTH };
+  });
+
+  const handleUpdateFifoColors = async (
+    updated: FifoColorsMap | { month: number; color: FifoMonthColor }
+  ) => {
+    let nextMap: FifoColorsMap;
+    if ('month' in updated && 'color' in updated) {
+      nextMap = {
+        ...fifoColorsByMonth,
+        [updated.month]: updated.color
+      };
+    } else {
+      nextMap = {
+        ...DEFAULT_FIFO_COLORS_BY_MONTH,
+        ...(updated as FifoColorsMap)
+      };
+    }
+
+    setFifoColorsByMonth(nextMap);
+    try {
+      localStorage.setItem('juwei_wms_fifoColorsByMonth', JSON.stringify(nextMap));
+    } catch (e) {}
+
+    // Broadcast cross-tab immediately
+    try {
+      syncChannelRef.current?.postMessage({
+        type: 'collection_updated',
+        collection: 'fifoColorsByMonth',
+        data: nextMap
+      });
+    } catch (e) {}
+
+    // Send WebSocket notification to central server
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      try {
+        socket.send(JSON.stringify({
+          type: 'update_fifo_colors',
+          fifoColorsByMonth: nextMap,
+          author: currentUser || 'Super Admin',
+          permission: currentPermission,
+          timestamp: new Date().toISOString()
+        }));
+      } catch (e) {}
+    }
+
+    // REST API persistence fallback
+    try {
+      const baseUrl = getApiBaseUrl();
+      await fetch(`${baseUrl}/api/fifo-colors`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-permission': currentPermission || '',
+          'x-employee-id': currentEmployeeId || ''
+        },
+        body: JSON.stringify({
+          fifoColorsByMonth: nextMap,
+          author: currentUser,
+          permission: currentPermission,
+          employeeId: currentEmployeeId
+        })
+      });
+    } catch (e) {
+      console.warn('Failed to sync FIFO colors via REST fallback:', e);
+    }
+  };
+
   // Keep active logged-in user's role, permissions, and status in sync with live registered accounts directory
   useEffect(() => {
     if (!isLoggedIn || !currentEmployeeId) return;
@@ -1663,6 +1792,11 @@ export default function App() {
         try { localStorage.setItem('juwei_wms_receivingCategories', JSON.stringify(catClean)); } catch (e) {}
       }
     }
+    if (dataPayload.fifoColorsByMonth && typeof dataPayload.fifoColorsByMonth === 'object') {
+      const merged = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...dataPayload.fifoColorsByMonth };
+      setFifoColorsByMonth(merged);
+      try { localStorage.setItem('juwei_wms_fifoColorsByMonth', JSON.stringify(merged)); } catch (e) {}
+    }
     if (Array.isArray(msgs)) setChatMessages(msgs);
     if (activePresenceList && Array.isArray(activePresenceList)) {
       setWsPresence(activePresenceList);
@@ -2097,6 +2231,11 @@ export default function App() {
                 try { localStorage.setItem('juwei_wms_receivingCategories', JSON.stringify(catClean)); } catch (e) {}
               }
             }
+            if (json.data.fifoColorsByMonth && typeof json.data.fifoColorsByMonth === 'object') {
+              const merged = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...json.data.fifoColorsByMonth };
+              setFifoColorsByMonth(merged);
+              try { localStorage.setItem('juwei_wms_fifoColorsByMonth', JSON.stringify(merged)); } catch (e) {}
+            }
             if (Array.isArray(cm) && cm.length > 0) setChatMessages(cm);
           }
         }
@@ -2434,6 +2573,11 @@ export default function App() {
                 try { localStorage.setItem('juwei_wms_receivingCategories', JSON.stringify(catClean)); } catch (e) {}
               }
             }
+            if (json.data.fifoColorsByMonth && typeof json.data.fifoColorsByMonth === 'object') {
+              const merged = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...json.data.fifoColorsByMonth };
+              setFifoColorsByMonth(merged);
+              try { localStorage.setItem('juwei_wms_fifoColorsByMonth', JSON.stringify(merged)); } catch (e) {}
+            }
             if (Array.isArray(cm) && cm.length > 0) setChatMessages(cm);
             if (json.activePresence && Array.isArray(json.activePresence)) {
               setWsPresence(json.activePresence);
@@ -2491,6 +2635,11 @@ export default function App() {
                   setReceivingCategories(catClean);
                   try { localStorage.setItem('juwei_wms_receivingCategories', JSON.stringify(catClean)); } catch (e) {}
                 }
+              }
+              if (json.data.fifoColorsByMonth && typeof json.data.fifoColorsByMonth === 'object') {
+                const merged = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...json.data.fifoColorsByMonth };
+                setFifoColorsByMonth(merged);
+                try { localStorage.setItem('juwei_wms_fifoColorsByMonth', JSON.stringify(merged)); } catch (e) {}
               }
               if (Array.isArray(cm) && cm.length > 0) setChatMessages(cm);
               if (json.activePresence && Array.isArray(json.activePresence)) {
@@ -2578,6 +2727,11 @@ export default function App() {
           setReceivingCategories(catClean);
           try { localStorage.setItem('juwei_wms_receivingCategories', JSON.stringify(catClean)); } catch (e) {}
         }
+      }
+      if (dataPayload.fifoColorsByMonth && typeof dataPayload.fifoColorsByMonth === 'object') {
+        const merged = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...dataPayload.fifoColorsByMonth };
+        setFifoColorsByMonth(merged);
+        try { localStorage.setItem('juwei_wms_fifoColorsByMonth', JSON.stringify(merged)); } catch (e) {}
       }
       if (msgs && Array.isArray(msgs)) setChatMessages(msgs);
       if (activePresenceList && Array.isArray(activePresenceList)) {
@@ -3172,6 +3326,14 @@ export default function App() {
                     }
                     break;
                   }
+                  case 'fifoColorsByMonth': {
+                    if (data && typeof data === 'object') {
+                      const merged = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...data };
+                      setFifoColorsByMonth(merged);
+                      try { localStorage.setItem('juwei_wms_fifoColorsByMonth', JSON.stringify(merged)); } catch (e) {}
+                    }
+                    break;
+                  }
                 }
               }
               break;
@@ -3195,6 +3357,15 @@ export default function App() {
                   setReceivingCategories(cleaned);
                   try { localStorage.setItem('juwei_wms_receivingCategories', JSON.stringify(cleaned)); } catch (e) {}
                 }
+              }
+              break;
+            }
+            case 'fifo_colors_updated': {
+              const { fifoColorsByMonth: newColors } = payload;
+              if (newColors && typeof newColors === 'object') {
+                const merged = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...newColors };
+                setFifoColorsByMonth(merged);
+                try { localStorage.setItem('juwei_wms_fifoColorsByMonth', JSON.stringify(merged)); } catch (e) {}
               }
               break;
             }
@@ -5510,6 +5681,22 @@ export default function App() {
               onOpenDiagnostics={() => setShowStartupDiagnosticsModal(true)}
             />
 
+            {/* Quick Record Lookup Barcode / QR Scanner Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setQuickLookupTerm('');
+                setShowQuickLookupScanner(true);
+              }}
+              className="inline-flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white px-2.5 sm:px-3 h-8 rounded-xl text-xs font-semibold transition-all cursor-pointer shrink-0 shadow-xs shadow-indigo-500/25 border border-indigo-500/40"
+              title="Quick Record Lookup: Scan lot number, part barcode, or QR tag (Alt+S or Ctrl+B)"
+              aria-label="Quick Record Lookup Barcode / QR Scanner"
+              id="header-barcode-scanner-button"
+            >
+              <Barcode className="h-4 w-4 shrink-0" />
+              <span className="hidden sm:inline font-medium">Quick Scan</span>
+            </button>
+
             {/* Connected Workstations / Active Terminals Pill - Logo Only with Count */}
             <button
               type="button"
@@ -5602,6 +5789,7 @@ export default function App() {
                   onOpenRegisterModal={() => setView('master-registry')}
                   receivingCategories={receivingCategories}
                   onUpdateReceivingCategories={handleUpdateReceivingCategories}
+                  fifoColorsByMonth={fifoColorsByMonth}
                 />
               )}
 
@@ -5619,6 +5807,8 @@ export default function App() {
                   issuances={issuances}
                   returns={returns}
                   registries={registries}
+                  fifoColorsByMonth={fifoColorsByMonth}
+                  onUpdateFifoColors={handleUpdateFifoColors}
                 />
               )}
 
@@ -5888,6 +6078,39 @@ export default function App() {
           lastSyncedTime={lastSyncedTime}
           onForceSync={handleManualSync}
           isManualSyncing={isManualSyncing}
+        />
+      )}
+
+      {/* Quick Record Lookup Barcode / QR Scanner Modal */}
+      {showQuickLookupScanner && (
+        <BarcodeScannerModal
+          isOpen={showQuickLookupScanner}
+          onClose={() => setShowQuickLookupScanner(false)}
+          title="Quick Record Lookup Barcode & QR Scanner"
+          subtitle="Scan material tag, roll barcode, lot label, or requisition QR code"
+          onScanResult={handleQuickLookupScan}
+        />
+      )}
+
+      {/* Quick Record Lookup Results Modal */}
+      {showQuickLookupResults && (
+        <QuickRecordLookupModal
+          isOpen={showQuickLookupResults}
+          onClose={() => setShowQuickLookupResults(false)}
+          onOpenScanner={() => {
+            setShowQuickLookupResults(false);
+            setShowQuickLookupScanner(true);
+          }}
+          searchTerm={quickLookupTerm}
+          onSearchTermChange={setQuickLookupTerm}
+          stocks={stocks}
+          receiving={receiving}
+          issuances={issuances}
+          deliveries={deliveries}
+          returns={returns}
+          recycling={recycling}
+          registries={registries}
+          onNavigateToModule={handleNavigateFromLookup}
         />
       )}
 

@@ -45,10 +45,11 @@ import {
   CheckCircle2,
   ShieldAlert,
   SlidersHorizontal,
-  FileText
+  FileText,
+  Loader2
 } from 'lucide-react';
-import { MaterialStockItem, MaterialType, getCustomerForPart, UOM_OPTIONS, ReceivingRecord, IssuanceRecord, ReturnRecord, MasterRegistryItem } from '../types';
-import { FIFO_COLORS_BY_MONTH } from '../data';
+import { MaterialStockItem, MaterialType, getCustomerForPart, UOM_OPTIONS, ReceivingRecord, IssuanceRecord, ReturnRecord, MasterRegistryItem, FifoColorsMap, FifoMonthColor } from '../types';
+import { FIFO_COLORS_BY_MONTH, DEFAULT_FIFO_COLORS_BY_MONTH, FIFO_COLOR_PRESETS, resolveFifoColor } from '../data';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { generateAuthoritativeId } from '../lib/idGenerator';
 
@@ -65,6 +66,8 @@ interface StockFIFOControlProps {
   issuances?: IssuanceRecord[];
   returns?: ReturnRecord[];
   registries?: MasterRegistryItem[];
+  fifoColorsByMonth?: FifoColorsMap;
+  onUpdateFifoColors?: (newColors: FifoColorsMap | { month: number; color: FifoMonthColor }) => Promise<void> | void;
 }
 
 export default function StockFIFOControl({
@@ -79,9 +82,20 @@ export default function StockFIFOControl({
   receiving = [],
   issuances = [],
   returns = [],
-  registries = []
+  registries = [],
+  fifoColorsByMonth,
+  onUpdateFifoColors
 }: StockFIFOControlProps) {
   const effectiveCanEdit = canEdit || isSuperAdmin;
+  const effectiveCalendar: FifoColorsMap = fifoColorsByMonth || FIFO_COLORS_BY_MONTH;
+
+  // Calendar Management Modal States
+  const [showEditCalendarModal, setShowEditCalendarModal] = useState<boolean>(false);
+  const [editingCalendarDraft, setEditingCalendarDraft] = useState<FifoColorsMap>(() => ({ ...effectiveCalendar }));
+  const [calendarModalError, setCalendarModalError] = useState<string>('');
+  const [calendarModalSuccess, setCalendarModalSuccess] = useState<string>('');
+  const [isSavingCalendar, setIsSavingCalendar] = useState<boolean>(false);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedType, setSelectedType] = useState<MaterialType | 'ALL'>('ALL');
   const [selectedStatus, setSelectedStatus] = useState<MaterialStockItem['status'] | 'ALL'>('ALL');
@@ -140,9 +154,9 @@ export default function StockFIFOControl({
       return;
     }
 
-    // Determine FIFO Month color tag
+    // Determine FIFO Month color tag from synced calendar
     const currentMonth = new Date().getMonth() + 1;
-    const fifoColor = FIFO_COLORS_BY_MONTH[currentMonth]?.name || 'Silver';
+    const fifoColor = effectiveCalendar[currentMonth]?.name || 'Silver';
 
     const newItem: MaterialStockItem = {
       id: generateAuthoritativeId('STK'),
@@ -358,27 +372,83 @@ export default function StockFIFOControl({
       {/* FIFO Color Coding Legend Section */}
       <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-4" id="fifo-legend-panel">
         <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-          <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
-            <Layers className="h-4 w-4 text-slate-500" /> Standard Quarterly FIFO Color Coding Calendar
-          </h3>
-          <span className="text-[10px] font-mono text-slate-400">Visual Control Guideline</span>
+          <div className="flex items-center gap-2">
+            <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+              <Layers className="h-4 w-4 text-slate-500" /> Standard Quarterly FIFO Color Coding Calendar
+            </h3>
+            <span className="bg-indigo-50 text-indigo-700 text-[10px] font-mono font-bold px-2 py-0.5 rounded border border-indigo-200">
+              12 MONTHS
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-mono text-slate-400 hidden sm:inline">Visual Control Guideline</span>
+            {isSuperAdmin && (
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingCalendarDraft({ ...effectiveCalendar });
+                  setCalendarModalError('');
+                  setCalendarModalSuccess('');
+                  setShowEditCalendarModal(true);
+                }}
+                className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs hover:border-indigo-300"
+                title="Super Admin: Customize monthly FIFO color tags"
+                id="btn-edit-fifo-calendar"
+              >
+                <Edit className="h-3 w-3 text-indigo-600" />
+                <span>Edit Calendar</span>
+              </button>
+            )}
+          </div>
         </div>
         <p className="text-xs text-slate-500">
           SOP dictates identifying and labeling incoming materials with the designated color tag prior to storage. Materials with missing tags must be immediately labeled.
         </p>
         
         <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3">
-          {Object.entries(FIFO_COLORS_BY_MONTH).map(([monthNum, meta]) => {
+          {Object.entries(effectiveCalendar).map(([monthNum, meta]) => {
             const date = new Date(2026, Number(monthNum) - 1, 1);
             const monthLabel = date.toLocaleString('default', { month: 'long' });
+            const isCurrentMonth = (new Date().getMonth() + 1) === Number(monthNum);
             return (
               <div 
                 key={monthNum} 
-                className="p-2.5 rounded-lg border border-slate-150 flex flex-col items-center justify-center text-center space-y-1.5 bg-slate-50 hover:bg-slate-100/50 transition-colors"
+                onClick={() => {
+                  if (isSuperAdmin) {
+                    setEditingCalendarDraft({ ...effectiveCalendar });
+                    setCalendarModalError('');
+                    setCalendarModalSuccess('');
+                    setShowEditCalendarModal(true);
+                  }
+                }}
+                className={`p-2.5 rounded-lg border flex flex-col items-center justify-center text-center space-y-1.5 transition-all relative group ${
+                  isCurrentMonth 
+                    ? 'border-indigo-300 bg-indigo-50/60 shadow-xs ring-1 ring-indigo-200' 
+                    : 'border-slate-150 bg-slate-50 hover:bg-slate-100/70'
+                } ${isSuperAdmin ? 'cursor-pointer hover:border-indigo-300 hover:shadow-xs' : ''}`}
+                title={isSuperAdmin ? `Click to edit FIFO calendar color for ${monthLabel}` : `${monthLabel}: ${meta.name}`}
               >
-                <span className="text-[10px] font-bold text-slate-400 uppercase font-mono">{monthLabel}</span>
-                <span className={`h-4 w-4 rounded-full shadow-sm border border-black/5 ${meta.colorClass}`} />
+                {isCurrentMonth && (
+                  <span className="absolute -top-2 right-1.5 bg-indigo-600 text-white text-[8px] font-bold px-1.5 py-0.2 rounded-full uppercase tracking-wider shadow-2xs">
+                    Current
+                  </span>
+                )}
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase font-mono">{monthLabel}</span>
+                  {isSuperAdmin && (
+                    <Edit className="h-2.5 w-2.5 text-slate-400 group-hover:text-indigo-600 transition-colors" />
+                  )}
+                </div>
+                <span 
+                  className={`h-4 w-4 rounded-full shadow-2xs border border-black/10 ${meta.colorClass}`} 
+                  style={meta.hex ? { backgroundColor: meta.hex } : undefined}
+                />
                 <span className="text-[10px] font-bold text-slate-700">{meta.name}</span>
+                {isSuperAdmin && (
+                  <span className="text-[9px] text-indigo-600 font-semibold opacity-0 group-hover:opacity-100 transition-opacity">
+                    Edit
+                  </span>
+                )}
               </div>
             );
           })}
@@ -1585,11 +1655,14 @@ export default function StockFIFOControl({
                   <select 
                     value={editingStockItem.fifoColor}
                     onChange={e => setEditingStockItem({ ...editingStockItem, fifoColor: e.target.value })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-semibold"
                   >
-                    {Object.keys(FIFO_COLORS_BY_MONTH).map(color => (
-                      <option key={color} value={color}>{color}</option>
+                    {Array.from(new Set(Object.values(effectiveCalendar).map(c => c.name))).map(colorName => (
+                      <option key={colorName} value={colorName}>{colorName}</option>
                     ))}
+                    {editingStockItem.fifoColor && !Object.values(effectiveCalendar).some(c => c.name === editingStockItem.fifoColor) && (
+                      <option value={editingStockItem.fifoColor}>{editingStockItem.fifoColor} (Historical)</option>
+                    )}
                   </select>
                 </div>
 
@@ -1940,6 +2013,215 @@ export default function StockFIFOControl({
 
       {/* Reusable Confirmation Modal with YES / NO options */}
       <ConfirmModal config={confirmAction} onClose={() => setConfirmAction(null)} />
+
+      {/* Super Admin Edit FIFO Color Coding Calendar Modal */}
+      {typeof document !== 'undefined' && showEditCalendarModal && isSuperAdmin && createPortal(
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 z-[999998]">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full overflow-hidden border border-slate-200 animate-in fade-in zoom-in-95 duration-150 max-h-[92vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white p-5 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300">
+                  <Layers className="h-5 w-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold tracking-tight">EDIT FIFO COLOR CODING CALENDAR</h3>
+                    <span className="bg-indigo-500/30 text-indigo-200 text-[10px] font-mono font-bold px-2 py-0.5 rounded-md border border-indigo-400/30">
+                      12 MONTHS
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 mt-0.5">
+                    Centralized visual color tag definitions synced across all workstations.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowEditCalendarModal(false);
+                  setCalendarModalError('');
+                  setCalendarModalSuccess('');
+                }}
+                className="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-white/10 transition cursor-pointer"
+                title="Close"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 overflow-y-auto flex-1 space-y-4">
+              {/* Informational SOP Alert */}
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs flex items-start gap-2.5">
+                <Info className="h-4 w-4 text-amber-700 shrink-0 mt-0.5" />
+                <div className="leading-relaxed">
+                  <strong>Standard Operating Procedure Note:</strong> Updating monthly color tags takes effect immediately for <em>newly received materials and stock records</em>. Past records stay permanently locked to the color tag assigned at their original receiving time.
+                </div>
+              </div>
+
+              {/* Status / Error Alerts */}
+              {calendarModalError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center gap-2 animate-fadeIn font-semibold">
+                  <AlertOctagon className="h-4 w-4 shrink-0 text-rose-500" />
+                  <span>{calendarModalError}</span>
+                </div>
+              )}
+              {calendarModalSuccess && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-xl flex items-center gap-2 animate-fadeIn font-semibold">
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                  <span>{calendarModalSuccess}</span>
+                </div>
+              )}
+
+              {/* 12 Months Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                {Array.from({ length: 12 }, (_, i) => i + 1).map((monthNum) => {
+                  const date = new Date(2026, monthNum - 1, 1);
+                  const monthName = date.toLocaleString('default', { month: 'long' });
+                  const currentMonthNum = new Date().getMonth() + 1;
+                  const isCurrent = monthNum === currentMonthNum;
+                  const monthColor = editingCalendarDraft[monthNum] || DEFAULT_FIFO_COLORS_BY_MONTH[monthNum];
+
+                  return (
+                    <div 
+                      key={monthNum}
+                      className={`p-3 rounded-xl border transition-all ${
+                        isCurrent 
+                          ? 'border-indigo-300 bg-indigo-50/40 ring-1 ring-indigo-200' 
+                          : 'border-slate-200 bg-white hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-mono font-bold text-slate-500">
+                            #{String(monthNum).padStart(2, '0')}
+                          </span>
+                          <span className="text-xs font-bold text-slate-800">
+                            {monthName}
+                          </span>
+                          {isCurrent && (
+                            <span className="bg-indigo-600 text-white text-[8px] font-bold px-1.5 py-0.2 rounded-full uppercase tracking-wider">
+                              Current Month
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span 
+                            className={`h-4 w-4 rounded-full border border-black/15 shadow-2xs ${monthColor.colorClass}`}
+                            style={monthColor.hex ? { backgroundColor: monthColor.hex } : undefined}
+                          />
+                          <span className="text-xs font-bold text-slate-700">
+                            {monthColor.name}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                          Assigned Color
+                        </label>
+                        <select
+                          value={monthColor.name}
+                          onChange={(e) => {
+                            const selectedName = e.target.value;
+                            const resolved = resolveFifoColor(selectedName);
+                            setEditingCalendarDraft(prev => ({
+                              ...prev,
+                              [monthNum]: resolved
+                            }));
+                          }}
+                          className="w-full text-xs font-medium border border-slate-200 rounded-lg px-2.5 py-1.5 bg-slate-50 focus:bg-white focus:ring-1 focus:ring-indigo-500 focus:outline-none transition"
+                        >
+                          {FIFO_COLOR_PRESETS.map((preset) => (
+                            <option key={preset.name} value={preset.name}>
+                              {preset.name}
+                            </option>
+                          ))}
+                          {!FIFO_COLOR_PRESETS.some(p => p.name === monthColor.name) && (
+                            <option value={monthColor.name}>
+                              {monthColor.name} (Custom)
+                            </option>
+                          )}
+                        </select>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingCalendarDraft({ ...DEFAULT_FIFO_COLORS_BY_MONTH });
+                  setCalendarModalSuccess('Restored standard 12-month SOP colors. Click "Save Calendar" to apply.');
+                  setCalendarModalError('');
+                }}
+                disabled={isSavingCalendar}
+                className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                title="Restore standard January-December default colors"
+              >
+                <RotateCcw className="h-3.5 w-3.5 text-slate-500" />
+                <span>Reset to SOP Defaults</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowEditCalendarModal(false);
+                    setCalendarModalError('');
+                    setCalendarModalSuccess('');
+                  }}
+                  disabled={isSavingCalendar}
+                  className="px-4 py-1.5 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-lg text-xs font-bold transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!onUpdateFifoColors) return;
+                    setIsSavingCalendar(true);
+                    setCalendarModalError('');
+                    try {
+                      await onUpdateFifoColors(editingCalendarDraft);
+                      setCalendarModalSuccess('FIFO Color Coding Calendar synchronized successfully across all workstations!');
+                      setTimeout(() => {
+                        setShowEditCalendarModal(false);
+                        setCalendarModalSuccess('');
+                      }, 1200);
+                    } catch (err: any) {
+                      setCalendarModalError(err?.message || 'Failed to update FIFO color coding calendar');
+                    } finally {
+                      setIsSavingCalendar(false);
+                    }
+                  }}
+                  disabled={isSavingCalendar}
+                  className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
+                  id="btn-save-fifo-calendar"
+                >
+                  {isSavingCalendar ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      <span>Save Calendar</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
