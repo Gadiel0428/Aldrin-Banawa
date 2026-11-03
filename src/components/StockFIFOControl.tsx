@@ -49,7 +49,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { MaterialStockItem, MaterialType, getCustomerForPart, UOM_OPTIONS, ReceivingRecord, IssuanceRecord, ReturnRecord, MasterRegistryItem, FifoColorsMap, FifoMonthColor } from '../types';
-import { FIFO_COLORS_BY_MONTH, DEFAULT_FIFO_COLORS_BY_MONTH, FIFO_COLOR_PRESETS, resolveFifoColor } from '../data';
+import { FIFO_COLORS_BY_MONTH, DEFAULT_FIFO_COLORS_BY_MONTH, FIFO_COLOR_PRESETS, resolveFifoColor, getFifoColorForDate, normalizeFifoColor } from '../data';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { generateAuthoritativeId } from '../lib/idGenerator';
 
@@ -155,8 +155,7 @@ export default function StockFIFOControl({
     }
 
     // Determine FIFO Month color tag from synced calendar
-    const currentMonth = new Date().getMonth() + 1;
-    const fifoColor = effectiveCalendar[currentMonth]?.name || 'Silver';
+    const fifoColor = getFifoColorForDate(systemDateStr, effectiveCalendar);
 
     const newItem: MaterialStockItem = {
       id: generateAuthoritativeId('STK'),
@@ -1035,22 +1034,19 @@ export default function StockFIFOControl({
                         )}
                       </td>
                       <td className="p-4">
-                        <span className="flex items-center gap-1.5 font-bold text-slate-700 font-mono">
-                          <span className={`h-3 w-3 rounded-full border border-black/5 ${
-                            item.fifoColor === 'Magenta' ? 'bg-fuchsia-600' :
-                            item.fifoColor === 'Orange' ? 'bg-orange-500' :
-                            item.fifoColor === 'Dark Green' ? 'bg-emerald-800' :
-                            item.fifoColor === 'Yellow' ? 'bg-yellow-400' :
-                            item.fifoColor === 'Navy Blue' ? 'bg-blue-900' :
-                            item.fifoColor === 'Brown' ? 'bg-amber-800' :
-                            item.fifoColor === 'Pink' ? 'bg-pink-400' :
-                            item.fifoColor === 'Violet' ? 'bg-violet-600' :
-                            item.fifoColor === 'Black' ? 'bg-stone-900' :
-                            item.fifoColor === 'Light Orange' ? 'bg-orange-300' :
-                            item.fifoColor === 'Grey' ? 'bg-slate-500' : 'bg-slate-300'
-                          }`} />
-                          {item.fifoColor}
-                        </span>
+                        {(() => {
+                          const displayColor = normalizeFifoColor(item.fifoColor, item.receivedDate, effectiveCalendar);
+                          const meta = resolveFifoColor(displayColor, undefined, undefined, effectiveCalendar);
+                          return (
+                            <span className="flex items-center gap-1.5 font-bold text-slate-700 font-mono">
+                              <span 
+                                className={`h-3 w-3 rounded-full border border-black/10 shrink-0 ${meta.colorClass}`}
+                                style={meta.hex ? { backgroundColor: meta.hex } : undefined} 
+                              />
+                              {displayColor}
+                            </span>
+                          );
+                        })()}
                       </td>
                       <td className="p-4 font-medium text-slate-700">{item.location}</td>
                       <td className="p-4">
@@ -1279,23 +1275,20 @@ export default function StockFIFOControl({
                                   <MapPin className="h-4 w-4 text-indigo-600 shrink-0" />
                                   <span className="text-sm font-bold text-slate-800">{item.location || 'Warehouse Main'}</span>
                                 </div>
-                                <div className="flex items-center gap-2 pt-1 border-t border-slate-100 text-xs font-mono">
-                                  <span className={`h-3 w-3 rounded-full border border-black/10 shrink-0 ${
-                                    item.fifoColor === 'Magenta' ? 'bg-fuchsia-600' :
-                                    item.fifoColor === 'Orange' ? 'bg-orange-500' :
-                                    item.fifoColor === 'Dark Green' ? 'bg-emerald-800' :
-                                    item.fifoColor === 'Yellow' ? 'bg-yellow-400' :
-                                    item.fifoColor === 'Navy Blue' ? 'bg-blue-900' :
-                                    item.fifoColor === 'Brown' ? 'bg-amber-800' :
-                                    item.fifoColor === 'Pink' ? 'bg-pink-400' :
-                                    item.fifoColor === 'Violet' ? 'bg-violet-600' :
-                                    item.fifoColor === 'Black' ? 'bg-stone-900' :
-                                    item.fifoColor === 'Light Orange' ? 'bg-orange-300' :
-                                    item.fifoColor === 'Grey' ? 'bg-slate-500' : 'bg-slate-300'
-                                  }`} />
-                                  <span className="font-bold text-slate-700">{item.fifoColor} Tag</span>
-                                  <span className="text-[10px] text-slate-400">({item.receivedDate ? new Date(item.receivedDate).toLocaleString('default', { month: 'short' }) : 'Month tag'})</span>
-                                </div>
+                                {(() => {
+                                  const displayColor = normalizeFifoColor(item.fifoColor, item.receivedDate, effectiveCalendar);
+                                  const meta = resolveFifoColor(displayColor, undefined, undefined, effectiveCalendar);
+                                  return (
+                                    <div className="flex items-center gap-2 pt-1 border-t border-slate-100 text-xs font-mono">
+                                      <span 
+                                        className={`h-3 w-3 rounded-full border border-black/10 shrink-0 ${meta.colorClass}`}
+                                        style={meta.hex ? { backgroundColor: meta.hex } : undefined} 
+                                      />
+                                      <span className="font-bold text-slate-700">{displayColor} Tag</span>
+                                      <span className="text-[10px] text-slate-400">({item.receivedDate ? new Date(item.receivedDate.includes('T') ? item.receivedDate : `${item.receivedDate}T00:00:00`).toLocaleString('default', { month: 'short' }) : 'Month tag'})</span>
+                                    </div>
+                                  );
+                                })()}
                               </div>
 
                               {/* Stat 3: FEFO Shelf Life & Expiry */}

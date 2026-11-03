@@ -50,7 +50,7 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { ReceivingRecord, ReturnRecord, MaterialStockItem, getCustomerForPart, UOM_OPTIONS, MasterRegistryItem, RegistryType, FifoColorsMap } from '../types';
-import { FIFO_COLORS_BY_MONTH } from '../data';
+import { FIFO_COLORS_BY_MONTH, resolveFifoColor, getFifoColorForDate, normalizeFifoColor } from '../data';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAuthoritativeId } from '../lib/idGenerator';
@@ -691,10 +691,8 @@ export default function ReceivingModule({
       return;
     }
 
-    // Determine FIFO quarterly color code based on today's month from synced calendar
-    const currentMonth = new Date().getMonth() + 1; // 1-indexed
-    const activeCalendar = fifoColorsByMonth || FIFO_COLORS_BY_MONTH;
-    const fifoColor = activeCalendar[currentMonth]?.name || 'Silver';
+    // Determine FIFO color code based on received date from synced calendar
+    const fifoColor = getFifoColorForDate(receivedDate, fifoColorsByMonth);
 
     // Discrepancy flag
     const hasConditionDiscrepancy = 
@@ -1732,22 +1730,19 @@ export default function ReceivingModule({
 
                           {/* 6. FIFO Tag Color */}
                           <td className="p-4 whitespace-nowrap">
-                            <span className="flex items-center gap-1.5 font-semibold text-slate-700">
-                              <span className={`h-3 w-3 rounded-full border border-slate-200 shadow-sm ${
-                                r.fifoColorCode === 'Magenta' ? 'bg-fuchsia-600' :
-                                r.fifoColorCode === 'Orange' ? 'bg-orange-500' :
-                                r.fifoColorCode === 'Dark Green' ? 'bg-emerald-800' :
-                                r.fifoColorCode === 'Yellow' ? 'bg-yellow-400' :
-                                r.fifoColorCode === 'Navy Blue' ? 'bg-blue-900' :
-                                r.fifoColorCode === 'Brown' ? 'bg-amber-800' :
-                                r.fifoColorCode === 'Pink' ? 'bg-pink-400' :
-                                r.fifoColorCode === 'Violet' ? 'bg-violet-600' :
-                                r.fifoColorCode === 'Black' ? 'bg-stone-900' :
-                                r.fifoColorCode === 'Light Orange' ? 'bg-orange-300' :
-                                r.fifoColorCode === 'Grey' ? 'bg-slate-500' : 'bg-slate-300'
-                              }`} />
-                              {r.fifoColorCode}
-                            </span>
+                            {(() => {
+                              const displayColor = normalizeFifoColor(r.fifoColorCode || (r as any).fifoColor, r.receivedDate || r.date, fifoColorsByMonth);
+                              const meta = resolveFifoColor(displayColor, undefined, undefined, fifoColorsByMonth);
+                              return (
+                                <span className="flex items-center gap-1.5 font-semibold text-slate-700">
+                                  <span 
+                                    className={`h-3 w-3 rounded-full border border-slate-200 shadow-sm ${meta.colorClass}`}
+                                    style={meta.hex ? { backgroundColor: meta.hex } : undefined}
+                                  />
+                                  {displayColor}
+                                </span>
+                              );
+                            })()}
                           </td>
 
                           {/* 7. SOP Compliance */}
@@ -2091,22 +2086,19 @@ export default function ReceivingModule({
 
                                           <div className="pt-1">
                                             <span className="text-slate-400 text-[11px] block">Assigned FIFO Tag:</span>
-                                            <div className="flex items-center gap-2 mt-1">
-                                              <span className={`h-4 w-4 rounded-full border border-slate-300 shadow-sm ${
-                                                r.fifoColorCode === 'Magenta' ? 'bg-fuchsia-600' :
-                                                r.fifoColorCode === 'Orange' ? 'bg-orange-500' :
-                                                r.fifoColorCode === 'Dark Green' ? 'bg-emerald-800' :
-                                                r.fifoColorCode === 'Yellow' ? 'bg-yellow-400' :
-                                                r.fifoColorCode === 'Navy Blue' ? 'bg-blue-900' :
-                                                r.fifoColorCode === 'Brown' ? 'bg-amber-800' :
-                                                r.fifoColorCode === 'Pink' ? 'bg-pink-400' :
-                                                r.fifoColorCode === 'Violet' ? 'bg-violet-600' :
-                                                r.fifoColorCode === 'Black' ? 'bg-stone-900' :
-                                                r.fifoColorCode === 'Light Orange' ? 'bg-orange-300' :
-                                                r.fifoColorCode === 'Grey' ? 'bg-slate-500' : 'bg-slate-300'
-                                              }`} />
-                                              <span className="font-semibold text-slate-800">{r.fifoColorCode}</span>
-                                            </div>
+                                            {(() => {
+                                              const displayColor = normalizeFifoColor(r.fifoColorCode || (r as any).fifoColor, r.receivedDate || r.date, fifoColorsByMonth);
+                                              const meta = resolveFifoColor(displayColor, undefined, undefined, fifoColorsByMonth);
+                                              return (
+                                                <div className="flex items-center gap-2 mt-1">
+                                                  <span 
+                                                    className={`h-4 w-4 rounded-full border border-slate-300 shadow-sm ${meta.colorClass}`}
+                                                    style={meta.hex ? { backgroundColor: meta.hex } : undefined}
+                                                  />
+                                                  <span className="font-semibold text-slate-800">{displayColor}</span>
+                                                </div>
+                                              );
+                                            })()}
                                           </div>
 
                                           {effectiveCanEdit && r.iqcStatus === 'PENDING_IQC' && (

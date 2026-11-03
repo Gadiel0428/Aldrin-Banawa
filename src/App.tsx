@@ -116,7 +116,9 @@ import {
   INITIAL_ENV_LOGS, 
   INITIAL_FORKLIFT_CHECKS,
   DEFAULT_FIFO_COLORS_BY_MONTH,
-  FIFO_COLORS_BY_MONTH
+  FIFO_COLORS_BY_MONTH,
+  getFifoColorForDate,
+  normalizeFifoColor
 } from './data';
 
 import DashboardOverview from './components/DashboardOverview';
@@ -1400,7 +1402,7 @@ export default function App() {
             color: r.color,
             receivedDate: r.receivedDate || r.received_date || new Date().toISOString().split('T')[0],
             expirationDate: r.expirationDate || r.expiration_date,
-            fifoColor: r.fifoColor || r.fifo_color || 'Dark Green',
+            fifoColor: normalizeFifoColor(r.fifoColor || r.fifo_color, r.receivedDate || r.received_date, fifoColorsByMonth),
             status: r.status || 'APPROVED',
             resinSackRisk: Boolean(r.resinSackRisk || r.resin_sack_risk),
             shelfLifeDays: r.shelfLifeDays || r.shelf_life_days ? Number(r.shelfLifeDays || r.shelf_life_days) : undefined,
@@ -1436,7 +1438,7 @@ export default function App() {
             supplierOrDept: r.supplierOrDept || r.supplier_or_dept || 'Internal',
             iqcStatus: r.iqcStatus || r.iqc_status || 'PENDING_IQC',
             status: r.status || 'DRAFT',
-            fifoColorCode: r.fifoColorCode || r.fifo_color_code || 'Dark Green',
+            fifoColorCode: normalizeFifoColor(r.fifoColorCode || r.fifo_color_code || r.fifoColor, r.receivedDate || r.received_date || r.date, fifoColorsByMonth),
             bom: r.bom || [],
             autoDeductBom: Boolean(r.autoDeductBom || r.auto_deduct_bom),
             customer: r.customer
@@ -4322,7 +4324,7 @@ export default function App() {
       lotNumber: record.lotNumber,
       receivedDate: record.receivedDate || record.date,
       color: record.color,
-      fifoColor: record.fifoColorCode,
+      fifoColor: normalizeFifoColor(record.fifoColorCode || (record as any).fifoColor, record.receivedDate || record.date, fifoColorsByMonth),
       status: record.status === 'QUARANTINED' ? 'QUARANTINE' : (record.iqcStatus === 'PENDING_IQC' ? 'HOLD' : 'APPROVED'),
       bom: record.bom,
       customer: record.customer,
@@ -4434,7 +4436,7 @@ export default function App() {
       unit: record.unit,
       lotNumber: record.lotNumber,
       receivedDate: record.date,
-      fifoColor: 'Pink',
+      fifoColor: getFifoColorForDate(record.date, fifoColorsByMonth),
       status: record.status === 'QUARANTINED' ? 'QUARANTINE' : 'APPROVED'
     };
     const nextStocks = [newStockItem, ...stocks];

@@ -72,17 +72,119 @@ export const FIFO_COLOR_PRESETS: FifoColorOption[] = [
 export function resolveFifoColor(
   name: string,
   fallbackColorClass = 'bg-indigo-600',
-  fallbackTextClass = 'text-indigo-600'
+  fallbackTextClass = 'text-indigo-600',
+  calendar?: FifoColorsMap
 ): FifoMonthColor {
-  const match = FIFO_COLOR_PRESETS.find(p => p.name.trim().toLowerCase() === (name || '').trim().toLowerCase());
+  const cleanName = (name || '').trim().toLowerCase();
+  if (calendar) {
+    const calMatch = Object.values(calendar).find(c => c?.name?.trim().toLowerCase() === cleanName);
+    if (calMatch) {
+      return { ...calMatch };
+    }
+  }
+  const match = FIFO_COLOR_PRESETS.find(p => p.name.trim().toLowerCase() === cleanName);
   if (match) {
     return { name: match.name, colorClass: match.colorClass, textClass: match.textClass, hex: match.hex };
+  }
+  const defaultMatch = Object.values(FIFO_COLORS_BY_MONTH).find(c => c?.name?.trim().toLowerCase() === cleanName);
+  if (defaultMatch) {
+    return { ...defaultMatch };
   }
   return {
     name: name || 'Custom',
     colorClass: fallbackColorClass,
     textClass: fallbackTextClass
   };
+}
+
+/**
+ * Safely extracts the 1-indexed month (1-12) from a date string.
+ * Handles YYYY-MM-DD, YYYY/MM/DD, ISO timestamps, and avoids UTC negative timezone shifts.
+ */
+export function getMonthFromDate(dateStr?: string | null): number | null {
+  if (!dateStr) return null;
+  const str = String(dateStr).trim();
+  if (!str) return null;
+
+  // Direct regex for YYYY-MM-DD or YYYY/MM/DD (prevents timezone offset bugs)
+  const ymdMatch = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (ymdMatch) {
+    const month = parseInt(ymdMatch[2], 10);
+    if (month >= 1 && month <= 12) {
+      return month;
+    }
+  }
+
+  // Fall back to Date parsing
+  const d = new Date(str.includes('T') ? str : `${str}T00:00:00`);
+  if (!isNaN(d.getTime())) {
+    return d.getMonth() + 1;
+  }
+  return null;
+}
+
+/**
+ * Returns the FIFO color NAME for the month of the received date (not new Date()).
+ * Uses the synced editable calendar (fifoColorsByMonth).
+ * Falls back to 'Silver' only if the date is invalid or missing.
+ */
+export function getFifoColorForDate(
+  receivedDate?: string | null,
+  calendar?: FifoColorsMap
+): string {
+  const monthNum = getMonthFromDate(receivedDate);
+  if (!monthNum) return 'Silver';
+
+  const activeMap = calendar || FIFO_COLORS_BY_MONTH || DEFAULT_FIFO_COLORS_BY_MONTH;
+  return activeMap[monthNum]?.name || DEFAULT_FIFO_COLORS_BY_MONTH[monthNum]?.name || 'Silver';
+}
+
+/**
+ * Normalizes a stored FIFO color value.
+ * If the value is a number 1-12 (e.g. "8", 8) or is not a known color name,
+ * recomputes it from receivedDate using the synced calendar.
+ * If the value is already a known valid color name, preserves it (locked in rule).
+ */
+export function normalizeFifoColor(
+  value?: string | number | null,
+  receivedDate?: string | null,
+  calendar?: FifoColorsMap
+): string {
+  const activeMap = calendar || FIFO_COLORS_BY_MONTH || DEFAULT_FIFO_COLORS_BY_MONTH;
+
+  if (value !== undefined && value !== null) {
+    const str = String(value).trim();
+
+    // Check if numeric (e.g., "8", 8)
+    if (/^\d+$/.test(str)) {
+      const monthNum = parseInt(str, 10);
+      if (monthNum >= 1 && monthNum <= 12) {
+        return activeMap[monthNum]?.name || DEFAULT_FIFO_COLORS_BY_MONTH[monthNum]?.name || 'Silver';
+      }
+      return getFifoColorForDate(receivedDate, activeMap);
+    }
+
+    // Ignore placeholder or null-string values
+    const lower = str.toLowerCase();
+    if (lower === 'n/a' || lower === 'undefined' || lower === 'null' || lower === '') {
+      return getFifoColorForDate(receivedDate, activeMap);
+    }
+
+    // Check if known in calendar
+    const matchInCalendar = Object.values(activeMap).find(m => m?.name?.toLowerCase() === lower);
+    if (matchInCalendar) {
+      return matchInCalendar.name;
+    }
+
+    // Check if known in presets
+    const matchInPresets = FIFO_COLOR_PRESETS.find(p => p.name.toLowerCase() === lower);
+    if (matchInPresets) {
+      return matchInPresets.name;
+    }
+  }
+
+  // Missing or unknown name -> recompute from receivedDate
+  return getFifoColorForDate(receivedDate, activeMap);
 }
 
 export const INITIAL_STOCK: MaterialStockItem[] = [];

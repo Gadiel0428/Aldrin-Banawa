@@ -282,6 +282,68 @@ async function startServer() {
     12: { name: 'Silver', colorClass: 'bg-slate-300', textClass: 'text-slate-400', hex: '#cbd5e1' }
   };
 
+  const FIFO_KNOWN_COLOR_NAMES = new Set([
+    'Magenta', 'Orange', 'Dark Green', 'Yellow', 'Navy Blue', 'Brown', 'Pink',
+    'Violet', 'Black', 'Light Orange', 'Grey', 'Silver',
+    'Red', 'Crimson', 'Blue', 'Sky Blue', 'Green', 'Lime', 'Teal', 'Cyan',
+    'Purple', 'Indigo', 'Amber', 'Gold', 'White'
+  ].map(s => s.toLowerCase()));
+
+  function getMonthFromDate(dateStr?: string | null): number | null {
+    if (!dateStr) return null;
+    const str = String(dateStr).trim();
+    if (!str) return null;
+    const ymdMatch = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+    if (ymdMatch) {
+      const month = parseInt(ymdMatch[2], 10);
+      if (month >= 1 && month <= 12) return month;
+    }
+    const d = new Date(str.includes('T') ? str : `${str}T00:00:00`);
+    if (!isNaN(d.getTime())) {
+      return d.getMonth() + 1;
+    }
+    return null;
+  }
+
+  function getFifoColorForDate(receivedDate?: string | null, calendar?: Record<number, any>): string {
+    const monthNum = getMonthFromDate(receivedDate);
+    if (!monthNum) return 'Silver';
+    const activeMap = calendar || state?.fifoColorsByMonth || DEFAULT_FIFO_COLORS_BY_MONTH;
+    return activeMap[monthNum]?.name || DEFAULT_FIFO_COLORS_BY_MONTH[monthNum]?.name || 'Silver';
+  }
+
+  function isValidFifoColorName(color: any, calendar?: Record<number, any>): boolean {
+    if (color === undefined || color === null) return false;
+    const s = String(color).trim();
+    if (!s || /^\d+$/.test(s) || s.toLowerCase() === 'n/a' || s.toLowerCase() === 'undefined' || s.toLowerCase() === 'null') {
+      return false;
+    }
+    if (FIFO_KNOWN_COLOR_NAMES.has(s.toLowerCase())) return true;
+    const activeMap = calendar || state?.fifoColorsByMonth || DEFAULT_FIFO_COLORS_BY_MONTH;
+    return Object.values(activeMap).some((m: any) => m?.name?.toLowerCase() === s.toLowerCase());
+  }
+
+  function normalizeFifoColor(value: any, receivedDate?: string | null, calendar?: Record<number, any>): string {
+    const activeMap = calendar || state?.fifoColorsByMonth || DEFAULT_FIFO_COLORS_BY_MONTH;
+    if (value !== undefined && value !== null) {
+      const str = String(value).trim();
+      if (/^\d+$/.test(str)) {
+        const m = parseInt(str, 10);
+        if (m >= 1 && m <= 12) {
+          return activeMap[m]?.name || DEFAULT_FIFO_COLORS_BY_MONTH[m]?.name || 'Silver';
+        }
+        return getFifoColorForDate(receivedDate, activeMap);
+      }
+      if (isValidFifoColorName(str, activeMap)) {
+        for (const m of Object.values(activeMap) as any[]) {
+          if (m?.name?.toLowerCase() === str.toLowerCase()) return m.name;
+        }
+        return str;
+      }
+    }
+    return getFifoColorForDate(receivedDate, activeMap);
+  }
+
   const STARTER_BARCODE_PRESETS = [
     {
       id: 'REG-BCP-RESIN-001',
@@ -1101,6 +1163,162 @@ async function startServer() {
 
   // 2. Load database state (or auto-recover from backups if needed) on server initialization
   loadDatabaseFromDisk();
+
+  // =========================================================================
+  // ONE-TIME FIFO TAG COLOR DATA REPAIR ON SERVER STARTUP:
+  // Scans all stock and receiving records right after pre-startup backup & load.
+  // If fifoColor / fifoColorCode is numeric (1-12) or not a valid color name,
+  // recomputes it from the received date using the synced calendar and persists.
+  // Valid color names are NEVER modified (maintaining the locked-in rule).
+  // Each change is logged to console and the dedicated FIFO repair audit log.
+  // =========================================================================
+  const FIFO_REPAIR_AUDIT_LOG_FILE = getStorageFilePath("fifo-repair-audit-log.json");
+
+  interface FifoRepairAuditEntry {
+    id: string;
+    collection: "stocks" | "receiving";
+    recordId: string;
+    partCode?: string;
+    receivedDate?: string;
+    oldFifoColor: any;
+    newFifoColor: string;
+    timestamp: string;
+    reason: string;
+  }
+
+  let fifoRepairAuditLogs: FifoRepairAuditEntry[] = [];
+  try {
+    if (fs.existsSync(FIFO_REPAIR_AUDIT_LOG_FILE)) {
+      const raw = fs.readFileSync(FIFO_REPAIR_AUDIT_LOG_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) fifoRepairAuditLogs = parsed;
+    }
+  } catch (e) {
+    fifoRepairAuditLogs = [];
+  }
+
+  function repairFifoTagColorsOnStartup(): {
+    stocksScanned: number;
+    stocksRepaired: number;
+    receivingScanned: number;
+    receivingRepaired: number;
+    repairs: FifoRepairAuditEntry[];
+  } {
+    console.log("[FIFO STARTUP AUDIT] Beginning inspection of FIFO tag colors across stock and receiving records...");
+    let stocksRepaired = 0;
+    let receivingRepaired = 0;
+    const newRepairs: FifoRepairAuditEntry[] = [];
+    const nowIso = new Date().toISOString();
+
+    // 1. Scan Stock Records
+    if (Array.isArray(state.stocks)) {
+      state.stocks.forEach((stock: any) => {
+        const currentColor = stock.fifoColor ?? stock.fifo_color;
+        if (!isValidFifoColorName(currentColor, state.fifoColorsByMonth)) {
+          const recDate = stock.receivedDate || stock.received_date || stock.date || stock.updated_at || nowIso.split('T')[0];
+          const newColor = getFifoColorForDate(recDate, state.fifoColorsByMonth);
+          const auditEntry: FifoRepairAuditEntry = {
+            id: `FIFO-AUDIT-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            collection: "stocks",
+            recordId: String(stock.id || stock.record_id),
+            partCode: stock.partCode || stock.part_code,
+            receivedDate: recDate,
+            oldFifoColor: currentColor,
+            newFifoColor: newColor,
+            timestamp: nowIso,
+            reason: currentColor === undefined || currentColor === null || currentColor === '' 
+              ? "Missing FIFO color tag; recomputed from receivedDate" 
+              : /^\d+$/.test(String(currentColor).trim()) 
+                ? `Numeric FIFO month code ('${currentColor}') normalized to canonical color name` 
+                : `Unrecognized color value ('${currentColor}') normalized to canonical color name`
+          };
+
+          stock.fifoColor = newColor;
+          stock.version = (Number(stock.version) || 1) + 1;
+          stock.updated_at = nowIso;
+
+          newRepairs.push(auditEntry);
+          fifoRepairAuditLogs.unshift(auditEntry);
+          stocksRepaired++;
+
+          console.log(`[FIFO REPAIR AUDIT] Repaired Stock [ID: ${stock.id}] (${stock.partCode || 'N/A'}): Old '${currentColor}' -> New '${newColor}' (Date: ${recDate})`);
+        }
+      });
+    }
+
+    // 2. Scan Receiving Records
+    if (Array.isArray(state.receiving)) {
+      state.receiving.forEach((rcv: any) => {
+        const currentColor = rcv.fifoColorCode ?? rcv.fifo_color_code ?? rcv.fifoColor;
+        if (!isValidFifoColorName(currentColor, state.fifoColorsByMonth)) {
+          const recDate = rcv.receivedDate || rcv.received_date || rcv.date || rcv.updated_at || nowIso.split('T')[0];
+          const newColor = getFifoColorForDate(recDate, state.fifoColorsByMonth);
+          const auditEntry: FifoRepairAuditEntry = {
+            id: `FIFO-AUDIT-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            collection: "receiving",
+            recordId: String(rcv.id || rcv.record_id),
+            partCode: rcv.partCode || rcv.part_code,
+            receivedDate: recDate,
+            oldFifoColor: currentColor,
+            newFifoColor: newColor,
+            timestamp: nowIso,
+            reason: currentColor === undefined || currentColor === null || currentColor === '' 
+              ? "Missing FIFO color code; recomputed from receivedDate" 
+              : /^\d+$/.test(String(currentColor).trim()) 
+                ? `Numeric FIFO month code ('${currentColor}') normalized to canonical color name` 
+                : `Unrecognized color value ('${currentColor}') normalized to canonical color name`
+          };
+
+          rcv.fifoColorCode = newColor;
+          rcv.fifoColor = newColor;
+          rcv.version = (Number(rcv.version) || 1) + 1;
+          rcv.updated_at = nowIso;
+
+          newRepairs.push(auditEntry);
+          fifoRepairAuditLogs.unshift(auditEntry);
+          receivingRepaired++;
+
+          console.log(`[FIFO REPAIR AUDIT] Repaired Receiving [ID: ${rcv.id}] (${rcv.partCode || 'N/A'}): Old '${currentColor}' -> New '${newColor}' (Date: ${recDate})`);
+        }
+      });
+    }
+
+    // 3. Persist changes if any repairs were made
+    if (newRepairs.length > 0) {
+      if (fifoRepairAuditLogs.length > 1000) {
+        fifoRepairAuditLogs = fifoRepairAuditLogs.slice(0, 1000);
+      }
+      try {
+        fs.writeFileSync(FIFO_REPAIR_AUDIT_LOG_FILE, JSON.stringify(fifoRepairAuditLogs, null, 2), "utf-8");
+      } catch (err) {
+        console.error("[FIFO REPAIR AUDIT] Failed to save audit log file to disk:", err);
+      }
+
+      commitDatabase();
+      console.log(`[FIFO DATA REPAIR SUMMARY] REPAIRED ${stocksRepaired} stock record(s) and ${receivingRepaired} receiving record(s). Database persisted to SQLite.`);
+
+      chatMessages.push({
+        id: `fifo-repair-${Date.now()}`,
+        sender: "System",
+        text: `[FIFO TAG AUDIT] Completed startup data repair: ${stocksRepaired} stock record(s) and ${receivingRepaired} receiving record(s) updated to canonical monthly FIFO colors based on received dates.`,
+        timestamp: nowIso,
+        isSystem: true
+      });
+    } else {
+      console.log(`[FIFO DATA REPAIR SUMMARY] Clean check completed: all ${state.stocks?.length || 0} stock records and ${state.receiving?.length || 0} receiving records already possess valid FIFO tag colors. No repairs required.`);
+    }
+
+    return {
+      stocksScanned: state.stocks?.length || 0,
+      stocksRepaired,
+      receivingScanned: state.receiving?.length || 0,
+      receivingRepaired,
+      repairs: newRepairs
+    };
+  }
+
+  // 3. Run the startup repair right after database load
+  const initialFifoRepairReport = repairFifoTagColorsOnStartup();
 
   function restoreDatabaseFromBackup(filename: string, author: string): { success: boolean; error?: string; recordCounts?: any } {
     try {
@@ -2527,7 +2745,7 @@ async function startServer() {
                 unit: 'PCS',
                 lotNumber: lotNumber || '',
                 receivedDate: serverTime.split('T')[0],
-                fifoColor: 'Dark Green',
+                fifoColor: getFifoColorForDate(serverTime.split('T')[0], state.fifoColorsByMonth),
                 status: 'APPROVED',
                 warehouseId: targetWh,
                 accountId: targetAcc
@@ -5343,6 +5561,21 @@ async function startServer() {
   });
 
   /**
+   * REST API: FIFO Tag Color Repair Report & Audit Logs
+   */
+  app.get("/api/system/fifo-repair-report", (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    return res.json({
+      success: true,
+      report: initialFifoRepairReport,
+      totalAuditEntries: fifoRepairAuditLogs.length,
+      auditLogs: fifoRepairAuditLogs
+    });
+  });
+
+  /**
    * REST API: Upsert Record
    * Concurrency checks, version increment, and synchronous disk commit BEFORE WebSocket broadcast.
    */
@@ -5520,7 +5753,7 @@ async function startServer() {
           unit: 'PCS',
           lotNumber: lotNumber || '',
           receivedDate: serverTime.split('T')[0],
-          fifoColor: 'Dark Green',
+          fifoColor: getFifoColorForDate(serverTime.split('T')[0], state.fifoColorsByMonth),
           status: 'APPROVED'
         });
         state.stocks.push(stockItem);
