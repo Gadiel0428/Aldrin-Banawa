@@ -540,10 +540,10 @@ export default function StockFIFOControl({
             <select 
               value={selectedCustomer}
               onChange={e => setSelectedCustomer(e.target.value)}
-              className="bg-transparent focus:outline-none font-semibold text-slate-700 cursor-pointer max-w-[160px] truncate"
+              className="bg-transparent focus:outline-none font-semibold text-slate-700 cursor-pointer min-w-[150px] max-w-[240px] truncate"
               title="Filter by Registered Customer with SKU Count"
             >
-              <option value="ALL">All Registered Customers</option>
+              <option value="ALL">ALL CUSTOMERS</option>
               {customersWithSkuCounts.map(item => (
                 <option key={item.customer} value={item.customer}>
                   {item.customer} ({item.skuCount} SKUs)

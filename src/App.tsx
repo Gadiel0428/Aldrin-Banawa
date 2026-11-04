@@ -54,8 +54,11 @@ import {
   Server,
   ShieldCheck,
   Info,
-  ExternalLink
+  ExternalLink,
+  AlertTriangle,
+  ChevronDown
 } from 'lucide-react';
+import juweiLogo from './assets/juwei-logo.png';
 import { QRCodeSVG } from 'qrcode.react';
 import { motion, AnimatePresence } from 'motion/react';
 import AccountQRBadgeModal from './components/AccountQRBadgeModal';
@@ -160,6 +163,27 @@ function LiveClock() {
         {time.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' })} • {time.toLocaleTimeString('en-US', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
       </span>
     </div>
+  );
+}
+
+// Bundled official Juwei logo with resilient fallback to "JUWEI WMS" if loading ever fails
+function JuweiLogoImage({ className = "h-8 w-auto mb-2" }: { className?: string }) {
+  const [hasError, setHasError] = useState(false);
+  if (hasError) {
+    return (
+      <div className={`flex items-center gap-1.5 font-bold tracking-wider text-indigo-400 font-mono select-none ${className}`}>
+        <Boxes className="h-5 w-5 text-indigo-400 shrink-0" />
+        <span>JUWEI WMS</span>
+      </div>
+    );
+  }
+  return (
+    <img
+      src={juweiLogo}
+      alt="JUWEI WMS"
+      className={className}
+      onError={() => setHasError(true)}
+    />
   );
 }
 
@@ -1359,22 +1383,25 @@ export default function App() {
     } catch (e) {}
     syncCollection('registeredUsers', defaultAccounts);
     const baseUrl = getApiBaseUrl();
+    const superAdminAcc = registeredUsers.find(u => (u.employeeId || '').toUpperCase() === 'JPMP-002');
+    const adminPin = superAdminAcc?.pin?.trim() || '0423';
     fetch(`${baseUrl}/api/reset-database`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
-        'x-user-employee-id': currentEmployeeId || 'JPMP-002',
+        'x-user-employee-id': 'JPMP-002',
         'x-user-role': currentRole || 'SUPER ADMINISTRATOR',
         'x-user-permission': currentPermission || 'FULL_ACCESS',
-        'x-user-pin': '0423'
+        'x-user-pin': adminPin
       },
       body: JSON.stringify({
-        employeeId: currentEmployeeId || 'JPMP-002',
+        employeeId: 'JPMP-002',
+        requesterEmployeeId: 'JPMP-002',
         role: currentRole || 'SUPER ADMINISTRATOR',
         permission: currentPermission || 'FULL_ACCESS',
-        pin: '0423',
+        pin: adminPin,
         confirmed: true,
-        author: `${currentUser || 'ALDRIN BANAWA'} (${currentEmployeeId || 'JPMP-002'})`,
+        author: `${currentUser || 'ALDRIN BANAWA'} (JPMP-002)`,
         wipeUsers: true
       })
     }).catch(() => {});
@@ -1818,7 +1845,9 @@ export default function App() {
     }
 
     const baseUrl = getApiBaseUrl();
-    const cleanAuthor = `${currentUser || 'ALDRIN BANAWA'} (${currentEmployeeId || 'JPMP-002'})`;
+    const cleanAuthor = `${currentUser || 'ALDRIN BANAWA'} (JPMP-002)`;
+    const superAdminAcc = registeredUsers.find(u => (u.employeeId || '').toUpperCase() === 'JPMP-002');
+    const adminPin = superAdminAcc?.pin?.trim() || '0423';
 
     let resetVer = Date.now();
     try {
@@ -1826,16 +1855,17 @@ export default function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-employee-id': currentEmployeeId || 'JPMP-002',
+          'x-user-employee-id': 'JPMP-002',
           'x-user-role': currentRole || 'SUPER ADMINISTRATOR',
           'x-user-permission': currentPermission || 'FULL_ACCESS',
-          'x-user-pin': '0423'
+          'x-user-pin': adminPin
         },
         body: JSON.stringify({
-          employeeId: currentEmployeeId || 'JPMP-002',
+          employeeId: 'JPMP-002',
+          requesterEmployeeId: 'JPMP-002',
           role: currentRole || 'SUPER ADMINISTRATOR',
           permission: currentPermission || 'FULL_ACCESS',
-          pin: '0423',
+          pin: adminPin,
           confirmed: true,
           author: cleanAuthor,
           keepUsers: true
@@ -3866,9 +3896,20 @@ export default function App() {
 
     // Server reset
     const baseUrl = getApiBaseUrl();
+    const superAdminAcc = registeredUsers.find(u => (u.employeeId || '').toUpperCase() === 'JPMP-002');
+    const adminPin = superAdminAcc?.pin?.trim() || '0423';
     fetch(`${baseUrl}/api/accounts/clear-all-except-super-admin`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 
+        'Content-Type': 'application/json',
+        'x-user-employee-id': 'JPMP-002',
+        'x-user-pin': adminPin
+      },
+      body: JSON.stringify({
+        employeeId: 'JPMP-002',
+        requesterEmployeeId: 'JPMP-002',
+        pin: adminPin
+      })
     }).catch(() => {});
 
     // WebSocket broadcast
@@ -4898,28 +4939,118 @@ export default function App() {
 
   const handleExportBackup = handleExportCurrentData;
 
-  // Import JSON Backup helper
-  const handleImportBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const fileReader = new FileReader();
-    if (e.target.files && e.target.files[0]) {
-      fileReader.readAsText(e.target.files[0], "UTF-8");
-      fileReader.onload = (event) => {
-        try {
-          const parsed = JSON.parse(event.target?.result as string);
-          if (parsed.stocks) { setStocks(parsed.stocks); syncCollection('stocks', parsed.stocks); }
-          if (parsed.receiving) { setReceiving(parsed.receiving); syncCollection('receiving', parsed.receiving); }
-          if (parsed.returns) { setReturns(parsed.returns); syncCollection('returns', parsed.returns); }
-          if (parsed.recycling) { setRecycling(parsed.recycling); syncCollection('recycling', parsed.recycling); }
-          if (parsed.issuances) { setIssuances(parsed.issuances); syncCollection('issuances', parsed.issuances); }
-          if (parsed.deliveries) { setDeliveries(parsed.deliveries); syncCollection('deliveries', parsed.deliveries); }
-          if (parsed.envLogs) { setEnvLogs(parsed.envLogs); syncCollection('envLogs', parsed.envLogs); }
-          if (parsed.forkliftChecks) { setForkliftChecks(parsed.forkliftChecks); syncCollection('forkliftChecks', parsed.forkliftChecks); }
-          alert('Backup restored and synchronized successfully across all JUWEI real-time clients!');
-        } catch (err) {
-          alert('Invalid backup file structure.');
-        }
-      };
+  // Helper to trigger automated server backup before running destructive operations
+  const triggerPreActionBackup = async (actionName: string): Promise<boolean> => {
+    try {
+      const baseUrl = getApiBaseUrl();
+      const superAdminAcc = registeredUsers.find(u => (u.employeeId || '').toUpperCase() === 'JPMP-002');
+      const adminPin = superAdminAcc?.pin?.trim() || '0423';
+      const res = await fetch(`${baseUrl}/api/admin/backups/create`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-user-employee-id': 'JPMP-002',
+          'x-user-pin': adminPin
+        },
+        body: JSON.stringify({
+          author: `${currentUser || 'SUPER_ADMIN'} (JPMP-002)`,
+          employeeId: 'JPMP-002',
+          requesterEmployeeId: 'JPMP-002',
+          pin: adminPin,
+          reason: `PRE_ACTION_BACKUP_${actionName}`
+        })
+      });
+      return res.ok;
+    } catch (e) {
+      console.warn(`[Danger Zone] Pre-action backup warning for ${actionName}:`, e);
+      return false;
     }
+  };
+
+  // 1. Reset Default Database with typed confirmation "RESET", pre-backup, and audit log
+  const handleInitiateResetDatabase = () => {
+    if (currentPermission !== 'FULL_ACCESS' && currentEmployeeId !== 'JPMP-002') {
+      alert("PERMISSION DENIED: Only Super Administrator (JPMP-002) is authorized to reset the database.");
+      return;
+    }
+    setConfirmActionApp({
+      title: 'DANGER: Reset Central Database',
+      message: 'WARNING: This will authoritatively clear all inventory, stock, receiving, return, issuance, and delivery transactions across the entire central database. Super Admin will remain active. A safety backup will be created automatically before reset.',
+      confirmLabel: 'EXECUTE FULL RESET',
+      confirmVariant: 'danger',
+      requiredConfirmationWord: 'RESET',
+      onConfirm: async () => {
+        await triggerPreActionBackup('RESET_DATABASE');
+        sendSystemActivity(`SUPER ADMIN ${currentUser} (${currentEmployeeId}) executed central database reset at ${new Date().toISOString()}`);
+        resetStateToDefaults();
+      }
+    });
+  };
+
+  // 2. Wipe Operator Accounts with typed confirmation "WIPE", pre-backup, and audit log
+  const handleInitiateWipeAccounts = () => {
+    if (currentPermission !== 'FULL_ACCESS' && currentEmployeeId !== 'JPMP-002') {
+      alert("PERMISSION DENIED: Only Super Administrator (JPMP-002) is authorized to wipe operator accounts.");
+      return;
+    }
+    setConfirmActionApp({
+      title: 'DANGER: Wipe Operator Accounts',
+      message: 'CRITICAL WARNING: This will remove all operator accounts and immediately disconnect active operators. ONLY Super Admin (JPMP-002) will remain active. A safety backup will be automatically created before wiping.',
+      confirmLabel: 'WIPE ALL OPERATORS',
+      confirmVariant: 'danger',
+      requiredConfirmationWord: 'WIPE',
+      onConfirm: async () => {
+        await triggerPreActionBackup('WIPE_OPERATORS');
+        sendSystemActivity(`SUPER ADMIN ${currentUser} (${currentEmployeeId}) wiped all operator accounts at ${new Date().toISOString()}`);
+        resetAccountsToDefaults();
+      }
+    });
+  };
+
+  // 3. Import DB Restore with typed confirmation "RESTORE", pre-backup, and audit log
+  const handleInitiateImportRestore = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (currentPermission !== 'FULL_ACCESS' && currentEmployeeId !== 'JPMP-002') {
+      alert("PERMISSION DENIED: Only Super Administrator (JPMP-002) is authorized to restore database backups.");
+      return;
+    }
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const fileName = file.name;
+    const fileReader = new FileReader();
+    fileReader.readAsText(file, "UTF-8");
+    fileReader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target?.result as string);
+        if (!parsed || typeof parsed !== 'object') {
+          alert('Invalid backup file structure.');
+          return;
+        }
+        setConfirmActionApp({
+          title: 'DANGER: Import DB Restore',
+          message: `WARNING: This will overwrite live central inventory and system collections with snapshot data from "${fileName}". An automatic pre-restore backup will be created before applying.`,
+          confirmLabel: 'RESTORE DATABASE',
+          confirmVariant: 'danger',
+          requiredConfirmationWord: 'RESTORE',
+          onConfirm: async () => {
+            await triggerPreActionBackup(`IMPORT_RESTORE_${fileName.replace(/[^a-zA-Z0-9_-]/g, '_')}`);
+            if (parsed.stocks) { setStocks(parsed.stocks); syncCollection('stocks', parsed.stocks); }
+            if (parsed.receiving) { setReceiving(parsed.receiving); syncCollection('receiving', parsed.receiving); }
+            if (parsed.returns) { setReturns(parsed.returns); syncCollection('returns', parsed.returns); }
+            if (parsed.recycling) { setRecycling(parsed.recycling); syncCollection('recycling', parsed.recycling); }
+            if (parsed.issuances) { setIssuances(parsed.issuances); syncCollection('issuances', parsed.issuances); }
+            if (parsed.deliveries) { setDeliveries(parsed.deliveries); syncCollection('deliveries', parsed.deliveries); }
+            if (parsed.envLogs) { setEnvLogs(parsed.envLogs); syncCollection('envLogs', parsed.envLogs); }
+            if (parsed.forkliftChecks) { setForkliftChecks(parsed.forkliftChecks); syncCollection('forkliftChecks', parsed.forkliftChecks); }
+            sendSystemActivity(`SUPER ADMIN ${currentUser} (${currentEmployeeId}) restored database from "${fileName}" at ${new Date().toISOString()}`);
+            alert(`Database successfully restored from "${fileName}" and synchronized across all active stations.`);
+          }
+        });
+      } catch (err) {
+        alert('Invalid backup file structure: could not parse JSON.');
+      } finally {
+        e.target.value = '';
+      }
+    };
   };
 
   const handleRegisterMasterItem = (item: MasterRegistryItem) => {
@@ -5167,11 +5298,7 @@ export default function App() {
 
           <div className="flex flex-col items-center text-center">
             <div className="mb-3 flex justify-center">
-              <img 
-                src="/juwei-logo.png" 
-                alt="Juwei Logo" 
-                className="h-12 w-auto" 
-              />
+              <JuweiLogoImage className="h-12 w-auto" />
             </div>
             <span className="inline-block bg-indigo-500/10 text-indigo-300 font-mono font-semibold text-[10px] uppercase px-2.5 py-0.5 rounded-md mb-2 border border-indigo-500/20">
               JUWEI WMS GATEWAY • v{appVersion}
@@ -5373,11 +5500,7 @@ export default function App() {
         <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
           {/* Logged in Operator badge */}
           <div className="p-4 bg-slate-950/70 border-b border-slate-800/80 flex flex-col gap-2.5 backdrop-blur-md shrink-0">
-            <img 
-              src="/juwei-logo.png" 
-              alt="Juwei Logo" 
-              className="h-8 w-auto mb-2" 
-            />
+            <JuweiLogoImage className="h-8 w-auto mb-2" />
 
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2.5">
@@ -5600,40 +5723,38 @@ export default function App() {
                   <Archive className="h-3.5 w-3.5 text-emerald-400" /> Automated Server Backups
                 </button>
                 
-                <label className="w-full bg-slate-800/80 hover:bg-slate-800 text-slate-300 hover:text-white py-2 px-3 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer border border-slate-700/60 transition-colors">
-                  <Upload className="h-3.5 w-3.5 text-indigo-400" /> Import DB Restore
-                  <input type="file" accept=".json" onChange={handleImportBackup} className="hidden" />
-                </label>
+                {/* Collapsible Danger Zone (Super Admin Only) */}
+                <details className="group rounded-xl border border-rose-900/60 bg-rose-950/25 text-xs overflow-hidden transition-all">
+                  <summary className="flex items-center justify-between px-3 py-2 text-rose-400 hover:text-rose-300 hover:bg-rose-950/50 cursor-pointer select-none font-semibold text-[10px] uppercase tracking-wider transition-colors list-none">
+                    <div className="flex items-center gap-1.5">
+                      <AlertTriangle className="h-3.5 w-3.5 text-rose-500 shrink-0" />
+                      <span>Danger Zone</span>
+                    </div>
+                    <ChevronDown className="h-3.5 w-3.5 text-rose-400/80 transition-transform duration-200 group-open:rotate-180" />
+                  </summary>
+                  <div className="p-2 space-y-1.5 border-t border-rose-900/40 bg-slate-950/80">
+                    <label className="w-full bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white py-1.5 px-2.5 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer border border-slate-700/60 transition-colors">
+                      <Upload className="h-3 w-3 text-amber-400" /> Import DB Restore
+                      <input type="file" accept=".json" onChange={handleInitiateImportRestore} className="hidden" />
+                    </label>
 
-                <button 
-                  onClick={() => {
-                    setConfirmActionApp({
-                      title: 'Reset Default Database',
-                      message: 'Are you sure you want to reset all inventory, receiving, stock, and delivery logs to initial default records?',
-                      confirmLabel: 'YES, RESET DATABASE',
-                      confirmVariant: 'danger',
-                      onConfirm: () => resetStateToDefaults()
-                    });
-                  }}
-                  className="w-full text-rose-400/80 hover:text-rose-300 py-1 text-[10px] font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors"
-                >
-                  <Trash2 className="h-3 w-3" /> Reset default database
-                </button>
+                    <button 
+                      type="button"
+                      onClick={handleInitiateResetDatabase}
+                      className="w-full bg-rose-950/70 hover:bg-rose-900/90 text-rose-300 hover:text-rose-100 py-1.5 px-2.5 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1.5 border border-rose-800/60 transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="h-3 w-3 text-rose-400" /> Reset Default Database
+                    </button>
 
-                <button 
-                  onClick={() => {
-                    setConfirmActionApp({
-                      title: 'Wipe Operator Accounts',
-                      message: "WARNING: THIS WILL REMOVE ALL OPERATOR ACCOUNTS AND LOG YOU OUT. ONLY 'SUPER ADMIN' (JPMP-002) WILL REMAIN ACTIVE. ARE YOU SURE?",
-                      confirmLabel: 'YES, WIPE ACCOUNTS',
-                      confirmVariant: 'danger',
-                      onConfirm: () => resetAccountsToDefaults()
-                    });
-                  }}
-                  className="w-full text-rose-400/70 hover:text-rose-300 py-1 text-[10px] font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors"
-                >
-                  <Trash2 className="h-3 w-3" /> Wipe operator accounts
-                </button>
+                    <button 
+                      type="button"
+                      onClick={handleInitiateWipeAccounts}
+                      className="w-full bg-rose-950/70 hover:bg-rose-900/90 text-rose-300 hover:text-rose-100 py-1.5 px-2.5 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1.5 border border-rose-800/60 transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="h-3 w-3 text-rose-400" /> Wipe Operator Accounts
+                    </button>
+                  </div>
+                </details>
               </>
             )}
           </div>

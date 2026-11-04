@@ -212,8 +212,16 @@ export async function clearAllAccountsExceptSuperAdmin(
     const baseUrl = getApiBaseUrl();
     const res = await fetch(`${baseUrl}/api/accounts/clear-all-except-super-admin`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pin: superAdminPin }),
+      headers: { 
+        'Content-Type': 'application/json',
+        'x-user-employee-id': 'JPMP-002',
+        'x-user-pin': superAdminPin
+      },
+      body: JSON.stringify({ 
+        employeeId: 'JPMP-002',
+        requesterEmployeeId: 'JPMP-002',
+        pin: superAdminPin 
+      }),
     });
     const data = await res.json();
     return data;

@@ -4541,8 +4541,94 @@ async function startServer() {
     }
   });
 
+  // =========================================================================
+  // SUPER ADMIN AUTHENTICATION, RATE LIMITING & AUDIT LOGGING
+  // 1. Employee ID MUST be EXACTLY 'JPMP-002' (reject empty or substring matches).
+  // 2. PIN must match ONLY the stored Super Admin PIN from the database (no '0423' fallback).
+  // 3. Rate limiting: 5 wrong attempts locks admin auth for 5 minutes.
+  // 4. Every attempt (success, failure, lockout) is recorded to authoritative audit log.
+  // =========================================================================
+  const MAX_SUPER_ADMIN_FAILED_ATTEMPTS = 5;
+  const SUPER_ADMIN_LOCKOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+  let superAdminFailedAttempts = 0;
+  let superAdminLockedUntil = 0;
+
+  const ADMIN_AUTH_AUDIT_LOG_FILE = getStorageFilePath("admin-auth-audit-log.json");
+
+  interface AdminAuthAuditEntry {
+    id: string;
+    outcome: 'SUCCESS' | 'INVALID_EMPLOYEE_ID' | 'INCORRECT_PIN' | 'SUPER_ADMIN_NOT_FOUND' | 'LOCKED_OUT';
+    employeeId: string;
+    ip: string;
+    timestamp: string;
+    details: string;
+    failedAttempts: number;
+    lockedUntil?: string;
+    path?: string;
+    method?: string;
+  }
+
+  let adminAuthAuditLogs: AdminAuthAuditEntry[] = [];
+  try {
+    if (fs.existsSync(ADMIN_AUTH_AUDIT_LOG_FILE)) {
+      const raw = fs.readFileSync(ADMIN_AUTH_AUDIT_LOG_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) adminAuthAuditLogs = parsed;
+    }
+  } catch (e) {
+    adminAuthAuditLogs = [];
+  }
+
+  function logAdminAuthAudit(entryData: {
+    outcome: 'SUCCESS' | 'INVALID_EMPLOYEE_ID' | 'INCORRECT_PIN' | 'SUPER_ADMIN_NOT_FOUND' | 'LOCKED_OUT';
+    employeeId: string;
+    ip: string;
+    details: string;
+    failedAttempts: number;
+    lockedUntil?: string;
+    req?: express.Request;
+  }) {
+    const entry: AdminAuthAuditEntry = {
+      id: `AUTH-LOG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      outcome: entryData.outcome,
+      employeeId: entryData.employeeId,
+      ip: entryData.ip,
+      timestamp: new Date().toISOString(),
+      details: entryData.details,
+      failedAttempts: entryData.failedAttempts,
+      lockedUntil: entryData.lockedUntil,
+      path: entryData.req?.path || entryData.req?.originalUrl,
+      method: entryData.req?.method
+    };
+
+    adminAuthAuditLogs.unshift(entry);
+    if (adminAuthAuditLogs.length > 500) {
+      adminAuthAuditLogs = adminAuthAuditLogs.slice(0, 500);
+    }
+
+    try {
+      fs.writeFileSync(ADMIN_AUTH_AUDIT_LOG_FILE, JSON.stringify(adminAuthAuditLogs, null, 2), "utf-8");
+    } catch (err) {
+      console.error("[ADMIN-AUTH-AUDIT] Failed to persist admin auth audit log:", err);
+    }
+
+    if (entryData.outcome === 'SUCCESS') {
+      console.log(`[ADMIN-AUTH-AUDIT] SUCCESS: JPMP-002 authenticated for ${entry.method || ''} ${entry.path || ''} from ${entry.ip}`);
+    } else {
+      console.warn(`[ADMIN-AUTH-AUDIT] ${entryData.outcome}: ID='${entryData.employeeId}', IP=${entry.ip}, Path=${entry.path || 'N/A'}. Details: ${entryData.details}`);
+    }
+  }
+
   // Helper to authenticate Super Admin
   function isAuthorizedSuperAdmin(req: express.Request): boolean {
+    const clientIp = (
+      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || 
+      req.socket?.remoteAddress || 
+      req.ip || 
+      '127.0.0.1'
+    );
+
     const bodyPin = (
       req.body?.adminPin || 
       req.body?.pin || 
@@ -4556,19 +4642,127 @@ async function startServer() {
       req.body?.employeeId || 
       req.body?.authorId || 
       req.headers['x-user-employee-id'] || 
+      req.headers['x-employee-id'] ||
       ''
     ).toString().trim().toUpperCase();
 
-    // Check in-memory central database for Super Admin PIN
+    const now = Date.now();
+
+    // 1. Check if currently locked out due to 5 prior failed attempts
+    if (superAdminLockedUntil > now) {
+      const remainingSeconds = Math.ceil((superAdminLockedUntil - now) / 1000);
+      logAdminAuthAudit({
+        outcome: 'LOCKED_OUT',
+        employeeId: bodyEmpId,
+        ip: clientIp,
+        details: `Super Admin authentication is LOCKED for ${remainingSeconds}s (${Math.ceil(remainingSeconds / 60)}m). 5 consecutive failed attempts previously reached.`,
+        failedAttempts: superAdminFailedAttempts,
+        lockedUntil: new Date(superAdminLockedUntil).toISOString(),
+        req
+      });
+      return false;
+    }
+
+    // 2. Clear expired lockout window
+    if (superAdminLockedUntil > 0 && now >= superAdminLockedUntil) {
+      superAdminFailedAttempts = 0;
+      superAdminLockedUntil = 0;
+    }
+
+    // 3. Employee ID MUST be EXACTLY 'JPMP-002' (reject empty or substring matches)
+    if (bodyEmpId !== 'JPMP-002') {
+      superAdminFailedAttempts++;
+      if (superAdminFailedAttempts >= MAX_SUPER_ADMIN_FAILED_ATTEMPTS) {
+        superAdminLockedUntil = Date.now() + SUPER_ADMIN_LOCKOUT_MS;
+      }
+      const remaining = Math.max(0, MAX_SUPER_ADMIN_FAILED_ATTEMPTS - superAdminFailedAttempts);
+      logAdminAuthAudit({
+        outcome: 'INVALID_EMPLOYEE_ID',
+        employeeId: bodyEmpId,
+        ip: clientIp,
+        details: `Rejected non-JPMP-002 employee ID: '${bodyEmpId}'. Attempts: ${superAdminFailedAttempts}/${MAX_SUPER_ADMIN_FAILED_ATTEMPTS}.${superAdminLockedUntil ? ' ADMIN AUTH NOW LOCKED FOR 5 MINUTES.' : ` ${remaining} attempts remaining.`}`,
+        failedAttempts: superAdminFailedAttempts,
+        lockedUntil: superAdminLockedUntil ? new Date(superAdminLockedUntil).toISOString() : undefined,
+        req
+      });
+      return false;
+    }
+
+    // 4. Retrieve stored Super Admin PIN from central database
     const superAdmin = state.registeredUsers.find(
       u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002'
     );
+    const storedPin = (superAdmin?.pin || '').toString().trim();
 
-    const validPin = superAdmin?.pin?.trim() || '0423';
-    const isIdMatch = bodyEmpId === 'JPMP-002' || bodyEmpId === '' || bodyEmpId.includes('002');
-    const isPinMatch = bodyPin === validPin || bodyPin === '0423';
-    return isIdMatch && isPinMatch;
+    if (!superAdmin || !storedPin) {
+      superAdminFailedAttempts++;
+      if (superAdminFailedAttempts >= MAX_SUPER_ADMIN_FAILED_ATTEMPTS) {
+        superAdminLockedUntil = Date.now() + SUPER_ADMIN_LOCKOUT_MS;
+      }
+      logAdminAuthAudit({
+        outcome: 'SUPER_ADMIN_NOT_FOUND',
+        employeeId: bodyEmpId,
+        ip: clientIp,
+        details: `Super Admin account (JPMP-002) or stored PIN not found in database. Attempts: ${superAdminFailedAttempts}/${MAX_SUPER_ADMIN_FAILED_ATTEMPTS}.${superAdminLockedUntil ? ' ADMIN AUTH NOW LOCKED FOR 5 MINUTES.' : ''}`,
+        failedAttempts: superAdminFailedAttempts,
+        lockedUntil: superAdminLockedUntil ? new Date(superAdminLockedUntil).toISOString() : undefined,
+        req
+      });
+      return false;
+    }
+
+    // 5. Compare only against stored Super Admin PIN (NO '0423' fallback)
+    if (bodyPin !== storedPin) {
+      superAdminFailedAttempts++;
+      if (superAdminFailedAttempts >= MAX_SUPER_ADMIN_FAILED_ATTEMPTS) {
+        superAdminLockedUntil = Date.now() + SUPER_ADMIN_LOCKOUT_MS;
+      }
+      const remaining = Math.max(0, MAX_SUPER_ADMIN_FAILED_ATTEMPTS - superAdminFailedAttempts);
+      logAdminAuthAudit({
+        outcome: 'INCORRECT_PIN',
+        employeeId: bodyEmpId,
+        ip: clientIp,
+        details: `Incorrect PIN provided for Super Admin JPMP-002. Attempts: ${superAdminFailedAttempts}/${MAX_SUPER_ADMIN_FAILED_ATTEMPTS}.${superAdminLockedUntil ? ' ADMIN AUTH NOW LOCKED FOR 5 MINUTES.' : ` ${remaining} attempts remaining.`}`,
+        failedAttempts: superAdminFailedAttempts,
+        lockedUntil: superAdminLockedUntil ? new Date(superAdminLockedUntil).toISOString() : undefined,
+        req
+      });
+      return false;
+    }
+
+    // 6. Success: Reset rate limit counters and log successful authorization
+    superAdminFailedAttempts = 0;
+    superAdminLockedUntil = 0;
+    logAdminAuthAudit({
+      outcome: 'SUCCESS',
+      employeeId: bodyEmpId,
+      ip: clientIp,
+      details: `Super Admin JPMP-002 authorized successfully.`,
+      failedAttempts: 0,
+      req
+    });
+    return true;
   }
+
+  // REST API: Super Admin Authentication Status & Audit Log
+  app.get("/api/admin/auth-status", (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    const now = Date.now();
+    const isLocked = superAdminLockedUntil > now;
+    const remainingSeconds = isLocked ? Math.ceil((superAdminLockedUntil - now) / 1000) : 0;
+
+    return res.json({
+      success: true,
+      isLocked,
+      remainingSeconds,
+      lockedUntil: isLocked ? new Date(superAdminLockedUntil).toISOString() : null,
+      failedAttempts: isLocked ? superAdminFailedAttempts : (superAdminLockedUntil > 0 ? 0 : superAdminFailedAttempts),
+      maxAttempts: MAX_SUPER_ADMIN_FAILED_ATTEMPTS,
+      lockoutDurationMinutes: 5,
+      auditLogsCount: adminAuthAuditLogs.length,
+      auditLogs: adminAuthAuditLogs.slice(0, 50)
+    });
+  });
 
   /**
    * GLOBAL RESET API
@@ -4592,6 +4786,13 @@ async function startServer() {
 
       const author = req.body?.author || "ALDRIN BANAWA (SUPER ADMINISTRATOR)";
       const keepUsers = req.body?.keepUsers !== false;
+
+      // Automatically create a safety backup right before running destructive reset
+      try {
+        await createDatabaseBackup("PRE_DATABASE_RESET_SAFETY_BACKUP", author);
+      } catch (backupErr) {
+        console.warn("[RESET-DATABASE] Pre-reset backup warning:", backupErr);
+      }
 
       // 1. Advance reset version
       systemResetVersion += 1;
@@ -5182,6 +5383,15 @@ async function startServer() {
     try {
       if (!isAuthorizedSuperAdmin(req)) {
         return res.status(403).json({ error: "PERMISSION_DENIED: Only Super Administrator is authorized to clear accounts." });
+      }
+
+      const author = req.body?.author || (req.headers['x-user-employee-id'] ? `${req.headers['x-user-employee-id']}` : "SUPER_ADMIN (JPMP-002)");
+
+      // Automatically create a safety backup right before wiping accounts
+      try {
+        await createDatabaseBackup("PRE_ACCOUNTS_WIPE_SAFETY_BACKUP", author);
+      } catch (backupErr) {
+        console.warn("[WIPE-ACCOUNTS] Pre-wipe backup warning:", backupErr);
       }
 
       const superAdmin = state.registeredUsers.find(u => u.employeeId.toUpperCase().trim() === 'JPMP-002') || defaultSuperAdmin;
