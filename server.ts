@@ -475,6 +475,15 @@ async function startServer() {
     operationalRoles: string[];
     receivingCategories: string[];
     fifoColorsByMonth: Record<number, { name: string; colorClass: string; textClass: string; hex?: string }>;
+    sessionTokens: Record<string, {
+      token: string;
+      employeeId: string;
+      username: string;
+      role: string;
+      permission: string;
+      createdAt: string;
+      lastActive: string;
+    }>;
   } = {
     stocks: INITIAL_STOCK.map((item: any) => normalizeRecord(item)),
     receiving: INITIAL_RECEIVING.map((item: any) => normalizeRecord(item)),
@@ -490,6 +499,7 @@ async function startServer() {
     operationalRoles: [...DEFAULT_OPERATIONAL_ROLES],
     receivingCategories: [...DEFAULT_RECEIVING_CATEGORIES],
     fifoColorsByMonth: { ...DEFAULT_FIFO_COLORS_BY_MONTH },
+    sessionTokens: {},
   };
 
   /**
@@ -519,6 +529,7 @@ async function startServer() {
       operationalRoles: state.operationalRoles || [...DEFAULT_OPERATIONAL_ROLES],
       receivingCategories: state.receivingCategories || [...DEFAULT_RECEIVING_CATEGORIES],
       fifoColorsByMonth: state.fifoColorsByMonth || { ...DEFAULT_FIFO_COLORS_BY_MONTH },
+      sessionTokens: state.sessionTokens || {},
       authorizedDevices: Array.from(authorizedDevicesMap.values()),
       deletedRecordTombstones: Array.from(deletedRecordTombstones),
       deletedUserTombstones: Array.from(deletedUserTombstones),
@@ -538,6 +549,83 @@ async function startServer() {
       console.error("CRITICAL: Failed SQLite database commit to disk:", err);
       return false;
     }
+  }
+
+  /**
+   * Session Token Security Engine:
+   * Extracts Bearer token from HTTP Authorization header or URL query string
+   */
+  function extractBearerToken(req: express.Request | http.IncomingMessage | string | undefined | null): string {
+    if (!req) return '';
+    if (typeof req === 'string') return req.trim();
+    const headers = (req as any).headers || {};
+    const authHeader = (headers['authorization'] || headers['Authorization']) as string;
+    if (authHeader && authHeader.toLowerCase().startsWith('bearer ')) {
+      return authHeader.substring(7).trim();
+    }
+    // Check URL query parameters (e.g. For WebSocket handshake or backup download links)
+    if ('url' in req && req.url) {
+      try {
+        const parsed = new URL(req.url, 'http://127.0.0.1');
+        const qToken = parsed.searchParams.get('token') || parsed.searchParams.get('authToken') || parsed.searchParams.get('auth_token');
+        if (qToken) return qToken.trim();
+      } catch {}
+    }
+    return '';
+  }
+
+  /**
+   * Derives authenticated user and permissions solely from the database-persisted session token.
+   * Completely ignores client-sent x-user-permission, body.permission, and x-employee-id for authorization.
+   */
+  function getSessionUser(reqOrToken: express.Request | http.IncomingMessage | string | undefined | null): { user: ServerUser; tokenRecord: any } | null {
+    if (!reqOrToken) return null;
+    const token = typeof reqOrToken === 'string' ? reqOrToken.trim() : extractBearerToken(reqOrToken);
+    if (!token) return null;
+    if (!state.sessionTokens) {
+      state.sessionTokens = {};
+      return null;
+    }
+    const tokenRecord = state.sessionTokens[token];
+    if (!tokenRecord) return null;
+
+    const empId = (tokenRecord.employeeId || '').toUpperCase().trim();
+    const user = state.registeredUsers.find(u => (u.employeeId || '').toUpperCase().trim() === empId);
+    if (!user) {
+      // User account was deleted, remove stale token
+      delete state.sessionTokens[token];
+      commitDatabase();
+      return null;
+    }
+
+    // Keep token record synchronized with latest account properties
+    tokenRecord.lastActive = new Date().toISOString();
+    tokenRecord.permission = user.permission || 'LIMITED_ACCESS';
+    tokenRecord.role = user.role || 'WAREHOUSE CLERK';
+    tokenRecord.username = user.username || 'OPERATOR';
+
+    return { user, tokenRecord };
+  }
+
+  /**
+   * Issues cryptographically random session token and persists it synchronously to database
+   */
+  function issueSessionToken(user: ServerUser): string {
+    const token = crypto.randomBytes(32).toString('hex');
+    if (!state.sessionTokens) {
+      state.sessionTokens = {};
+    }
+    state.sessionTokens[token] = {
+      token,
+      employeeId: (user.employeeId || '').toUpperCase().trim(),
+      username: (user.username || '').toUpperCase().trim(),
+      role: (user.role || '').toUpperCase().trim(),
+      permission: user.permission || (user.employeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
+      createdAt: new Date().toISOString(),
+      lastActive: new Date().toISOString()
+    };
+    commitDatabase();
+    return token;
   }
 
   // =========================================================================
@@ -831,9 +919,21 @@ async function startServer() {
           if (parsed.fifoColorsByMonth && typeof parsed.fifoColorsByMonth === 'object') {
             state.fifoColorsByMonth = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...parsed.fifoColorsByMonth };
           }
+        } else if (key === 'sessionTokens') {
+          if (parsed.sessionTokens && typeof parsed.sessionTokens === 'object') {
+            state.sessionTokens = { ...parsed.sessionTokens };
+          }
         } else if (Array.isArray(parsed[key]) && (!(parsed.state && key in parsed.state))) {
           (state as any)[key] = parsed[key].map((rec: any) => normalizeRecord(rec));
         }
+      }
+      if (parsed.sessionTokens && typeof parsed.sessionTokens === 'object') {
+        state.sessionTokens = { ...parsed.sessionTokens };
+      } else if (parsed.state?.sessionTokens && typeof parsed.state.sessionTokens === 'object') {
+        state.sessionTokens = { ...parsed.state.sessionTokens };
+      }
+      if (!state.sessionTokens || typeof state.sessionTokens !== 'object') {
+        state.sessionTokens = {};
       }
       if (!Array.isArray(state.operationalRoles) || state.operationalRoles.length === 0) {
         state.operationalRoles = [...DEFAULT_OPERATIONAL_ROLES];

@@ -187,6 +187,63 @@ export function normalizeFifoColor(
   return getFifoColorForDate(receivedDate, activeMap);
 }
 
+/**
+ * Auto-format dash fields as the user types digits only.
+ * Prefix and dashes are inserted automatically.
+ * When digits are deleted or backspaced completely, the field returns an empty string ("")
+ * so an emptied field is truly empty and backspace works normally.
+ */
+export function formatDashField(
+  rawInput: string,
+  prefix: string,
+  prefixPattern: RegExp
+): string {
+  if (!rawInput) return '';
+  const trimmed = rawInput.trim();
+  if (!trimmed) return '';
+
+  // Strip known prefix / partial prefix from front
+  const remainder = trimmed.replace(prefixPattern, '');
+  // Extract digits only
+  const digits = remainder.replace(/\D/g, '');
+
+  if (!digits) {
+    return '';
+  }
+
+  return `${prefix}${digits}`;
+}
+
+export function formatRrNumber(rawInput: string): string {
+  const currentYear = new Date().getFullYear();
+  return formatDashField(rawInput, `RR-${currentYear}-`, /^RR-?(?:\d{4})?-?/i);
+}
+
+export function formatPoNumber(rawInput: string): string {
+  const currentYear = new Date().getFullYear();
+  return formatDashField(rawInput, `PO-${currentYear}-`, /^PO-?(?:\d{4})?-?/i);
+}
+
+export function formatDrNumber(rawInput: string): string {
+  return formatDashField(rawInput, 'DR-', /^DR-?/i);
+}
+
+export function formatSiNumber(rawInput: string): string {
+  return formatDashField(rawInput, 'SI-', /^SI-?/i);
+}
+
+export function formatWaybillNumber(rawInput: string): string {
+  return formatDashField(rawInput, 'WB-LBC-', /^WB-?(?:LBC)?-?/i);
+}
+
+export function formatPartCode(rawInput: string): string {
+  return formatDashField(rawInput, 'RM-RE-', /^RM-?(?:RE)?-?/i);
+}
+
+export function formatLotNumber(rawInput: string): string {
+  return formatDashField(rawInput, 'LOT-', /^LOT-?/i);
+}
+
 export const INITIAL_STOCK: MaterialStockItem[] = [];
 
 export const INITIAL_RECEIVING: ReceivingRecord[] = [];

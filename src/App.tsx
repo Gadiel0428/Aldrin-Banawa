@@ -87,7 +87,12 @@ import {
   upsertCentralRecord,
   deleteCentralRecord,
   performCentralGlobalReset,
-  resolveAccountPin
+  resolveAccountPin,
+  getAuthToken,
+  setAuthToken,
+  getAuthHeaders,
+  fetchSessionAccount,
+  resumeSessionAccount
 } from './lib/centralApi';
 
 import { 
@@ -333,6 +338,56 @@ export default function App() {
     }
   });
   const [authTab, setAuthTab] = useState<'login' | 'register'>('login');
+
+  // Authoritative Session Token Persistence & Resumption
+  // Synchronizes and validates server-issued random session token with database state
+  useEffect(() => {
+    let isCancelled = false;
+    const syncSession = async () => {
+      const storedLoggedIn = typeof localStorage !== 'undefined' && localStorage.getItem('juwei_wms_isLoggedIn') === 'true';
+      const storedEmpId = (typeof localStorage !== 'undefined' ? localStorage.getItem('juwei_wms_employeeId') : '') || currentEmployeeId;
+      if (!storedLoggedIn && !isLoggedIn) return;
+
+      const token = getAuthToken();
+      if (token) {
+        const sessionData = await fetchSessionAccount();
+        if (!isCancelled && sessionData?.success && sessionData.user) {
+          setCurrentPermission(sessionData.user.permission);
+          setCurrentRole(sessionData.user.role);
+          setCurrentUser(sessionData.user.username);
+          setCurrentEmployeeId(sessionData.user.employeeId);
+          try {
+            localStorage.setItem('juwei_wms_userPermission', sessionData.user.permission);
+            localStorage.setItem('juwei_wms_userRole', sessionData.user.role);
+            localStorage.setItem('juwei_wms_currentUser', sessionData.user.username);
+            localStorage.setItem('juwei_wms_employeeId', sessionData.user.employeeId);
+          } catch {}
+          return;
+        }
+      }
+
+      // If token is missing/expired but user was previously logged in, resume session
+      if (storedEmpId) {
+        const resumed = await resumeSessionAccount(storedEmpId);
+        if (!isCancelled && resumed?.success && resumed.user) {
+          if (resumed.token) setAuthToken(resumed.token);
+          setCurrentPermission(resumed.user.permission);
+          setCurrentRole(resumed.user.role);
+          setCurrentUser(resumed.user.username);
+          setCurrentEmployeeId(resumed.user.employeeId);
+          try {
+            localStorage.setItem('juwei_wms_userPermission', resumed.user.permission);
+            localStorage.setItem('juwei_wms_userRole', resumed.user.role);
+            localStorage.setItem('juwei_wms_currentUser', resumed.user.username);
+            localStorage.setItem('juwei_wms_employeeId', resumed.user.employeeId);
+          } catch {}
+        }
+      }
+    };
+
+    syncSession();
+    return () => { isCancelled = true; };
+  }, [isLoggedIn]);
 
   // Central Database modal state
   const [showCentralDatabaseModal, setShowCentralDatabaseModal] = useState<boolean>(false);
@@ -1131,11 +1186,7 @@ export default function App() {
       const baseUrl = getApiBaseUrl();
       await fetch(`${baseUrl}/api/roles`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-permission': currentPermission || '',
-          'x-employee-id': currentEmployeeId || ''
-        },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           roles: cleaned,
           author: currentUser
@@ -1231,11 +1282,7 @@ export default function App() {
       const baseUrl = getApiBaseUrl();
       await fetch(`${baseUrl}/api/categories`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-permission': currentPermission || '',
-          'x-employee-id': currentEmployeeId || ''
-        },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           action: renameData ? 'rename' : 'set',
           categories: cleaned,
@@ -1311,11 +1358,7 @@ export default function App() {
       const baseUrl = getApiBaseUrl();
       await fetch(`${baseUrl}/api/fifo-colors`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-permission': currentPermission || '',
-          'x-employee-id': currentEmployeeId || ''
-        },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           fifoColorsByMonth: nextMap,
           author: currentUser,
@@ -1387,13 +1430,13 @@ export default function App() {
     const adminPin = superAdminAcc?.pin?.trim() || '0423';
     fetch(`${baseUrl}/api/reset-database`, {
       method: 'POST',
-      headers: { 
+      headers: getAuthHeaders({ 
         'Content-Type': 'application/json',
         'x-user-employee-id': 'JPMP-002',
         'x-user-role': currentRole || 'SUPER ADMINISTRATOR',
         'x-user-permission': currentPermission || 'FULL_ACCESS',
         'x-user-pin': adminPin
-      },
+      }),
       body: JSON.stringify({
         employeeId: 'JPMP-002',
         requesterEmployeeId: 'JPMP-002',
@@ -1702,12 +1745,10 @@ export default function App() {
     try {
       const res = await fetch(`${baseUrl}/api/sync/batch`, {
         method: 'POST',
-        headers: { 
+        headers: getAuthHeaders({ 
           'Content-Type': 'application/json',
-          'x-device-id': persistentDevId,
-          'x-employee-id': currentEmployeeId || '',
-          'x-user-permission': currentPermission || ''
-        },
+          'x-device-id': persistentDevId
+        }),
         body: JSON.stringify(batchPayload)
       });
       if (res.status === 409) {
@@ -1727,12 +1768,10 @@ export default function App() {
     try {
       const resFallback = await fetch(`${httpProto}//${cleanHost}/api/sync/batch`, {
         method: 'POST',
-        headers: { 
+        headers: getAuthHeaders({ 
           'Content-Type': 'application/json',
-          'x-device-id': persistentDevId,
-          'x-employee-id': currentEmployeeId || '',
-          'x-user-permission': currentPermission || ''
-        },
+          'x-device-id': persistentDevId
+        }),
         body: JSON.stringify(batchPayload)
       });
       if (resFallback.status === 409) {
@@ -1853,13 +1892,13 @@ export default function App() {
     try {
       const res = await fetch(`${baseUrl}/api/reset-database`, {
         method: 'POST',
-        headers: {
+        headers: getAuthHeaders({
           'Content-Type': 'application/json',
           'x-user-employee-id': 'JPMP-002',
           'x-user-role': currentRole || 'SUPER ADMINISTRATOR',
           'x-user-permission': currentPermission || 'FULL_ACCESS',
           'x-user-pin': adminPin
-        },
+        }),
         body: JSON.stringify({
           employeeId: 'JPMP-002',
           requesterEmployeeId: 'JPMP-002',
@@ -2393,7 +2432,7 @@ export default function App() {
 
     fetch(`${baseUrl}/api/records/upsert`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         collection,
         record,
@@ -2416,7 +2455,7 @@ export default function App() {
     .catch(() => {
       fetch(`${httpProto}//${cleanHost}/api/records/upsert`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           collection,
           record,
@@ -2488,7 +2527,7 @@ export default function App() {
 
     fetch(`${baseUrl}/api/records/delete`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ collection, id, reset_version: currentResetVer })
     })
     .then(async res => {
@@ -2504,7 +2543,7 @@ export default function App() {
     .catch(() => {
       fetch(`${httpProto}//${cleanHost}/api/records/delete`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ collection, id, reset_version: currentResetVer })
       })
       .then(async res => {
@@ -2984,6 +3023,7 @@ export default function App() {
           try {
             const authPayload = {
               type: 'authenticate',
+              token: getAuthToken() || '',
               accountId: clientAccountId,
               warehouseId: clientWarehouseId,
               user_id: currentEmployeeId ? `USR-${currentEmployeeId}` : 'ANONYMOUS',
@@ -3654,12 +3694,10 @@ export default function App() {
 
     fetch(`${baseUrl}/api/sync`, {
       method: 'POST',
-      headers: { 
+      headers: getAuthHeaders({ 
         'Content-Type': 'application/json',
-        'x-device-id': persistentDevId,
-        'x-employee-id': currentEmployeeId || '',
-        'x-user-permission': currentPermission || ''
-      },
+        'x-device-id': persistentDevId
+      }),
       body: JSON.stringify(syncPayload)
     })
     .then(async res => {
@@ -3677,12 +3715,10 @@ export default function App() {
     .catch(() => {
       fetch(`${httpProto}//${cleanHost}/api/sync`, {
         method: 'POST',
-        headers: { 
+        headers: getAuthHeaders({ 
           'Content-Type': 'application/json',
-          'x-device-id': persistentDevId,
-          'x-employee-id': currentEmployeeId || '',
-          'x-user-permission': currentPermission || ''
-        },
+          'x-device-id': persistentDevId
+        }),
         body: JSON.stringify(syncPayload)
       })
       .then(async res => {
@@ -3814,7 +3850,7 @@ export default function App() {
       const baseUrl = getApiBaseUrl();
       fetch(`${baseUrl}/api/accounts/register`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           ...newUser,
           requesterEmployeeId: currentEmployeeId || 'JPMP-002',
@@ -3864,7 +3900,7 @@ export default function App() {
     const baseUrl = getApiBaseUrl();
     fetch(`${baseUrl}/api/accounts/delete`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ employeeId: cleanId })
     }).catch(() => {});
 
@@ -3900,11 +3936,11 @@ export default function App() {
     const adminPin = superAdminAcc?.pin?.trim() || '0423';
     fetch(`${baseUrl}/api/accounts/clear-all-except-super-admin`, {
       method: 'POST',
-      headers: { 
+      headers: getAuthHeaders({ 
         'Content-Type': 'application/json',
         'x-user-employee-id': 'JPMP-002',
         'x-user-pin': adminPin
-      },
+      }),
       body: JSON.stringify({
         employeeId: 'JPMP-002',
         requesterEmployeeId: 'JPMP-002',
@@ -3968,7 +4004,7 @@ export default function App() {
       const baseUrl = getApiBaseUrl();
       fetch(`${baseUrl}/api/accounts/delete`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ employeeId: cleanOldId })
       }).catch(() => {});
     }
@@ -4006,7 +4042,7 @@ export default function App() {
         const baseUrl = getApiBaseUrl();
         fetch(`${baseUrl}/api/accounts/update`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify(targetUpdatedUser)
         }).catch(() => {});
       } catch (e) {}
@@ -4177,12 +4213,16 @@ export default function App() {
     }
   };
 
-  const handleLogin = (user: {username: string; role: string; employeeId: string; permission?: string; status?: string; lastActive?: string}) => {
+  const handleLogin = (user: {username: string; role: string; employeeId: string; permission?: string; status?: string; lastActive?: string; token?: string}) => {
     const cleanUsername = (user.username || 'OPERATOR').toUpperCase();
     const cleanRole = (user.role || 'WAREHOUSE CLERK').toUpperCase();
     const cleanEmployeeId = (user.employeeId || '').toUpperCase();
     const cleanPermission = user.permission || (cleanEmployeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS');
     const nowIso = new Date().toISOString();
+
+    if (user.token) {
+      setAuthToken(user.token);
+    }
 
     setCurrentUser(cleanUsername);
     setCurrentRole(cleanRole);
@@ -4207,6 +4247,7 @@ export default function App() {
       try {
         socket!.send(JSON.stringify({
           type: 'authenticate',
+          token: getAuthToken() || user.token || '',
           user_id: `USR-${cleanEmployeeId}`,
           session_id: clientSessionId.current,
           device_id: getPersistentDeviceId(),
@@ -4273,12 +4314,14 @@ export default function App() {
       } catch (e) {}
     }
 
+    setAuthToken(null);
     setCurrentUser('');
     setCurrentRole('');
     setCurrentEmployeeId('');
     setCurrentPermission('LIMITED_ACCESS');
     setIsLoggedIn(false);
     try {
+      localStorage.removeItem('juwei_wms_authToken');
       localStorage.removeItem('juwei_wms_isLoggedIn');
       localStorage.removeItem('juwei_wms_currentUser');
       localStorage.removeItem('juwei_wms_userRole');
@@ -4313,7 +4356,7 @@ export default function App() {
       const baseUrl = getApiBaseUrl();
       fetch(`${baseUrl}/api/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ username: 'System Audit', text, isSystem: true })
       }).catch(() => {});
     }
@@ -4334,7 +4377,7 @@ export default function App() {
       const baseUrl = getApiBaseUrl();
       fetch(`${baseUrl}/api/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ username: currentUser, text, isSystem: false })
       }).catch(() => {});
     }
@@ -4947,11 +4990,11 @@ export default function App() {
       const adminPin = superAdminAcc?.pin?.trim() || '0423';
       const res = await fetch(`${baseUrl}/api/admin/backups/create`, {
         method: 'POST',
-        headers: { 
+        headers: getAuthHeaders({ 
           'Content-Type': 'application/json',
           'x-user-employee-id': 'JPMP-002',
           'x-user-pin': adminPin
-        },
+        }),
         body: JSON.stringify({
           author: `${currentUser || 'SUPER_ADMIN'} (JPMP-002)`,
           employeeId: 'JPMP-002',

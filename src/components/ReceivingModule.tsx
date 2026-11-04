@@ -50,7 +50,7 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { ReceivingRecord, ReturnRecord, MaterialStockItem, getCustomerForPart, UOM_OPTIONS, MasterRegistryItem, RegistryType, FifoColorsMap } from '../types';
-import { FIFO_COLORS_BY_MONTH, resolveFifoColor, getFifoColorForDate, normalizeFifoColor } from '../data';
+import { FIFO_COLORS_BY_MONTH, resolveFifoColor, getFifoColorForDate, normalizeFifoColor, formatRrNumber, formatPoNumber, formatDrNumber, formatSiNumber } from '../data';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAuthoritativeId } from '../lib/idGenerator';
@@ -1349,7 +1349,7 @@ export default function ReceivingModule({
                         type="text"
                         placeholder="RR-2026-XXXX"
                         value={rrNumber}
-                        onChange={e => setRrNumber(e.target.value)}
+                        onChange={e => setRrNumber(formatRrNumber(e.target.value))}
                         className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono focus:ring-1 focus:ring-indigo-500 focus:outline-none"
                       />
                     </div>
@@ -1361,7 +1361,7 @@ export default function ReceivingModule({
                         type="text"
                         placeholder="PO-2026-XXXX"
                         value={poNumber}
-                        onChange={e => setPoNumber(e.target.value)}
+                        onChange={e => setPoNumber(formatPoNumber(e.target.value))}
                         className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono focus:ring-1 focus:ring-indigo-500 focus:outline-none"
                       />
                     </div>
@@ -1373,7 +1373,7 @@ export default function ReceivingModule({
                         type="text"
                         placeholder="DR-XXXXX"
                         value={drNumber}
-                        onChange={e => setDrNumber(e.target.value)}
+                        onChange={e => setDrNumber(formatDrNumber(e.target.value))}
                         className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono focus:ring-1 focus:ring-indigo-500 focus:outline-none"
                       />
                     </div>
@@ -1385,7 +1385,7 @@ export default function ReceivingModule({
                         type="text"
                         placeholder="SI-XXXXX"
                         value={siNumber}
-                        onChange={e => setSiNumber(e.target.value)}
+                        onChange={e => setSiNumber(formatSiNumber(e.target.value))}
                         className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono focus:ring-1 focus:ring-indigo-500 focus:outline-none"
                       />
                     </div>
@@ -2984,7 +2984,7 @@ export default function ReceivingModule({
                   <input 
                     type="text" 
                     value={editingReceiving.poNumber || ''}
-                    onChange={e => setEditingReceiving({ ...editingReceiving, poNumber: e.target.value })}
+                    onChange={e => setEditingReceiving({ ...editingReceiving, poNumber: formatPoNumber(e.target.value) })}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
                   />
                 </div>
@@ -2994,7 +2994,7 @@ export default function ReceivingModule({
                   <input 
                     type="text" 
                     value={editingReceiving.drNumber || ''}
-                    onChange={e => setEditingReceiving({ ...editingReceiving, drNumber: e.target.value })}
+                    onChange={e => setEditingReceiving({ ...editingReceiving, drNumber: formatDrNumber(e.target.value) })}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
                   />
                 </div>
@@ -3004,7 +3004,7 @@ export default function ReceivingModule({
                   <input 
                     type="text" 
                     value={editingReceiving.siNumber || ''}
-                    onChange={e => setEditingReceiving({ ...editingReceiving, siNumber: e.target.value })}
+                    onChange={e => setEditingReceiving({ ...editingReceiving, siNumber: formatSiNumber(e.target.value) })}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
                   />
                 </div>

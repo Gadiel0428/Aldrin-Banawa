@@ -17,6 +17,7 @@ import {
   FolderOpen
 } from 'lucide-react';
 import { getApiBaseUrl } from '../config/serverConfig';
+import { getAuthHeaders, getAuthToken } from '../lib/centralApi';
 
 interface BackupItem {
   filename: string;
@@ -70,7 +71,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
     try {
       const res = await fetch(`${addressTried}/api/admin/backups`, {
         cache: 'no-store',
-        headers: { 'Accept': 'application/json' }
+        headers: getAuthHeaders({ 'Accept': 'application/json' })
       });
       if (res.ok) {
         const data = await res.json();
@@ -109,11 +110,11 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
       const baseUrl = getApiBaseUrl();
       const res = await fetch(`${baseUrl}/api/admin/backups/create`, {
         method: 'POST',
-        headers: { 
+        headers: getAuthHeaders({ 
           'Content-Type': 'application/json',
           'x-user-employee-id': 'JPMP-002',
           'x-user-pin': adminPin
-        },
+        }),
         body: JSON.stringify({
           author: currentUser || 'SUPER_ADMIN',
           employeeId: 'JPMP-002',
@@ -148,11 +149,11 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
       const baseUrl = getApiBaseUrl();
       const res = await fetch(`${baseUrl}/api/admin/backups/restore`, {
         method: 'POST',
-        headers: { 
+        headers: getAuthHeaders({ 
           'Content-Type': 'application/json',
           'x-user-employee-id': 'JPMP-002',
           'x-user-pin': adminPin
-        },
+        }),
         body: JSON.stringify({
           filename: backupToRestore.filename,
           confirmed: true,
@@ -183,7 +184,9 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
 
   const handleDownload = (filename: string) => {
     const baseUrl = getApiBaseUrl();
-    window.location.href = `${baseUrl}/api/admin/backups/download/${encodeURIComponent(filename)}`;
+    const token = getAuthToken();
+    const query = token ? `?token=${encodeURIComponent(token)}` : '';
+    window.location.href = `${baseUrl}/api/admin/backups/download/${encodeURIComponent(filename)}${query}`;
   };
 
   if (!isOpen) return null;

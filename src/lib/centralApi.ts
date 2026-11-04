@@ -22,6 +22,38 @@ export function isAccountPinCompromised(account?: Partial<RegisteredAccount> | n
   return pin === '1234';
 }
 
+export const AUTH_TOKEN_STORAGE_KEY = 'juwei_wms_authToken';
+
+export function getAuthToken(): string | null {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      return localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+    }
+  } catch {}
+  return null;
+}
+
+export function setAuthToken(token: string | null): void {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      if (token) {
+        localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+      } else {
+        localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+      }
+    }
+  } catch {}
+}
+
+export function getAuthHeaders(extraHeaders: Record<string, string> = {}): Record<string, string> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = { ...extraHeaders };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
 export interface CentralDbSnapshot {
   status: string;
   revision: number;
@@ -53,11 +85,11 @@ export async function fetchCentralDatabaseSnapshot(): Promise<CentralDbSnapshot 
   try {
     const baseUrl = getApiBaseUrl();
     const res = await fetch(`${baseUrl}/api/sync`, {
-      headers: {
+      headers: getAuthHeaders({
         'Accept': 'application/json',
         'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Pragma': 'no-cache',
-      },
+      }),
     });
     if (!res.ok) {
       console.warn(`Central DB snapshot request failed with status: ${res.status}`);
@@ -75,11 +107,12 @@ export async function fetchCentralDatabaseSnapshot(): Promise<CentralDbSnapshot 
 
 /**
  * Verify account credentials and PIN against the central database.
+ * On success, stores the server-issued random session token in localStorage.
  */
 export async function verifyCentralCredentials(
   identifier: string,
   pin: string
-): Promise<RegisteredAccount | null> {
+): Promise<(RegisteredAccount & { token?: string }) | null> {
   const cleanInput = String(identifier || '').trim();
   const enteredPin = String(pin || '').trim();
   if (!cleanInput || !enteredPin) return null;
@@ -94,11 +127,71 @@ export async function verifyCentralCredentials(
     if (res.ok) {
       const body = await res.json();
       if (body.success && body.user) {
-        return body.user as RegisteredAccount;
+        if (body.token) {
+          setAuthToken(body.token);
+        }
+        return {
+          ...body.user,
+          token: body.token
+        } as RegisteredAccount & { token?: string };
       }
     }
   } catch (apiErr) {
     console.warn('Central API verify account credentials error:', apiErr);
+  }
+  return null;
+}
+
+/**
+ * Validate current session token with the central database.
+ */
+export async function fetchSessionAccount(): Promise<{ success: boolean; user?: RegisteredAccount; token?: string } | null> {
+  const token = getAuthToken();
+  if (!token) return null;
+  try {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/accounts/session`, {
+      headers: getAuthHeaders({
+        'Accept': 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate'
+      })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.user) {
+        return data;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to validate session account:', e);
+  }
+  return null;
+}
+
+/**
+ * Resume or issue a persistent session token for an authenticated operator ID.
+ */
+export async function resumeSessionAccount(employeeId?: string): Promise<{ success: boolean; user?: RegisteredAccount; token?: string } | null> {
+  const empId = employeeId || (typeof localStorage !== 'undefined' ? localStorage.getItem('juwei_wms_employeeId') : null);
+  const token = getAuthToken();
+  if (!empId && !token) return null;
+
+  try {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/accounts/resume-session`, {
+      method: 'POST',
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ employeeId: empId, token })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.token) {
+        setAuthToken(data.token);
+        return data;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to resume session:', e);
   }
   return null;
 }
@@ -114,7 +207,7 @@ export async function registerCentralAccount(
     const baseUrl = getApiBaseUrl();
     const res = await fetch(`${baseUrl}/api/accounts/register`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(account),
     });
     const data = await res.json();
@@ -135,7 +228,7 @@ export async function updateCentralAccount(
     const baseUrl = getApiBaseUrl();
     const res = await fetch(`${baseUrl}/api/accounts/update`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ oldEmployeeId, updatedUser: account }),
     });
     const data = await res.json();
@@ -159,11 +252,11 @@ export async function updateCentralPin(
     const baseUrl = getApiBaseUrl();
     const res = await fetch(`${baseUrl}/api/accounts/update-pin`, {
       method: 'POST',
-      headers: { 
+      headers: getAuthHeaders({ 
         'Content-Type': 'application/json',
         'x-user-employee-id': requesterEmployeeId || 'JPMP-002',
         ...(options?.adminPin ? { 'x-user-pin': options.adminPin } : {})
-      },
+      }),
       body: JSON.stringify({
         employeeId,
         currentPin,
@@ -192,7 +285,7 @@ export async function deleteCentralAccount(
     const baseUrl = getApiBaseUrl();
     const res = await fetch(`${baseUrl}/api/accounts/delete`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ employeeId, requesterId }),
     });
     const data = await res.json();
@@ -212,11 +305,11 @@ export async function clearAllAccountsExceptSuperAdmin(
     const baseUrl = getApiBaseUrl();
     const res = await fetch(`${baseUrl}/api/accounts/clear-all-except-super-admin`, {
       method: 'POST',
-      headers: { 
+      headers: getAuthHeaders({ 
         'Content-Type': 'application/json',
         'x-user-employee-id': 'JPMP-002',
         'x-user-pin': superAdminPin
-      },
+      }),
       body: JSON.stringify({ 
         employeeId: 'JPMP-002',
         requesterEmployeeId: 'JPMP-002',
@@ -242,7 +335,7 @@ export async function upsertCentralRecord(
     const baseUrl = getApiBaseUrl();
     const res = await fetch(`${baseUrl}/api/records/upsert`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ collection, record }),
     });
     const data = await res.json();
@@ -263,7 +356,7 @@ export async function deleteCentralRecord(
     const baseUrl = getApiBaseUrl();
     const res = await fetch(`${baseUrl}/api/records/delete`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ collection, id }),
     });
     const data = await res.json();
@@ -288,7 +381,7 @@ export async function performCentralGlobalReset(payload: {
     const baseUrl = getApiBaseUrl();
     const res = await fetch(`${baseUrl}/api/reset-everything`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     });
     const data = await res.json();
@@ -307,7 +400,7 @@ export async function initializeFreshInstallation(payload: {
     const baseUrl = getApiBaseUrl();
     const res = await fetch(`${baseUrl}/api/terminal/fresh-install`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     });
     return await res.json();
@@ -319,7 +412,9 @@ export async function initializeFreshInstallation(payload: {
 export async function fetchAuthorizedDevices(): Promise<any> {
   try {
     const baseUrl = getApiBaseUrl();
-    const res = await fetch(`${baseUrl}/api/devices/authorized`);
+    const res = await fetch(`${baseUrl}/api/devices/authorized`, {
+      headers: getAuthHeaders({ 'Accept': 'application/json' })
+    });
     return await res.json();
   } catch (err: any) {
     return { success: false, devices: [] };
@@ -336,7 +431,7 @@ export async function authorizeDevice(payload: {
     const baseUrl = getApiBaseUrl();
     const res = await fetch(`${baseUrl}/api/devices/authorize`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     });
     return await res.json();
@@ -354,7 +449,7 @@ export async function revokeDevice(payload: {
     const baseUrl = getApiBaseUrl();
     const res = await fetch(`${baseUrl}/api/devices/revoke`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     });
     return await res.json();

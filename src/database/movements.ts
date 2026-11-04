@@ -5,6 +5,7 @@
 
 import { CreateStockMovementInput, StockMovement, StockMovementResult } from '../types/movement';
 import { getApiBaseUrl } from '../config/serverConfig';
+import { getAuthHeaders } from '../lib/centralApi';
 
 // Helper to get or generate a persistent device ID
 export function getDeviceId(): string {
@@ -41,7 +42,7 @@ export async function createStockMovement(input: CreateStockMovementInput): Prom
     const baseUrl = getApiBaseUrl();
     const resp = await fetch(`${baseUrl}/api/stock-movements`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         ...input,
         delta,
