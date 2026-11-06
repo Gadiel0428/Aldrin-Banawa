@@ -179,10 +179,7 @@ export function getApiBaseUrl(): string {
   return getCentralServerUrl();
 }
 
-/**
- * Returns the full WebSocket URL for real-time channel subscription
- */
-export function getCentralWebSocketUrl(accountId?: string, warehouseId?: string, token?: string): string {
+export function getCentralWebSocketUrl(accountId?: string, warehouseId?: string, sessionToken?: string): string {
   const serverUrl = getCentralServerUrl();
   const cleanHost = sanitizeServerHost(serverUrl) || DEFAULT_PRODUCTION_SERVER_HOST;
   const isHttps = isSecureHost(cleanHost, serverUrl);
@@ -190,11 +187,8 @@ export function getCentralWebSocketUrl(accountId?: string, warehouseId?: string,
   
   const acc = accountId || (typeof localStorage !== 'undefined' ? localStorage.getItem('juwei_wms_account_id') : null) || 'ACC-JUWEI';
   const wh = warehouseId || (typeof localStorage !== 'undefined' ? localStorage.getItem('juwei_wms_warehouse_id') : null) || 'WH-MAIN';
-  const authToken = token || (typeof localStorage !== 'undefined' ? localStorage.getItem('juwei_wms_authToken') : null) || '';
-  
-  let url = `${wsProto}//${cleanHost}/ws?accountId=${encodeURIComponent(acc)}&warehouseId=${encodeURIComponent(wh)}`;
-  if (authToken) {
-    url += `&token=${encodeURIComponent(authToken)}`;
-  }
-  return url;
+  const token = sessionToken || (typeof localStorage !== 'undefined' ? localStorage.getItem('juwei_wms_session_token') : null) || '';
+  const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+
+  return `${wsProto}//${cleanHost}/ws?accountId=${encodeURIComponent(acc)}&warehouseId=${encodeURIComponent(wh)}${tokenParam}`;
 }

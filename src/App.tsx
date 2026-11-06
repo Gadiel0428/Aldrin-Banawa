@@ -2258,7 +2258,7 @@ export default function App() {
       try {
         const res = await fetch(`${baseUrl}/api/terminal/fresh-install`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({
             stationId,
             installId,
@@ -4062,38 +4062,49 @@ export default function App() {
     }
 
     const enteredPin = (loginPin || '').trim();
+    if (!rawInput || !enteredPin) {
+      setLoginError('PLEASE ENTER OPERATIONAL ID AND PIN CODE.');
+      return;
+    }
 
-    // Match by employeeId, raw employeeId, username, or phone number in local state
-    let foundUser = registeredUsers.find(
-      (u) => {
-        const uEmpId = (u.employeeId || '').toUpperCase();
-        const uUsername = (u.username || '').toUpperCase();
-        const uPhone = (u.phoneNumber || '').replace(/\D/g, '');
-        const inputPhone = rawInput.replace(/\D/g, '');
+    setIsLoggingIn(true);
+    let foundUser: (RegisteredAccount & { token?: string }) | null = null;
 
-        const idMatches = uEmpId === searchId || uEmpId === rawInput.toUpperCase() || uUsername === rawInput.toUpperCase() || (inputPhone.length >= 10 && uPhone === inputPhone);
-        const pinMatches = Boolean(u.pin && u.pin.trim() === enteredPin);
-
-        return idMatches && pinMatches;
+    // 1. Authoritatively verify with server to issue cryptographic session token
+    try {
+      const authoritativeUser = await verifyCentralCredentials(rawInput, enteredPin);
+      if (authoritativeUser) {
+        foundUser = authoritativeUser;
+        setRegisteredUsers(prev => upsertUserInState(prev, authoritativeUser));
       }
-    );
+    } catch (authErr) {
+      console.warn("Authoritative login verification error:", authErr);
+    }
 
-    // If not found in local memory or PIN was updated on another machine, verify live against central database
-    if (!foundUser && enteredPin) {
-      setIsLoggingIn(true);
-      try {
-        const authoritativeUser = await verifyCentralCredentials(rawInput, enteredPin);
-        if (authoritativeUser) {
-          foundUser = authoritativeUser;
-          setRegisteredUsers(prev => upsertUserInState(prev, authoritativeUser));
+    // 2. Fallback to local memory if offline/unreachable
+    if (!foundUser) {
+      const localMatch = registeredUsers.find(
+        (u) => {
+          const uEmpId = (u.employeeId || '').toUpperCase();
+          const uUsername = (u.username || '').toUpperCase();
+          const uPhone = (u.phoneNumber || '').replace(/\D/g, '');
+          const inputPhone = rawInput.replace(/\D/g, '');
+
+          const idMatches = uEmpId === searchId || uEmpId === rawInput.toUpperCase() || uUsername === rawInput.toUpperCase() || (inputPhone.length >= 10 && uPhone === inputPhone);
+          const pinMatches = Boolean(u.pin && u.pin.trim() === enteredPin);
+
+          return idMatches && pinMatches;
         }
-      } catch (authErr) {
-        console.warn("Authoritative login verification error:", authErr);
+      );
+
+      if (localMatch) {
+        foundUser = localMatch;
+        // Asynchronously request session token
+        resumeSessionAccount(localMatch.employeeId).catch(() => {});
       }
     }
 
     if (foundUser) {
-      setIsLoggingIn(true);
       const empIdToRemember = (foundUser.employeeId || loginEmployeeId).trim().toUpperCase();
       if (rememberLogin) {
         try {
@@ -4150,33 +4161,56 @@ export default function App() {
              (u.employeeId || '').toUpperCase() === searchEmpId.replace(/^JPMP-/, '')
     );
 
-    if (foundUser) {
-      if (!searchPin || (foundUser.pin && foundUser.pin.trim() !== searchPin)) {
-        // Check central database in case PIN was updated from another terminal
-        if (searchPin) {
-          verifyCentralCredentials(searchEmpId, searchPin).then(verified => {
-            if (verified) {
-              setRegisteredUsers(prev => upsertUserInState(prev, verified));
-              setShowLoginQrScanner(false);
-              setLoginEmployeeId('');
-              setLoginPin('');
-              setLoginError('');
-              setIsLoggingIn(true);
-              setTimeout(() => {
-                handleLogin(verified);
-                setIsLoggingIn(false);
-              }, 300);
-              return;
-            }
-            setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR ${foundUser.username || ''} (${foundUser.employeeId || ''}). ONLY REGISTERED PIN IS AUTHORIZED.`);
-          }).catch(() => {
-            setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR ${foundUser.username || ''} (${foundUser.employeeId || ''}). ONLY REGISTERED PIN IS AUTHORIZED.`);
-          });
+    if (searchPin) {
+      // Authoritatively verify with server to issue cryptographic session token
+      verifyCentralCredentials(searchEmpId, searchPin).then(verified => {
+        if (verified) {
+          setRegisteredUsers(prev => upsertUserInState(prev, verified));
+          setShowLoginQrScanner(false);
+          setLoginEmployeeId('');
+          setLoginPin('');
+          setLoginError('');
+          setIsLoggingIn(true);
+          setTimeout(() => {
+            handleLogin(verified);
+            setIsLoggingIn(false);
+          }, 300);
           return;
         }
-        setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR ${foundUser.username || ''} (${foundUser.employeeId || ''}). ONLY REGISTERED PIN IS AUTHORIZED.`);
-        return;
-      }
+        if (foundUser && foundUser.pin && foundUser.pin.trim() === searchPin) {
+          setShowLoginQrScanner(false);
+          setLoginEmployeeId('');
+          setLoginPin('');
+          setLoginError('');
+          setIsLoggingIn(true);
+          resumeSessionAccount(foundUser.employeeId).catch(() => {});
+          setTimeout(() => {
+            handleLogin(foundUser);
+            setIsLoggingIn(false);
+          }, 300);
+          return;
+        }
+        setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR ${foundUser?.username || searchEmpId}. ONLY REGISTERED PIN IS AUTHORIZED.`);
+      }).catch(() => {
+        if (foundUser && foundUser.pin && foundUser.pin.trim() === searchPin) {
+          setShowLoginQrScanner(false);
+          setLoginEmployeeId('');
+          setLoginPin('');
+          setLoginError('');
+          setIsLoggingIn(true);
+          resumeSessionAccount(foundUser.employeeId).catch(() => {});
+          setTimeout(() => {
+            handleLogin(foundUser);
+            setIsLoggingIn(false);
+          }, 300);
+          return;
+        }
+        setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR ${foundUser?.username || searchEmpId}. ONLY REGISTERED PIN IS AUTHORIZED.`);
+      });
+      return;
+    }
+
+    if (foundUser) {
       setShowLoginQrScanner(false);
       setLoginEmployeeId('');
       setLoginPin('');
@@ -4187,28 +4221,6 @@ export default function App() {
         setIsLoggingIn(false);
       }, 300);
     } else {
-      // Not yet in local memory, check central database
-      if (searchPin) {
-        verifyCentralCredentials(searchEmpId, searchPin).then(verified => {
-          if (verified) {
-            setRegisteredUsers(prev => upsertUserInState(prev, verified));
-            setShowLoginQrScanner(false);
-            setLoginEmployeeId('');
-            setLoginPin('');
-            setLoginError('');
-            setIsLoggingIn(true);
-            setTimeout(() => {
-              handleLogin(verified);
-              setIsLoggingIn(false);
-            }, 300);
-            return;
-          }
-          setLoginError(`OPERATOR ID "${searchEmpId}" IS NOT REGISTERED IN JPMP DIRECTORY.`);
-        }).catch(() => {
-          setLoginError(`OPERATOR ID "${searchEmpId}" IS NOT REGISTERED IN JPMP DIRECTORY.`);
-        });
-        return;
-      }
       setLoginError(`OPERATOR ID "${searchEmpId}" IS NOT REGISTERED IN JPMP DIRECTORY.`);
     }
   };
@@ -4313,6 +4325,14 @@ export default function App() {
         }));
       } catch (e) {}
     }
+
+    try {
+      const baseUrl = getApiBaseUrl();
+      fetch(`${baseUrl}/api/logout`, {
+        method: 'POST',
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' })
+      }).catch(() => {});
+    } catch (e) {}
 
     setAuthToken(null);
     setCurrentUser('');

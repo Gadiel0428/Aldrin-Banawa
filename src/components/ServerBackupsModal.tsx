@@ -17,7 +17,7 @@ import {
   FolderOpen
 } from 'lucide-react';
 import { getApiBaseUrl } from '../config/serverConfig';
-import { getAuthHeaders, getAuthToken } from '../lib/centralApi';
+import { getAuthHeaders, getStoredSessionToken } from '../lib/centralApi';
 
 interface BackupItem {
   filename: string;
@@ -111,9 +111,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
       const res = await fetch(`${baseUrl}/api/admin/backups/create`, {
         method: 'POST',
         headers: getAuthHeaders({ 
-          'Content-Type': 'application/json',
-          'x-user-employee-id': 'JPMP-002',
-          'x-user-pin': adminPin
+          'Content-Type': 'application/json'
         }),
         body: JSON.stringify({
           author: currentUser || 'SUPER_ADMIN',
@@ -150,9 +148,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
       const res = await fetch(`${baseUrl}/api/admin/backups/restore`, {
         method: 'POST',
         headers: getAuthHeaders({ 
-          'Content-Type': 'application/json',
-          'x-user-employee-id': 'JPMP-002',
-          'x-user-pin': adminPin
+          'Content-Type': 'application/json'
         }),
         body: JSON.stringify({
           filename: backupToRestore.filename,
@@ -184,9 +180,9 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
 
   const handleDownload = (filename: string) => {
     const baseUrl = getApiBaseUrl();
-    const token = getAuthToken();
-    const query = token ? `?token=${encodeURIComponent(token)}` : '';
-    window.location.href = `${baseUrl}/api/admin/backups/download/${encodeURIComponent(filename)}${query}`;
+    const token = getStoredSessionToken();
+    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+    window.location.href = `${baseUrl}/api/admin/backups/download/${encodeURIComponent(filename)}${tokenParam}`;
   };
 
   if (!isOpen) return null;

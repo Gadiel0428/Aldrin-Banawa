@@ -156,6 +156,13 @@ export function initializeSchema(db: SqliteDatabase) {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+      token TEXT PRIMARY KEY,
+      employee_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      last_used_at TEXT NOT NULL
+    );
   `);
 }
 
@@ -681,4 +688,88 @@ export function checkpointAndClose(): void {
   activeDb = null;
   statements = null;
   dbCache.initialized = false;
+}
+
+export interface AuthSessionRecord {
+  token: string;
+  employee_id: string;
+  created_at: string;
+  last_used_at: string;
+}
+
+/**
+ * Save or update a session token in SQLite
+ */
+export function saveSessionToSqlite(token: string, employeeId: string): void {
+  if (!activeDb) return;
+  const now = new Date().toISOString();
+  try {
+    activeDb.prepare(`
+      INSERT INTO auth_sessions (token, employee_id, created_at, last_used_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(token) DO UPDATE SET
+        employee_id = excluded.employee_id,
+        last_used_at = excluded.last_used_at;
+    `).run(token, employeeId, now, now);
+  } catch (e) {
+    console.error("[SQLITE STORE] Failed to save session to SQLite:", e);
+  }
+}
+
+/**
+ * Delete a single session token from SQLite
+ */
+export function deleteSessionFromSqlite(token: string): void {
+  if (!activeDb) return;
+  try {
+    activeDb.prepare("DELETE FROM auth_sessions WHERE token = ?;").run(token);
+  } catch (e) {
+    console.error("[SQLITE STORE] Failed to delete session from SQLite:", e);
+  }
+}
+
+/**
+ * Delete all sessions belonging to a specific employee ID
+ */
+export function deleteSessionsByEmployeeIdFromSqlite(employeeId: string): void {
+  if (!activeDb) return;
+  try {
+    activeDb.prepare("DELETE FROM auth_sessions WHERE UPPER(TRIM(employee_id)) = UPPER(TRIM(?));").run(employeeId);
+  } catch (e) {
+    console.error("[SQLITE STORE] Failed to delete employee sessions from SQLite:", e);
+  }
+}
+
+/**
+ * Clear all sessions from SQLite
+ */
+export function deleteAllSessionsFromSqlite(): void {
+  if (!activeDb) return;
+  try {
+    activeDb.prepare("DELETE FROM auth_sessions;").run();
+  } catch (e) {
+    console.error("[SQLITE STORE] Failed to clear all sessions from SQLite:", e);
+  }
+}
+
+/**
+ * Load all stored sessions from SQLite into memory
+ */
+export function loadAllSessionsFromSqlite(): AuthSessionRecord[] {
+  if (!activeDb) return [];
+  try {
+    return activeDb.prepare("SELECT token, employee_id, created_at, last_used_at FROM auth_sessions;").all() as AuthSessionRecord[];
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Update session last_used_at timestamp in SQLite
+ */
+export function updateSessionLastUsedInSqlite(token: string): void {
+  if (!activeDb) return;
+  try {
+    activeDb.prepare("UPDATE auth_sessions SET last_used_at = ? WHERE token = ?;").run(new Date().toISOString(), token);
+  } catch (e) {}
 }

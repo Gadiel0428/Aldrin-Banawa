@@ -22,38 +22,6 @@ export function isAccountPinCompromised(account?: Partial<RegisteredAccount> | n
   return pin === '1234';
 }
 
-export const AUTH_TOKEN_STORAGE_KEY = 'juwei_wms_authToken';
-
-export function getAuthToken(): string | null {
-  try {
-    if (typeof localStorage !== 'undefined') {
-      return localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
-    }
-  } catch {}
-  return null;
-}
-
-export function setAuthToken(token: string | null): void {
-  try {
-    if (typeof localStorage !== 'undefined') {
-      if (token) {
-        localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
-      } else {
-        localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
-      }
-    }
-  } catch {}
-}
-
-export function getAuthHeaders(extraHeaders: Record<string, string> = {}): Record<string, string> {
-  const token = getAuthToken();
-  const headers: Record<string, string> = { ...extraHeaders };
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-  return headers;
-}
-
 export interface CentralDbSnapshot {
   status: string;
   revision: number;
@@ -75,6 +43,46 @@ export interface CentralDbSnapshot {
     chatMessages: any[];
     stockMovements?: any[];
   };
+}
+
+/**
+ * Fetch authoritative central database snapshot via HTTP REST.
+export function getStoredSessionToken(): string {
+  try {
+    return localStorage.getItem('juwei_wms_session_token') || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+export function getAuthHeaders(extraHeaders: Record<string, string> = {}): Record<string, string> {
+  const token = getStoredSessionToken();
+  const headers: Record<string, string> = { ...extraHeaders };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+/**
+ * Verify active session token with central server and fetch authoritative profile & permission.
+ */
+export async function checkCentralSession(): Promise<{ valid: boolean; user?: RegisteredAccount; permission?: string } | null> {
+  const token = getStoredSessionToken();
+  if (!token) return { valid: false };
+  try {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/accounts/session`, {
+      headers: getAuthHeaders({ 'Accept': 'application/json' })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data;
+    }
+    return { valid: false };
+  } catch (err) {
+    return null; // Network error or server rebooting
+  }
 }
 
 /**
@@ -105,14 +113,19 @@ export async function fetchCentralDatabaseSnapshot(): Promise<CentralDbSnapshot 
   return null;
 }
 
+export interface VerifyCredentialsResult {
+  user: RegisteredAccount;
+  token: string;
+}
+
 /**
  * Verify account credentials and PIN against the central database.
- * On success, stores the server-issued random session token in localStorage.
+ * Returns authoritative user profile and cryptographic session token.
  */
 export async function verifyCentralCredentials(
   identifier: string,
   pin: string
-): Promise<(RegisteredAccount & { token?: string }) | null> {
+): Promise<VerifyCredentialsResult | null> {
   const cleanInput = String(identifier || '').trim();
   const enteredPin = String(pin || '').trim();
   if (!cleanInput || !enteredPin) return null;
@@ -126,72 +139,15 @@ export async function verifyCentralCredentials(
     });
     if (res.ok) {
       const body = await res.json();
-      if (body.success && body.user) {
-        if (body.token) {
-          setAuthToken(body.token);
-        }
+      if (body.success && body.user && body.token) {
         return {
-          ...body.user,
-          token: body.token
-        } as RegisteredAccount & { token?: string };
+          user: body.user as RegisteredAccount,
+          token: body.token as string
+        };
       }
     }
   } catch (apiErr) {
     console.warn('Central API verify account credentials error:', apiErr);
-  }
-  return null;
-}
-
-/**
- * Validate current session token with the central database.
- */
-export async function fetchSessionAccount(): Promise<{ success: boolean; user?: RegisteredAccount; token?: string } | null> {
-  const token = getAuthToken();
-  if (!token) return null;
-  try {
-    const baseUrl = getApiBaseUrl();
-    const res = await fetch(`${baseUrl}/api/accounts/session`, {
-      headers: getAuthHeaders({
-        'Accept': 'application/json',
-        'Cache-Control': 'no-cache, no-store, must-revalidate'
-      })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.success && data.user) {
-        return data;
-      }
-    }
-  } catch (e) {
-    console.warn('Failed to validate session account:', e);
-  }
-  return null;
-}
-
-/**
- * Resume or issue a persistent session token for an authenticated operator ID.
- */
-export async function resumeSessionAccount(employeeId?: string): Promise<{ success: boolean; user?: RegisteredAccount; token?: string } | null> {
-  const empId = employeeId || (typeof localStorage !== 'undefined' ? localStorage.getItem('juwei_wms_employeeId') : null);
-  const token = getAuthToken();
-  if (!empId && !token) return null;
-
-  try {
-    const baseUrl = getApiBaseUrl();
-    const res = await fetch(`${baseUrl}/api/accounts/resume-session`, {
-      method: 'POST',
-      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ employeeId: empId, token })
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.success && data.token) {
-        setAuthToken(data.token);
-        return data;
-      }
-    }
-  } catch (e) {
-    console.warn('Failed to resume session:', e);
   }
   return null;
 }
