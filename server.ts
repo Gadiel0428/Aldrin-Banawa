@@ -475,15 +475,6 @@ async function startServer() {
     operationalRoles: string[];
     receivingCategories: string[];
     fifoColorsByMonth: Record<number, { name: string; colorClass: string; textClass: string; hex?: string }>;
-    sessionTokens: Record<string, {
-      token: string;
-      employeeId: string;
-      username: string;
-      role: string;
-      permission: string;
-      createdAt: string;
-      lastActive: string;
-    }>;
   } = {
     stocks: INITIAL_STOCK.map((item: any) => normalizeRecord(item)),
     receiving: INITIAL_RECEIVING.map((item: any) => normalizeRecord(item)),
@@ -499,7 +490,6 @@ async function startServer() {
     operationalRoles: [...DEFAULT_OPERATIONAL_ROLES],
     receivingCategories: [...DEFAULT_RECEIVING_CATEGORIES],
     fifoColorsByMonth: { ...DEFAULT_FIFO_COLORS_BY_MONTH },
-    sessionTokens: {},
   };
 
   /**
@@ -529,7 +519,6 @@ async function startServer() {
       operationalRoles: state.operationalRoles || [...DEFAULT_OPERATIONAL_ROLES],
       receivingCategories: state.receivingCategories || [...DEFAULT_RECEIVING_CATEGORIES],
       fifoColorsByMonth: state.fifoColorsByMonth || { ...DEFAULT_FIFO_COLORS_BY_MONTH },
-      sessionTokens: state.sessionTokens || {},
       authorizedDevices: Array.from(authorizedDevicesMap.values()),
       deletedRecordTombstones: Array.from(deletedRecordTombstones),
       deletedUserTombstones: Array.from(deletedUserTombstones),
@@ -549,127 +538,6 @@ async function startServer() {
       console.error("CRITICAL: Failed SQLite database commit to disk:", err);
       return false;
     }
-  }
-
-  /**
-   * Session Token Security Engine:
-   * Extracts Bearer token from HTTP Authorization header or URL query string
-   */
-  function extractBearerToken(req: express.Request | http.IncomingMessage | string | undefined | null): string {
-    if (!req) return '';
-    if (typeof req === 'string') return req.trim();
-    const headers = (req as any).headers || {};
-    const authHeader = (headers['authorization'] || headers['Authorization']) as string;
-    if (authHeader && authHeader.toLowerCase().startsWith('bearer ')) {
-      return authHeader.substring(7).trim();
-    }
-    // Check URL query parameters (e.g. For WebSocket handshake or backup download links)
-    if ('url' in req && req.url) {
-      try {
-        const parsed = new URL(req.url, 'http://127.0.0.1');
-        const qToken = parsed.searchParams.get('token') || parsed.searchParams.get('authToken') || parsed.searchParams.get('auth_token');
-        if (qToken) return qToken.trim();
-      } catch {}
-    }
-    return '';
-  }
-
-  /**
-   * Derives authenticated user and permissions solely from the database-persisted session token.
-   * Completely ignores client-sent x-user-permission, body.permission, and x-employee-id for authorization.
-   */
-  function getSessionUser(reqOrToken: express.Request | http.IncomingMessage | string | undefined | null): { user: ServerUser; tokenRecord: any } | null {
-    if (!reqOrToken) return null;
-    const token = typeof reqOrToken === 'string' ? reqOrToken.trim() : extractBearerToken(reqOrToken);
-    if (!token) return null;
-    if (!state.sessionTokens) {
-      state.sessionTokens = {};
-      return null;
-    }
-    const tokenRecord = state.sessionTokens[token];
-    if (!tokenRecord) return null;
-
-    const empId = (tokenRecord.employeeId || '').toUpperCase().trim();
-    const user = state.registeredUsers.find(u => (u.employeeId || '').toUpperCase().trim() === empId);
-    if (!user) {
-      // User account was deleted, remove stale token
-      delete state.sessionTokens[token];
-      commitDatabase();
-      return null;
-    }
-
-    // Keep token record synchronized with latest account properties
-    tokenRecord.lastActive = new Date().toISOString();
-    tokenRecord.permission = user.permission || 'LIMITED_ACCESS';
-    tokenRecord.role = user.role || 'WAREHOUSE CLERK';
-    tokenRecord.username = user.username || 'OPERATOR';
-
-    return { user, tokenRecord };
-  }
-
-  /**
-   * Issues cryptographically random session token and persists it synchronously to database
-   */
-  function issueSessionToken(user: ServerUser): string {
-    const token = crypto.randomBytes(32).toString('hex');
-    if (!state.sessionTokens) {
-      state.sessionTokens = {};
-    }
-    state.sessionTokens[token] = {
-      token,
-      employeeId: (user.employeeId || '').toUpperCase().trim(),
-      username: (user.username || '').toUpperCase().trim(),
-      role: (user.role || '').toUpperCase().trim(),
-      permission: user.permission || (user.employeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
-      createdAt: new Date().toISOString(),
-      lastActive: new Date().toISOString()
-    };
-    commitDatabase();
-    return token;
-  }
-
-  /**
-   * Central Route Authorization Guard:
-   * Enforces permissions strictly derived from verified database session tokens.
-   * Completely ignores client-sent x-user-permission, body.permission, and x-employee-id.
-   */
-  function requireSession(
-    req: express.Request, 
-    res: express.Response, 
-    requiredLevel: 'ANY_AUTHENTICATED' | 'WRITE_ALLOWED' | 'FULL_ACCESS'
-  ): ServerUser | null {
-    const sessionInfo = getSessionUser(req);
-    if (!sessionInfo) {
-      res.status(401).json({ 
-        success: false, 
-        error: "UNAUTHORIZED: Valid session token required. Please sign in with your credentials." 
-      });
-      return null;
-    }
-
-    const { user } = sessionInfo;
-    const isSuper = user.employeeId.toUpperCase().trim() === 'JPMP-002';
-    const permission = isSuper ? 'FULL_ACCESS' : (user.permission || 'LIMITED_ACCESS');
-
-    if (requiredLevel === 'FULL_ACCESS') {
-      if (permission !== 'FULL_ACCESS') {
-        res.status(403).json({ 
-          success: false, 
-          error: "PERMISSION DENIED: FULL_ACCESS required. LIMITED_ACCESS and VIEW_ONLY accounts cannot access administrative routes or master configurations." 
-        });
-        return null;
-      }
-    } else if (requiredLevel === 'WRITE_ALLOWED') {
-      if (permission === 'VIEW_ONLY') {
-        res.status(403).json({ 
-          success: false, 
-          error: "PERMISSION DENIED: Account has VIEW_ONLY privileges. Data modifications are not permitted." 
-        });
-        return null;
-      }
-    }
-
-    return user;
   }
 
   // =========================================================================
@@ -963,21 +831,9 @@ async function startServer() {
           if (parsed.fifoColorsByMonth && typeof parsed.fifoColorsByMonth === 'object') {
             state.fifoColorsByMonth = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...parsed.fifoColorsByMonth };
           }
-        } else if (key === 'sessionTokens') {
-          if (parsed.sessionTokens && typeof parsed.sessionTokens === 'object') {
-            state.sessionTokens = { ...parsed.sessionTokens };
-          }
         } else if (Array.isArray(parsed[key]) && (!(parsed.state && key in parsed.state))) {
           (state as any)[key] = parsed[key].map((rec: any) => normalizeRecord(rec));
         }
-      }
-      if (parsed.sessionTokens && typeof parsed.sessionTokens === 'object') {
-        state.sessionTokens = { ...parsed.sessionTokens };
-      } else if (parsed.state?.sessionTokens && typeof parsed.state.sessionTokens === 'object') {
-        state.sessionTokens = { ...parsed.state.sessionTokens };
-      }
-      if (!state.sessionTokens || typeof state.sessionTokens !== 'object') {
-        state.sessionTokens = {};
       }
       if (!Array.isArray(state.operationalRoles) || state.operationalRoles.length === 0) {
         state.operationalRoles = [...DEFAULT_OPERATIONAL_ROLES];
@@ -2126,11 +1982,6 @@ async function startServer() {
       return { success: false, status: 403, error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." };
     }
 
-    const isMaster = collection === 'registries' || collection === 'operationalRoles' || collection === 'receivingCategories' || collection === 'registeredUsers' || collection === 'fifoColorsByMonth';
-    if (isMaster && userPermission !== 'FULL_ACCESS') {
-      return { success: false, status: 403, error: "PERMISSION DENIED: FULL_ACCESS required to modify master data or configurations." };
-    }
-
     const serverTime = new Date().toISOString();
     const currentList: any[] = (state as any)[collection] || [];
     const recordId = String(record.id || record.record_id || `REC-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`);
@@ -2320,12 +2171,8 @@ async function startServer() {
       return { success: false, status: 400, error: "Invalid collection" };
     }
 
-    if (userPermission !== 'FULL_ACCESS') {
-      return { 
-        success: false, 
-        status: 403, 
-        error: "PERMISSION DENIED: Only FULL_ACCESS accounts can delete records. LIMITED_ACCESS and VIEW_ONLY accounts cannot delete records." 
-      };
+    if (userPermission === 'VIEW_ONLY') {
+      return { success: false, status: 403, error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." };
     }
 
     const recordId = String(id);
@@ -2636,33 +2483,15 @@ async function startServer() {
             const conn = connectionRegistry.get(connId);
             if (!conn) break;
 
-            // Extract session token from message payload or WebSocket handshake
-            // Completely ignore client-sent payload.permission, payload.role, payload.employeeId for authorization!
-            const clientToken = String(payload.token || payload.authToken || extractBearerToken(req) || '').trim();
-            const sessionInfo = getSessionUser(clientToken);
-
-            let employeeId = "";
-            let username = "GUEST OPERATOR";
-            let role = "OPERATOR";
-            let permission = "VIEW_ONLY";
-
-            if (sessionInfo) {
-              const u = sessionInfo.user;
-              employeeId = (u.employeeId || "").toUpperCase().trim();
-              username = (u.username || "OPERATOR").toUpperCase().trim();
-              role = (u.role || "WAREHOUSE OPERATOR").toUpperCase().trim();
-              permission = employeeId === 'JPMP-002' ? 'FULL_ACCESS' : (u.permission || 'LIMITED_ACCESS');
-            } else {
-              // Unauthenticated socket defaults to VIEW_ONLY privileges
-              permission = "VIEW_ONLY";
-              username = String(payload.username || "GUEST OPERATOR").trim().toUpperCase();
-            }
-
+            const employeeId = String(payload.employeeId || "").trim().toUpperCase();
+            const username = String(payload.username || (employeeId === 'JPMP-002' ? 'ALDRIN BANAWA' : 'OPERATOR')).trim().toUpperCase();
+            const role = String(payload.role || (employeeId === 'JPMP-002' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR')).trim().toUpperCase();
+            const permission = String(payload.permission || (employeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS')).trim();
             const activeView = String(payload.activeView || "dashboard").trim();
             const stationId = String(payload.stationId || "").trim();
             const deviceId = String(payload.device_id || payload.deviceId || conn.device_id).trim();
             const sessionId = String(payload.session_id || payload.sessionId || conn.session_id).trim();
-            const userId = employeeId ? `USR-${employeeId}` : (conn.user_id || 'ANONYMOUS');
+            const userId = String(payload.user_id || payload.userId || (employeeId ? `USR-${employeeId}` : conn.user_id)).trim();
             const devPlatform = String(payload.platform || conn.platform || "Web").trim();
             const devName = String(payload.deviceName || `${devPlatform} Terminal`).trim();
             const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || systemResetVersion;
@@ -2887,12 +2716,6 @@ async function startServer() {
           case "adjust_stock": {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
-
-            if (conn?.permission === 'VIEW_ONLY') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: Account has VIEW_ONLY privileges. Adjustments rejected.", status: 403 }));
-              break;
-            }
-
             const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
             const targetWh = normalizeGroupId(payload.warehouseId || conn?.warehouseId, "WH-MAIN");
             const { productId, delta, newQuantity, location, lotNumber, notes } = payload;
@@ -2975,12 +2798,6 @@ async function startServer() {
           case "transfer_location": {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
-
-            if (conn?.permission === 'VIEW_ONLY') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: Account has VIEW_ONLY privileges. Transfers rejected.", status: 403 }));
-              break;
-            }
-
             const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
             const sourceWh = normalizeGroupId(payload.fromWarehouseId || payload.warehouseId || conn?.warehouseId, "WH-MAIN");
             const targetWh = normalizeGroupId(payload.toWarehouseId || payload.warehouseId || conn?.warehouseId, "WH-MAIN");
@@ -3037,12 +2854,6 @@ async function startServer() {
           case "pick_pack_ship": {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
-
-            if (conn?.permission === 'VIEW_ONLY') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: Account has VIEW_ONLY privileges. Pick/Pack/Ship rejected.", status: 403 }));
-              break;
-            }
-
             const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
             const targetWh = normalizeGroupId(payload.warehouseId || conn?.warehouseId, "WH-MAIN");
             const { orderId, operationType, items, notes } = payload;
@@ -3219,13 +3030,7 @@ async function startServer() {
             }
 
             if (conn?.permission === 'VIEW_ONLY') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: Account has VIEW_ONLY privileges.", status: 403 }));
-              break;
-            }
-
-            const isMaster = col === 'registries' || col === 'operationalRoles' || col === 'receivingCategories' || col === 'registeredUsers' || col === 'fifoColorsByMonth';
-            if (isMaster && conn?.permission !== 'FULL_ACCESS') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: FULL_ACCESS required to modify master data or configurations.", status: 403 }));
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
               break;
             }
 
@@ -3419,24 +3224,9 @@ async function startServer() {
               break;
             }
 
-            if (conn?.permission === 'VIEW_ONLY') {
-              ws.send(JSON.stringify({
-                type: "ERROR",
-                error: "PERMISSION DENIED: Account has VIEW_ONLY privileges. Batch sync rejected.",
-                status: 403,
-                systemResetVersion
-              }));
-              break;
-            }
-
             const mutations = Array.isArray(payload.mutations) ? payload.mutations : [];
             let processed = 0;
             for (const m of mutations) {
-              const isMaster = m.collection === 'registries' || m.collection === 'operationalRoles' || m.collection === 'receivingCategories' || m.collection === 'registeredUsers' || m.collection === 'fifoColorsByMonth';
-              if (isMaster && conn?.permission !== 'FULL_ACCESS') {
-                continue; // Skip master data for non-FULL_ACCESS
-              }
-
               if (m.type === 'upsert' && m.collection && m.record) {
                 const res = executeRecordUpsert({
                   collection: m.collection,
@@ -3445,14 +3235,10 @@ async function startServer() {
                   employeeId: m.employeeId || conn?.employeeId,
                   user_id: m.user_id || conn?.user_id,
                   device_id: m.device_id || conn?.deviceId,
-                  reset_version: clientResetVersion,
-                  userPermission: conn?.permission
+                  reset_version: clientResetVersion
                 });
                 if (res.success) processed++;
               } else if (m.type === 'delete' && m.collection && (m.id || m.recordId)) {
-                if (conn?.permission !== 'FULL_ACCESS') {
-                  continue; // Skip deletes for non-FULL_ACCESS
-                }
                 const res = executeRecordDelete({
                   collection: m.collection,
                   id: String(m.id || m.recordId),
@@ -3460,8 +3246,7 @@ async function startServer() {
                   employeeId: m.employeeId || conn?.employeeId,
                   user_id: m.user_id || conn?.user_id,
                   device_id: m.device_id || conn?.deviceId,
-                  reset_version: clientResetVersion,
-                  userPermission: conn?.permission
+                  reset_version: clientResetVersion
                 });
                 if (res.success) processed++;
               }
@@ -3519,8 +3304,10 @@ async function startServer() {
             if (conn) {
               if (payload.activeView) conn.activeView = payload.activeView;
               if (payload.stationId) conn.stationId = payload.stationId;
-              // CRITICAL SECURITY FIX: Never accept permission or role escalation from client in presence_update!
-              // Account role and permissions must strictly come from the database session token.
+              if (payload.username) conn.username = payload.username.toUpperCase();
+              if (payload.employeeId) conn.employeeId = payload.employeeId.toUpperCase();
+              if (payload.role) conn.role = payload.role.toUpperCase();
+              if (payload.permission) conn.permission = payload.permission;
               conn.lastPing = Date.now();
               broadcastPresenceSync();
             }
@@ -3560,16 +3347,9 @@ async function startServer() {
           }
 
           case "chat": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (conn?.permission === 'VIEW_ONLY') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: Account has VIEW_ONLY privileges.", status: 403 }));
-              break;
-            }
-
             const newMsg: ChatMessage = {
               id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-              sender: conn?.username || payload.username || payload.sender || "Staff",
+              sender: payload.username || payload.sender || "Staff",
               text: String(payload.text || '').trim(),
               timestamp: new Date().toISOString(),
               isSystem: false
@@ -3586,13 +3366,6 @@ async function startServer() {
           }
 
           case "register_account": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (conn?.permission !== 'FULL_ACCESS') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: FULL_ACCESS required to register accounts.", status: 403 }));
-              break;
-            }
-
             const newUser = payload.user;
             if (!newUser || !newUser.employeeId) break;
             const cleanEmpId = String(newUser.employeeId).trim().toUpperCase();
@@ -3658,13 +3431,6 @@ async function startServer() {
           }
 
           case "update_account": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (conn?.permission !== 'FULL_ACCESS') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: FULL_ACCESS required to update accounts.", status: 403 }));
-              break;
-            }
-
             const updated = payload.user;
             if (!updated || !updated.employeeId) break;
             const cleanEmpId = String(updated.employeeId).trim().toUpperCase();
@@ -3712,13 +3478,6 @@ async function startServer() {
           }
 
           case "delete_account": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (conn?.permission !== 'FULL_ACCESS') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: FULL_ACCESS required to delete accounts.", status: 403 }));
-              break;
-            }
-
             const cleanId = String(payload.employeeId || '').trim().toUpperCase();
             if (!cleanId || cleanId === 'JPMP-002') break;
 
@@ -3742,12 +3501,6 @@ async function startServer() {
           }
 
           case "all_accounts_cleared": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (conn?.permission !== 'FULL_ACCESS') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: FULL_ACCESS required to clear accounts.", status: 403 }));
-              break;
-            }
             const superAdmin = state.registeredUsers.find(u => u.employeeId.toUpperCase().trim() === 'JPMP-002') || defaultSuperAdmin;
             state.registeredUsers.forEach(u => {
               if (u.employeeId.toUpperCase().trim() !== 'JPMP-002') {
@@ -3779,13 +3532,6 @@ async function startServer() {
 
           case "update_roles":
           case "manage_roles": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (conn?.permission !== 'FULL_ACCESS') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: FULL_ACCESS required to edit operational roles.", status: 403 }));
-              break;
-            }
-
             if (Array.isArray(payload.roles)) {
               const cleaned = Array.from(new Set<string>(payload.roles.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
               if (cleaned.length > 0) {
@@ -3810,13 +3556,6 @@ async function startServer() {
 
           case "update_categories":
           case "manage_categories": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (conn?.permission !== 'FULL_ACCESS') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: FULL_ACCESS required to edit receiving categories.", status: 403 }));
-              break;
-            }
-
             let recModified = false;
             let retModified = false;
             let stocksModified = false;
@@ -3918,13 +3657,6 @@ async function startServer() {
 
           case "update_fifo_colors":
           case "manage_fifo_colors": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (conn?.permission !== 'FULL_ACCESS') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: FULL_ACCESS required to edit FIFO colors.", status: 403 }));
-              break;
-            }
-
             if (payload.fifoColorsByMonth && typeof payload.fifoColorsByMonth === 'object') {
               state.fifoColorsByMonth = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...payload.fifoColorsByMonth };
               stateRevision++;
@@ -4363,9 +4095,8 @@ async function startServer() {
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
 
-    const sessionInfo = getSessionUser(req);
-    const clientEmpId = sessionInfo ? sessionInfo.user.employeeId : ((req.headers['x-employee-id'] as string) || '');
-    const clientPermission = sessionInfo ? (sessionInfo.user.permission || 'LIMITED_ACCESS') : ((req.headers['x-permission'] as string) || 'LIMITED_ACCESS');
+    const clientEmpId = (req.headers['x-employee-id'] as string) || '';
+    const clientPermission = (req.headers['x-permission'] as string) || '';
 
     res.json({
       status: "ok",
@@ -4386,20 +4117,7 @@ async function startServer() {
   // REST API: Sync collection (Batch upsert from client to central database)
   app.post("/api/sync", async (req, res) => {
     try {
-      const sessionInfo = getSessionUser(req);
-      if (!sessionInfo) {
-        return res.status(401).json({ error: "UNAUTHORIZED: Valid session token required. Please sign in." });
-      }
-
-      const authUser = sessionInfo.user;
-      const authEmpId = authUser.employeeId.toUpperCase().trim();
-      const authPermission = authEmpId === 'JPMP-002' ? 'FULL_ACCESS' : (authUser.permission || 'LIMITED_ACCESS');
-
-      if (authPermission === 'VIEW_ONLY') {
-        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges. Sync rejected." });
-      }
-
-      const { collection, data, reset_version, device_id, author, employeeId } = req.body;
+      const { collection, data, reset_version, author, employeeId, device_id } = req.body;
       const clientResetVersion = Number(reset_version || req.headers['x-reset-version']) || systemResetVersion;
       if (clientResetVersion < systemResetVersion) {
         return res.status(409).json({
@@ -4413,9 +4131,9 @@ async function startServer() {
         return res.status(400).json({ error: `Unknown or invalid collection: ${collection}` });
       }
 
-      const isMaster = collection === 'registries' || collection === 'operationalRoles' || collection === 'receivingCategories' || collection === 'registeredUsers' || collection === 'fifoColorsByMonth';
-      if (isMaster && authPermission !== 'FULL_ACCESS') {
-        return res.status(403).json({ error: "PERMISSION DENIED: Only FULL_ACCESS accounts can modify master data or configurations." });
+      const clientPermission = (req.headers['x-user-permission'] || req.body.permission || '').toString().toUpperCase();
+      if (clientPermission === 'VIEW_ONLY') {
+        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
       }
 
       if (collection === 'operationalRoles') {
@@ -4490,10 +4208,9 @@ async function startServer() {
 
       let modifiedCount = 0;
       const serverTime = new Date().toISOString();
-      const effectiveEmpId = employeeId || authUser?.employeeId || "";
-      const effectiveAuthor = author || authUser?.username || effectiveEmpId || "Operator";
+      const effectiveAuthor = author || employeeId || "Operator";
       const effectiveDevId = String(device_id || req.headers['x-device-id'] || 'DEV-CENTRAL').trim();
-      const effectiveUserId = String(req.body.user_id || (effectiveEmpId ? `USR-${effectiveEmpId}` : `USR-${effectiveAuthor}`)).trim();
+      const effectiveUserId = String(req.body.user_id || (employeeId ? `USR-${employeeId}` : `USR-${effectiveAuthor}`)).trim();
 
       for (const item of items) {
         if (!item) continue;
@@ -4584,21 +4301,7 @@ async function startServer() {
   // REST API: Batch Mutations (offline reconciliation for reconnecting devices)
   app.post("/api/sync/batch", async (req, res) => {
     try {
-      const sessionInfo = getSessionUser(req);
-      if (!sessionInfo) {
-        return res.status(401).json({ error: "UNAUTHORIZED: Valid session token required. Please sign in." });
-      }
-
-      const authUser = sessionInfo.user;
-      const authEmpId = authUser.employeeId.toUpperCase().trim();
-      const authPermission = authEmpId === 'JPMP-002' ? 'FULL_ACCESS' : (authUser.permission || 'LIMITED_ACCESS');
-
-      // VIEW_ONLY rejects writes
-      if (authPermission === 'VIEW_ONLY') {
-        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges. Batch sync rejected." });
-      }
-
-      const { mutations, reset_version, device_id } = req.body;
+      const { mutations, reset_version, author, employeeId, device_id } = req.body;
       const clientResetVersion = Number(reset_version || req.headers['x-reset-version']) || systemResetVersion;
       
       if (clientResetVersion < systemResetVersion) {
@@ -4612,44 +4315,32 @@ async function startServer() {
       const mutList = Array.isArray(mutations) ? mutations : [];
       let processed = 0;
       const effectiveDevId = String(device_id || req.headers['x-device-id'] || 'DEV-OFFLINE').trim();
-      const effectiveAuthor = authUser.username || authEmpId;
-      const effectiveUserId = `USR-${authEmpId}`;
+      const effectiveAuthor = author || employeeId || "Operator";
+      const effectiveUserId = String(req.body.user_id || (employeeId ? `USR-${employeeId}` : `USR-${effectiveAuthor}`)).trim();
 
       for (const m of mutList) {
-        // LIMITED_ACCESS cannot touch master data or configurations
-        const isMaster = m.collection === 'registries' || m.collection === 'operationalRoles' || m.collection === 'receivingCategories' || m.collection === 'registeredUsers' || m.collection === 'fifoColorsByMonth';
-        if (isMaster && authPermission !== 'FULL_ACCESS') {
-          continue; // Skip unauthorized master data mutation
-        }
-
         if (m.type === 'upsert' && m.collection && m.record) {
           const r = executeRecordUpsert({
             collection: m.collection,
             record: m.record,
-            author: effectiveAuthor,
-            employeeId: authEmpId,
-            user_id: effectiveUserId,
+            author: m.author || effectiveAuthor,
+            employeeId: m.employeeId || employeeId,
+            user_id: m.user_id || effectiveUserId,
             device_id: m.device_id || effectiveDevId,
             actionDesc: m.actionDesc,
-            reset_version: clientResetVersion,
-            userPermission: authPermission
+            reset_version: clientResetVersion
           });
           if (r.success) processed++;
         } else if (m.type === 'delete' && m.collection && (m.id || m.recordId)) {
-          // LIMITED_ACCESS cannot delete records!
-          if (authPermission !== 'FULL_ACCESS') {
-            continue; // Skip deletion for non-FULL_ACCESS accounts
-          }
           const r = executeRecordDelete({
             collection: m.collection,
             id: String(m.id || m.recordId),
-            author: effectiveAuthor,
-            employeeId: authEmpId,
-            user_id: effectiveUserId,
+            author: m.author || effectiveAuthor,
+            employeeId: m.employeeId || employeeId,
+            user_id: m.user_id || effectiveUserId,
             device_id: m.device_id || effectiveDevId,
             actionDesc: m.actionDesc,
-            reset_version: clientResetVersion,
-            userPermission: authPermission
+            reset_version: clientResetVersion
           });
           if (r.success) processed++;
         }
@@ -4867,7 +4558,7 @@ async function startServer() {
 
   interface AdminAuthAuditEntry {
     id: string;
-    outcome: 'SUCCESS' | 'INVALID_EMPLOYEE_ID' | 'INCORRECT_PIN' | 'SUPER_ADMIN_NOT_FOUND' | 'LOCKED_OUT' | 'UNAUTHORIZED_NO_SESSION';
+    outcome: 'SUCCESS' | 'INVALID_EMPLOYEE_ID' | 'INCORRECT_PIN' | 'SUPER_ADMIN_NOT_FOUND' | 'LOCKED_OUT';
     employeeId: string;
     ip: string;
     timestamp: string;
@@ -4890,7 +4581,7 @@ async function startServer() {
   }
 
   function logAdminAuthAudit(entryData: {
-    outcome: 'SUCCESS' | 'INVALID_EMPLOYEE_ID' | 'INCORRECT_PIN' | 'SUPER_ADMIN_NOT_FOUND' | 'LOCKED_OUT' | 'UNAUTHORIZED_NO_SESSION';
+    outcome: 'SUCCESS' | 'INVALID_EMPLOYEE_ID' | 'INCORRECT_PIN' | 'SUPER_ADMIN_NOT_FOUND' | 'LOCKED_OUT';
     employeeId: string;
     ip: string;
     details: string;
@@ -4938,6 +4629,23 @@ async function startServer() {
       '127.0.0.1'
     );
 
+    const bodyPin = (
+      req.body?.adminPin || 
+      req.body?.pin || 
+      req.headers['x-admin-pin'] || 
+      req.headers['x-user-pin'] || 
+      ''
+    ).toString().trim();
+
+    const bodyEmpId = (
+      req.body?.requesterEmployeeId || 
+      req.body?.employeeId || 
+      req.body?.authorId || 
+      req.headers['x-user-employee-id'] || 
+      req.headers['x-employee-id'] ||
+      ''
+    ).toString().trim().toUpperCase();
+
     const now = Date.now();
 
     // 1. Check if currently locked out due to 5 prior failed attempts
@@ -4945,7 +4653,7 @@ async function startServer() {
       const remainingSeconds = Math.ceil((superAdminLockedUntil - now) / 1000);
       logAdminAuthAudit({
         outcome: 'LOCKED_OUT',
-        employeeId: 'JPMP-002',
+        employeeId: bodyEmpId,
         ip: clientIp,
         details: `Super Admin authentication is LOCKED for ${remainingSeconds}s (${Math.ceil(remainingSeconds / 60)}m). 5 consecutive failed attempts previously reached.`,
         failedAttempts: superAdminFailedAttempts,
@@ -4961,31 +4669,8 @@ async function startServer() {
       superAdminLockedUntil = 0;
     }
 
-    // 3. Authenticate Session Token strictly against central SQLite database
-    // Completely ignore x-user-permission, body.permission, and x-employee-id for authorization!
-    const sessionInfo = getSessionUser(req);
-    if (!sessionInfo) {
-      superAdminFailedAttempts++;
-      if (superAdminFailedAttempts >= MAX_SUPER_ADMIN_FAILED_ATTEMPTS) {
-        superAdminLockedUntil = Date.now() + SUPER_ADMIN_LOCKOUT_MS;
-      }
-      logAdminAuthAudit({
-        outcome: 'UNAUTHORIZED_NO_SESSION',
-        employeeId: 'ANONYMOUS',
-        ip: clientIp,
-        details: `Rejected admin request: Valid session token required. Attempts: ${superAdminFailedAttempts}/${MAX_SUPER_ADMIN_FAILED_ATTEMPTS}.`,
-        failedAttempts: superAdminFailedAttempts,
-        lockedUntil: superAdminLockedUntil ? new Date(superAdminLockedUntil).toISOString() : undefined,
-        req
-      });
-      return false;
-    }
-
-    const { user } = sessionInfo;
-    const sessionEmpId = (user.employeeId || '').toUpperCase().trim();
-    const sessionPermission = (user.permission || '').trim();
-
-    if (sessionEmpId !== 'JPMP-002' || sessionPermission !== 'FULL_ACCESS') {
+    // 3. Employee ID MUST be EXACTLY 'JPMP-002' (reject empty or substring matches)
+    if (bodyEmpId !== 'JPMP-002') {
       superAdminFailedAttempts++;
       if (superAdminFailedAttempts >= MAX_SUPER_ADMIN_FAILED_ATTEMPTS) {
         superAdminLockedUntil = Date.now() + SUPER_ADMIN_LOCKOUT_MS;
@@ -4993,9 +4678,9 @@ async function startServer() {
       const remaining = Math.max(0, MAX_SUPER_ADMIN_FAILED_ATTEMPTS - superAdminFailedAttempts);
       logAdminAuthAudit({
         outcome: 'INVALID_EMPLOYEE_ID',
-        employeeId: sessionEmpId,
+        employeeId: bodyEmpId,
         ip: clientIp,
-        details: `Rejected non-Super Admin token belonging to '${sessionEmpId}' (${sessionPermission}). Attempts: ${superAdminFailedAttempts}/${MAX_SUPER_ADMIN_FAILED_ATTEMPTS}.${superAdminLockedUntil ? ' ADMIN AUTH NOW LOCKED FOR 5 MINUTES.' : ` ${remaining} attempts remaining.`}`,
+        details: `Rejected non-JPMP-002 employee ID: '${bodyEmpId}'. Attempts: ${superAdminFailedAttempts}/${MAX_SUPER_ADMIN_FAILED_ATTEMPTS}.${superAdminLockedUntil ? ' ADMIN AUTH NOW LOCKED FOR 5 MINUTES.' : ` ${remaining} attempts remaining.`}`,
         failedAttempts: superAdminFailedAttempts,
         lockedUntil: superAdminLockedUntil ? new Date(superAdminLockedUntil).toISOString() : undefined,
         req
@@ -5004,29 +4689,30 @@ async function startServer() {
     }
 
     // 4. Retrieve stored Super Admin PIN from central database
-    const storedPin = (user.pin || '').toString().trim();
-    if (!storedPin) {
+    const superAdmin = state.registeredUsers.find(
+      u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002'
+    );
+    const storedPin = (superAdmin?.pin || '').toString().trim();
+
+    if (!superAdmin || !storedPin) {
+      superAdminFailedAttempts++;
+      if (superAdminFailedAttempts >= MAX_SUPER_ADMIN_FAILED_ATTEMPTS) {
+        superAdminLockedUntil = Date.now() + SUPER_ADMIN_LOCKOUT_MS;
+      }
       logAdminAuthAudit({
         outcome: 'SUPER_ADMIN_NOT_FOUND',
-        employeeId: sessionEmpId,
+        employeeId: bodyEmpId,
         ip: clientIp,
-        details: `Super Admin account (JPMP-002) has no configured PIN in database.`,
+        details: `Super Admin account (JPMP-002) or stored PIN not found in database. Attempts: ${superAdminFailedAttempts}/${MAX_SUPER_ADMIN_FAILED_ATTEMPTS}.${superAdminLockedUntil ? ' ADMIN AUTH NOW LOCKED FOR 5 MINUTES.' : ''}`,
         failedAttempts: superAdminFailedAttempts,
+        lockedUntil: superAdminLockedUntil ? new Date(superAdminLockedUntil).toISOString() : undefined,
         req
       });
       return false;
     }
 
-    // 5. If confirmation PIN was provided in body/headers, verify it
-    const bodyPin = (
-      req.body?.adminPin || 
-      req.body?.pin || 
-      req.headers['x-admin-pin'] || 
-      req.headers['x-user-pin'] || 
-      ''
-    ).toString().trim();
-
-    if (bodyPin && bodyPin !== storedPin) {
+    // 5. Compare only against stored Super Admin PIN (NO '0423' fallback)
+    if (bodyPin !== storedPin) {
       superAdminFailedAttempts++;
       if (superAdminFailedAttempts >= MAX_SUPER_ADMIN_FAILED_ATTEMPTS) {
         superAdminLockedUntil = Date.now() + SUPER_ADMIN_LOCKOUT_MS;
@@ -5034,7 +4720,7 @@ async function startServer() {
       const remaining = Math.max(0, MAX_SUPER_ADMIN_FAILED_ATTEMPTS - superAdminFailedAttempts);
       logAdminAuthAudit({
         outcome: 'INCORRECT_PIN',
-        employeeId: sessionEmpId,
+        employeeId: bodyEmpId,
         ip: clientIp,
         details: `Incorrect PIN provided for Super Admin JPMP-002. Attempts: ${superAdminFailedAttempts}/${MAX_SUPER_ADMIN_FAILED_ATTEMPTS}.${superAdminLockedUntil ? ' ADMIN AUTH NOW LOCKED FOR 5 MINUTES.' : ` ${remaining} attempts remaining.`}`,
         failedAttempts: superAdminFailedAttempts,
@@ -5049,9 +4735,9 @@ async function startServer() {
     superAdminLockedUntil = 0;
     logAdminAuthAudit({
       outcome: 'SUCCESS',
-      employeeId: sessionEmpId,
+      employeeId: bodyEmpId,
       ip: clientIp,
-      details: `Super Admin JPMP-002 authorized successfully via database-verified session token.`,
+      details: `Super Admin JPMP-002 authorized successfully.`,
       failedAttempts: 0,
       req
     });
@@ -5211,12 +4897,10 @@ async function startServer() {
   // BACKUPS MANAGEMENT REST API (SUPER ADMIN ONLY)
   // =========================================================================
 
-  // 1. List existing backups and recent backup/restore audit log (SUPER ADMIN / FULL_ACCESS ONLY)
+  // 1. List existing backups and recent backup/restore audit log
   app.get("/api/admin/backups", (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     try {
-      if (!requireSession(req, res, 'FULL_ACCESS')) return;
-
       if (!fs.existsSync(BACKUPS_DIR)) {
         fs.mkdirSync(BACKUPS_DIR, { recursive: true });
       }
@@ -5298,11 +4982,9 @@ async function startServer() {
     }
   });
 
-  // 4. Download backup snapshot file (FULL_ACCESS ONLY)
+  // 4. Download backup snapshot file
   app.get("/api/admin/backups/download/:filename", (req, res) => {
     try {
-      if (!requireSession(req, res, 'FULL_ACCESS')) return;
-
       const filename = path.basename(req.params.filename);
       const filePath = path.join(BACKUPS_DIR, filename);
       if (!fs.existsSync(filePath)) {
@@ -5342,9 +5024,9 @@ async function startServer() {
     }
   });
 
-  // REST API: Verify Operator Credentials & PIN (Issues Persistent Database Session Token)
-  // Single Source of Truth: Central database verification + crypto.randomBytes token
-  app.post(["/api/accounts/verify", "/api/login"], async (req, res) => {
+  // REST API: Verify Operator Credentials & PIN
+  // Single Source of Truth: Central database verification
+  app.post("/api/accounts/verify", async (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     try {
       const { identifier, pin } = req.body;
@@ -5377,13 +5059,10 @@ async function startServer() {
         if (matchedUser.pin === '1234') {
           matchedUser.isPinCompromised = true;
         }
-
-        // Issue cryptographically random session token (crypto.randomBytes) persisted to disk
-        const sessionToken = issueSessionToken(matchedUser);
+        commitDatabase();
 
         return res.json({
           success: true,
-          token: sessionToken,
           user: matchedUser,
           isPinCompromised: matchedUser.pin === '1234' || !!matchedUser.isPinCompromised,
           systemResetVersion
@@ -5401,87 +5080,16 @@ async function startServer() {
     }
   });
 
-  // REST API: Validate Current Session Token
-  // Allows client to stay logged in across server restarts and page refreshes
-  app.get("/api/accounts/session", (req, res) => {
-    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    try {
-      const sessionInfo = getSessionUser(req);
-      if (!sessionInfo) {
-        return res.status(401).json({ success: false, error: "SESSION_EXPIRED: Invalid or expired session token." });
-      }
-      return res.json({
-        success: true,
-        user: sessionInfo.user,
-        token: sessionInfo.tokenRecord.token,
-        systemResetVersion
-      });
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message });
-    }
-  });
-
-  // REST API: Resume Session (with token or remembered employeeId)
-  app.post("/api/accounts/resume-session", (req, res) => {
-    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    try {
-      const token = String(req.body?.token || extractBearerToken(req) || '').trim();
-      if (token) {
-        const sessionInfo = getSessionUser(token);
-        if (sessionInfo) {
-          return res.json({
-            success: true,
-            user: sessionInfo.user,
-            token: sessionInfo.tokenRecord.token,
-            systemResetVersion
-          });
-        }
-      }
-
-      // If token expired or not provided, check if client has valid remembered credentials
-      return res.status(401).json({ success: false, error: "SESSION_REQUIRED: Please sign in." });
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message });
-    }
-  });
-
-  // REST API: Revoke Session Token (Logout)
-  app.post("/api/logout", (req, res) => {
-    try {
-      const token = extractBearerToken(req) || String(req.body?.token || '').trim();
-      if (token && state.sessionTokens && state.sessionTokens[token]) {
-        delete state.sessionTokens[token];
-        commitDatabase();
-      }
-      return res.json({ success: true, message: "Logged out successfully" });
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message });
-    }
-  });
-
   // REST API: Update Account PIN
   // Strict Security Rule: PIN changes only allowed via explicit Super Admin authorization or verified operator self-change.
   // Log every PIN change (who, which account, when).
-  // REST API: Update Account PIN
-  // Strict Security Rule: PIN changes only allowed via explicit Super Admin authorization (FULL_ACCESS) or verified operator self-change.
-  // Log every PIN change (who, which account, when).
   app.post("/api/accounts/update-pin", async (req, res) => {
     try {
-      const sessionInfo = getSessionUser(req);
-      if (!sessionInfo) {
-        return res.status(401).json({ error: "UNAUTHORIZED: Valid session token required. Please sign in." });
-      }
-
-      const { employeeId, currentPin, newPin, author, reason } = req.body;
+      const { employeeId, currentPin, newPin, requesterEmployeeId, author, reason } = req.body;
       const cleanEmpId = String(employeeId || '').trim().toUpperCase();
       const cleanNewPin = String(newPin || '').trim();
       const cleanCurrentPin = String(currentPin || '').trim();
-      
-      const authUser = sessionInfo.user;
-      const authEmpId = authUser.employeeId.toUpperCase().trim();
-      const authPermission = authEmpId === 'JPMP-002' ? 'FULL_ACCESS' : (authUser.permission || 'LIMITED_ACCESS');
-      const isSuper = authEmpId === 'JPMP-002' && authPermission === 'FULL_ACCESS';
-      const isSelf = authEmpId === cleanEmpId;
+      const requesterId = String(requesterEmployeeId || cleanEmpId).trim().toUpperCase();
 
       if (!cleanEmpId || !cleanNewPin) {
         return res.status(400).json({ error: "Operator ID and new PIN are required" });
@@ -5507,11 +5115,8 @@ async function startServer() {
         return res.status(404).json({ error: "Operator account not found in central database" });
       }
 
-      // Authorization Guard: Only Super Admin (FULL_ACCESS) or the account owner verifying their current PIN
-      if (!isSuper && !isSelf) {
-        return res.status(403).json({ error: "PERMISSION DENIED: FULL_ACCESS required to change other accounts' PINs." });
-      }
-
+      // Verification: must be confirmed Super Admin OR operator verifying their own current PIN
+      const isSuper = isAuthorizedSuperAdmin(req);
       if (!isSuper) {
         if (target.pin !== cleanCurrentPin) {
           console.warn(`[SECURITY ALERT] Unauthorized PIN change attempt for ${cleanEmpId} from IP ${req.ip}`);
@@ -5525,7 +5130,7 @@ async function startServer() {
       target.pin = cleanNewPin;
       target.isPinCompromised = false;
       target.pinChangedAt = new Date().toISOString();
-      target.pinChangedBy = authEmpId;
+      target.pinChangedBy = requesterId;
       target.version = (target.version || 1) + 1;
       target.updated_at = new Date().toISOString();
       target.reset_version = systemResetVersion;
@@ -5542,7 +5147,7 @@ async function startServer() {
         cleanEmpId,
         target.username,
         author || (isSuper ? 'Super Administrator (ALDRIN BANAWA)' : target.username),
-        authEmpId,
+        requesterId,
         reason || (previousWasCompromised ? 'Resolving compromised default PIN' : 'Explicit PIN update'),
         previousWasCompromised,
         req.ip
@@ -5552,7 +5157,7 @@ async function startServer() {
         type: "account_updated",
         account: target,
         user: target,
-        author: author || authEmpId,
+        author: author || requesterId,
         systemResetVersion
       });
 
@@ -5575,10 +5180,9 @@ async function startServer() {
     }
   });
 
-  // REST API: Get PIN Audit Logs (FULL_ACCESS Super Admin Only)
+  // REST API: Get PIN Audit Logs (Super Admin Only)
   app.get("/api/accounts/pin-audit-log", (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    if (!requireSession(req, res, 'FULL_ACCESS')) return;
     return res.json({
       success: true,
       count: pinAuditLogs.length,
@@ -5586,12 +5190,9 @@ async function startServer() {
     });
   });
 
-  // REST API: Register New Operator Account (FULL_ACCESS ONLY)
+  // REST API: Register New Operator Account
   app.post("/api/accounts/register", async (req, res) => {
     try {
-      const authUser = requireSession(req, res, 'FULL_ACCESS');
-      if (!authUser) return;
-
       const { employeeId, username, role, phoneNumber, permission, pin, registeredBy } = req.body;
       const cleanEmpId = String(employeeId || '').trim().toUpperCase();
       const cleanUsername = String(username || '').trim().toUpperCase();
@@ -5618,8 +5219,8 @@ async function startServer() {
         permission: String(permission || 'LIMITED_ACCESS').trim(),
         pin: cleanPin,
         status: 'ACTIVE',
-        registeredBy: registeredBy || `${authUser.employeeId} (${authUser.username})`,
-        registeredBySuperAdmin: authUser.employeeId === 'JPMP-002',
+        registeredBy: registeredBy || 'JPMP-002 (ALDRIN BANAWA)',
+        registeredBySuperAdmin: true,
         registeredAt: new Date().toISOString(),
         version: 1,
         updated_at: new Date().toISOString(),
@@ -5637,7 +5238,7 @@ async function startServer() {
       broadcast({
         type: "account_registered",
         user: newUser,
-        author: registeredBy || authUser.username,
+        author: registeredBy || 'Super Administrator',
         systemResetVersion
       });
 
@@ -5661,12 +5262,9 @@ async function startServer() {
     }
   });
 
-  // REST API: Update Operator Account (FULL_ACCESS ONLY)
+  // REST API: Update Operator Account
   app.post("/api/accounts/update", async (req, res) => {
     try {
-      const authUser = requireSession(req, res, 'FULL_ACCESS');
-      if (!authUser) return;
-
       const { oldEmployeeId, updatedUser } = req.body;
       const cleanOldId = String(oldEmployeeId || updatedUser?.employeeId || '').trim().toUpperCase();
 
@@ -5724,7 +5322,7 @@ async function startServer() {
         type: "account_updated",
         account: mergedUser,
         user: mergedUser,
-        author: req.body.author || authUser.username,
+        author: req.body.author || 'Admin',
         systemResetVersion
       });
 
@@ -5741,12 +5339,9 @@ async function startServer() {
     }
   });
 
-  // REST API: Delete Operator Account (FULL_ACCESS ONLY)
+  // REST API: Delete Operator Account
   app.post("/api/accounts/delete", async (req, res) => {
     try {
-      const authUser = requireSession(req, res, 'FULL_ACCESS');
-      if (!authUser) return;
-
       const { employeeId } = req.body;
       const cleanId = String(employeeId || '').trim().toUpperCase();
 
@@ -5783,14 +5378,14 @@ async function startServer() {
     }
   });
 
-  // REST API: Clear All Accounts Except Super Admin (FULL_ACCESS ONLY)
+  // REST API: Clear All Accounts Except Super Admin
   app.post("/api/accounts/clear-all-except-super-admin", async (req, res) => {
     try {
       if (!isAuthorizedSuperAdmin(req)) {
         return res.status(403).json({ error: "PERMISSION_DENIED: Only Super Administrator is authorized to clear accounts." });
       }
 
-      const author = req.body?.author || "SUPER_ADMIN (JPMP-002)";
+      const author = req.body?.author || (req.headers['x-user-employee-id'] ? `${req.headers['x-user-employee-id']}` : "SUPER_ADMIN (JPMP-002)");
 
       // Automatically create a safety backup right before wiping accounts
       try {
@@ -5847,11 +5442,9 @@ async function startServer() {
     });
   });
 
-  // REST API: Manage / Update Operational Roles (FULL_ACCESS ONLY)
+  // REST API: Manage / Update Operational Roles (Super Admin)
   app.post("/api/roles", async (req, res) => {
     try {
-      if (!requireSession(req, res, 'FULL_ACCESS')) return;
-
       const { action, role, oldRole, newRole, roles, updateExistingAccounts } = req.body;
       let modified = false;
       let usersModified = false;
@@ -5950,11 +5543,9 @@ async function startServer() {
     });
   });
 
-  // REST API: Manage / Update Receiving Categories (FULL_ACCESS ONLY)
+  // REST API: Manage / Update Receiving Categories (Super Admin)
   app.post("/api/categories", async (req, res) => {
     try {
-      if (!requireSession(req, res, 'FULL_ACCESS')) return;
-
       const { action, category, oldCategory, newCategory, oldCat, newCat, categories, updateExistingRecords } = req.body;
       let modified = false;
       let recModified = false;
@@ -6118,12 +5709,16 @@ async function startServer() {
     });
   });
 
-  // REST API: Manage FIFO Colors (FULL_ACCESS ONLY)
   app.post("/api/fifo-colors", async (req, res) => {
     try {
-      if (!requireSession(req, res, 'FULL_ACCESS')) return;
-
       const { action, month, color, fifoColorsByMonth } = req.body;
+      const clientPermission = (req.headers['x-user-permission'] || req.body.permission || '').toString().toUpperCase();
+      const clientEmpId = (req.headers['x-employee-id'] || req.body.employeeId || '').toString().toUpperCase();
+      const isSuperAdmin = clientEmpId === 'JPMP-002' || clientPermission === 'FULL_ACCESS';
+
+      if (!isSuperAdmin) {
+        return res.status(403).json({ error: "PERMISSION DENIED: Only Super Administrator (JPMP-002) can edit the FIFO color calendar." });
+      }
 
       let modified = false;
 
@@ -6196,41 +5791,21 @@ async function startServer() {
    */
   app.post("/api/records/upsert", async (req, res) => {
     try {
-      const sessionInfo = getSessionUser(req);
-      if (!sessionInfo) {
-        return res.status(401).json({ error: "UNAUTHORIZED: Valid session token required. Please sign in." });
-      }
-
-      const authUser = sessionInfo.user;
-      const authEmpId = authUser.employeeId.toUpperCase().trim();
-      const authPermission = authEmpId === 'JPMP-002' ? 'FULL_ACCESS' : (authUser.permission || 'LIMITED_ACCESS');
-
-      // VIEW_ONLY rejects writes
-      if (authPermission === 'VIEW_ONLY') {
-        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges. Write rejected." });
-      }
-
-      const { collection, record, actionDesc, expectedVersion } = req.body;
-
-      // Master data check: LIMITED_ACCESS cannot touch master data or configurations
-      const isMasterData = collection === 'registries' || collection === 'operationalRoles' || collection === 'receivingCategories' || collection === 'registeredUsers' || collection === 'fifoColorsByMonth';
-      if (isMasterData && authPermission !== 'FULL_ACCESS') {
-        return res.status(403).json({ error: "PERMISSION DENIED: Only FULL_ACCESS accounts can modify master data and configuration." });
-      }
-
+      const { collection, record, author, employeeId, actionDesc, expectedVersion } = req.body;
+      const userPermission = (req.body.permission || req.headers['x-user-permission'] || '').toString().toUpperCase();
       const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version'] || record?.reset_version) || systemResetVersion;
 
       const result = executeRecordUpsert({
         collection,
         record,
-        author: authUser.username || authEmpId,
-        employeeId: authEmpId,
-        user_id: `USR-${authEmpId}`,
-        device_id: req.body.device_id || req.headers['x-device-id'] || record?.device_id || 'DEV-CENTRAL',
+        author,
+        employeeId,
+        user_id: req.body.user_id || record?.user_id,
+        device_id: req.body.device_id || req.headers['x-device-id'] || record?.device_id,
         actionDesc,
         expectedVersion,
         reset_version: clientResetVersion,
-        userPermission: authPermission
+        userPermission
       });
 
       if (!result.success) {
@@ -6255,39 +5830,24 @@ async function startServer() {
 
   /**
    * REST API: Delete Record
-   * Security Rule: FULL_ACCESS ONLY. LIMITED_ACCESS and VIEW_ONLY accounts cannot delete records.
+   * Synchronous disk commit BEFORE WebSocket broadcast.
    */
   app.post("/api/records/delete", async (req, res) => {
     try {
-      const sessionInfo = getSessionUser(req);
-      if (!sessionInfo) {
-        return res.status(401).json({ error: "UNAUTHORIZED: Valid session token required. Please sign in." });
-      }
-
-      const authUser = sessionInfo.user;
-      const authEmpId = authUser.employeeId.toUpperCase().trim();
-      const authPermission = authEmpId === 'JPMP-002' ? 'FULL_ACCESS' : (authUser.permission || 'LIMITED_ACCESS');
-
-      // LIMITED_ACCESS cannot delete records
-      if (authPermission !== 'FULL_ACCESS') {
-        return res.status(403).json({ 
-          error: "PERMISSION DENIED: Only FULL_ACCESS accounts can delete records. LIMITED_ACCESS and VIEW_ONLY accounts cannot delete records." 
-        });
-      }
-
-      const { collection, id, actionDesc } = req.body;
+      const { collection, id, author, employeeId, actionDesc } = req.body;
+      const userPermission = (req.body.permission || req.headers['x-user-permission'] || '').toString().toUpperCase();
       const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version']) || systemResetVersion;
 
       const result = executeRecordDelete({
         collection,
         id,
-        author: authUser.username || authEmpId,
-        employeeId: authEmpId,
-        user_id: `USR-${authEmpId}`,
-        device_id: req.body.device_id || req.headers['x-device-id'] || 'DEV-CENTRAL',
+        author,
+        employeeId,
+        user_id: req.body.user_id,
+        device_id: req.body.device_id || req.headers['x-device-id'],
         actionDesc,
         reset_version: clientResetVersion,
-        userPermission: authPermission
+        userPermission
       });
 
       if (!result.success) {
@@ -6315,20 +5875,6 @@ async function startServer() {
    */
   app.post("/api/stock-movements", async (req, res) => {
     try {
-      const sessionInfo = getSessionUser(req);
-      if (!sessionInfo) {
-        return res.status(401).json({ error: "UNAUTHORIZED: Valid session token required. Please sign in." });
-      }
-
-      const authUser = sessionInfo.user;
-      const authEmpId = authUser.employeeId.toUpperCase().trim();
-      const authPermission = authEmpId === 'JPMP-002' ? 'FULL_ACCESS' : (authUser.permission || 'LIMITED_ACCESS');
-
-      // VIEW_ONLY rejects writes
-      if (authPermission === 'VIEW_ONLY') {
-        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges. Movement rejected." });
-      }
-
       const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version']);
       if (clientResetVersion && clientResetVersion < systemResetVersion) {
         return res.status(409).json({
@@ -6346,17 +5892,14 @@ async function startServer() {
         referenceId,
         referenceNumber,
         notes,
+        userId,
+        userName,
         deviceId,
         idempotencyKey,
         preventNegativeStock = true,
         lotNumber,
-        location,
-        userId,
-        userName
+        location
       } = req.body;
-
-      const effectiveUserId = String(userId || authUser.employeeId || 'USR-OP');
-      const effectiveUserName = String(userName || authUser.username || 'Operator');
 
       if (!productId) {
         return res.status(400).json({ error: "productId is required" });
@@ -6438,8 +5981,8 @@ async function startServer() {
         reference_id: referenceId || null,
         reference_number: referenceNumber || null,
         notes: notes || null,
-        user_id: effectiveUserId,
-        user_name: effectiveUserName,
+        user_id: userId || null,
+        user_name: userName || 'Operator',
         device_id: deviceId || 'CENTRAL-SERVER',
         idempotency_key: idempotencyKey || null,
         created_at: serverTime,
@@ -6479,8 +6022,8 @@ async function startServer() {
         record: stockItem,
         movement: movementRecord,
         actionDesc: notes || `Stock movement: ${type} (${finalDelta})`,
-        author: effectiveUserName,
-        user_id: effectiveUserId,
+        author: userName || 'Operator',
+        user_id: userId,
         device_id: deviceId,
         timestamp: serverTime
       });

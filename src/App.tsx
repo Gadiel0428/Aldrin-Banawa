@@ -87,12 +87,7 @@ import {
   upsertCentralRecord,
   deleteCentralRecord,
   performCentralGlobalReset,
-  resolveAccountPin,
-  getAuthToken,
-  setAuthToken,
-  getAuthHeaders,
-  fetchSessionAccount,
-  resumeSessionAccount
+  resolveAccountPin
 } from './lib/centralApi';
 
 import { 
@@ -338,56 +333,6 @@ export default function App() {
     }
   });
   const [authTab, setAuthTab] = useState<'login' | 'register'>('login');
-
-  // Authoritative Session Token Persistence & Resumption
-  // Synchronizes and validates server-issued random session token with database state
-  useEffect(() => {
-    let isCancelled = false;
-    const syncSession = async () => {
-      const storedLoggedIn = typeof localStorage !== 'undefined' && localStorage.getItem('juwei_wms_isLoggedIn') === 'true';
-      const storedEmpId = (typeof localStorage !== 'undefined' ? localStorage.getItem('juwei_wms_employeeId') : '') || currentEmployeeId;
-      if (!storedLoggedIn && !isLoggedIn) return;
-
-      const token = getAuthToken();
-      if (token) {
-        const sessionData = await fetchSessionAccount();
-        if (!isCancelled && sessionData?.success && sessionData.user) {
-          setCurrentPermission(sessionData.user.permission);
-          setCurrentRole(sessionData.user.role);
-          setCurrentUser(sessionData.user.username);
-          setCurrentEmployeeId(sessionData.user.employeeId);
-          try {
-            localStorage.setItem('juwei_wms_userPermission', sessionData.user.permission);
-            localStorage.setItem('juwei_wms_userRole', sessionData.user.role);
-            localStorage.setItem('juwei_wms_currentUser', sessionData.user.username);
-            localStorage.setItem('juwei_wms_employeeId', sessionData.user.employeeId);
-          } catch {}
-          return;
-        }
-      }
-
-      // If token is missing/expired but user was previously logged in, resume session
-      if (storedEmpId) {
-        const resumed = await resumeSessionAccount(storedEmpId);
-        if (!isCancelled && resumed?.success && resumed.user) {
-          if (resumed.token) setAuthToken(resumed.token);
-          setCurrentPermission(resumed.user.permission);
-          setCurrentRole(resumed.user.role);
-          setCurrentUser(resumed.user.username);
-          setCurrentEmployeeId(resumed.user.employeeId);
-          try {
-            localStorage.setItem('juwei_wms_userPermission', resumed.user.permission);
-            localStorage.setItem('juwei_wms_userRole', resumed.user.role);
-            localStorage.setItem('juwei_wms_currentUser', resumed.user.username);
-            localStorage.setItem('juwei_wms_employeeId', resumed.user.employeeId);
-          } catch {}
-        }
-      }
-    };
-
-    syncSession();
-    return () => { isCancelled = true; };
-  }, [isLoggedIn]);
 
   // Central Database modal state
   const [showCentralDatabaseModal, setShowCentralDatabaseModal] = useState<boolean>(false);
@@ -1186,7 +1131,11 @@ export default function App() {
       const baseUrl = getApiBaseUrl();
       await fetch(`${baseUrl}/api/roles`, {
         method: 'POST',
-        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-permission': currentPermission || '',
+          'x-employee-id': currentEmployeeId || ''
+        },
         body: JSON.stringify({
           roles: cleaned,
           author: currentUser
@@ -1282,7 +1231,11 @@ export default function App() {
       const baseUrl = getApiBaseUrl();
       await fetch(`${baseUrl}/api/categories`, {
         method: 'POST',
-        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-permission': currentPermission || '',
+          'x-employee-id': currentEmployeeId || ''
+        },
         body: JSON.stringify({
           action: renameData ? 'rename' : 'set',
           categories: cleaned,
@@ -1358,7 +1311,11 @@ export default function App() {
       const baseUrl = getApiBaseUrl();
       await fetch(`${baseUrl}/api/fifo-colors`, {
         method: 'POST',
-        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-permission': currentPermission || '',
+          'x-employee-id': currentEmployeeId || ''
+        },
         body: JSON.stringify({
           fifoColorsByMonth: nextMap,
           author: currentUser,
@@ -1430,13 +1387,13 @@ export default function App() {
     const adminPin = superAdminAcc?.pin?.trim() || '0423';
     fetch(`${baseUrl}/api/reset-database`, {
       method: 'POST',
-      headers: getAuthHeaders({ 
+      headers: { 
         'Content-Type': 'application/json',
         'x-user-employee-id': 'JPMP-002',
         'x-user-role': currentRole || 'SUPER ADMINISTRATOR',
         'x-user-permission': currentPermission || 'FULL_ACCESS',
         'x-user-pin': adminPin
-      }),
+      },
       body: JSON.stringify({
         employeeId: 'JPMP-002',
         requesterEmployeeId: 'JPMP-002',
@@ -1745,10 +1702,12 @@ export default function App() {
     try {
       const res = await fetch(`${baseUrl}/api/sync/batch`, {
         method: 'POST',
-        headers: getAuthHeaders({ 
+        headers: { 
           'Content-Type': 'application/json',
-          'x-device-id': persistentDevId
-        }),
+          'x-device-id': persistentDevId,
+          'x-employee-id': currentEmployeeId || '',
+          'x-user-permission': currentPermission || ''
+        },
         body: JSON.stringify(batchPayload)
       });
       if (res.status === 409) {
@@ -1768,10 +1727,12 @@ export default function App() {
     try {
       const resFallback = await fetch(`${httpProto}//${cleanHost}/api/sync/batch`, {
         method: 'POST',
-        headers: getAuthHeaders({ 
+        headers: { 
           'Content-Type': 'application/json',
-          'x-device-id': persistentDevId
-        }),
+          'x-device-id': persistentDevId,
+          'x-employee-id': currentEmployeeId || '',
+          'x-user-permission': currentPermission || ''
+        },
         body: JSON.stringify(batchPayload)
       });
       if (resFallback.status === 409) {
@@ -1892,13 +1853,13 @@ export default function App() {
     try {
       const res = await fetch(`${baseUrl}/api/reset-database`, {
         method: 'POST',
-        headers: getAuthHeaders({
+        headers: {
           'Content-Type': 'application/json',
           'x-user-employee-id': 'JPMP-002',
           'x-user-role': currentRole || 'SUPER ADMINISTRATOR',
           'x-user-permission': currentPermission || 'FULL_ACCESS',
           'x-user-pin': adminPin
-        }),
+        },
         body: JSON.stringify({
           employeeId: 'JPMP-002',
           requesterEmployeeId: 'JPMP-002',
@@ -2258,7 +2219,7 @@ export default function App() {
       try {
         const res = await fetch(`${baseUrl}/api/terminal/fresh-install`, {
           method: 'POST',
-          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             stationId,
             installId,
@@ -2432,7 +2393,7 @@ export default function App() {
 
     fetch(`${baseUrl}/api/records/upsert`, {
       method: 'POST',
-      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         collection,
         record,
@@ -2455,7 +2416,7 @@ export default function App() {
     .catch(() => {
       fetch(`${httpProto}//${cleanHost}/api/records/upsert`, {
         method: 'POST',
-        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           collection,
           record,
@@ -2527,7 +2488,7 @@ export default function App() {
 
     fetch(`${baseUrl}/api/records/delete`, {
       method: 'POST',
-      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ collection, id, reset_version: currentResetVer })
     })
     .then(async res => {
@@ -2543,7 +2504,7 @@ export default function App() {
     .catch(() => {
       fetch(`${httpProto}//${cleanHost}/api/records/delete`, {
         method: 'POST',
-        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ collection, id, reset_version: currentResetVer })
       })
       .then(async res => {
@@ -3023,7 +2984,6 @@ export default function App() {
           try {
             const authPayload = {
               type: 'authenticate',
-              token: getAuthToken() || '',
               accountId: clientAccountId,
               warehouseId: clientWarehouseId,
               user_id: currentEmployeeId ? `USR-${currentEmployeeId}` : 'ANONYMOUS',
@@ -3694,10 +3654,12 @@ export default function App() {
 
     fetch(`${baseUrl}/api/sync`, {
       method: 'POST',
-      headers: getAuthHeaders({ 
+      headers: { 
         'Content-Type': 'application/json',
-        'x-device-id': persistentDevId
-      }),
+        'x-device-id': persistentDevId,
+        'x-employee-id': currentEmployeeId || '',
+        'x-user-permission': currentPermission || ''
+      },
       body: JSON.stringify(syncPayload)
     })
     .then(async res => {
@@ -3715,10 +3677,12 @@ export default function App() {
     .catch(() => {
       fetch(`${httpProto}//${cleanHost}/api/sync`, {
         method: 'POST',
-        headers: getAuthHeaders({ 
+        headers: { 
           'Content-Type': 'application/json',
-          'x-device-id': persistentDevId
-        }),
+          'x-device-id': persistentDevId,
+          'x-employee-id': currentEmployeeId || '',
+          'x-user-permission': currentPermission || ''
+        },
         body: JSON.stringify(syncPayload)
       })
       .then(async res => {
@@ -3850,7 +3814,7 @@ export default function App() {
       const baseUrl = getApiBaseUrl();
       fetch(`${baseUrl}/api/accounts/register`, {
         method: 'POST',
-        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...newUser,
           requesterEmployeeId: currentEmployeeId || 'JPMP-002',
@@ -3900,7 +3864,7 @@ export default function App() {
     const baseUrl = getApiBaseUrl();
     fetch(`${baseUrl}/api/accounts/delete`, {
       method: 'POST',
-      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ employeeId: cleanId })
     }).catch(() => {});
 
@@ -3936,11 +3900,11 @@ export default function App() {
     const adminPin = superAdminAcc?.pin?.trim() || '0423';
     fetch(`${baseUrl}/api/accounts/clear-all-except-super-admin`, {
       method: 'POST',
-      headers: getAuthHeaders({ 
+      headers: { 
         'Content-Type': 'application/json',
         'x-user-employee-id': 'JPMP-002',
         'x-user-pin': adminPin
-      }),
+      },
       body: JSON.stringify({
         employeeId: 'JPMP-002',
         requesterEmployeeId: 'JPMP-002',
@@ -4004,7 +3968,7 @@ export default function App() {
       const baseUrl = getApiBaseUrl();
       fetch(`${baseUrl}/api/accounts/delete`, {
         method: 'POST',
-        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ employeeId: cleanOldId })
       }).catch(() => {});
     }
@@ -4042,7 +4006,7 @@ export default function App() {
         const baseUrl = getApiBaseUrl();
         fetch(`${baseUrl}/api/accounts/update`, {
           method: 'POST',
-          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(targetUpdatedUser)
         }).catch(() => {});
       } catch (e) {}
@@ -4062,49 +4026,38 @@ export default function App() {
     }
 
     const enteredPin = (loginPin || '').trim();
-    if (!rawInput || !enteredPin) {
-      setLoginError('PLEASE ENTER OPERATIONAL ID AND PIN CODE.');
-      return;
-    }
 
-    setIsLoggingIn(true);
-    let foundUser: (RegisteredAccount & { token?: string }) | null = null;
+    // Match by employeeId, raw employeeId, username, or phone number in local state
+    let foundUser = registeredUsers.find(
+      (u) => {
+        const uEmpId = (u.employeeId || '').toUpperCase();
+        const uUsername = (u.username || '').toUpperCase();
+        const uPhone = (u.phoneNumber || '').replace(/\D/g, '');
+        const inputPhone = rawInput.replace(/\D/g, '');
 
-    // 1. Authoritatively verify with server to issue cryptographic session token
-    try {
-      const authoritativeUser = await verifyCentralCredentials(rawInput, enteredPin);
-      if (authoritativeUser) {
-        foundUser = authoritativeUser;
-        setRegisteredUsers(prev => upsertUserInState(prev, authoritativeUser));
+        const idMatches = uEmpId === searchId || uEmpId === rawInput.toUpperCase() || uUsername === rawInput.toUpperCase() || (inputPhone.length >= 10 && uPhone === inputPhone);
+        const pinMatches = Boolean(u.pin && u.pin.trim() === enteredPin);
+
+        return idMatches && pinMatches;
       }
-    } catch (authErr) {
-      console.warn("Authoritative login verification error:", authErr);
-    }
+    );
 
-    // 2. Fallback to local memory if offline/unreachable
-    if (!foundUser) {
-      const localMatch = registeredUsers.find(
-        (u) => {
-          const uEmpId = (u.employeeId || '').toUpperCase();
-          const uUsername = (u.username || '').toUpperCase();
-          const uPhone = (u.phoneNumber || '').replace(/\D/g, '');
-          const inputPhone = rawInput.replace(/\D/g, '');
-
-          const idMatches = uEmpId === searchId || uEmpId === rawInput.toUpperCase() || uUsername === rawInput.toUpperCase() || (inputPhone.length >= 10 && uPhone === inputPhone);
-          const pinMatches = Boolean(u.pin && u.pin.trim() === enteredPin);
-
-          return idMatches && pinMatches;
+    // If not found in local memory or PIN was updated on another machine, verify live against central database
+    if (!foundUser && enteredPin) {
+      setIsLoggingIn(true);
+      try {
+        const authoritativeUser = await verifyCentralCredentials(rawInput, enteredPin);
+        if (authoritativeUser) {
+          foundUser = authoritativeUser;
+          setRegisteredUsers(prev => upsertUserInState(prev, authoritativeUser));
         }
-      );
-
-      if (localMatch) {
-        foundUser = localMatch;
-        // Asynchronously request session token
-        resumeSessionAccount(localMatch.employeeId).catch(() => {});
+      } catch (authErr) {
+        console.warn("Authoritative login verification error:", authErr);
       }
     }
 
     if (foundUser) {
+      setIsLoggingIn(true);
       const empIdToRemember = (foundUser.employeeId || loginEmployeeId).trim().toUpperCase();
       if (rememberLogin) {
         try {
@@ -4161,56 +4114,33 @@ export default function App() {
              (u.employeeId || '').toUpperCase() === searchEmpId.replace(/^JPMP-/, '')
     );
 
-    if (searchPin) {
-      // Authoritatively verify with server to issue cryptographic session token
-      verifyCentralCredentials(searchEmpId, searchPin).then(verified => {
-        if (verified) {
-          setRegisteredUsers(prev => upsertUserInState(prev, verified));
-          setShowLoginQrScanner(false);
-          setLoginEmployeeId('');
-          setLoginPin('');
-          setLoginError('');
-          setIsLoggingIn(true);
-          setTimeout(() => {
-            handleLogin(verified);
-            setIsLoggingIn(false);
-          }, 300);
-          return;
-        }
-        if (foundUser && foundUser.pin && foundUser.pin.trim() === searchPin) {
-          setShowLoginQrScanner(false);
-          setLoginEmployeeId('');
-          setLoginPin('');
-          setLoginError('');
-          setIsLoggingIn(true);
-          resumeSessionAccount(foundUser.employeeId).catch(() => {});
-          setTimeout(() => {
-            handleLogin(foundUser);
-            setIsLoggingIn(false);
-          }, 300);
-          return;
-        }
-        setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR ${foundUser?.username || searchEmpId}. ONLY REGISTERED PIN IS AUTHORIZED.`);
-      }).catch(() => {
-        if (foundUser && foundUser.pin && foundUser.pin.trim() === searchPin) {
-          setShowLoginQrScanner(false);
-          setLoginEmployeeId('');
-          setLoginPin('');
-          setLoginError('');
-          setIsLoggingIn(true);
-          resumeSessionAccount(foundUser.employeeId).catch(() => {});
-          setTimeout(() => {
-            handleLogin(foundUser);
-            setIsLoggingIn(false);
-          }, 300);
-          return;
-        }
-        setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR ${foundUser?.username || searchEmpId}. ONLY REGISTERED PIN IS AUTHORIZED.`);
-      });
-      return;
-    }
-
     if (foundUser) {
+      if (!searchPin || (foundUser.pin && foundUser.pin.trim() !== searchPin)) {
+        // Check central database in case PIN was updated from another terminal
+        if (searchPin) {
+          verifyCentralCredentials(searchEmpId, searchPin).then(verified => {
+            if (verified) {
+              setRegisteredUsers(prev => upsertUserInState(prev, verified));
+              setShowLoginQrScanner(false);
+              setLoginEmployeeId('');
+              setLoginPin('');
+              setLoginError('');
+              setIsLoggingIn(true);
+              setTimeout(() => {
+                handleLogin(verified);
+                setIsLoggingIn(false);
+              }, 300);
+              return;
+            }
+            setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR ${foundUser.username || ''} (${foundUser.employeeId || ''}). ONLY REGISTERED PIN IS AUTHORIZED.`);
+          }).catch(() => {
+            setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR ${foundUser.username || ''} (${foundUser.employeeId || ''}). ONLY REGISTERED PIN IS AUTHORIZED.`);
+          });
+          return;
+        }
+        setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR ${foundUser.username || ''} (${foundUser.employeeId || ''}). ONLY REGISTERED PIN IS AUTHORIZED.`);
+        return;
+      }
       setShowLoginQrScanner(false);
       setLoginEmployeeId('');
       setLoginPin('');
@@ -4221,20 +4151,38 @@ export default function App() {
         setIsLoggingIn(false);
       }, 300);
     } else {
+      // Not yet in local memory, check central database
+      if (searchPin) {
+        verifyCentralCredentials(searchEmpId, searchPin).then(verified => {
+          if (verified) {
+            setRegisteredUsers(prev => upsertUserInState(prev, verified));
+            setShowLoginQrScanner(false);
+            setLoginEmployeeId('');
+            setLoginPin('');
+            setLoginError('');
+            setIsLoggingIn(true);
+            setTimeout(() => {
+              handleLogin(verified);
+              setIsLoggingIn(false);
+            }, 300);
+            return;
+          }
+          setLoginError(`OPERATOR ID "${searchEmpId}" IS NOT REGISTERED IN JPMP DIRECTORY.`);
+        }).catch(() => {
+          setLoginError(`OPERATOR ID "${searchEmpId}" IS NOT REGISTERED IN JPMP DIRECTORY.`);
+        });
+        return;
+      }
       setLoginError(`OPERATOR ID "${searchEmpId}" IS NOT REGISTERED IN JPMP DIRECTORY.`);
     }
   };
 
-  const handleLogin = (user: {username: string; role: string; employeeId: string; permission?: string; status?: string; lastActive?: string; token?: string}) => {
+  const handleLogin = (user: {username: string; role: string; employeeId: string; permission?: string; status?: string; lastActive?: string}) => {
     const cleanUsername = (user.username || 'OPERATOR').toUpperCase();
     const cleanRole = (user.role || 'WAREHOUSE CLERK').toUpperCase();
     const cleanEmployeeId = (user.employeeId || '').toUpperCase();
     const cleanPermission = user.permission || (cleanEmployeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS');
     const nowIso = new Date().toISOString();
-
-    if (user.token) {
-      setAuthToken(user.token);
-    }
 
     setCurrentUser(cleanUsername);
     setCurrentRole(cleanRole);
@@ -4259,7 +4207,6 @@ export default function App() {
       try {
         socket!.send(JSON.stringify({
           type: 'authenticate',
-          token: getAuthToken() || user.token || '',
           user_id: `USR-${cleanEmployeeId}`,
           session_id: clientSessionId.current,
           device_id: getPersistentDeviceId(),
@@ -4326,22 +4273,12 @@ export default function App() {
       } catch (e) {}
     }
 
-    try {
-      const baseUrl = getApiBaseUrl();
-      fetch(`${baseUrl}/api/logout`, {
-        method: 'POST',
-        headers: getAuthHeaders({ 'Content-Type': 'application/json' })
-      }).catch(() => {});
-    } catch (e) {}
-
-    setAuthToken(null);
     setCurrentUser('');
     setCurrentRole('');
     setCurrentEmployeeId('');
     setCurrentPermission('LIMITED_ACCESS');
     setIsLoggedIn(false);
     try {
-      localStorage.removeItem('juwei_wms_authToken');
       localStorage.removeItem('juwei_wms_isLoggedIn');
       localStorage.removeItem('juwei_wms_currentUser');
       localStorage.removeItem('juwei_wms_userRole');
@@ -4376,7 +4313,7 @@ export default function App() {
       const baseUrl = getApiBaseUrl();
       fetch(`${baseUrl}/api/chat`, {
         method: 'POST',
-        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: 'System Audit', text, isSystem: true })
       }).catch(() => {});
     }
@@ -4397,7 +4334,7 @@ export default function App() {
       const baseUrl = getApiBaseUrl();
       fetch(`${baseUrl}/api/chat`, {
         method: 'POST',
-        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: currentUser, text, isSystem: false })
       }).catch(() => {});
     }
@@ -5010,11 +4947,11 @@ export default function App() {
       const adminPin = superAdminAcc?.pin?.trim() || '0423';
       const res = await fetch(`${baseUrl}/api/admin/backups/create`, {
         method: 'POST',
-        headers: getAuthHeaders({ 
+        headers: { 
           'Content-Type': 'application/json',
           'x-user-employee-id': 'JPMP-002',
           'x-user-pin': adminPin
-        }),
+        },
         body: JSON.stringify({
           author: `${currentUser || 'SUPER_ADMIN'} (JPMP-002)`,
           employeeId: 'JPMP-002',
