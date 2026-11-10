@@ -15,3 +15,4 @@ public/build-info.json
 backups/
 backup-audit-log.json
 admin-auth-audit-log.json
+.env
