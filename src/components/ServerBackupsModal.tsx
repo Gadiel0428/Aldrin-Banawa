@@ -66,9 +66,9 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
   const fetchBackups = async () => {
     setIsLoading(true);
     setStatusMessage(null);
-    const addressTried = getApiBaseUrl();
     try {
-      const res = await fetch(`${addressTried}/api/admin/backups`, {
+      const baseUrl = getApiBaseUrl();
+      const res = await fetch(`${baseUrl}/api/admin/backups`, {
         cache: 'no-store',
         headers: { 'Accept': 'application/json' }
       });
@@ -78,19 +78,11 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
         setAuditLogs(data.auditLogs || []);
         if (data.backupsDir) setBackupsDir(data.backupsDir);
       } else {
-        const err = await res.json().catch(() => ({}));
+        const err = await res.json();
         setStatusMessage({ text: err.error || 'Failed to fetch backups', type: 'error' });
       }
     } catch (e: any) {
-      const rawMsg = e?.message || String(e);
-      if (rawMsg.includes('Failed to fetch') || rawMsg.includes('NetworkError') || rawMsg.includes('fetch') || rawMsg.includes('network')) {
-        setStatusMessage({
-          text: `Cannot reach the server at ${addressTried}. Check that the server PC is on and that pm2 shows juwei-wms online.`,
-          type: 'error'
-        });
-      } else {
-        setStatusMessage({ text: e?.message || 'Server communication error', type: 'error' });
-      }
+      setStatusMessage({ text: e?.message || 'Server communication error', type: 'error' });
     } finally {
       setIsLoading(false);
     }
@@ -237,29 +229,16 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
 
         {/* Status Message */}
         {statusMessage && (
-          <div className={`px-5 py-2.5 text-xs flex items-center justify-between gap-3 border-b ${
+          <div className={`px-5 py-2.5 text-xs flex items-center gap-2 border-b ${
             statusMessage.type === 'success' 
               ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-300' 
               : statusMessage.type === 'error'
               ? 'bg-rose-950/40 border-rose-800/60 text-rose-300'
               : 'bg-indigo-950/40 border-indigo-800/60 text-indigo-300'
           }`}>
-            <div className="flex items-center gap-2">
-              {statusMessage.type === 'success' && <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />}
-              {statusMessage.type === 'error' && <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />}
-              <span>{statusMessage.text}</span>
-            </div>
-            {statusMessage.type === 'error' && (
-              <button
-                type="button"
-                onClick={fetchBackups}
-                disabled={isLoading}
-                className="bg-rose-900/80 hover:bg-rose-800 text-rose-100 border border-rose-700/80 px-2.5 py-1 rounded text-[11px] font-semibold flex items-center gap-1.5 transition shrink-0 cursor-pointer shadow-xs active:scale-95"
-              >
-                <RefreshCw className={`h-3 w-3 ${isLoading ? 'animate-spin' : ''}`} />
-                <span>Retry</span>
-              </button>
-            )}
+            {statusMessage.type === 'success' && <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />}
+            {statusMessage.type === 'error' && <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />}
+            <span>{statusMessage.text}</span>
           </div>
         )}
 

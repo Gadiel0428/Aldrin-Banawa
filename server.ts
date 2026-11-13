@@ -4593,13 +4593,6 @@ async function startServer() {
       const author = req.body?.author || "ALDRIN BANAWA (SUPER ADMINISTRATOR)";
       const keepUsers = req.body?.keepUsers !== false;
 
-      // Automatically create a safety backup right before running destructive reset
-      try {
-        await createDatabaseBackup("PRE_DATABASE_RESET_SAFETY_BACKUP", author);
-      } catch (backupErr) {
-        console.warn("[RESET-DATABASE] Pre-reset backup warning:", backupErr);
-      }
-
       // 1. Advance reset version
       systemResetVersion += 1;
       systemResetTimestamp = new Date().toISOString();
@@ -5189,15 +5182,6 @@ async function startServer() {
     try {
       if (!isAuthorizedSuperAdmin(req)) {
         return res.status(403).json({ error: "PERMISSION_DENIED: Only Super Administrator is authorized to clear accounts." });
-      }
-
-      const author = req.body?.author || (req.headers['x-user-employee-id'] ? `${req.headers['x-user-employee-id']}` : "SUPER_ADMIN (JPMP-002)");
-
-      // Automatically create a safety backup right before wiping accounts
-      try {
-        await createDatabaseBackup("PRE_ACCOUNTS_WIPE_SAFETY_BACKUP", author);
-      } catch (backupErr) {
-        console.warn("[WIPE-ACCOUNTS] Pre-wipe backup warning:", backupErr);
       }
 
       const superAdmin = state.registeredUsers.find(u => u.employeeId.toUpperCase().trim() === 'JPMP-002') || defaultSuperAdmin;
