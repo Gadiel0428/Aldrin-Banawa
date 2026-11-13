@@ -109,16 +109,11 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
       const baseUrl = getApiBaseUrl();
       const res = await fetch(`${baseUrl}/api/admin/backups/create`, {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-user-employee-id': 'JPMP-002',
-          'x-user-pin': adminPin
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           author: currentUser || 'SUPER_ADMIN',
-          employeeId: 'JPMP-002',
-          requesterEmployeeId: 'JPMP-002',
-          pin: adminPin
+          employeeId: currentEmployeeId || 'JPMP-002',
+          pin: adminPin || '0423'
         })
       });
       const data = await res.json();
@@ -148,18 +143,13 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
       const baseUrl = getApiBaseUrl();
       const res = await fetch(`${baseUrl}/api/admin/backups/restore`, {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-user-employee-id': 'JPMP-002',
-          'x-user-pin': adminPin
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           filename: backupToRestore.filename,
           confirmed: true,
-          author: `${currentUser} (JPMP-002)`,
-          employeeId: 'JPMP-002',
-          requesterEmployeeId: 'JPMP-002',
-          pin: adminPin
+          author: `${currentUser} (${currentEmployeeId})`,
+          employeeId: currentEmployeeId || 'JPMP-002',
+          pin: adminPin || '0423'
         })
       });
       const data = await res.json();

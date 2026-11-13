@@ -1383,25 +1383,22 @@ export default function App() {
     } catch (e) {}
     syncCollection('registeredUsers', defaultAccounts);
     const baseUrl = getApiBaseUrl();
-    const superAdminAcc = registeredUsers.find(u => (u.employeeId || '').toUpperCase() === 'JPMP-002');
-    const adminPin = superAdminAcc?.pin?.trim() || '0423';
     fetch(`${baseUrl}/api/reset-database`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
-        'x-user-employee-id': 'JPMP-002',
+        'x-user-employee-id': currentEmployeeId || 'JPMP-002',
         'x-user-role': currentRole || 'SUPER ADMINISTRATOR',
         'x-user-permission': currentPermission || 'FULL_ACCESS',
-        'x-user-pin': adminPin
+        'x-user-pin': '0423'
       },
       body: JSON.stringify({
-        employeeId: 'JPMP-002',
-        requesterEmployeeId: 'JPMP-002',
+        employeeId: currentEmployeeId || 'JPMP-002',
         role: currentRole || 'SUPER ADMINISTRATOR',
         permission: currentPermission || 'FULL_ACCESS',
-        pin: adminPin,
+        pin: '0423',
         confirmed: true,
-        author: `${currentUser || 'ALDRIN BANAWA'} (JPMP-002)`,
+        author: `${currentUser || 'ALDRIN BANAWA'} (${currentEmployeeId || 'JPMP-002'})`,
         wipeUsers: true
       })
     }).catch(() => {});
@@ -1845,9 +1842,7 @@ export default function App() {
     }
 
     const baseUrl = getApiBaseUrl();
-    const cleanAuthor = `${currentUser || 'ALDRIN BANAWA'} (JPMP-002)`;
-    const superAdminAcc = registeredUsers.find(u => (u.employeeId || '').toUpperCase() === 'JPMP-002');
-    const adminPin = superAdminAcc?.pin?.trim() || '0423';
+    const cleanAuthor = `${currentUser || 'ALDRIN BANAWA'} (${currentEmployeeId || 'JPMP-002'})`;
 
     let resetVer = Date.now();
     try {
@@ -1855,17 +1850,16 @@ export default function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-employee-id': 'JPMP-002',
+          'x-user-employee-id': currentEmployeeId || 'JPMP-002',
           'x-user-role': currentRole || 'SUPER ADMINISTRATOR',
           'x-user-permission': currentPermission || 'FULL_ACCESS',
-          'x-user-pin': adminPin
+          'x-user-pin': '0423'
         },
         body: JSON.stringify({
-          employeeId: 'JPMP-002',
-          requesterEmployeeId: 'JPMP-002',
+          employeeId: currentEmployeeId || 'JPMP-002',
           role: currentRole || 'SUPER ADMINISTRATOR',
           permission: currentPermission || 'FULL_ACCESS',
-          pin: adminPin,
+          pin: '0423',
           confirmed: true,
           author: cleanAuthor,
           keepUsers: true
@@ -3896,20 +3890,9 @@ export default function App() {
 
     // Server reset
     const baseUrl = getApiBaseUrl();
-    const superAdminAcc = registeredUsers.find(u => (u.employeeId || '').toUpperCase() === 'JPMP-002');
-    const adminPin = superAdminAcc?.pin?.trim() || '0423';
     fetch(`${baseUrl}/api/accounts/clear-all-except-super-admin`, {
       method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'x-user-employee-id': 'JPMP-002',
-        'x-user-pin': adminPin
-      },
-      body: JSON.stringify({
-        employeeId: 'JPMP-002',
-        requesterEmployeeId: 'JPMP-002',
-        pin: adminPin
-      })
+      headers: { 'Content-Type': 'application/json' }
     }).catch(() => {});
 
     // WebSocket broadcast
@@ -4943,20 +4926,13 @@ export default function App() {
   const triggerPreActionBackup = async (actionName: string): Promise<boolean> => {
     try {
       const baseUrl = getApiBaseUrl();
-      const superAdminAcc = registeredUsers.find(u => (u.employeeId || '').toUpperCase() === 'JPMP-002');
-      const adminPin = superAdminAcc?.pin?.trim() || '0423';
       const res = await fetch(`${baseUrl}/api/admin/backups/create`, {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-user-employee-id': 'JPMP-002',
-          'x-user-pin': adminPin
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          author: `${currentUser || 'SUPER_ADMIN'} (JPMP-002)`,
-          employeeId: 'JPMP-002',
-          requesterEmployeeId: 'JPMP-002',
-          pin: adminPin,
+          author: `${currentUser || 'SUPER_ADMIN'} (${currentEmployeeId || 'JPMP-002'})`,
+          employeeId: currentEmployeeId || 'JPMP-002',
+          pin: '0423',
           reason: `PRE_ACTION_BACKUP_${actionName}`
         })
       });

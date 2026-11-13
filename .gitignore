@@ -12,7 +12,3 @@ central-database.json.migrated-*
 central-database.sqlite*
 data-store.json
 public/build-info.json
-backups/
-backup-audit-log.json
-admin-auth-audit-log.json
-.env
