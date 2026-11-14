@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { ReceivingRecord, IssuanceRecord, MaterialStockItem } from '../types';
+import { renderPdfDocToPages } from './printDocument';
 
 export interface ReportFilterOptions {
   dateRange: 'today' | '7days' | '30days' | 'all' | 'custom';
@@ -569,6 +570,19 @@ export function generateReceivingVsIssuancePDF(
   doc.text(`${appTitle} • ${appDate}`, sign3X + 4, finalY + 22.5);
 
   return doc;
+}
+
+export async function generateReceivingVsIssuanceReportPages(
+  receiving: ReceivingRecord[],
+  issuances: IssuanceRecord[],
+  stocks: MaterialStockItem[],
+  options: ReportFilterOptions
+): Promise<{ doc: jsPDF; pages: string[]; filename: string }> {
+  const doc = generateReceivingVsIssuancePDF(receiving, issuances, stocks, options);
+  const dateStamp = new Date().toISOString().split('T')[0];
+  const filename = `Juwei_Receiving_vs_Issuance_Report_${options.dateRange}_${dateStamp}.pdf`;
+  const pages = await renderPdfDocToPages(doc);
+  return { doc, pages, filename };
 }
 
 export function downloadReceivingVsIssuancePDF(

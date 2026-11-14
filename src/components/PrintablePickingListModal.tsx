@@ -25,7 +25,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { PrintPreviewModal } from './PrintPreviewModal';
-import { exportElementAsPDF } from '../utils/printDocument';
+import { renderDocumentPages, printPages, showPrintToast } from '../utils/printDocument';
 import { DeliveryRecord, IssuanceRecord, MaterialStockItem, MasterRegistryItem } from '../types';
 
 export type DocViewMode = 'OFFICIAL_DOC' | 'PICKING_LIST' | 'SUMMARY_LOG';
@@ -75,36 +75,24 @@ export default function PrintablePickingListModal({
     : (targetIssuance?.requisitionNumber || 'N/A');
 
   const handlePrint = async () => {
-    if (isExportingPDF) return;
-    // Print the currently shown .printable-area element (either preview sheet or document container)
-    let el: HTMLElement | null = null;
-    if (showPrintPreview) {
-      el = document.querySelector('.printable-area');
-    }
-    if (!el && printableContainerRef.current) {
-      el = printableContainerRef.current;
-    }
-    if (!el) {
-      el = (document.getElementById('printable-document-container') as HTMLElement | null)
-        || (document.querySelector('.printable-area') as HTMLElement | null);
-    }
-    if (el) {
-      setIsExportingPDF(true);
-      try {
-        const idStr = docNumber && docNumber !== 'N/A' ? docNumber : 'document';
-        const filename = `JUWEI-${viewMode}-${idStr}.pdf`;
-        await exportElementAsPDF(el, filename);
-      } catch (err) {
-        console.error('[PrintablePickingListModal] PDF export error:', err);
-      } finally {
-        setIsExportingPDF(false);
-      }
+    if (isExportingPDF || !printableContainerRef.current) return;
+    setIsExportingPDF(true);
+    try {
+      const pages = await renderDocumentPages(printableContainerRef.current);
+      await printPages(pages);
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to print document';
+      console.error('[PrintablePickingListModal] Print error:', err);
+      showPrintToast(msg, 'error');
+    } finally {
+      setIsExportingPDF(false);
     }
   };
 
-  // Keyboard shortcut Ctrl+P / Cmd+P within the document modal
+  // Keyboard shortcut Ctrl+P / Cmd+P within the document modal (ignored if preview is active)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (showPrintPreview) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
         e.preventDefault();
         handlePrint();
@@ -121,7 +109,17 @@ export default function PrintablePickingListModal({
   const dateStr = isDeliveryMode ? (targetDelivery?.date || new Date().toISOString().split('T')[0]) : (targetIssuance?.date || new Date().toISOString().split('T')[0]);
   const preparedBy = isDeliveryMode ? (targetDelivery?.preparedBy || 'Warehouse Staff') : (targetIssuance?.issuedBy || 'Warehouse Staff');
   const receivedBy = isDeliveryMode ? 'Carrier Logistics / Customer' : (targetIssuance?.receivedBy || 'Department Supervisor');
-  const lotNumber = isDeliveryMode ? 'LOT-2026-FIFO' : (targetIssuance?.lotNumber || 'N/A');
+
+  // Real lot numbers resolution (never hardcoded LOT-2026-FIFO)
+  const getDeliveryLotNumbers = (): string => {
+    if (deliveriesList && deliveriesList.length > 0) {
+      const lots = Array.from(new Set(deliveriesList.map(d => (d as any).lotNumber || (d as any).lot || '').filter(Boolean)));
+      if (lots.length > 0) return lots.join(', ');
+    }
+    const singleLot = (targetDelivery as any)?.lotNumber || (targetDelivery as any)?.lot || matchedStock?.lotNumber;
+    return singleLot ? String(singleLot).trim() : '-';
+  };
+  const lotNumber = isDeliveryMode ? getDeliveryLotNumbers() : (targetIssuance?.lotNumber || '-');
 
   const matchedStock = stocks.find(s => (s.partCode || '').toLowerCase() === (partCode || '').toLowerCase());
   const matchedRegistry = registries.find(r => (r.code || '').toLowerCase() === (partCode || '').toLowerCase());
@@ -1285,6 +1283,8 @@ export default function PrintablePickingListModal({
           <PrintPreviewModal
             isOpen={showPrintPreview}
             onClose={() => setShowPrintPreview(false)}
+            targetElementRef={printableContainerRef}
+            filename={`JUWEI-${viewMode}-${docNumber && docNumber !== 'N/A' ? docNumber : 'document'}.pdf`}
             documentTitle={
               viewMode === "OFFICIAL_DOC" 
                 ? (isDeliveryMode ? "Delivery Receipt & Gate Pass" : "Material Requisition Slip (MRS)")
@@ -1335,10 +1335,7 @@ export default function PrintablePickingListModal({
                 </button>
               </div>
             }
-            onPrint={handlePrint}
-          >
-            {documentContent}
-          </PrintPreviewModal>
+          />
         )}
       </motion.div>
     </motion.div>

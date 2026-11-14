@@ -1,5 +1,5 @@
 // JUWEI WMS Mobile & Desktop Service Worker
-const CACHE_NAME = 'juwei-wms-v5';
+const CACHE_NAME = 'juwei-wms-v6';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
@@ -70,10 +70,11 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Network-first for all other static assets (favicon, manifest, png icons)
+  // NEVER cache failed (non-200), 404, or opaque error responses
   event.respondWith(
     fetch(event.request)
       .then((networkResponse) => {
-        if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
+        if (networkResponse && networkResponse.ok && networkResponse.status === 200 && networkResponse.type === 'basic') {
           const responseToCache = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => {
             cache.put(event.request, responseToCache);

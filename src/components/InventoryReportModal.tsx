@@ -26,12 +26,13 @@ import {
   Loader2 
 } from 'lucide-react';
 import { PrintPreviewModal } from './PrintPreviewModal';
-import { exportElementAsPDF } from '../utils/printDocument';
+import { renderDocumentPages, printPages, showPrintToast } from '../utils/printDocument';
 import { MaterialStockItem, getCustomerForPart } from '../types';
 import { 
   filterInventoryData, 
   downloadInventoryReportPDF, 
   downloadInventoryReportCSV,
+  generateInventoryReportPages,
   InventoryReportOptions 
 } from '../utils/inventoryReportGenerator';
 
@@ -55,6 +56,9 @@ export default function InventoryReportModal({
   const [searchQuery, setSearchQuery] = useState('');
   const [isExportingPDF, setIsExportingPDF] = useState(false);
   const [showPrintPreview, setShowPrintPreview] = useState(false);
+  const [previewPages, setPreviewPages] = useState<string[] | undefined>(undefined);
+  const [previewFilename, setPreviewFilename] = useState<string>('Juwei_Inventory_Report.pdf');
+  const reportContainerRef = useRef<HTMLDivElement>(null);
   const [isExportingCSV, setIsExportingCSV] = useState(false);
   const [copiedSuccess, setCopiedSuccess] = useState(false);
 
@@ -99,14 +103,18 @@ export default function InventoryReportModal({
     return filterInventoryData(stocks, reportOptions);
   }, [stocks, reportOptions]);
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
     try {
       setIsExportingPDF(true);
-      downloadInventoryReportPDF(stocks, reportOptions);
-    } catch (err) {
-      console.error('Failed to export PDF:', err);
+      const result = await generateInventoryReportPages(stocks, reportOptions);
+      setPreviewPages(result.pages);
+      setPreviewFilename(result.filename);
+      setShowPrintPreview(true);
+    } catch (err: any) {
+      console.error('Failed to export PDF pages:', err);
+      showPrintToast(err?.message || 'Failed to export PDF report', 'error');
     } finally {
-      setTimeout(() => setIsExportingPDF(false), 600);
+      setIsExportingPDF(false);
     }
   };
 
@@ -126,25 +134,29 @@ export default function InventoryReportModal({
   const [isPrintingPDF, setIsPrintingPDF] = useState<boolean>(false);
 
   const handlePrint = async () => {
-    if (isPrintingPDF) return;
-    const el = (document.getElementById('printable-inventory-report') as HTMLElement | null)
-      || (document.querySelector('.printable-area') as HTMLElement | null);
-    if (el) {
-      setIsPrintingPDF(true);
-      try {
-        const dateStr = new Date().toISOString().split('T')[0];
-        const filename = `JUWEI-Inventory-Report-${dateStr}.pdf`;
-        await exportElementAsPDF(el, filename);
-      } catch (err) {
-        console.error('[InventoryReportModal] PDF export error:', err);
-      } finally {
-        setIsPrintingPDF(false);
-      }
+    if (isPrintingPDF || !reportContainerRef.current) return;
+    setIsPrintingPDF(true);
+    try {
+      const pages = await renderDocumentPages(reportContainerRef.current);
+      await printPages(pages);
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to print document';
+      console.error('[InventoryReportModal] Print error:', err);
+      showPrintToast(msg, 'error');
+    } finally {
+      setIsPrintingPDF(false);
     }
+  };
+
+  const handleOpenPrintPreview = () => {
+    setPreviewPages(undefined);
+    setPreviewFilename(`Juwei_Inventory_Report_${new Date().toISOString().split('T')[0]}.pdf`);
+    setShowPrintPreview(true);
   };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (showPrintPreview) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
         e.preventDefault();
         handlePrint();
@@ -152,7 +164,7 @@ export default function InventoryReportModal({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPrintingPDF]);
+  }, [isPrintingPDF, showPrintPreview]);
 
   const reportContent = (
     <div className="space-y-6">
@@ -549,7 +561,7 @@ export default function InventoryReportModal({
             <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
-                onClick={() => setShowPrintPreview(true)}
+                onClick={handleOpenPrintPreview}
                 className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border border-slate-700"
               >
                 <Eye className="h-4 w-4 text-indigo-400" />
@@ -579,7 +591,7 @@ export default function InventoryReportModal({
 
               <button
                 type="button"
-                onClick={() => setShowPrintPreview(true)}
+                onClick={handleOpenPrintPreview}
                 className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border border-slate-700"
                 title="Preview report in A4 layout before opening system print dialog"
               >

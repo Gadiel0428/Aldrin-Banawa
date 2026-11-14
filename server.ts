@@ -472,6 +472,7 @@ async function startServer() {
     registries: any[];
     registeredUsers: ServerUser[];
     stockMovements: any[];
+    sessions: any[];
     operationalRoles: string[];
     receivingCategories: string[];
     fifoColorsByMonth: Record<number, { name: string; colorClass: string; textClass: string; hex?: string }>;
@@ -487,6 +488,7 @@ async function startServer() {
     registries: [...STARTER_BARCODE_PRESETS],
     registeredUsers: [{ ...defaultSuperAdmin }],
     stockMovements: [],
+    sessions: [],
     operationalRoles: [...DEFAULT_OPERATIONAL_ROLES],
     receivingCategories: [...DEFAULT_RECEIVING_CATEGORIES],
     fifoColorsByMonth: { ...DEFAULT_FIFO_COLORS_BY_MONTH },
@@ -516,6 +518,7 @@ async function startServer() {
       registries: state.registries || [],
       registeredUsers: state.registeredUsers || [],
       stockMovements: state.stockMovements || [],
+      sessions: state.sessions || [],
       operationalRoles: state.operationalRoles || [...DEFAULT_OPERATIONAL_ROLES],
       receivingCategories: state.receivingCategories || [...DEFAULT_RECEIVING_CATEGORIES],
       fifoColorsByMonth: state.fifoColorsByMonth || { ...DEFAULT_FIFO_COLORS_BY_MONTH },
@@ -852,6 +855,10 @@ async function startServer() {
             state.registries.push(preset);
           }
         }
+      if (!Array.isArray(state.sessions)) {
+        state.sessions = [];
+      } else if (Array.isArray(parsed.sessions) && state.sessions.length === 0) {
+        state.sessions = parsed.sessions.map((rec: any) => normalizeRecord(rec));
       }
 
       if (Array.isArray(parsed.deletedRecordTombstones)) {
@@ -1934,6 +1941,108 @@ async function startServer() {
     });
   }
 
+  /**
+   * Derive account and permission authoritatively from a session token.
+   * Tokens are generated on login (crypto.randomBytes) and stored in the database.
+   */
+  function getAuthFromToken(token?: string | null): { user: ServerUser; permission: string; token: string } | null {
+    if (!token) return null;
+    const cleanToken = String(token).trim();
+    if (!cleanToken) return null;
+
+    const session = (state.sessions || []).find(s => s && (s.token === cleanToken || s.id === cleanToken));
+    if (!session) return null;
+
+    const user = state.registeredUsers.find(
+      u => (u.employeeId || "").toUpperCase().trim() === (session.employeeId || "").toUpperCase().trim()
+    );
+    if (!user || user.status === "INACTIVE") return null;
+
+    // Update lastActive timestamp on session
+    session.lastActive = new Date().toISOString();
+
+    // Authoritatively derive permission from user account record in database
+    const permission = (user.permission || (user.employeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS')).trim().toUpperCase();
+
+    return { user, permission, token: cleanToken };
+  }
+
+  /**
+   * Extract Bearer session token from request headers or URL query parameter
+   */
+  function extractToken(req: express.Request): string | null {
+    const authHeader = req.headers["authorization"];
+    if (authHeader && typeof authHeader === "string") {
+      const match = authHeader.match(/^Bearer\s+(.+)$/i);
+      if (match && match[1]) {
+        return match[1].trim();
+      }
+    }
+    if (req.query && typeof req.query.token === "string" && req.query.token.trim()) {
+      return req.query.token.trim();
+    }
+    return null;
+  }
+
+  /**
+   * Authenticate incoming HTTP request using session token
+   */
+  function authenticateRequest(req: express.Request): { user: ServerUser; permission: string; token: string } | null {
+    const token = extractToken(req);
+    return getAuthFromToken(token);
+  }
+
+  /**
+   * Enforce valid authenticated session
+   */
+  function requireAuth(req: express.Request, res: express.Response): { user: ServerUser; permission: string; token: string } | null {
+    const auth = authenticateRequest(req);
+    if (!auth) {
+      res.status(401).json({ error: "UNAUTHORIZED: Valid session token required. Please log in." });
+      return null;
+    }
+    return auth;
+  }
+
+  /**
+   * Enforce FULL_ACCESS permission (admin, backup, reset, restore, accounts, roles, categories, master data, deletes)
+   */
+  function requireFullAccess(req: express.Request, res: express.Response, actionDesc: string = "perform this action"): { user: ServerUser; permission: string; token: string } | null {
+    const auth = requireAuth(req, res);
+    if (!auth) return null;
+    if (auth.permission !== "FULL_ACCESS") {
+      res.status(403).json({ error: `PERMISSION_DENIED: FULL_ACCESS required to ${actionDesc}.` });
+      return null;
+    }
+    return auth;
+  }
+
+  /**
+   * Enforce write permission (rejects VIEW_ONLY)
+   */
+  function requireWriteAccess(req: express.Request, res: express.Response, actionDesc: string = "perform writes"): { user: ServerUser; permission: string; token: string } | null {
+    const auth = requireAuth(req, res);
+    if (!auth) return null;
+    if (auth.permission === "VIEW_ONLY") {
+      res.status(403).json({ error: `PERMISSION_DENIED: Account has VIEW_ONLY privileges and cannot ${actionDesc}.` });
+      return null;
+    }
+    return auth;
+  }
+
+  /**
+   * Enforce delete permission (rejects VIEW_ONLY and LIMITED_ACCESS)
+   */
+  function requireDeleteAccess(req: express.Request, res: express.Response, actionDesc: string = "delete records"): { user: ServerUser; permission: string; token: string } | null {
+    const auth = requireAuth(req, res);
+    if (!auth) return null;
+    if (auth.permission !== "FULL_ACCESS") {
+      res.status(403).json({ error: `PERMISSION_DENIED: Limited access accounts cannot delete records. FULL_ACCESS required to ${actionDesc}.` });
+      return null;
+    }
+    return auth;
+  }
+
   interface UpsertExecutionResult {
     success: boolean;
     status: number;
@@ -1979,7 +2088,12 @@ async function startServer() {
     }
 
     if (userPermission === 'VIEW_ONLY') {
-      return { success: false, status: 403, error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." };
+      return { success: false, status: 403, error: "PERMISSION DENIED: Account has VIEW_ONLY privileges and cannot perform writes." };
+    }
+
+    const isRestrictedCollection = ['registeredUsers', 'operationalRoles', 'receivingCategories', 'registries', 'fifoColorsByMonth', 'sessions'].includes(collection);
+    if (userPermission === 'LIMITED_ACCESS' && isRestrictedCollection) {
+      return { success: false, status: 403, error: `PERMISSION DENIED: Limited access accounts cannot touch roles, categories, accounts, or master data (${collection}). FULL_ACCESS required.` };
     }
 
     const serverTime = new Date().toISOString();
@@ -2172,7 +2286,11 @@ async function startServer() {
     }
 
     if (userPermission === 'VIEW_ONLY') {
-      return { success: false, status: 403, error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." };
+      return { success: false, status: 403, error: "PERMISSION DENIED: Account has VIEW_ONLY privileges and cannot delete records." };
+    }
+
+    if (userPermission !== 'FULL_ACCESS') {
+      return { success: false, status: 403, error: "PERMISSION DENIED: Limited access accounts cannot delete records. FULL_ACCESS required." };
     }
 
     const recordId = String(id);
@@ -2335,7 +2453,20 @@ async function startServer() {
       const parsedUrl = new URL(req.url || "/ws", `http://${host}`);
       const qAcc = parsedUrl.searchParams.get("accountId") || parsedUrl.searchParams.get("account_id") || (req.headers["x-account-id"] as string);
       const qWh = parsedUrl.searchParams.get("warehouseId") || parsedUrl.searchParams.get("warehouse_id") || (req.headers["x-warehouse-id"] as string);
-      const authToken = parsedUrl.searchParams.get("token") || parsedUrl.searchParams.get("auth_token") || (req.headers["authorization"] ? req.headers["authorization"].replace(/^Bearer\s+/i, "") : "");
+      const rawAuthHeader = (req.headers["authorization"] as string) || "";
+      const rawSecProtocol = (req.headers["sec-websocket-protocol"] as string) || "";
+      const authToken = (
+        parsedUrl.searchParams.get("token") || 
+        parsedUrl.searchParams.get("auth_token") || 
+        (rawAuthHeader ? rawAuthHeader.replace(/^Bearer\s+/i, "") : "") ||
+        rawSecProtocol ||
+        ""
+      ).trim();
+
+      const authOnConnect = getAuthFromToken(authToken);
+      if (authOnConnect) {
+        ws.token = authOnConnect.token;
+      }
 
       if (qAcc) queryAccountId = qAcc.trim();
       if (qWh) queryWarehouseId = qWh.trim();
@@ -2389,14 +2520,14 @@ async function startServer() {
     // Register active terminal in central connection registry
     const initialRecord: ActiveConnectionRecord = {
       connection_id,
-      user_id: "ANONYMOUS",
+      user_id: authOnConnect ? `USR-${authOnConnect.user.employeeId}` : "ANONYMOUS",
       session_id: `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       device_id: `dev_${Math.random().toString(36).substring(2, 9)}`,
       stationId: "",
-      employeeId: "",
-      username: "CONNECTING TERMINAL",
-      role: "OPERATOR",
-      permission: "LIMITED_ACCESS",
+      employeeId: authOnConnect ? authOnConnect.user.employeeId : "",
+      username: authOnConnect ? authOnConnect.user.username : "CONNECTING TERMINAL",
+      role: authOnConnect ? authOnConnect.user.role : "OPERATOR",
+      permission: authOnConnect ? authOnConnect.permission : "VIEW_ONLY",
       platform,
       deviceName: `${platform} Terminal`,
       activeView: "dashboard",
@@ -2459,6 +2590,38 @@ async function startServer() {
       console.warn("WebSocket client error:", err?.message || err);
     });
 
+    function getWsAuthContext(targetWs: any, msgPayload?: any): { user: ServerUser; permission: string; token: string } | null {
+      const token = msgPayload?.token || msgPayload?.sessionToken || targetWs.token;
+      const auth = getAuthFromToken(token);
+      if (auth) {
+        targetWs.token = auth.token;
+        const cId = socketToConnectionId.get(targetWs);
+        if (cId) {
+          const c = connectionRegistry.get(cId);
+          if (c) {
+            c.employeeId = auth.user.employeeId;
+            c.username = auth.user.username;
+            c.role = auth.user.role;
+            c.permission = auth.permission;
+            c.user_id = `USR-${auth.user.employeeId}`;
+          }
+        }
+        return auth;
+      }
+      const cId = socketToConnectionId.get(targetWs);
+      if (cId) {
+        const c = connectionRegistry.get(cId);
+        if (c && c.employeeId) {
+          const user = state.registeredUsers.find(u => (u.employeeId || '').toUpperCase().trim() === (c.employeeId || '').toUpperCase().trim());
+          if (user && user.status !== 'INACTIVE') {
+            const permission = (user.permission || (user.employeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS')).trim().toUpperCase();
+            return { user, permission, token: c.session_id || '' };
+          }
+        }
+      }
+      return null;
+    }
+
     ws.on("message", async (messageData: any) => {
       ws.isAlive = true;
       try {
@@ -2483,15 +2646,30 @@ async function startServer() {
             const conn = connectionRegistry.get(connId);
             if (!conn) break;
 
-            const employeeId = String(payload.employeeId || "").trim().toUpperCase();
-            const username = String(payload.username || (employeeId === 'JPMP-002' ? 'ALDRIN BANAWA' : 'OPERATOR')).trim().toUpperCase();
-            const role = String(payload.role || (employeeId === 'JPMP-002' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR')).trim().toUpperCase();
-            const permission = String(payload.permission || (employeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS')).trim();
+            const msgToken = payload.token || payload.sessionToken || ws.token;
+            const auth = getAuthFromToken(msgToken);
+
+            let employeeId = "";
+            let username = "OPERATOR";
+            let role = "OPERATOR";
+            let permission = "VIEW_ONLY";
+            let userId = conn.user_id;
+
+            if (auth) {
+              ws.token = auth.token;
+              employeeId = auth.user.employeeId;
+              username = auth.user.username;
+              role = auth.user.role;
+              permission = auth.permission;
+              userId = `USR-${auth.user.employeeId}`;
+            } else {
+              permission = "VIEW_ONLY";
+            }
+
             const activeView = String(payload.activeView || "dashboard").trim();
             const stationId = String(payload.stationId || "").trim();
             const deviceId = String(payload.device_id || payload.deviceId || conn.device_id).trim();
             const sessionId = String(payload.session_id || payload.sessionId || conn.session_id).trim();
-            const userId = String(payload.user_id || payload.userId || (employeeId ? `USR-${employeeId}` : conn.user_id)).trim();
             const devPlatform = String(payload.platform || conn.platform || "Web").trim();
             const devName = String(payload.deviceName || `${devPlatform} Terminal`).trim();
             const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || systemResetVersion;
@@ -2716,6 +2894,16 @@ async function startServer() {
           case "adjust_stock": {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
+            const wsAuth = getWsAuthContext(ws, payload);
+            if (!wsAuth) {
+              ws.send(JSON.stringify({ type: "ERROR", error: "UNAUTHORIZED: Valid session token required.", status: 401 }));
+              break;
+            }
+            if (wsAuth.permission === "VIEW_ONLY") {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: Account has VIEW_ONLY privileges and cannot adjust stock.", status: 403 }));
+              break;
+            }
+
             const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
             const targetWh = normalizeGroupId(payload.warehouseId || conn?.warehouseId, "WH-MAIN");
             const { productId, delta, newQuantity, location, lotNumber, notes } = payload;
@@ -2764,8 +2952,8 @@ async function startServer() {
               previous_quantity: prevQty,
               new_quantity: stockItem ? stockItem.quantity : calculatedQty,
               notes: notes || 'Stock adjustment via WebSocket',
-              user_id: conn?.user_id || 'OPERATOR',
-              user_name: conn?.username || 'Operator',
+              user_id: `USR-${wsAuth.user.employeeId}`,
+              user_name: wsAuth.user.username,
               device_id: conn?.device_id || 'TERMINAL',
               created_at: serverTime,
               reset_version: systemResetVersion
@@ -2787,8 +2975,8 @@ async function startServer() {
               record: stockItem,
               movement: movementRecord,
               actionDesc: notes || `Adjusted stock for ${productId} (${prevQty} -> ${stockItem?.quantity})`,
-              author: conn?.username || "Operator",
-              user_id: conn?.user_id,
+              author: wsAuth.user.username,
+              user_id: `USR-${wsAuth.user.employeeId}`,
               device_id: conn?.device_id
             });
             break;
@@ -2798,6 +2986,16 @@ async function startServer() {
           case "transfer_location": {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
+            const wsAuth = getWsAuthContext(ws, payload);
+            if (!wsAuth) {
+              ws.send(JSON.stringify({ type: "ERROR", error: "UNAUTHORIZED: Valid session token required.", status: 401 }));
+              break;
+            }
+            if (wsAuth.permission === "VIEW_ONLY") {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: Account has VIEW_ONLY privileges and cannot transfer locations.", status: 403 }));
+              break;
+            }
+
             const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
             const sourceWh = normalizeGroupId(payload.fromWarehouseId || payload.warehouseId || conn?.warehouseId, "WH-MAIN");
             const targetWh = normalizeGroupId(payload.toWarehouseId || payload.warehouseId || conn?.warehouseId, "WH-MAIN");
@@ -2822,8 +3020,8 @@ async function startServer() {
               type: 'LOCATION_TRANSFER',
               quantity: Number(quantity) || 0,
               notes: notes || `Transferred from ${fromLocation || sourceWh} to ${toLocation || targetWh}`,
-              user_id: conn?.user_id || 'OPERATOR',
-              user_name: conn?.username || 'Operator',
+              user_id: `USR-${wsAuth.user.employeeId}`,
+              user_name: wsAuth.user.username,
               device_id: conn?.device_id || 'TERMINAL',
               created_at: serverTime,
               reset_version: systemResetVersion
@@ -2843,8 +3041,8 @@ async function startServer() {
               record: stockItem,
               movement: movementRecord,
               actionDesc: notes || `Location transfer for ${productId} to ${toLocation || targetWh}`,
-              author: conn?.username || "Operator",
-              user_id: conn?.user_id,
+              author: wsAuth.user.username,
+              user_id: `USR-${wsAuth.user.employeeId}`,
               device_id: conn?.device_id
             });
             break;
@@ -2854,6 +3052,16 @@ async function startServer() {
           case "pick_pack_ship": {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
+            const wsAuth = getWsAuthContext(ws, payload);
+            if (!wsAuth) {
+              ws.send(JSON.stringify({ type: "ERROR", error: "UNAUTHORIZED: Valid session token required.", status: 401 }));
+              break;
+            }
+            if (wsAuth.permission === "VIEW_ONLY") {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: Account has VIEW_ONLY privileges and cannot pick/pack/ship.", status: 403 }));
+              break;
+            }
+
             const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
             const targetWh = normalizeGroupId(payload.warehouseId || conn?.warehouseId, "WH-MAIN");
             const { orderId, operationType, items, notes } = payload;
@@ -2886,8 +3094,8 @@ async function startServer() {
               type: operationType || 'PICK_PACK_SHIP',
               reference_number: orderId,
               notes: notes || `${operationType || 'Pick/Pack/Ship'} operation for order ${orderId}`,
-              user_id: conn?.user_id || 'OPERATOR',
-              user_name: conn?.username || 'Operator',
+              user_id: `USR-${wsAuth.user.employeeId}`,
+              user_name: wsAuth.user.username,
               device_id: conn?.device_id || 'TERMINAL',
               created_at: serverTime,
               reset_version: systemResetVersion
@@ -2907,8 +3115,8 @@ async function startServer() {
               record: affectedStockItem,
               movement: movementRecord,
               actionDesc: notes || `${operationType || 'Pick/Pack/Ship'} completed for order ${orderId}`,
-              author: conn?.username || "Operator",
-              user_id: conn?.user_id,
+              author: wsAuth.user.username,
+              user_id: `USR-${wsAuth.user.employeeId}`,
               device_id: conn?.device_id
             });
             break;
@@ -2922,19 +3130,35 @@ async function startServer() {
           case "update_record": {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
+            const wsAuth = getWsAuthContext(ws, payload);
+            if (!wsAuth) {
+              ws.send(JSON.stringify({ type: "ERROR", error: "UNAUTHORIZED: Valid session token required.", status: 401 }));
+              break;
+            }
+            if (wsAuth.permission === "VIEW_ONLY") {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: Account has VIEW_ONLY privileges and cannot perform writes.", status: 403 }));
+              break;
+            }
+
+            const isRestricted = ['registeredUsers', 'operationalRoles', 'receivingCategories', 'registries', 'fifoColorsByMonth', 'sessions'].includes(payload.collection);
+            if (wsAuth.permission === 'LIMITED_ACCESS' && isRestricted) {
+              ws.send(JSON.stringify({ type: "ERROR", error: `PERMISSION DENIED: Limited access accounts cannot touch roles, categories, accounts, or master data (${payload.collection}). FULL_ACCESS required.`, status: 403 }));
+              break;
+            }
+
             const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || conn?.resetVersion || systemResetVersion;
 
             const upsertRes = executeRecordUpsert({
               collection: payload.collection,
               record: payload.record,
-              author: payload.author || conn?.username || "Operator",
-              employeeId: payload.employeeId || conn?.employeeId,
-              user_id: payload.user_id || conn?.user_id,
+              author: wsAuth.user.username,
+              employeeId: wsAuth.user.employeeId,
+              user_id: `USR-${wsAuth.user.employeeId}`,
               device_id: payload.device_id || conn?.deviceId || payload.record?.device_id,
               actionDesc: payload.actionDesc,
               expectedVersion: payload.expectedVersion,
               reset_version: clientResetVersion,
-              userPermission: conn?.permission,
+              userPermission: wsAuth.permission,
               excludeSocket: ws
             });
 
@@ -2971,19 +3195,29 @@ async function startServer() {
           case "DATA_DELETE": {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
+            const wsAuth = getWsAuthContext(ws, payload);
+            if (!wsAuth) {
+              ws.send(JSON.stringify({ type: "ERROR", error: "UNAUTHORIZED: Valid session token required.", status: 401 }));
+              break;
+            }
+            if (wsAuth.permission !== "FULL_ACCESS") {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: Limited access accounts cannot delete records. FULL_ACCESS required.", status: 403 }));
+              break;
+            }
+
             const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || conn?.resetVersion || systemResetVersion;
             const targetId = String(payload.id || payload.record_id || payload.recordId || "");
 
             const deleteRes = executeRecordDelete({
               collection: payload.collection,
               id: targetId,
-              author: payload.author || conn?.username || "Operator",
-              employeeId: payload.employeeId || conn?.employeeId,
-              user_id: payload.user_id || conn?.user_id,
+              author: wsAuth.user.username,
+              employeeId: wsAuth.user.employeeId,
+              user_id: `USR-${wsAuth.user.employeeId}`,
               device_id: payload.device_id || conn?.deviceId,
               actionDesc: payload.actionDesc,
               reset_version: clientResetVersion,
-              userPermission: conn?.permission,
+              userPermission: wsAuth.permission,
               excludeSocket: ws
             });
 
@@ -3010,6 +3244,16 @@ async function startServer() {
           case "sync_collection": {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
+            const wsAuth = getWsAuthContext(ws, payload);
+            if (!wsAuth) {
+              ws.send(JSON.stringify({ type: "ERROR", error: "UNAUTHORIZED: Valid session token required.", status: 401 }));
+              break;
+            }
+            if (wsAuth.permission === "VIEW_ONLY") {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: Account has VIEW_ONLY privileges.", status: 403 }));
+              break;
+            }
+
             const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || conn?.resetVersion || systemResetVersion;
             const col = payload.collection;
 
@@ -3029,8 +3273,9 @@ async function startServer() {
               break;
             }
 
-            if (conn?.permission === 'VIEW_ONLY') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
+            const isRestricted = ['operationalRoles', 'receivingCategories', 'fifoColorsByMonth', 'registries', 'registeredUsers', 'sessions'].includes(col);
+            if (isRestricted && wsAuth.permission !== 'FULL_ACCESS') {
+              ws.send(JSON.stringify({ type: "ERROR", error: `PERMISSION DENIED: Limited access accounts cannot touch roles, categories, accounts, or master data (${col}). FULL_ACCESS required.`, status: 403 }));
               break;
             }
 
@@ -3106,10 +3351,10 @@ async function startServer() {
 
             let modifiedCount = 0;
             const serverTime = new Date().toISOString();
-            const effectiveAuthor = payload.author || conn?.username || "Operator";
-            const effectiveEmpId = payload.employeeId || conn?.employeeId;
+            const effectiveAuthor = wsAuth.user.username;
+            const effectiveEmpId = wsAuth.user.employeeId;
             const effectiveDevId = payload.device_id || conn?.deviceId || 'DEV-CENTRAL';
-            const effectiveUserId = payload.user_id || conn?.user_id || (effectiveEmpId ? `USR-${effectiveEmpId}` : `USR-${effectiveAuthor}`);
+            const effectiveUserId = `USR-${effectiveEmpId}`;
 
             for (const item of items) {
               if (!item) continue;
@@ -3211,6 +3456,16 @@ async function startServer() {
           case "sync_batch": {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
+            const wsAuth = getWsAuthContext(ws, payload);
+            if (!wsAuth) {
+              ws.send(JSON.stringify({ type: "ERROR", error: "UNAUTHORIZED: Valid session token required.", status: 401 }));
+              break;
+            }
+            if (wsAuth.permission === "VIEW_ONLY") {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: Account has VIEW_ONLY privileges.", status: 403 }));
+              break;
+            }
+
             const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || conn?.resetVersion || systemResetVersion;
             
             if (clientResetVersion < systemResetVersion) {
@@ -3231,28 +3486,33 @@ async function startServer() {
                 const res = executeRecordUpsert({
                   collection: m.collection,
                   record: m.record,
-                  author: m.author || conn?.username || "Operator",
-                  employeeId: m.employeeId || conn?.employeeId,
-                  user_id: m.user_id || conn?.user_id,
+                  author: wsAuth.user.username,
+                  employeeId: wsAuth.user.employeeId,
+                  user_id: `USR-${wsAuth.user.employeeId}`,
                   device_id: m.device_id || conn?.deviceId,
-                  reset_version: clientResetVersion
+                  reset_version: clientResetVersion,
+                  userPermission: wsAuth.permission
                 });
                 if (res.success) processed++;
               } else if (m.type === 'delete' && m.collection && (m.id || m.recordId)) {
+                if (wsAuth.permission !== 'FULL_ACCESS') {
+                  continue; // Limited access accounts cannot delete records
+                }
                 const res = executeRecordDelete({
                   collection: m.collection,
                   id: String(m.id || m.recordId),
-                  author: m.author || conn?.username || "Operator",
-                  employeeId: m.employeeId || conn?.employeeId,
-                  user_id: m.user_id || conn?.user_id,
+                  author: wsAuth.user.username,
+                  employeeId: wsAuth.user.employeeId,
+                  user_id: `USR-${wsAuth.user.employeeId}`,
                   device_id: m.device_id || conn?.deviceId,
-                  reset_version: clientResetVersion
+                  reset_version: clientResetVersion,
+                  userPermission: wsAuth.permission
                 });
                 if (res.success) processed++;
               }
             }
 
-            console.log(`[CENTRAL-DB] [WS-BATCH-MUTATIONS] Processed ${processed}/${mutations.length} mutations | User: ${conn?.username || 'Operator'} | Device: ${conn?.deviceId || 'Terminal'}`);
+            console.log(`[CENTRAL-DB] [WS-BATCH-MUTATIONS] Processed ${processed}/${mutations.length} mutations | User: ${wsAuth.user.username} | Device: ${conn?.deviceId || 'Terminal'}`);
 
             ws.send(JSON.stringify({
               type: "BATCH_SYNC_CONFIRMED",
@@ -3267,6 +3527,9 @@ async function startServer() {
           case "get_state": {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
+            const wsAuth = getWsAuthContext(ws, payload);
+            const userPerm = wsAuth?.permission || conn?.permission || "VIEW_ONLY";
+            const userEmpId = wsAuth?.user.employeeId || conn?.employeeId;
             const presenceList = getActivePresenceList();
             ws.send(JSON.stringify({
               type: "init",
@@ -3277,7 +3540,7 @@ async function startServer() {
               systemResetTimestamp,
               systemResetId,
               systemResetBy,
-              data: filterDataForClient({ ...state, chatMessages }, conn?.permission || "LIMITED_ACCESS", conn?.employeeId),
+              data: filterDataForClient({ ...state, chatMessages }, userPerm, userEmpId),
               activeUsers: getActiveUsersList(),
               activePresence: presenceList,
               presenceList,
@@ -3302,12 +3565,16 @@ async function startServer() {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
             if (conn) {
+              const wsAuth = getWsAuthContext(ws, payload);
               if (payload.activeView) conn.activeView = payload.activeView;
               if (payload.stationId) conn.stationId = payload.stationId;
-              if (payload.username) conn.username = payload.username.toUpperCase();
-              if (payload.employeeId) conn.employeeId = payload.employeeId.toUpperCase();
-              if (payload.role) conn.role = payload.role.toUpperCase();
-              if (payload.permission) conn.permission = payload.permission;
+              if (wsAuth) {
+                conn.username = wsAuth.user.username;
+                conn.employeeId = wsAuth.user.employeeId;
+                conn.role = wsAuth.user.role;
+                conn.permission = wsAuth.permission;
+                conn.user_id = `USR-${wsAuth.user.employeeId}`;
+              }
               conn.lastPing = Date.now();
               broadcastPresenceSync();
             }
@@ -3316,7 +3583,12 @@ async function startServer() {
 
           case "force_sync_all":
           case "sync_all_workstations": {
-            const author = payload.author || "SUPER ADMINISTRATOR";
+            const wsAuth = getWsAuthContext(ws, payload);
+            if (!wsAuth || wsAuth.permission !== "FULL_ACCESS") {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: FULL_ACCESS required to force sync all workstations.", status: 403 }));
+              break;
+            }
+            const author = wsAuth.user.username;
             broadcast({
               type: "SYNC_REQUIRED",
               author,
@@ -3347,10 +3619,22 @@ async function startServer() {
           }
 
           case "chat": {
+            const wsAuth = getWsAuthContext(ws, payload);
+            if (!wsAuth) {
+              ws.send(JSON.stringify({ type: "ERROR", error: "UNAUTHORIZED: Valid session token required.", status: 401 }));
+              break;
+            }
+            if (wsAuth.permission === "VIEW_ONLY") {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY accounts cannot post chat messages.", status: 403 }));
+              break;
+            }
+            const cleanText = String(payload.text || '').trim();
+            if (!cleanText) break;
+
             const newMsg: ChatMessage = {
               id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-              sender: payload.username || payload.sender || "Staff",
-              text: String(payload.text || '').trim(),
+              sender: wsAuth.user.username,
+              text: cleanText,
               timestamp: new Date().toISOString(),
               isSystem: false
             };
@@ -3366,6 +3650,11 @@ async function startServer() {
           }
 
           case "register_account": {
+            const wsAuth = getWsAuthContext(ws, payload);
+            if (!wsAuth || wsAuth.permission !== "FULL_ACCESS") {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: FULL_ACCESS required to register accounts.", status: 403 }));
+              break;
+            }
             const newUser = payload.user;
             if (!newUser || !newUser.employeeId) break;
             const cleanEmpId = String(newUser.employeeId).trim().toUpperCase();
@@ -3392,7 +3681,7 @@ async function startServer() {
               pin: cleanPin,
               isPinCompromised: isCompromised,
               status: 'ACTIVE',
-              registeredBy: payload.author || newUser.registeredBy || 'JPMP-002 (ALDRIN BANAWA)',
+              registeredBy: wsAuth.user.username,
               registeredBySuperAdmin: true,
               registeredAt: newUser.registeredAt || new Date().toISOString(),
               version: 1,
@@ -3408,7 +3697,7 @@ async function startServer() {
             stateRevision++;
             commitDatabase();
 
-            const authorName = payload.author || "Super Administrator";
+            const authorName = wsAuth.user.username;
             broadcast({
               type: "account_registered",
               user: userToStore,
@@ -3431,6 +3720,11 @@ async function startServer() {
           }
 
           case "update_account": {
+            const wsAuth = getWsAuthContext(ws, payload);
+            if (!wsAuth || wsAuth.permission !== "FULL_ACCESS") {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: FULL_ACCESS required to update accounts.", status: 403 }));
+              break;
+            }
             const updated = payload.user;
             if (!updated || !updated.employeeId) break;
             const cleanEmpId = String(updated.employeeId).trim().toUpperCase();
@@ -3460,7 +3754,7 @@ async function startServer() {
             stateRevision++;
             commitDatabase();
 
-            const authorName = payload.author || "Admin";
+            const authorName = wsAuth.user.username;
             broadcast({
               type: "account_updated",
               user: mergedUser,
@@ -3478,6 +3772,11 @@ async function startServer() {
           }
 
           case "delete_account": {
+            const wsAuth = getWsAuthContext(ws, payload);
+            if (!wsAuth || wsAuth.permission !== "FULL_ACCESS") {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: FULL_ACCESS required to delete accounts.", status: 403 }));
+              break;
+            }
             const cleanId = String(payload.employeeId || '').trim().toUpperCase();
             if (!cleanId || cleanId === 'JPMP-002') break;
 
@@ -3501,6 +3800,11 @@ async function startServer() {
           }
 
           case "all_accounts_cleared": {
+            const wsAuth = getWsAuthContext(ws, payload);
+            if (!wsAuth || wsAuth.permission !== "FULL_ACCESS") {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: FULL_ACCESS required to clear accounts.", status: 403 }));
+              break;
+            }
             const superAdmin = state.registeredUsers.find(u => u.employeeId.toUpperCase().trim() === 'JPMP-002') || defaultSuperAdmin;
             state.registeredUsers.forEach(u => {
               if (u.employeeId.toUpperCase().trim() !== 'JPMP-002') {
@@ -3532,6 +3836,11 @@ async function startServer() {
 
           case "update_roles":
           case "manage_roles": {
+            const wsAuth = getWsAuthContext(ws, payload);
+            if (!wsAuth || wsAuth.permission !== "FULL_ACCESS") {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: FULL_ACCESS required to manage roles.", status: 403 }));
+              break;
+            }
             if (Array.isArray(payload.roles)) {
               const cleaned = Array.from(new Set<string>(payload.roles.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
               if (cleaned.length > 0) {
@@ -3556,6 +3865,11 @@ async function startServer() {
 
           case "update_categories":
           case "manage_categories": {
+            const wsAuth = getWsAuthContext(ws, payload);
+            if (!wsAuth || wsAuth.permission !== "FULL_ACCESS") {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: FULL_ACCESS required to manage categories.", status: 403 }));
+              break;
+            }
             let recModified = false;
             let retModified = false;
             let stocksModified = false;
@@ -3657,6 +3971,11 @@ async function startServer() {
 
           case "update_fifo_colors":
           case "manage_fifo_colors": {
+            const wsAuth = getWsAuthContext(ws, payload);
+            if (!wsAuth || wsAuth.permission !== "FULL_ACCESS") {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: FULL_ACCESS required to manage FIFO colors.", status: 403 }));
+              break;
+            }
             if (payload.fifoColorsByMonth && typeof payload.fifoColorsByMonth === 'object') {
               state.fifoColorsByMonth = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...payload.fifoColorsByMonth };
               stateRevision++;
@@ -3700,6 +4019,10 @@ async function startServer() {
           }
 
           case "client_installed": {
+            const wsAuth = getWsAuthContext(ws, payload);
+            if (!wsAuth || wsAuth.permission !== "FULL_ACCESS") {
+              break;
+            }
             const { stationId, installId, username, employeeId, platform, timestamp } = payload;
             console.log(`[CENTRAL-DB] Client installed: Station ${stationId} by ${username} (${employeeId}) on ${platform}`);
             broadcast({
@@ -3716,11 +4039,15 @@ async function startServer() {
           }
 
           case "system_activity": {
+            const wsAuth = getWsAuthContext(ws, payload);
+            if (!wsAuth || wsAuth.permission === "VIEW_ONLY") {
+              break;
+            }
             const actText = String(payload.text || payload.action || '').trim();
             if (actText) {
               const newMsg: ChatMessage = {
                 id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-                sender: "SYSTEM",
+                sender: wsAuth.user.username || "SYSTEM",
                 text: actText,
                 timestamp: new Date().toISOString(),
                 isSystem: true
@@ -4067,7 +4394,9 @@ async function startServer() {
 
   // REST API: Synchronize All Workstations (Windows, Android, iOS, Desktop)
   app.post(["/api/sync/all-workstations", "/api/sync-all-workstations"], (req, res) => {
-    const author = req.body?.author || "SUPER ADMINISTRATOR";
+    const auth = requireFullAccess(req, res, "force sync all workstations");
+    if (!auth) return;
+    const author = auth.user.username || "SUPER ADMINISTRATOR";
     broadcast({
       type: "SYNC_REQUIRED",
       author,
@@ -4095,8 +4424,9 @@ async function startServer() {
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
 
-    const clientEmpId = (req.headers['x-employee-id'] as string) || '';
-    const clientPermission = (req.headers['x-permission'] as string) || '';
+    const auth = authenticateRequest(req);
+    const clientEmpId = auth?.user?.employeeId || '';
+    const clientPermission = auth?.permission || 'LIMITED_ACCESS';
 
     res.json({
       status: "ok",
@@ -4117,7 +4447,10 @@ async function startServer() {
   // REST API: Sync collection (Batch upsert from client to central database)
   app.post("/api/sync", async (req, res) => {
     try {
-      const { collection, data, reset_version, author, employeeId, device_id } = req.body;
+      const auth = requireWriteAccess(req, res, "sync collection data");
+      if (!auth) return;
+
+      const { collection, data, reset_version, device_id } = req.body;
       const clientResetVersion = Number(reset_version || req.headers['x-reset-version']) || systemResetVersion;
       if (clientResetVersion < systemResetVersion) {
         return res.status(409).json({
@@ -4131,9 +4464,9 @@ async function startServer() {
         return res.status(400).json({ error: `Unknown or invalid collection: ${collection}` });
       }
 
-      const clientPermission = (req.headers['x-user-permission'] || req.body.permission || '').toString().toUpperCase();
-      if (clientPermission === 'VIEW_ONLY') {
-        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
+      const isRestricted = ['operationalRoles', 'receivingCategories', 'fifoColorsByMonth', 'registries', 'registeredUsers', 'sessions'].includes(collection);
+      if (isRestricted && auth.permission !== 'FULL_ACCESS') {
+        return res.status(403).json({ error: `PERMISSION DENIED: Limited access accounts cannot touch roles, categories, accounts, or master data (${collection}). FULL_ACCESS required.` });
       }
 
       if (collection === 'operationalRoles') {
@@ -4208,9 +4541,10 @@ async function startServer() {
 
       let modifiedCount = 0;
       const serverTime = new Date().toISOString();
-      const effectiveAuthor = author || employeeId || "Operator";
+      const effectiveAuthor = auth.user.username;
+      const effectiveEmpId = auth.user.employeeId;
       const effectiveDevId = String(device_id || req.headers['x-device-id'] || 'DEV-CENTRAL').trim();
-      const effectiveUserId = String(req.body.user_id || (employeeId ? `USR-${employeeId}` : `USR-${effectiveAuthor}`)).trim();
+      const effectiveUserId = `USR-${effectiveEmpId}`;
 
       for (const item of items) {
         if (!item) continue;
@@ -4301,7 +4635,10 @@ async function startServer() {
   // REST API: Batch Mutations (offline reconciliation for reconnecting devices)
   app.post("/api/sync/batch", async (req, res) => {
     try {
-      const { mutations, reset_version, author, employeeId, device_id } = req.body;
+      const auth = requireWriteAccess(req, res, "submit batch mutations");
+      if (!auth) return;
+
+      const { mutations, reset_version, device_id } = req.body;
       const clientResetVersion = Number(reset_version || req.headers['x-reset-version']) || systemResetVersion;
       
       if (clientResetVersion < systemResetVersion) {
@@ -4315,32 +4652,42 @@ async function startServer() {
       const mutList = Array.isArray(mutations) ? mutations : [];
       let processed = 0;
       const effectiveDevId = String(device_id || req.headers['x-device-id'] || 'DEV-OFFLINE').trim();
-      const effectiveAuthor = author || employeeId || "Operator";
-      const effectiveUserId = String(req.body.user_id || (employeeId ? `USR-${employeeId}` : `USR-${effectiveAuthor}`)).trim();
+      const effectiveAuthor = auth.user.username;
+      const effectiveUserId = `USR-${auth.user.employeeId}`;
 
       for (const m of mutList) {
         if (m.type === 'upsert' && m.collection && m.record) {
+          const isRestricted = ['operationalRoles', 'receivingCategories', 'fifoColorsByMonth', 'registries', 'registeredUsers', 'sessions'].includes(m.collection);
+          if (isRestricted && auth.permission !== 'FULL_ACCESS') {
+            continue; // Limited access accounts cannot touch master data/roles/categories/accounts
+          }
+
           const r = executeRecordUpsert({
             collection: m.collection,
             record: m.record,
-            author: m.author || effectiveAuthor,
-            employeeId: m.employeeId || employeeId,
-            user_id: m.user_id || effectiveUserId,
+            author: effectiveAuthor,
+            employeeId: auth.user.employeeId,
+            user_id: effectiveUserId,
             device_id: m.device_id || effectiveDevId,
             actionDesc: m.actionDesc,
-            reset_version: clientResetVersion
+            reset_version: clientResetVersion,
+            userPermission: auth.permission
           });
           if (r.success) processed++;
         } else if (m.type === 'delete' && m.collection && (m.id || m.recordId)) {
+          if (auth.permission !== 'FULL_ACCESS') {
+            continue; // Limited access accounts cannot delete
+          }
           const r = executeRecordDelete({
             collection: m.collection,
             id: String(m.id || m.recordId),
-            author: m.author || effectiveAuthor,
-            employeeId: m.employeeId || employeeId,
-            user_id: m.user_id || effectiveUserId,
+            author: effectiveAuthor,
+            employeeId: auth.user.employeeId,
+            user_id: effectiveUserId,
             device_id: m.device_id || effectiveDevId,
             actionDesc: m.actionDesc,
-            reset_version: clientResetVersion
+            reset_version: clientResetVersion,
+            userPermission: auth.permission
           });
           if (r.success) processed++;
         }
@@ -4495,6 +4842,9 @@ async function startServer() {
   // REST API: Terminal Fresh Install & Primary Administrator Device Binding
   app.post("/api/terminal/fresh-install", (req, res) => {
     try {
+      const auth = requireFullAccess(req, res, "perform terminal fresh installation");
+      if (!auth) return;
+
       const { deviceId, deviceName, stationId } = req.body;
       const targetDeviceId = deviceId || primaryDeviceId;
 
@@ -4541,34 +4891,205 @@ async function startServer() {
     }
   });
 
+  // =========================================================================
+  // SUPER ADMIN AUTHENTICATION, RATE LIMITING & AUDIT LOGGING
+  // 1. Employee ID MUST be EXACTLY 'JPMP-002' (reject empty or substring matches).
+  // 2. PIN must match ONLY the stored Super Admin PIN from the database (no '0423' fallback).
+  // 3. Rate limiting: 5 wrong attempts locks admin auth for 5 minutes.
+  // 4. Every attempt (success, failure, lockout) is recorded to authoritative audit log.
+  // =========================================================================
+  const MAX_SUPER_ADMIN_FAILED_ATTEMPTS = 5;
+  const SUPER_ADMIN_LOCKOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+  let superAdminFailedAttempts = 0;
+  let superAdminLockedUntil = 0;
+
+  const ADMIN_AUTH_AUDIT_LOG_FILE = getStorageFilePath("admin-auth-audit-log.json");
+
+  interface AdminAuthAuditEntry {
+    id: string;
+    outcome: 'SUCCESS' | 'INVALID_EMPLOYEE_ID' | 'INCORRECT_PIN' | 'SUPER_ADMIN_NOT_FOUND' | 'LOCKED_OUT';
+    employeeId: string;
+    ip: string;
+    timestamp: string;
+    details: string;
+    failedAttempts: number;
+    lockedUntil?: string;
+    path?: string;
+    method?: string;
+  }
+
+  let adminAuthAuditLogs: AdminAuthAuditEntry[] = [];
+  try {
+    if (fs.existsSync(ADMIN_AUTH_AUDIT_LOG_FILE)) {
+      const raw = fs.readFileSync(ADMIN_AUTH_AUDIT_LOG_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) adminAuthAuditLogs = parsed;
+    }
+  } catch (e) {
+    adminAuthAuditLogs = [];
+  }
+
+  function logAdminAuthAudit(entryData: {
+    outcome: 'SUCCESS' | 'INVALID_EMPLOYEE_ID' | 'INCORRECT_PIN' | 'SUPER_ADMIN_NOT_FOUND' | 'LOCKED_OUT';
+    employeeId: string;
+    ip: string;
+    details: string;
+    failedAttempts: number;
+    lockedUntil?: string;
+    req?: express.Request;
+  }) {
+    const entry: AdminAuthAuditEntry = {
+      id: `AUTH-LOG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      outcome: entryData.outcome,
+      employeeId: entryData.employeeId,
+      ip: entryData.ip,
+      timestamp: new Date().toISOString(),
+      details: entryData.details,
+      failedAttempts: entryData.failedAttempts,
+      lockedUntil: entryData.lockedUntil,
+      path: entryData.req?.path || entryData.req?.originalUrl,
+      method: entryData.req?.method
+    };
+
+    adminAuthAuditLogs.unshift(entry);
+    if (adminAuthAuditLogs.length > 500) {
+      adminAuthAuditLogs = adminAuthAuditLogs.slice(0, 500);
+    }
+
+    try {
+      fs.writeFileSync(ADMIN_AUTH_AUDIT_LOG_FILE, JSON.stringify(adminAuthAuditLogs, null, 2), "utf-8");
+    } catch (err) {
+      console.error("[ADMIN-AUTH-AUDIT] Failed to persist admin auth audit log:", err);
+    }
+
+    if (entryData.outcome === 'SUCCESS') {
+      console.log(`[ADMIN-AUTH-AUDIT] SUCCESS: JPMP-002 authenticated for ${entry.method || ''} ${entry.path || ''} from ${entry.ip}`);
+    } else {
+      console.warn(`[ADMIN-AUTH-AUDIT] ${entryData.outcome}: ID='${entryData.employeeId}', IP=${entry.ip}, Path=${entry.path || 'N/A'}. Details: ${entryData.details}`);
+    }
+  }
+
   // Helper to authenticate Super Admin
   function isAuthorizedSuperAdmin(req: express.Request): boolean {
+    const clientIp = (
+      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || 
+      req.socket?.remoteAddress || 
+      req.ip || 
+      '127.0.0.1'
+    );
+
+    // 1. Authoritatively derive user and permission from session token (Bearer or query)
+    const auth = authenticateRequest(req);
+    if (!auth) {
+      logAdminAuthAudit({
+        outcome: 'SUPER_ADMIN_NOT_FOUND',
+        employeeId: 'UNAUTHENTICATED',
+        ip: clientIp,
+        details: 'Rejected request without valid session token.',
+        failedAttempts: superAdminFailedAttempts,
+        req
+      });
+      return false;
+    }
+
+    if (auth.permission !== 'FULL_ACCESS') {
+      logAdminAuthAudit({
+        outcome: 'INVALID_EMPLOYEE_ID',
+        employeeId: auth.user.employeeId,
+        ip: clientIp,
+        details: `Rejected non-FULL_ACCESS account '${auth.user.employeeId}' with permission '${auth.permission}'.`,
+        failedAttempts: superAdminFailedAttempts,
+        req
+      });
+      return false;
+    }
+
     const bodyPin = (
       req.body?.adminPin || 
       req.body?.pin || 
-      req.headers['x-admin-pin'] || 
-      req.headers['x-user-pin'] || 
       ''
     ).toString().trim();
 
-    const bodyEmpId = (
-      req.body?.requesterEmployeeId || 
-      req.body?.employeeId || 
-      req.body?.authorId || 
-      req.headers['x-user-employee-id'] || 
-      ''
-    ).toString().trim().toUpperCase();
+    const now = Date.now();
 
-    // Check in-memory central database for Super Admin PIN
-    const superAdmin = state.registeredUsers.find(
-      u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002'
-    );
+    // 2. Check if currently locked out due to prior failed PIN attempts
+    if (superAdminLockedUntil > now) {
+      const remainingSeconds = Math.ceil((superAdminLockedUntil - now) / 1000);
+      logAdminAuthAudit({
+        outcome: 'LOCKED_OUT',
+        employeeId: auth.user.employeeId,
+        ip: clientIp,
+        details: `Super Admin authentication is LOCKED for ${remainingSeconds}s.`,
+        failedAttempts: superAdminFailedAttempts,
+        lockedUntil: new Date(superAdminLockedUntil).toISOString(),
+        req
+      });
+      return false;
+    }
 
-    const validPin = superAdmin?.pin?.trim() || '0423';
-    const isIdMatch = bodyEmpId === 'JPMP-002' || bodyEmpId === '' || bodyEmpId.includes('002');
-    const isPinMatch = bodyPin === validPin || bodyPin === '0423';
-    return isIdMatch && isPinMatch;
+    if (superAdminLockedUntil > 0 && now >= superAdminLockedUntil) {
+      superAdminFailedAttempts = 0;
+      superAdminLockedUntil = 0;
+    }
+
+    // 3. If an explicit PIN was provided in body, verify it against stored PIN
+    if (bodyPin) {
+      const superAdmin = state.registeredUsers.find(
+        u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002'
+      );
+      const storedPin = (superAdmin?.pin || auth.user.pin || '').toString().trim();
+
+      if (bodyPin !== storedPin) {
+        superAdminFailedAttempts++;
+        if (superAdminFailedAttempts >= MAX_SUPER_ADMIN_FAILED_ATTEMPTS) {
+          superAdminLockedUntil = Date.now() + SUPER_ADMIN_LOCKOUT_MS;
+        }
+        logAdminAuthAudit({
+          outcome: 'INCORRECT_PIN',
+          employeeId: auth.user.employeeId,
+          ip: clientIp,
+          details: `Incorrect PIN provided for admin action. Attempts: ${superAdminFailedAttempts}/${MAX_SUPER_ADMIN_FAILED_ATTEMPTS}.`,
+          failedAttempts: superAdminFailedAttempts,
+          lockedUntil: superAdminLockedUntil ? new Date(superAdminLockedUntil).toISOString() : undefined,
+          req
+        });
+        return false;
+      }
+    }
+
+    superAdminFailedAttempts = 0;
+    superAdminLockedUntil = 0;
+    logAdminAuthAudit({
+      outcome: 'SUCCESS',
+      employeeId: auth.user.employeeId,
+      ip: clientIp,
+      details: `Admin ${auth.user.employeeId} (${auth.user.username}) authorized with FULL_ACCESS.`,
+      failedAttempts: 0,
+      req
+    });
+    return true;
   }
+
+  // REST API: Super Admin Authentication Status & Audit Log
+  app.get("/api/admin/auth-status", (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    const now = Date.now();
+    const isLocked = superAdminLockedUntil > now;
+    const remainingSeconds = isLocked ? Math.ceil((superAdminLockedUntil - now) / 1000) : 0;
+
+    return res.json({
+      success: true,
+      isLocked,
+      remainingSeconds,
+      lockedUntil: isLocked ? new Date(superAdminLockedUntil).toISOString() : null,
+      failedAttempts: isLocked ? superAdminFailedAttempts : (superAdminLockedUntil > 0 ? 0 : superAdminFailedAttempts),
+      maxAttempts: MAX_SUPER_ADMIN_FAILED_ATTEMPTS,
+      lockoutDurationMinutes: 5,
+      auditLogsCount: adminAuthAuditLogs.length,
+      auditLogs: adminAuthAuditLogs.slice(0, 50)
+    });
+  });
 
   /**
    * GLOBAL RESET API
@@ -4578,6 +5099,9 @@ async function startServer() {
    */
   app.post(["/api/reset-everything", "/api/reset-database"], async (req, res) => {
     try {
+      const auth = requireFullAccess(req, res, "execute global database reset");
+      if (!auth) return;
+
       if (!req.body?.confirmed) {
         return res.status(400).json({ 
           error: "CONFIRMATION_REQUIRED: Global reset requires explicit 'confirmed: true'." 
@@ -4590,8 +5114,15 @@ async function startServer() {
         });
       }
 
-      const author = req.body?.author || "ALDRIN BANAWA (SUPER ADMINISTRATOR)";
+      const author = auth.user.username || "ALDRIN BANAWA (SUPER ADMINISTRATOR)";
       const keepUsers = req.body?.keepUsers !== false;
+
+      // Automatically create a safety backup right before running destructive reset
+      try {
+        await createDatabaseBackup("PRE_DATABASE_RESET_SAFETY_BACKUP", author);
+      } catch (backupErr) {
+        console.warn("[RESET-DATABASE] Pre-reset backup warning:", backupErr);
+      }
 
       // 1. Advance reset version
       systemResetVersion += 1;
@@ -4700,6 +5231,9 @@ async function startServer() {
   app.get("/api/admin/backups", (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     try {
+      const auth = requireFullAccess(req, res, "view database backups");
+      if (!auth) return;
+
       if (!fs.existsSync(BACKUPS_DIR)) {
         fs.mkdirSync(BACKUPS_DIR, { recursive: true });
       }
@@ -4723,12 +5257,15 @@ async function startServer() {
   // 2. Trigger on-demand backup
   app.post("/api/admin/backups/create", async (req, res) => {
     try {
+      const auth = requireFullAccess(req, res, "create database backups");
+      if (!auth) return;
+
       if (!isAuthorizedSuperAdmin(req)) {
         return res.status(403).json({ 
           error: "PERMISSION_DENIED: Only Super Administrator (JPMP-002) is authorized to trigger manual backups." 
         });
       }
-      const author = req.body?.author || "SUPER_ADMIN";
+      const author = auth.user.username || "SUPER_ADMIN";
       const result = await createDatabaseBackup("MANUAL_ON_DEMAND", author);
       if (result.success) {
         return res.json({ 
@@ -4747,6 +5284,9 @@ async function startServer() {
   // 3. Restore database snapshot (overwrite live database with selected backup)
   app.post("/api/admin/backups/restore", (req, res) => {
     try {
+      const auth = requireFullAccess(req, res, "restore database backups");
+      if (!auth) return;
+
       if (!isAuthorizedSuperAdmin(req)) {
         return res.status(403).json({ 
           error: "PERMISSION_DENIED: Only Super Administrator (JPMP-002) is authorized to restore database snapshots." 
@@ -4764,7 +5304,7 @@ async function startServer() {
         return res.status(400).json({ error: "MISSING_FILENAME: Backup filename is required." });
       }
 
-      const author = req.body?.author || "SUPER_ADMIN";
+      const author = auth.user.username || "SUPER_ADMIN";
       const result = restoreDatabaseFromBackup(filename, author);
 
       if (result.success) {
@@ -4784,6 +5324,9 @@ async function startServer() {
   // 4. Download backup snapshot file
   app.get("/api/admin/backups/download/:filename", (req, res) => {
     try {
+      const auth = requireFullAccess(req, res, "download database backups");
+      if (!auth) return;
+
       const filename = path.basename(req.params.filename);
       const filePath = path.join(BACKUPS_DIR, filename);
       if (!fs.existsSync(filePath)) {
@@ -4811,10 +5354,17 @@ async function startServer() {
         commitDatabase();
       }
 
+      const auth = authenticateRequest(req);
+      const isSuper = auth?.permission === 'FULL_ACCESS';
+      const accounts = isSuper ? state.registeredUsers : state.registeredUsers.map(u => {
+        const { pin, pin_hash, ...safe } = u;
+        return safe;
+      });
+
       return res.json({
         success: true,
-        count: state.registeredUsers.length,
-        accounts: state.registeredUsers,
+        count: accounts.length,
+        accounts,
         revision: stateRevision,
         systemResetVersion
       });
@@ -4823,8 +5373,8 @@ async function startServer() {
     }
   });
 
-  // REST API: Verify Operator Credentials & PIN
-  // Single Source of Truth: Central database verification
+  // REST API: Verify Operator Credentials & Issue Server-Authoritative Session Token
+  // Stored in database so server restarts don't log people out
   app.post("/api/accounts/verify", async (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     try {
@@ -4853,16 +5403,36 @@ async function startServer() {
       });
 
       if (matchedUser) {
-        // Record last active timestamp
         matchedUser.lastActive = new Date().toISOString();
         if (matchedUser.pin === '1234') {
           matchedUser.isPinCompromised = true;
         }
+
+        // Issue cryptographically random session token (32 bytes hex)
+        const sessionToken = crypto.randomBytes(32).toString('hex');
+        const effectivePermission = (matchedUser.permission || (matchedUser.employeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS')).trim().toUpperCase();
+
+        const sessionRecord = {
+          id: sessionToken,
+          token: sessionToken,
+          employeeId: matchedUser.employeeId,
+          username: matchedUser.username,
+          role: matchedUser.role,
+          permission: effectivePermission,
+          createdAt: new Date().toISOString(),
+          lastActive: new Date().toISOString()
+        };
+
+        if (!state.sessions) state.sessions = [];
+        state.sessions.push(sessionRecord);
         commitDatabase();
 
         return res.json({
           success: true,
           user: matchedUser,
+          token: sessionToken,
+          sessionToken,
+          permission: effectivePermission,
           isPinCompromised: matchedUser.pin === '1234' || !!matchedUser.isPinCompromised,
           systemResetVersion
         });
@@ -4874,6 +5444,36 @@ async function startServer() {
         success: false,
         error: "AUTHENTICATION_FAILED: Invalid Operator ID or PIN code."
       });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // REST API: Validate Current Session Token & Retrieve User Record
+  app.get("/api/accounts/session", (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    const auth = requireAuth(req, res);
+    if (!auth) return;
+
+    return res.json({
+      success: true,
+      user: auth.user,
+      permission: auth.permission,
+      token: auth.token,
+      sessionToken: auth.token,
+      systemResetVersion
+    });
+  });
+
+  // REST API: Invalidate Session Token on Logout
+  app.post("/api/accounts/logout", (req, res) => {
+    try {
+      const token = extractToken(req);
+      if (token && Array.isArray(state.sessions)) {
+        state.sessions = state.sessions.filter(s => s && s.token !== token && s.id !== token);
+        commitDatabase();
+      }
+      return res.json({ success: true, message: "Logged out successfully" });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
@@ -4915,8 +5515,14 @@ async function startServer() {
       }
 
       // Verification: must be confirmed Super Admin OR operator verifying their own current PIN
-      const isSuper = isAuthorizedSuperAdmin(req);
+      const auth = requireAuth(req, res);
+      if (!auth) return;
+
+      const isSuper = auth.permission === 'FULL_ACCESS';
       if (!isSuper) {
+        if (auth.user.employeeId.toUpperCase().trim() !== cleanEmpId) {
+          return res.status(403).json({ error: "PERMISSION_DENIED: Limited access accounts cannot update PIN of other operators. FULL_ACCESS required." });
+        }
         if (target.pin !== cleanCurrentPin) {
           console.warn(`[SECURITY ALERT] Unauthorized PIN change attempt for ${cleanEmpId} from IP ${req.ip}`);
           return res.status(403).json({ error: "INCORRECT_PIN: Current PIN does not match. Super Admin authorization required." });
@@ -4929,7 +5535,7 @@ async function startServer() {
       target.pin = cleanNewPin;
       target.isPinCompromised = false;
       target.pinChangedAt = new Date().toISOString();
-      target.pinChangedBy = requesterId;
+      target.pinChangedBy = auth.user.employeeId;
       target.version = (target.version || 1) + 1;
       target.updated_at = new Date().toISOString();
       target.reset_version = systemResetVersion;
@@ -4946,7 +5552,7 @@ async function startServer() {
         cleanEmpId,
         target.username,
         author || (isSuper ? 'Super Administrator (ALDRIN BANAWA)' : target.username),
-        requesterId,
+        auth.user.employeeId,
         reason || (previousWasCompromised ? 'Resolving compromised default PIN' : 'Explicit PIN update'),
         previousWasCompromised,
         req.ip
@@ -4956,7 +5562,7 @@ async function startServer() {
         type: "account_updated",
         account: target,
         user: target,
-        author: author || requesterId,
+        author: auth.user.username,
         systemResetVersion
       });
 
@@ -4982,6 +5588,9 @@ async function startServer() {
   // REST API: Get PIN Audit Logs (Super Admin Only)
   app.get("/api/accounts/pin-audit-log", (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    const auth = requireFullAccess(req, res, "view PIN audit logs");
+    if (!auth) return;
+
     return res.json({
       success: true,
       count: pinAuditLogs.length,
@@ -4992,7 +5601,10 @@ async function startServer() {
   // REST API: Register New Operator Account
   app.post("/api/accounts/register", async (req, res) => {
     try {
-      const { employeeId, username, role, phoneNumber, permission, pin, registeredBy } = req.body;
+      const auth = requireFullAccess(req, res, "register new operator accounts");
+      if (!auth) return;
+
+      const { employeeId, username, role, phoneNumber, permission, pin } = req.body;
       const cleanEmpId = String(employeeId || '').trim().toUpperCase();
       const cleanUsername = String(username || '').trim().toUpperCase();
       const cleanPin = String(pin || '').trim();
@@ -5018,7 +5630,7 @@ async function startServer() {
         permission: String(permission || 'LIMITED_ACCESS').trim(),
         pin: cleanPin,
         status: 'ACTIVE',
-        registeredBy: registeredBy || 'JPMP-002 (ALDRIN BANAWA)',
+        registeredBy: auth.user.username,
         registeredBySuperAdmin: true,
         registeredAt: new Date().toISOString(),
         version: 1,
@@ -5037,7 +5649,7 @@ async function startServer() {
       broadcast({
         type: "account_registered",
         user: newUser,
-        author: registeredBy || 'Super Administrator',
+        author: auth.user.username,
         systemResetVersion
       });
 
@@ -5064,6 +5676,9 @@ async function startServer() {
   // REST API: Update Operator Account
   app.post("/api/accounts/update", async (req, res) => {
     try {
+      const auth = requireFullAccess(req, res, "update operator accounts");
+      if (!auth) return;
+
       const { oldEmployeeId, updatedUser } = req.body;
       const cleanOldId = String(oldEmployeeId || updatedUser?.employeeId || '').trim().toUpperCase();
 
@@ -5121,7 +5736,7 @@ async function startServer() {
         type: "account_updated",
         account: mergedUser,
         user: mergedUser,
-        author: req.body.author || 'Admin',
+        author: auth.user.username,
         systemResetVersion
       });
 
@@ -5141,6 +5756,9 @@ async function startServer() {
   // REST API: Delete Operator Account
   app.post("/api/accounts/delete", async (req, res) => {
     try {
+      const auth = requireFullAccess(req, res, "delete operator accounts");
+      if (!auth) return;
+
       const { employeeId } = req.body;
       const cleanId = String(employeeId || '').trim().toUpperCase();
 
@@ -5180,8 +5798,20 @@ async function startServer() {
   // REST API: Clear All Accounts Except Super Admin
   app.post("/api/accounts/clear-all-except-super-admin", async (req, res) => {
     try {
+      const auth = requireFullAccess(req, res, "clear all accounts");
+      if (!auth) return;
+
       if (!isAuthorizedSuperAdmin(req)) {
         return res.status(403).json({ error: "PERMISSION_DENIED: Only Super Administrator is authorized to clear accounts." });
+      }
+
+      const author = auth.user.username || "SUPER_ADMIN (JPMP-002)";
+
+      // Automatically create a safety backup right before wiping accounts
+      try {
+        await createDatabaseBackup("PRE_ACCOUNTS_WIPE_SAFETY_BACKUP", author);
+      } catch (backupErr) {
+        console.warn("[WIPE-ACCOUNTS] Pre-wipe backup warning:", backupErr);
       }
 
       const superAdmin = state.registeredUsers.find(u => u.employeeId.toUpperCase().trim() === 'JPMP-002') || defaultSuperAdmin;
@@ -5235,6 +5865,9 @@ async function startServer() {
   // REST API: Manage / Update Operational Roles (Super Admin)
   app.post("/api/roles", async (req, res) => {
     try {
+      const auth = requireFullAccess(req, res, "manage operational roles");
+      if (!auth) return;
+
       const { action, role, oldRole, newRole, roles, updateExistingAccounts } = req.body;
       let modified = false;
       let usersModified = false;
@@ -5336,6 +5969,9 @@ async function startServer() {
   // REST API: Manage / Update Receiving Categories (Super Admin)
   app.post("/api/categories", async (req, res) => {
     try {
+      const auth = requireFullAccess(req, res, "manage receiving categories");
+      if (!auth) return;
+
       const { action, category, oldCategory, newCategory, oldCat, newCat, categories, updateExistingRecords } = req.body;
       let modified = false;
       let recModified = false;
@@ -5501,14 +6137,10 @@ async function startServer() {
 
   app.post("/api/fifo-colors", async (req, res) => {
     try {
-      const { action, month, color, fifoColorsByMonth } = req.body;
-      const clientPermission = (req.headers['x-user-permission'] || req.body.permission || '').toString().toUpperCase();
-      const clientEmpId = (req.headers['x-employee-id'] || req.body.employeeId || '').toString().toUpperCase();
-      const isSuperAdmin = clientEmpId === 'JPMP-002' || clientPermission === 'FULL_ACCESS';
+      const auth = requireFullAccess(req, res, "manage FIFO color calendar");
+      if (!auth) return;
 
-      if (!isSuperAdmin) {
-        return res.status(403).json({ error: "PERMISSION DENIED: Only Super Administrator (JPMP-002) can edit the FIFO color calendar." });
-      }
+      const { action, month, color, fifoColorsByMonth } = req.body;
 
       let modified = false;
 
@@ -5581,21 +6213,23 @@ async function startServer() {
    */
   app.post("/api/records/upsert", async (req, res) => {
     try {
+      const auth = requireWriteAccess(req, res, "upsert records");
+      if (!auth) return;
+
       const { collection, record, author, employeeId, actionDesc, expectedVersion } = req.body;
-      const userPermission = (req.body.permission || req.headers['x-user-permission'] || '').toString().toUpperCase();
       const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version'] || record?.reset_version) || systemResetVersion;
 
       const result = executeRecordUpsert({
         collection,
         record,
-        author,
-        employeeId,
+        author: auth.user.username || author,
+        employeeId: auth.user.employeeId || employeeId,
         user_id: req.body.user_id || record?.user_id,
         device_id: req.body.device_id || req.headers['x-device-id'] || record?.device_id,
         actionDesc,
         expectedVersion,
         reset_version: clientResetVersion,
-        userPermission
+        userPermission: auth.permission
       });
 
       if (!result.success) {
@@ -5624,20 +6258,22 @@ async function startServer() {
    */
   app.post("/api/records/delete", async (req, res) => {
     try {
+      const auth = requireDeleteAccess(req, res, "delete records");
+      if (!auth) return;
+
       const { collection, id, author, employeeId, actionDesc } = req.body;
-      const userPermission = (req.body.permission || req.headers['x-user-permission'] || '').toString().toUpperCase();
       const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version']) || systemResetVersion;
 
       const result = executeRecordDelete({
         collection,
         id,
-        author,
-        employeeId,
+        author: auth.user.username || author,
+        employeeId: auth.user.employeeId || employeeId,
         user_id: req.body.user_id,
         device_id: req.body.device_id || req.headers['x-device-id'],
         actionDesc,
         reset_version: clientResetVersion,
-        userPermission
+        userPermission: auth.permission
       });
 
       if (!result.success) {
@@ -5665,6 +6301,9 @@ async function startServer() {
    */
   app.post("/api/stock-movements", async (req, res) => {
     try {
+      const auth = requireWriteAccess(req, res, "create stock movements");
+      if (!auth) return;
+
       const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version']);
       if (clientResetVersion && clientResetVersion < systemResetVersion) {
         return res.status(409).json({
@@ -5682,14 +6321,14 @@ async function startServer() {
         referenceId,
         referenceNumber,
         notes,
-        userId,
-        userName,
         deviceId,
         idempotencyKey,
         preventNegativeStock = true,
         lotNumber,
         location
       } = req.body;
+      const userId = "USR-" + auth.user.employeeId;
+      const userName = auth.user.username;
 
       if (!productId) {
         return res.status(400).json({ error: "productId is required" });
@@ -5842,13 +6481,16 @@ async function startServer() {
   // REST API: Chat message
   app.post("/api/chat", (req, res) => {
     try {
-      const { sender, text } = req.body;
+      const auth = requireWriteAccess(req, res, "post chat message");
+      if (!auth) return;
+
+      const { text } = req.body;
       const cleanText = String(text || '').trim();
       if (!cleanText) return res.status(400).json({ error: "Text required" });
 
       const newMsg: ChatMessage = {
         id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        sender: sender || "Staff",
+        sender: auth.user.username || "Staff",
         text: cleanText,
         timestamp: new Date().toISOString(),
         isSystem: false

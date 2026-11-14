@@ -260,6 +260,12 @@ export default function App() {
   // Startup cleanup: Purge any legacy stale client-side caches to prevent resurrection
   useEffect(() => {
     try {
+      if (typeof window !== 'undefined' && window.location && window.location.origin && window.location.origin.startsWith('http')) {
+        const cached = localStorage.getItem('juwei_wms_server_address');
+        if (cached && cached.includes('192.168.20.214')) {
+          localStorage.removeItem('juwei_wms_server_address');
+        }
+      }
       const keysToClean = [
         'juwei_wms_cache_stocks',
         'juwei_wms_cache_receiving',
@@ -2176,11 +2182,11 @@ export default function App() {
         try { localStorage.removeItem(k); } catch (e) {}
       });
 
-      // Purge any legacy Cloud Run or dev server addresses to ensure zero Google/Gmail account login prompt
+      // Clean up any stale or unreachable server address
       try {
         const cachedServer = localStorage.getItem('juwei_wms_server_address');
-        if (cachedServer && (cachedServer.includes('.run.app') || cachedServer.includes('ais-dev-') || cachedServer.includes('ais-pre-'))) {
-          localStorage.setItem('juwei_wms_server_address', 'http://192.168.20.214:3000');
+        if (cachedServer && cachedServer.includes('192.168.20.214')) {
+          localStorage.removeItem('juwei_wms_server_address');
         }
       } catch (e) {}
 

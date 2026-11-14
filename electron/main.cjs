@@ -21,8 +21,8 @@ let currentAppVersion = '';
 function getFormattedWindowTitle(ver) {
   const v = ver ? String(ver).replace(/^v/i, '').trim() : '';
   return v 
-    ? `JUWEI WAREHOUSE MANAGEMENT SYSTEM v${v} (CENTRAL CLOUD CONNECTED)`
-    : 'JUWEI WAREHOUSE MANAGEMENT SYSTEM (CENTRAL CLOUD CONNECTED)';
+    ? `JUWEI WAREHOUSE MANAGEMENT SYSTEM v${v} (WAREHOUSE SERVER)`
+    : 'JUWEI WAREHOUSE MANAGEMENT SYSTEM (WAREHOUSE SERVER)';
 }
 
 function setElectronWindowTitle(ver) {
@@ -103,8 +103,8 @@ function createWindow() {
   }
 
   const windowTitle = appVersion 
-    ? `JUWEI WAREHOUSE MANAGEMENT SYSTEM v${appVersion} (CENTRAL CLOUD CONNECTED)`
-    : 'JUWEI WAREHOUSE MANAGEMENT SYSTEM (CENTRAL CLOUD CONNECTED)';
+    ? `JUWEI WAREHOUSE MANAGEMENT SYSTEM v${appVersion} (WAREHOUSE SERVER)`
+    : 'JUWEI WAREHOUSE MANAGEMENT SYSTEM (WAREHOUSE SERVER)';
 
   const windowOptions = {
     width: 1366,
@@ -201,9 +201,9 @@ function createWindow() {
       if (match && match[1]) {
         currentAppVersion = match[1];
       }
-      const formattedTitle = title.includes('(CENTRAL CLOUD CONNECTED)')
+      const formattedTitle = title.includes('(WAREHOUSE SERVER)')
         ? title
-        : `${title} (CENTRAL CLOUD CONNECTED)`;
+        : `${title} (WAREHOUSE SERVER)`;
       mainWindow.setTitle(formattedTitle);
     }
   });
@@ -284,7 +284,9 @@ ipcMain.handle('open-generated-pdf', async (event, { pdfData, filename }) => {
   try {
     const tempDir = app.getPath('temp');
     const safeFilename = (filename || 'juwei-wms-document.pdf').replace(/[/\\?%*:|"<>]/g, '_');
-    const finalFilename = safeFilename.endsWith('.pdf') ? safeFilename : `${safeFilename}.pdf`;
+    const baseName = safeFilename.replace(/\.pdf$/i, '');
+    const timestamp = Date.now();
+    const finalFilename = `${baseName}-${timestamp}.pdf`;
     const filePath = path.join(tempDir, finalFilename);
 
     let buffer;
