@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { AlertTriangle, CheckCircle2, XCircle, Info, RefreshCw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, XCircle, Info } from 'lucide-react';
 
 export interface ConfirmActionConfig {
   title: string;
@@ -9,8 +9,7 @@ export interface ConfirmActionConfig {
   confirmLabel?: string;
   cancelLabel?: string;
   confirmVariant?: 'danger' | 'primary' | 'warning';
-  requiredConfirmationWord?: string;
-  onConfirm: () => void | Promise<void>;
+  onConfirm: () => void;
   onCancel?: () => void;
 }
 
@@ -20,34 +19,14 @@ interface ConfirmModalProps {
 }
 
 export const ConfirmModal: React.FC<ConfirmModalProps> = ({ config, onClose }) => {
-  const [typedWord, setTypedWord] = useState('');
-  const [isProcessing, setIsProcessing] = useState(false);
-
-  useEffect(() => {
-    setTypedWord('');
-    setIsProcessing(false);
-  }, [config]);
-
   const handleCancel = () => {
-    if (isProcessing) return;
     if (config?.onCancel) config.onCancel();
     onClose();
   };
 
-  const isConfirmed = !config?.requiredConfirmationWord || 
-    typedWord.trim().toUpperCase() === config.requiredConfirmationWord.trim().toUpperCase();
-
-  const handleConfirm = async () => {
-    if (!isConfirmed || isProcessing) return;
-    setIsProcessing(true);
-    try {
-      await config?.onConfirm();
-      onClose();
-    } catch (e) {
-      console.error('Error during confirmed action:', e);
-    } finally {
-      setIsProcessing(false);
-    }
+  const handleConfirm = () => {
+    if (config?.onConfirm) config.onConfirm();
+    onClose();
   };
 
   const content = (
@@ -85,37 +64,19 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({ config, onClose }) =
               </div>
             </div>
 
-            {config.requiredConfirmationWord && (
-              <div className="mb-4 p-3 rounded-2xl bg-rose-50/80 border border-rose-200 text-slate-800 space-y-2">
-                <label className="block text-xs font-semibold text-rose-950">
-                  Type <span className="font-mono font-bold bg-white px-2 py-0.5 rounded border border-rose-300 text-rose-700 select-all">{config.requiredConfirmationWord}</span> to authorize:
-                </label>
-                <input
-                  type="text"
-                  autoFocus
-                  placeholder={`Type "${config.requiredConfirmationWord}"`}
-                  value={typedWord}
-                  onChange={(e) => setTypedWord(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-rose-300 rounded-xl text-xs font-mono font-bold uppercase tracking-wider text-slate-900 focus:outline-none focus:ring-2 focus:ring-rose-500 shadow-inner"
-                />
-              </div>
-            )}
-
             <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-slate-200/80">
               <button
                 type="button"
                 onClick={handleCancel}
-                disabled={isProcessing}
-                className="px-4 py-2 bg-slate-100/90 hover:bg-slate-200 disabled:opacity-50 text-slate-800 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border border-slate-300/80 backdrop-blur-md"
+                className="px-4 py-2 bg-slate-100/90 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border border-slate-300/80 backdrop-blur-md"
               >
                 <XCircle className="h-4 w-4 text-slate-500" />
-                {config.cancelLabel || 'Cancel'}
+                {config.cancelLabel || 'NO'}
               </button>
               <button
                 type="button"
                 onClick={handleConfirm}
-                disabled={!isConfirmed || isProcessing}
-                className={`px-5 py-2 text-xs font-bold rounded-xl transition-all shadow-md flex items-center gap-1.5 cursor-pointer border disabled:opacity-40 disabled:cursor-not-allowed ${
+                className={`px-5 py-2 text-xs font-bold rounded-xl transition-all shadow-md flex items-center gap-1.5 cursor-pointer border ${
                   config.confirmVariant === 'danger'
                     ? 'bg-rose-600 hover:bg-rose-700 text-white border-rose-600 shadow-rose-600/20'
                     : config.confirmVariant === 'warning'
@@ -123,12 +84,8 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({ config, onClose }) =
                     : 'bg-blue-600 hover:bg-blue-700 text-white border-blue-600 shadow-blue-600/20'
                 }`}
               >
-                {isProcessing ? (
-                  <RefreshCw className="h-4 w-4 text-white animate-spin" />
-                ) : (
-                  <CheckCircle2 className="h-4 w-4 text-white" />
-                )}
-                {config.confirmLabel || 'Confirm'}
+                <CheckCircle2 className="h-4 w-4 text-white" />
+                {config.confirmLabel || 'YES'}
               </button>
             </div>
           </motion.div>

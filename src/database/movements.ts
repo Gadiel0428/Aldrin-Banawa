@@ -4,7 +4,7 @@
  */
 
 import { CreateStockMovementInput, StockMovement, StockMovementResult } from '../types/movement';
-import { getApiBaseUrl, getAuthHeaders } from '../config/serverConfig';
+import { getApiBaseUrl } from '../config/serverConfig';
 
 // Helper to get or generate a persistent device ID
 export function getDeviceId(): string {
@@ -41,7 +41,7 @@ export async function createStockMovement(input: CreateStockMovementInput): Prom
     const baseUrl = getApiBaseUrl();
     const resp = await fetch(`${baseUrl}/api/stock-movements`, {
       method: 'POST',
-      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...input,
         delta,
@@ -76,7 +76,7 @@ export async function fetchStockMovements(limit = 100, warehouseId?: string, pro
     if (warehouseId) url += `&warehouseId=${encodeURIComponent(warehouseId)}`;
     if (productId) url += `&productId=${encodeURIComponent(productId)}`;
 
-    const resp = await fetch(url, { headers: getAuthHeaders({ 'Accept': 'application/json' }) });
+    const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
     if (resp.ok) {
       const list = await resp.json();
       return Array.isArray(list) ? list : [];

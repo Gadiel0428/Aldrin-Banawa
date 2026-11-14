@@ -144,6 +144,32 @@ jobs:
           
           Write-Host "Successfully published Windows EXE to GitHub Releases at $releaseUrl"
 
+          # Notify Central Production Server so all web clients and desktops immediately reflect the latest GitHub release
+          try {
+            $syncPayload = @{
+              version = $cleanVersion
+              tag = $tag
+              repository = $repo
+              releaseUrl = $releaseUrl
+              buildId = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            } | ConvertTo-Json
+
+            $targetServers = @(
+              "https://aldrin-banawa.onrender.com/api/build-info/publish"
+            )
+            foreach ($srv in $targetServers) {
+              try {
+                Write-Host "Notifying production server at $srv of version $cleanVersion ..."
+                $response = Invoke-RestMethod -Uri $srv -Method Post -Body $syncPayload -ContentType "application/json" -TimeoutSec 10
+                Write-Host "Server successfully synced to latest release version $cleanVersion"
+              } catch {
+                Write-Warning "Could not notify $srv : $_"
+              }
+            }
+          } catch {
+            Write-Warning "Notification step notice: $_"
+          }
+
           # Write rich download summary to GitHub Actions summary page
           $summary = @"
           # 🎉 JUWEI WMS Windows EXE Ready for Download!

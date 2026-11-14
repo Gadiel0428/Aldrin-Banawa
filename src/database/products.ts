@@ -5,16 +5,16 @@
 
 import { Product, ProductFilter } from '../types/product';
 import { getDeviceId } from './movements';
-import { getApiBaseUrl, getAuthHeaders } from '../config/serverConfig';
+import { getApiBaseUrl } from '../config/serverConfig';
 
 export async function fetchProducts(filter?: ProductFilter): Promise<Product[]> {
   try {
     const baseUrl = getApiBaseUrl();
     const res = await fetch(`${baseUrl}/api/sync`, { 
-      headers: getAuthHeaders({ 
+      headers: { 
         'Accept': 'application/json',
         'Cache-Control': 'no-cache'
-      }) 
+      } 
     });
     if (res.ok) {
       const json = await res.json();
@@ -134,10 +134,10 @@ export async function upsertProduct(input: Partial<Product>): Promise<Product> {
     const baseUrl = getApiBaseUrl();
     const res = await fetch(`${baseUrl}/api/records/upsert`, {
       method: 'POST',
-      headers: getAuthHeaders({
+      headers: {
         'Content-Type': 'application/json',
         'x-device-id': deviceId
-      }),
+      },
       body: JSON.stringify({
         collection: 'registries',
         record: registryRecord,

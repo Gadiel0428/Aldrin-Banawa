@@ -28,8 +28,7 @@ export const COLLECTION_TABLE_MAP: Record<string, string> = {
   forklift_checks: "forkliftChecks",
   registries: "registries",
   registered_users: "registeredUsers",
-  stock_movements: "stockMovements",
-  sessions: "sessions"
+  stock_movements: "stockMovements"
 };
 
 export const ALL_COLLECTION_TABLES = [
@@ -45,8 +44,7 @@ export const ALL_COLLECTION_TABLES = [
   "registered_users",
   "stock_movements",
   "authorized_devices",
-  "chat_messages",
-  "sessions"
+  "chat_messages"
 ];
 
 interface CacheStore {
@@ -568,7 +566,6 @@ export function readDatabaseFromSqlite(dbInstance?: SqliteDatabase): any {
     registries: collectionsData["registries"] || [],
     registeredUsers: users,
     stockMovements: collectionsData["stock_movements"] || [],
-    sessions: collectionsData["sessions"] || [],
     operationalRoles,
     receivingCategories
   };
@@ -595,7 +592,6 @@ export function readDatabaseFromSqlite(dbInstance?: SqliteDatabase): any {
     registries: stateObj.registries,
     registeredUsers: users,
     stockMovements: stateObj.stockMovements,
-    sessions: stateObj.sessions,
     authorizedDevices: collectionsData["authorized_devices"] || [],
     chatMessages,
     deletedRecordTombstones,

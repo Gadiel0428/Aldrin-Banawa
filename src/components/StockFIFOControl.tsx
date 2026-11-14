@@ -49,7 +49,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { MaterialStockItem, MaterialType, getCustomerForPart, UOM_OPTIONS, ReceivingRecord, IssuanceRecord, ReturnRecord, MasterRegistryItem, FifoColorsMap, FifoMonthColor } from '../types';
-import { FIFO_COLORS_BY_MONTH, DEFAULT_FIFO_COLORS_BY_MONTH, FIFO_COLOR_PRESETS, resolveFifoColor, getFifoColorForDate, normalizeFifoColor, formatPartCode, formatLotNumber } from '../data';
+import { FIFO_COLORS_BY_MONTH, DEFAULT_FIFO_COLORS_BY_MONTH, FIFO_COLOR_PRESETS, resolveFifoColor, getFifoColorForDate, normalizeFifoColor } from '../data';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { generateAuthoritativeId } from '../lib/idGenerator';
 
@@ -540,10 +540,10 @@ export default function StockFIFOControl({
             <select 
               value={selectedCustomer}
               onChange={e => setSelectedCustomer(e.target.value)}
-              className="bg-transparent focus:outline-none font-semibold text-slate-700 cursor-pointer min-w-[150px] max-w-[240px] truncate"
+              className="bg-transparent focus:outline-none font-semibold text-slate-700 cursor-pointer max-w-[160px] truncate"
               title="Filter by Registered Customer with SKU Count"
             >
-              <option value="ALL">ALL CUSTOMERS</option>
+              <option value="ALL">All Registered Customers</option>
               {customersWithSkuCounts.map(item => (
                 <option key={item.customer} value={item.customer}>
                   {item.customer} ({item.skuCount} SKUs)
@@ -588,7 +588,7 @@ export default function StockFIFOControl({
               <label className="block text-[10px] font-semibold text-slate-500 mb-1">Part Code *</label>
               <input 
                 type="text" required placeholder="RM-RE-XXX" value={newPartCode}
-                onChange={e => setNewPartCode(formatPartCode(e.target.value))}
+                onChange={e => setNewPartCode(e.target.value)}
                 className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs font-mono"
               />
             </div>
@@ -618,7 +618,7 @@ export default function StockFIFOControl({
               <label className="block text-[10px] font-semibold text-slate-500 mb-1">Lot / Batch Number *</label>
               <input 
                 type="text" required placeholder="LOT-XXXX" value={newLot}
-                onChange={e => setNewLot(formatLotNumber(e.target.value))}
+                onChange={e => setNewLot(e.target.value)}
                 className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs font-mono"
               />
             </div>
@@ -1559,7 +1559,7 @@ export default function StockFIFOControl({
                   <input 
                     type="text" 
                     value={editingStockItem.partCode}
-                    onChange={e => setEditingStockItem({ ...editingStockItem, partCode: formatPartCode(e.target.value) })}
+                    onChange={e => setEditingStockItem({ ...editingStockItem, partCode: e.target.value.toUpperCase() })}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
                   />
                 </div>
@@ -1628,7 +1628,7 @@ export default function StockFIFOControl({
                   <input 
                     type="text" 
                     value={editingStockItem.lotNumber}
-                    onChange={e => setEditingStockItem({ ...editingStockItem, lotNumber: formatLotNumber(e.target.value) })}
+                    onChange={e => setEditingStockItem({ ...editingStockItem, lotNumber: e.target.value })}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
                   />
                 </div>

@@ -20,6 +20,19 @@
     <script>
       (function() {
         try {
+          // If opened directly in a standalone window/tab outside the AI Studio dev iframe,
+          // instantly redirect to the authoritative Render production URL
+          // so operators and users are NEVER prompted for a Google/Gmail account login.
+          if (window.location.hostname && (window.location.hostname.indexOf('ais-dev-') !== -1 || window.location.hostname.indexOf('run.app') !== -1) && window.self === window.top) {
+            var targetUrl = 'http://192.168.20.214:3000' + window.location.pathname + window.location.search + window.location.hash;
+            window.location.replace(targetUrl);
+          }
+        } catch(e) {}
+      })();
+    </script>
+    <script>
+      (function() {
+        try {
           var svgIcon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%231e1b4b"/><polygon points="32,10 52,21 32,32 12,21" fill="%23818cf8"/><polygon points="12,21 32,32 32,53 12,42" fill="%234338ca"/><polygon points="32,32 52,21 52,42 32,53" fill="%23312e81"/><circle cx="32" cy="21" r="5" fill="%2310b981"/></svg>';
           var dataUrl = 'data:image/svg+xml;utf8,' + svgIcon;
           

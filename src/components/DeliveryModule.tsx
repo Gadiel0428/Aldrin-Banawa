@@ -37,7 +37,6 @@ import PrintablePickingListModal, { DocViewMode } from './PrintablePickingListMo
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAuthoritativeId } from '../lib/idGenerator';
-import { formatDrNumber, formatSiNumber, formatWaybillNumber } from '../data';
 
 interface DeliveryModuleProps {
   deliveries: DeliveryRecord[];
@@ -1050,7 +1049,7 @@ export default function DeliveryModule({
                   <label className="block text-[10px] font-bold text-slate-400 mb-1">Official Delivery Receipt (DR) # *</label>
                   <input 
                     type="text" required placeholder="DR-XXXXX" value={drNumber}
-                    onChange={e => setDrNumber(formatDrNumber(e.target.value))}
+                    onChange={e => setDrNumber(e.target.value)}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:outline-none"
                   />
                 </div>
@@ -1059,7 +1058,7 @@ export default function DeliveryModule({
                   <label className="block text-[10px] font-bold text-slate-400 mb-1">Official Sales Invoice (SI) # *</label>
                   <input 
                     type="text" required placeholder="SI-XXXX" value={salesInvoice}
-                    onChange={e => setSalesInvoice(formatSiNumber(e.target.value))}
+                    onChange={e => setSalesInvoice(e.target.value)}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:outline-none"
                   />
                 </div>
@@ -1068,7 +1067,7 @@ export default function DeliveryModule({
                   <label className="block text-[10px] font-bold text-slate-400 mb-1">Transportation Way Bill # *</label>
                   <input 
                     type="text" required placeholder="WB-LBC-XXXXX" value={wayBill}
-                    onChange={e => setWayBill(formatWaybillNumber(e.target.value))}
+                    onChange={e => setWayBill(e.target.value)}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:outline-none"
                   />
                 </div>
@@ -1227,7 +1226,7 @@ export default function DeliveryModule({
                   <input 
                     type="text" 
                     value={editingDelivery.drNumber || ''}
-                    onChange={e => setEditingDelivery({ ...editingDelivery, drNumber: formatDrNumber(e.target.value) })}
+                    onChange={e => setEditingDelivery({ ...editingDelivery, drNumber: e.target.value })}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
                   />
                 </div>
@@ -1237,7 +1236,7 @@ export default function DeliveryModule({
                   <input 
                     type="text" 
                     value={editingDelivery.salesInvoice || ''}
-                    onChange={e => setEditingDelivery({ ...editingDelivery, salesInvoice: formatSiNumber(e.target.value) })}
+                    onChange={e => setEditingDelivery({ ...editingDelivery, salesInvoice: e.target.value })}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
                   />
                 </div>
@@ -1247,7 +1246,7 @@ export default function DeliveryModule({
                   <input 
                     type="text" 
                     value={editingDelivery.wayBill || ''}
-                    onChange={e => setEditingDelivery({ ...editingDelivery, wayBill: formatWaybillNumber(e.target.value) })}
+                    onChange={e => setEditingDelivery({ ...editingDelivery, wayBill: e.target.value })}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
                   />
                 </div>
