@@ -9,9 +9,7 @@ import {
   CheckCircle2, 
   Clock, 
   HardDrive, 
-  ShieldCheck, 
   Lock, 
-  FileText, 
   X,
   PlusCircle,
   FolderOpen

@@ -323,27 +323,6 @@ async function startServer() {
     return Object.values(activeMap).some((m: any) => m?.name?.toLowerCase() === s.toLowerCase());
   }
 
-  function normalizeFifoColor(value: any, receivedDate?: string | null, calendar?: Record<number, any>): string {
-    const activeMap = calendar || state?.fifoColorsByMonth || DEFAULT_FIFO_COLORS_BY_MONTH;
-    if (value !== undefined && value !== null) {
-      const str = String(value).trim();
-      if (/^\d+$/.test(str)) {
-        const m = parseInt(str, 10);
-        if (m >= 1 && m <= 12) {
-          return activeMap[m]?.name || DEFAULT_FIFO_COLORS_BY_MONTH[m]?.name || 'Silver';
-        }
-        return getFifoColorForDate(receivedDate, activeMap);
-      }
-      if (isValidFifoColorName(str, activeMap)) {
-        for (const m of Object.values(activeMap) as any[]) {
-          if (m?.name?.toLowerCase() === str.toLowerCase()) return m.name;
-        }
-        return str;
-      }
-    }
-    return getFifoColorForDate(receivedDate, activeMap);
-  }
-
   const STARTER_BARCODE_PRESETS = [
     {
       id: 'REG-BCP-RESIN-001',
@@ -896,16 +875,6 @@ async function startServer() {
       }
 
       return true;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  // Thin JSON wrapper around applyDatabaseObject
-  function parseAndApplyDatabaseJson(raw: string): boolean {
-    try {
-      const parsed = JSON.parse(raw);
-      return applyDatabaseObject(parsed);
     } catch (e) {
       return false;
     }
@@ -3796,7 +3765,7 @@ async function startServer() {
   });
 
   // REST API: Diagnostics & Connectivity Verification
-  app.get("/api/diagnostics", (req, res) => {
+  app.get("/api/diagnostics", (_req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     res.json({
       status: "ok",
@@ -3959,7 +3928,7 @@ async function startServer() {
   });
 
   // REST API: Build Info for Live Application Updates
-  app.get(["/api/build-info", "/build-info.json"], async (req, res) => {
+  app.get(["/api/build-info", "/build-info.json"], async (_req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
@@ -4011,7 +3980,7 @@ async function startServer() {
   });
 
   // REST API: Direct Installer Download Redirect (downloads JUWEI.WMS.Desktop.System.Setup.1.0.XX.exe directly)
-  app.get("/api/download/latest-installer", async (req, res) => {
+  app.get("/api/download/latest-installer", async (_req, res) => {
     let targetVer = "";
     if (fs.existsSync(RELEASE_PERSIST_FILE)) {
       try {
@@ -4034,7 +4003,7 @@ async function startServer() {
   });
 
   // REST API: Health Check
-  app.get("/api/health", (req, res) => {
+  app.get("/api/health", (_req, res) => {
     res.json({
       status: "ok",
       serverInstanceId: SERVER_INSTANCE_ID,
@@ -4053,7 +4022,7 @@ async function startServer() {
   });
 
   // REST API: Live Connection & Active Terminals Registry
-  app.get("/api/presence", (req, res) => {
+  app.get("/api/presence", (_req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     res.json({
       status: "ok",
@@ -4360,7 +4329,7 @@ async function startServer() {
   });
 
   // REST API: State Summary & Revision
-  app.get(["/api/sync/state-summary", "/api/sync/digest"], (req, res) => {
+  app.get(["/api/sync/state-summary", "/api/sync/digest"], (_req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     const summary: Record<string, { count: number; lastUpdated?: string }> = {};
     Object.keys(state).forEach((key) => {
@@ -4381,7 +4350,7 @@ async function startServer() {
   });
 
   // REST API: Devices & Heartbeats
-  app.get("/api/devices", (req, res) => {
+  app.get("/api/devices", (_req, res) => {
     const now = Date.now();
     const threshold = 5 * 60 * 1000; // 5 min
     const devices = Array.from(activeDevices.values()).map(dev => ({
@@ -4422,7 +4391,7 @@ async function startServer() {
   });
 
   // REST API: Authorized Devices Management (Super Administrator)
-  app.get("/api/devices/authorized", (req, res) => {
+  app.get("/api/devices/authorized", (_req, res) => {
     res.json({
       success: true,
       installationId,
@@ -4495,7 +4464,7 @@ async function startServer() {
   // REST API: Terminal Fresh Install & Primary Administrator Device Binding
   app.post("/api/terminal/fresh-install", (req, res) => {
     try {
-      const { deviceId, deviceName, stationId } = req.body;
+      const { deviceId, deviceName } = req.body;
       const targetDeviceId = deviceId || primaryDeviceId;
 
       // Ensure target device is authorized
@@ -4697,7 +4666,7 @@ async function startServer() {
   // =========================================================================
 
   // 1. List existing backups and recent backup/restore audit log
-  app.get("/api/admin/backups", (req, res) => {
+  app.get("/api/admin/backups", (_req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     try {
       if (!fs.existsSync(BACKUPS_DIR)) {
@@ -4802,7 +4771,7 @@ async function startServer() {
   });
 
   // REST API: Operator Accounts List
-  app.get("/api/accounts", async (req, res) => {
+  app.get("/api/accounts", async (_req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     try {
       // Ensure Super Administrator JPMP-002 is always first and present
@@ -4980,7 +4949,7 @@ async function startServer() {
   });
 
   // REST API: Get PIN Audit Logs (Super Admin Only)
-  app.get("/api/accounts/pin-audit-log", (req, res) => {
+  app.get("/api/accounts/pin-audit-log", (_req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     return res.json({
       success: true,
@@ -5224,7 +5193,7 @@ async function startServer() {
   });
 
   // REST API: Get Operational Roles
-  app.get("/api/roles", (req, res) => {
+  app.get("/api/roles", (_req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     res.json({
       success: true,
@@ -5325,7 +5294,7 @@ async function startServer() {
   });
 
   // REST API: Get Receiving Categories
-  app.get("/api/categories", (req, res) => {
+  app.get("/api/categories", (_req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     res.json({
       success: true,
@@ -5489,7 +5458,7 @@ async function startServer() {
    * Allows querying and central updates for monthly FIFO color definitions.
    * Locked in per record at receipt time; updates do not retroactively alter existing records.
    */
-  app.get("/api/fifo-colors", (req, res) => {
+  app.get("/api/fifo-colors", (_req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
@@ -5563,7 +5532,7 @@ async function startServer() {
   /**
    * REST API: FIFO Tag Color Repair Report & Audit Logs
    */
-  app.get("/api/system/fifo-repair-report", (req, res) => {
+  app.get("/api/system/fifo-repair-report", (_req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
@@ -5884,7 +5853,7 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
+    app.get("*", (_req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }

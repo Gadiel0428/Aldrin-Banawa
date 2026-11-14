@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -15,7 +15,6 @@ import {
   Wifi, 
   Camera, 
   Zap, 
-  ArrowRight,
   Info,
   CheckCircle2
 } from 'lucide-react';
@@ -33,7 +32,7 @@ interface MobileAppDownloadModalProps {
 export default function MobileAppDownloadModal({
   isOpen,
   onClose,
-  serverAddress,
+  serverAddress: _serverAddress,
   onFreshInstallSync,
   appVersion
 }: MobileAppDownloadModalProps) {
@@ -76,7 +75,6 @@ export default function MobileAppDownloadModal({
 
   // Clean public production URL (Guarantees no Google/Gmail account sign-in screen on mobile devices)
   const currentUrl = getPublicAppUrl();
-  const isHttps = typeof window !== 'undefined' ? window.location.protocol === 'https:' : true;
 
   const handleInstallClick = async () => {
     if (!deferredPrompt) {

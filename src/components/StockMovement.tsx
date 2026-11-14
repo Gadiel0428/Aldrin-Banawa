@@ -16,11 +16,10 @@ import {
   Layers, 
   Clock, 
   User, 
-  Building2,
   RefreshCw,
   AlertCircle
 } from 'lucide-react';
-import { fetchStockMovements, createStockMovement } from '../database/movements';
+import { fetchStockMovements } from '../database/movements';
 import { subscribeToStockMovements } from '../database/realtime';
 import { syncManager } from '../sync/syncManager';
 import { StockMovement, StockMovementType } from '../types/movement';

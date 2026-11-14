@@ -19,13 +19,10 @@ import {
   Check, 
   X, 
   AlertCircle, 
-  Filter, 
   RefreshCw, 
   Copy, 
   CheckCircle2, 
   Clock, 
-  CircleDot,
-  User,
   ShieldAlert,
   Tag,
   Plus,
@@ -99,7 +96,7 @@ export default function RegisteredAccountsModule({
   currentUser,
   currentEmployeeId,
   isSuperAdmin = false,
-  canEdit = false
+  canEdit: _canEdit = false
 }: RegisteredAccountsModuleProps) {
   // Centralized managed operational roles list
   const managedRoles = useMemo(() => {

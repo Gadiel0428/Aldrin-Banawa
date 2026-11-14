@@ -34,7 +34,7 @@ export const VersionUpdateBanner: React.FC<VersionUpdateBannerProps> = ({
     }
 
     if (!targetVer) {
-      targetVer = '1.0.93';
+      targetVer = '1.0.94';
     }
 
     const repo = 'Gadiel0428/Aldrin-Banawa';

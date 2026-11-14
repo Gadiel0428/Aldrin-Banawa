@@ -14,22 +14,15 @@ import {
   AlertTriangle, 
   CheckCircle, 
   Sparkles, 
-  Activity, 
   ClipboardCheck, 
   ShieldAlert, 
-  UserPlus,
   Edit,
-  Trash2,
   Printer,
   ChevronDown,
   ChevronRight,
-  PackageCheck,
   ClipboardList,
   Check,
-  Layers,
-  Building2,
   Factory,
-  Tag,
   ShieldCheck
 } from 'lucide-react';
 import { DeliveryRecord, ForkliftChecklist, MaterialStockItem, MasterRegistryItem } from '../types';
@@ -435,7 +428,6 @@ export default function DeliveryModule({
                 <tbody className="divide-y divide-slate-100">
                   {filteredDeliveries.map(d => {
                     const isExpanded = expandedDeliveryId === d.id;
-                    const isFullyLoaded = d.status === 'LOADED' || d.status === 'RELEASED';
                     const matchedStock = stocks.find(s => 
                       (s.partCode || '').trim().toLowerCase() === (d.partCode || '').trim().toLowerCase()
                     );

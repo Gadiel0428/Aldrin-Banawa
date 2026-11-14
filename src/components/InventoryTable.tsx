@@ -5,14 +5,11 @@
 
 import React, { useState, useEffect } from 'react';
 import { 
-  Package, 
   Search, 
   AlertTriangle, 
   CheckCircle, 
-  ArrowUpDown, 
   RefreshCw,
   Building,
-  Layers,
   MapPin
 } from 'lucide-react';
 import { InventoryItem, Warehouse } from '../types/inventory';

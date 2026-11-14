@@ -17,10 +17,8 @@ import {
 import { 
   Package, 
   AlertTriangle, 
-  RefreshCw, 
   ArrowUpRight, 
   ClipboardCheck, 
-  Thermometer, 
   TrendingUp, 
   TrendingDown,
   ArrowDownLeft,
@@ -31,12 +29,10 @@ import {
   MessageSquare,
   Send,
   Users,
-  Radio,
   FileText,
   FileSpreadsheet,
   Download,
   Printer,
-  ShieldCheck,
   Layers
 } from 'lucide-react';
 import { 
@@ -53,7 +49,9 @@ import {
 } from '../types';
 import ReceivingVsIssuanceReportModal from './ReceivingVsIssuanceReportModal';
 import InventoryReportModal from './InventoryReportModal';
-import { downloadReceivingVsIssuancePDF } from '../utils/reportGenerator';
+import { PrintPreviewModal } from './PrintPreviewModal';
+import { generateReceivingVsIssuanceReportPages } from '../utils/reportGenerator';
+import { showPrintToast, formatPrintErrorMessage } from '../utils/printDocument';
 
 interface DashboardOverviewProps {
   stocks: MaterialStockItem[];
@@ -80,8 +78,8 @@ export default function DashboardOverview({
   receiving,
   issuances,
   deliveries,
-  recycling,
-  envLogs,
+  recycling: _recycling,
+  envLogs: _envLogs,
   forkliftChecks,
   setView,
   activeUsers,
@@ -90,16 +88,18 @@ export default function DashboardOverview({
   sendChatMessage,
   registeredUsers = [],
   isSuperAdmin = false,
-  canEdit = false,
+  canEdit: _canEdit = false,
   registries = []
 }: DashboardOverviewProps) {
   
   const [activeTab, setActiveTab] = useState<'transactions' | 'chat'>('transactions');
-  const [selectedCustomer, setSelectedCustomer] = useState<string>('');
   const [msgText, setMsgText] = useState('');
   const [showReportModal, setShowReportModal] = useState(false);
   const [showInventoryReportModal, setShowInventoryReportModal] = useState(false);
   const [isExportingPDF, setIsExportingPDF] = useState(false);
+  const [showDirectPreview, setShowDirectPreview] = useState(false);
+  const [directPreviewPages, setDirectPreviewPages] = useState<string[]>([]);
+  const [directPreviewFilename, setDirectPreviewFilename] = useState('Juwei_Receiving_vs_Issuance_Report.pdf');
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Receiving vs Issuance Snapshot Aggregates
@@ -137,17 +137,26 @@ export default function DashboardOverview({
       .slice(0, 5);
   }, [receiving, issuances, stocks]);
 
-  const handleDirectExportPDF = () => {
+  const handleDirectExportPDF = async () => {
+    if (isExportingPDF) return;
+    setIsExportingPDF(true);
+    setShowDirectPreview(true);
     try {
-      setIsExportingPDF(true);
-      downloadReceivingVsIssuancePDF(receiving, issuances, stocks, {
+      const { pages, filename } = await generateReceivingVsIssuanceReportPages(receiving, issuances, stocks, {
         dateRange: 'all',
         generatedBy: currentUser,
         employeeId: 'JPMP-002',
         userRole: isSuperAdmin ? 'Super Administrator' : 'Warehouse Manager'
       });
+      setDirectPreviewPages(pages);
+      setDirectPreviewFilename(filename);
     } catch (err) {
-      console.error('Failed to export PDF:', err);
+      console.error('Failed to render PDF report:', err);
+      setShowDirectPreview(false);
+      showPrintToast(
+        `Failed to generate PDF report: ${formatPrintErrorMessage(err)}`,
+        'error'
+      );
     } finally {
       setIsExportingPDF(false);
     }
@@ -175,23 +184,6 @@ export default function DashboardOverview({
   const totalStockItems = stocks.reduce((sum, item) => sum + (item.status === 'APPROVED' ? item.quantity : 0), 0);
   const quarantineCount = stocks.filter(item => item.status === 'QUARANTINE' || item.status === 'HOLD').length;
   const pendingIqcCount = receiving.filter(item => item.iqcStatus === 'PENDING_IQC').length;
-  const activeRecyclingCount = recycling.filter(item => item.disposition === 'Re-used').reduce((sum, item) => sum + item.quantity, 0);
-  
-  // Find top 3 stock SKUs/items by quantity
-  const top3Stocks = Object.values(
-    stocks
-      .filter(item => item.status === 'APPROVED' && item.quantity > 0)
-      .reduce((acc, item) => {
-        const key = item.partCode;
-        if (!acc[key]) {
-          acc[key] = { qty: 0, unit: item.unit, partCode: item.partCode, description: item.description };
-        }
-        acc[key].qty += item.quantity;
-        return acc;
-      }, {} as Record<string, { qty: number; unit: string; partCode: string; description: string }>)
-  )
-    .sort((a, b) => b.qty - a.qty)
-    .slice(0, 3);
   
   // Expiry & Shelf Life Warning (items with less than 30 days to expire, or already expired)
   const todayStr = '2026-07-19'; // Fixed system date as provided in metadata
@@ -204,10 +196,6 @@ export default function DashboardOverview({
 
   // Broken Resin Sacks Risk
   const brokenResinSacks = stocks.filter(item => item.resinSackRisk && item.status === 'QUARANTINE');
-
-  // Latest Env Status (Space Utilization)
-  const latestEnv = envLogs[envLogs.length - 1];
-  const isEnvWarning = latestEnv ? ((latestEnv.occupiedSlots / latestEnv.totalSlots) > 0.92) : false;
 
   // Forklift checklist for today
   const forkliftDoneToday = forkliftChecks.some(check => check.date === todayStr);
@@ -239,26 +227,6 @@ export default function DashboardOverview({
       badgeColor: 'bg-purple-50 text-purple-700 border-purple-200'
     }))
   ].sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 5);
-
-  // Group unique SKUs (partCode) by customer for Dashboard view
-  const skusByCustomer = Object.entries(
-    stocks.reduce((acc, item) => {
-      const customer = item.customer || getCustomerForPart(item.partCode, item.description);
-      if (!acc[customer]) {
-        acc[customer] = new Set<string>();
-      }
-      acc[customer].add(item.partCode);
-      return acc;
-    }, {} as Record<string, Set<string>>)
-  ).map(([customer, partCodesSet]) => ({
-    customer,
-    skuCount: partCodesSet.size,
-    partCodes: Array.from(partCodesSet),
-  })).sort((a, b) => b.skuCount - a.skuCount);
-
-  const selectedCustomerData = skusByCustomer.find(item => item.customer === selectedCustomer);
-  const selectedCustomerSKUCount = selectedCustomerData ? selectedCustomerData.skuCount : 0;
-  const selectedCustomerPartCodes = selectedCustomerData ? selectedCustomerData.partCodes : [];
 
   // Automatic Reorder Min Threshold Alert Logic
   const stockQtyByPart = stocks.reduce((acc, item) => {
@@ -1428,8 +1396,22 @@ export default function DashboardOverview({
           stocks={stocks}
           currentUser={currentUser}
           isSuperAdmin={isSuperAdmin}
-          initialCustomerFilter={selectedCustomer || 'ALL'}
+          initialCustomerFilter="ALL"
           onClose={() => setShowInventoryReportModal(false)}
+        />
+      )}
+
+      {/* In-App Preview for Direct Dashboard PDF Report */}
+      {showDirectPreview && (
+        <PrintPreviewModal
+          isOpen={showDirectPreview}
+          onClose={() => setShowDirectPreview(false)}
+          documentTitle="Receiving vs Issuance Audit Snapshot"
+          documentNumber="DOC REF: JPM-WMS-REP-008"
+          documentSubtitle="All-Time Historical Material Flow Report"
+          filename={directPreviewFilename}
+          pages={directPreviewPages}
+          isRendering={isExportingPDF}
         />
       )}
     </div>

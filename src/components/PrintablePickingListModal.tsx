@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'motion/react';
 import { 
@@ -6,26 +6,19 @@ import {
   X, 
   CheckCircle2, 
   Package, 
-  Truck, 
-  Calendar, 
-  User, 
-  MapPin, 
-  Hash, 
-  Barcode, 
-  ShieldCheck, 
-  ShieldAlert, 
   FileText, 
   FileSpreadsheet, 
   ClipboardList, 
-  Building2, 
-  Award, 
-  FileCheck,
-  Check,
   Eye,
   Loader2
 } from 'lucide-react';
 import { PrintPreviewModal } from './PrintPreviewModal';
-import { exportElementAsPDF } from '../utils/printDocument';
+import {
+  renderDocumentPages,
+  printPages,
+  showPrintToast,
+  formatPrintErrorMessage
+} from '../utils/printDocument';
 import { DeliveryRecord, IssuanceRecord, MaterialStockItem, MasterRegistryItem } from '../types';
 
 export type DocViewMode = 'OFFICIAL_DOC' | 'PICKING_LIST' | 'SUMMARY_LOG';
@@ -63,6 +56,8 @@ export default function PrintablePickingListModal({
     (!delivery && !issuance) ? 'SUMMARY_LOG' : initialView
   );
   const [showPrintPreview, setShowPrintPreview] = useState<boolean>(false);
+  const [previewPages, setPreviewPages] = useState<string[]>([]);
+  const [isGeneratingPreview, setIsGeneratingPreview] = useState<boolean>(false);
   const [isExportingPDF, setIsExportingPDF] = useState<boolean>(false);
   const printableContainerRef = useRef<HTMLDivElement>(null);
 
@@ -74,36 +69,69 @@ export default function PrintablePickingListModal({
     ? (targetDelivery?.drNumber || targetDelivery?.pickingListNumber || targetDelivery?.gatePassNumber || 'N/A')
     : (targetIssuance?.requisitionNumber || 'N/A');
 
+  const idStr = docNumber && docNumber !== 'N/A' ? docNumber : 'document';
+  const docFilename = `JUWEI-${viewMode}-${idStr}.pdf`;
+
+  const renderPreviewFromRef = async () => {
+    const el = printableContainerRef.current;
+    if (!el) {
+      showPrintToast('Could not locate printable document container.', 'error');
+      return;
+    }
+    setIsGeneratingPreview(true);
+    try {
+      const pages = await renderDocumentPages(el);
+      setPreviewPages(pages);
+    } catch (err) {
+      console.error('[PrintablePickingListModal] Preview render error:', err);
+      showPrintToast(
+        `Failed to render print preview: ${formatPrintErrorMessage(err)}`,
+        'error'
+      );
+    } finally {
+      setIsGeneratingPreview(false);
+    }
+  };
+
+  const handleOpenPreview = async () => {
+    setShowPrintPreview(true);
+    await renderPreviewFromRef();
+  };
+
+  // Re-render preview pages cleanly if viewMode switches while PrintPreviewModal is open
+  useEffect(() => {
+    if (!showPrintPreview) return;
+    const raf = requestAnimationFrame(() => {
+      renderPreviewFromRef();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [viewMode]);
+
   const handlePrint = async () => {
     if (isExportingPDF) return;
-    // Print the currently shown .printable-area element (either preview sheet or document container)
-    let el: HTMLElement | null = null;
-    if (showPrintPreview) {
-      el = document.querySelector('.printable-area');
-    }
-    if (!el && printableContainerRef.current) {
-      el = printableContainerRef.current;
-    }
+    const el = printableContainerRef.current;
     if (!el) {
-      el = (document.getElementById('printable-document-container') as HTMLElement | null)
-        || (document.querySelector('.printable-area') as HTMLElement | null);
+      showPrintToast('Could not locate printable document container.', 'error');
+      return;
     }
-    if (el) {
-      setIsExportingPDF(true);
-      try {
-        const idStr = docNumber && docNumber !== 'N/A' ? docNumber : 'document';
-        const filename = `JUWEI-${viewMode}-${idStr}.pdf`;
-        await exportElementAsPDF(el, filename);
-      } catch (err) {
-        console.error('[PrintablePickingListModal] PDF export error:', err);
-      } finally {
-        setIsExportingPDF(false);
-      }
+    setIsExportingPDF(true);
+    try {
+      const pages = await renderDocumentPages(el);
+      await printPages(pages);
+    } catch (err) {
+      console.error('[PrintablePickingListModal] Print error:', err);
+      showPrintToast(
+        `Print failed: ${formatPrintErrorMessage(err)}`,
+        'error'
+      );
+    } finally {
+      setIsExportingPDF(false);
     }
   };
 
   // Keyboard shortcut Ctrl+P / Cmd+P within the document modal
   useEffect(() => {
+    if (showPrintPreview) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
         e.preventDefault();
@@ -330,7 +358,7 @@ export default function PrintablePickingListModal({
                 </div>
 
                 {/* Tri-Signature Authorization Block */}
-                <div className="pt-6 border-t-2 border-slate-900 grid grid-cols-3 gap-6 text-xs text-center">
+                <div className="avoid-break pt-6 border-t-2 border-slate-900 grid grid-cols-3 gap-6 text-xs text-center">
                   <div className="space-y-1">
                     <div className="border-b-2 border-slate-400 pb-1">
                       <input
@@ -579,7 +607,7 @@ export default function PrintablePickingListModal({
                 </div>
 
                 {/* Signature Authorization Block */}
-                <div className="pt-6 border-t-2 border-slate-900 grid grid-cols-3 gap-6 text-xs text-center">
+                <div className="avoid-break pt-6 border-t-2 border-slate-900 grid grid-cols-3 gap-6 text-xs text-center">
                   <div className="space-y-1">
                     <div className="border-b-2 border-slate-400 pb-1">
                       <input
@@ -835,7 +863,7 @@ export default function PrintablePickingListModal({
                   </div>
                 </div>
 
-                <div className="pt-6 border-t border-slate-300 grid grid-cols-3 gap-6 text-xs text-center">
+                <div className="avoid-break pt-6 border-t border-slate-300 grid grid-cols-3 gap-6 text-xs text-center">
                   <div className="space-y-1">
                     <div className="border-b border-slate-400 pb-1">
                       <input
@@ -1035,7 +1063,7 @@ export default function PrintablePickingListModal({
                 )}
 
                 {/* Audit Authorization Signatures */}
-                <div className="pt-6 border-t-2 border-slate-900 grid grid-cols-2 gap-8 text-xs text-center">
+                <div className="avoid-break pt-6 border-t-2 border-slate-900 grid grid-cols-2 gap-8 text-xs text-center">
                   <div className="space-y-1">
                     <div className="border-b border-slate-400 pb-1">
                       <input
@@ -1176,18 +1204,18 @@ export default function PrintablePickingListModal({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setShowPrintPreview(true)}
-              disabled={isExportingPDF}
-              className={`px-3.5 py-2 ${isExportingPDF ? 'bg-slate-800/60 text-slate-500 border-slate-800 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white border-slate-700 hover:border-indigo-500/50 cursor-pointer active:scale-95'} border text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5`}
+              onClick={handleOpenPreview}
+              disabled={isExportingPDF || isGeneratingPreview}
+              className={`px-3.5 py-2 ${isExportingPDF || isGeneratingPreview ? 'bg-slate-800/60 text-slate-500 border-slate-800 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white border-slate-700 hover:border-indigo-500/50 cursor-pointer active:scale-95'} border text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5`}
               title="Open A4 Print Layout Preview before printing"
               id="btn-print-preview"
             >
-              {isExportingPDF ? (
+              {isGeneratingPreview ? (
                 <Loader2 className="h-4 w-4 animate-spin text-indigo-400" />
               ) : (
                 <Eye className="h-4 w-4 text-indigo-400" />
               )}
-              <span>PRINT PREVIEW</span>
+              <span>{isGeneratingPreview ? 'RENDERING...' : 'PRINT PREVIEW'}</span>
             </button>
 
             <button
@@ -1196,12 +1224,12 @@ export default function PrintablePickingListModal({
               disabled={isExportingPDF}
               className={`px-4 py-2 ${isExportingPDF ? 'bg-indigo-800 text-indigo-300 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white cursor-pointer'} text-xs font-bold rounded-xl shadow-lg transition flex items-center gap-2`}
               id="btn-print-document-sheet"
-              title="Generate real A4 PDF file and open directly (Ctrl+P)"
+              title="Render A4 pages and open Print dialog (Ctrl+P)"
             >
               {isExportingPDF ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin text-amber-300" />
-                  <span>GENERATING PDF...</span>
+                  <span>PREPARING PRINT...</span>
                 </>
               ) : (
                 <>
@@ -1234,11 +1262,11 @@ export default function PrintablePickingListModal({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setShowPrintPreview(true)}
-              disabled={isExportingPDF}
-              className={`px-2.5 py-1 ${isExportingPDF ? 'bg-amber-100/70 text-amber-700/60 border-amber-200 cursor-not-allowed' : 'bg-amber-200/80 hover:bg-amber-200 text-amber-950 cursor-pointer border-amber-300'} font-bold rounded-lg text-xs transition flex items-center gap-1 shadow-xs border`}
+              onClick={handleOpenPreview}
+              disabled={isExportingPDF || isGeneratingPreview}
+              className={`px-2.5 py-1 ${isExportingPDF || isGeneratingPreview ? 'bg-amber-100/70 text-amber-700/60 border-amber-200 cursor-not-allowed' : 'bg-amber-200/80 hover:bg-amber-200 text-amber-950 cursor-pointer border-amber-300'} font-bold rounded-lg text-xs transition flex items-center gap-1 shadow-xs border`}
             >
-              {isExportingPDF ? (
+              {isGeneratingPreview ? (
                 <>
                   <Loader2 className="h-3 w-3 animate-spin text-amber-700" />
                   <span>Preparing...</span>
@@ -1259,7 +1287,7 @@ export default function PrintablePickingListModal({
               {isExportingPDF ? (
                 <>
                   <Loader2 className="h-3 w-3 animate-spin text-amber-300" />
-                  <span>Generating PDF...</span>
+                  <span>Preparing Print...</span>
                 </>
               ) : (
                 <>
@@ -1294,6 +1322,9 @@ export default function PrintablePickingListModal({
             }
             documentNumber={docNumber}
             documentSubtitle={isDeliveryMode ? "Official Logistics Manifest" : "Material Management Documentation"}
+            filename={docFilename}
+            pages={previewPages}
+            isRendering={isGeneratingPreview}
             extraToolbarControls={
               <div className="flex items-center gap-1 bg-slate-950/70 border border-slate-800 p-0.5 rounded-lg text-xs font-semibold">
                 {(targetDelivery || targetIssuance) && (
@@ -1335,10 +1366,7 @@ export default function PrintablePickingListModal({
                 </button>
               </div>
             }
-            onPrint={handlePrint}
-          >
-            {documentContent}
-          </PrintPreviewModal>
+          />
         )}
       </motion.div>
     </motion.div>

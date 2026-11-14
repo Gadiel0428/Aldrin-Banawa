@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -12,27 +12,19 @@ import {
   XCircle,
   AlertTriangle,
   RefreshCw,
-  Server,
   Radio,
-  Database,
-  ShieldCheck,
   Globe,
-  Wifi,
   X,
   Copy,
   Check,
   Laptop,
-  ArrowRight,
-  Clock,
   Send,
   CheckCircle,
 } from 'lucide-react';
 import {
   getCentralServerUrl,
   getCentralServerHost,
-  getApiBaseUrl,
   getCentralWebSocketUrl,
-  isLocalhostAddress
 } from '../config/serverConfig';
 
 export interface DiagnosticItem {

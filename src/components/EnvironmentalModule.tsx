@@ -9,13 +9,10 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   Plus, 
   Boxes, 
-  Layers, 
   Sparkles, 
   AlertTriangle, 
   CheckCircle, 
   ShieldAlert,
-  ClipboardCheck,
-  Activity,
   Warehouse,
   Trash2,
   Lock,
@@ -23,8 +20,7 @@ import {
   Edit,
   Search,
   CheckCircle2,
-  XCircle,
-  FolderPlus
+  XCircle
 } from 'lucide-react';
 import { EnvironmentalLog, StorageZone, MasterRegistryItem } from '../types';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
@@ -244,7 +240,6 @@ export default function EnvironmentalModule({
   const overallTotal = zoneMetricsList.reduce((sum, item) => sum + item.total, 0);
   const overallPercent = (overallOccupied / overallTotal) * 100;
 
-  const isAnyZoneOverloaded = zoneMetricsList.some(item => item.percent > 92);
   const anyBlockedAisles = zoneMetricsList.some(item => !item.aislesClear);
 
   return (
@@ -940,6 +935,8 @@ export default function EnvironmentalModule({
         </AnimatePresence>,
         document.body
       )}
+
+      <ConfirmModal config={confirmAction} onClose={() => setConfirmAction(null)} />
     </div>
   );
 }

@@ -19,24 +19,18 @@ export const DEFAULT_PRODUCTION_SERVER_URL = `http://${DEFAULT_PRODUCTION_SERVER
  * is automatically replaced with the authoritative local production URL.
  */
 export function sanitizePublicAppUrl(urlOrHost: string): string {
-  if (!urlOrHost) return DEFAULT_PRODUCTION_SERVER_URL;
-  if (urlOrHost.includes('.run.app') || urlOrHost.includes('ais-dev-') || urlOrHost.includes('ais-pre-') || urlOrHost.includes('aldrin-banawa.onrender.com')) {
-    return DEFAULT_PRODUCTION_SERVER_URL;
-  }
+  if (!urlOrHost) return getPublicAppUrl();
   return urlOrHost;
 }
 
 /**
- * Returns the clean, authoritative application URL that NEVER requires or prompts for a Gmail account.
+ * Returns the clean, authoritative application URL.
  * Used for Desktop .BAT installer, Windows shortcuts, Mobile QR codes, and PWA downloads.
  */
 export function getPublicAppUrl(): string {
   if (typeof window !== 'undefined' && window.location && window.location.origin) {
     const origin = window.location.origin;
-    if (origin.includes('.run.app') || origin.includes('ais-dev-') || origin.includes('ais-pre-') || origin.includes('aldrin-banawa.onrender.com')) {
-      return DEFAULT_PRODUCTION_SERVER_URL;
-    }
-    if (!isLocalhostAddress(origin)) {
+    if (origin.startsWith('http')) {
       return origin;
     }
   }
@@ -82,9 +76,8 @@ export function isSecureHost(cleanHost: string, rawInput: string = ''): boolean 
   if (cleanHost.includes('.run.app') || cleanHost.includes('render.com') || cleanHost.includes('cloud')) {
     return true;
   }
-  // Local network IP addresses (such as 192.168.20.214:3000) or loopback default to standard HTTP / WS
-  if (/^\d+\.\d+\.\d+\.\d+/.test(cleanHost) || cleanHost.includes(':3000') || isLocalhostAddress(cleanHost)) {
-    return typeof window !== 'undefined' && window.location && window.location.protocol === 'https:';
+  if (typeof window !== 'undefined' && window.location && window.location.protocol === 'https:') {
+    return true;
   }
   return false;
 }
@@ -93,16 +86,15 @@ let hasLoggedResolution = false;
 
 /**
  * Resolves the authoritative central server URL for the client.
- * Enforces production cloud authority:
- * - If running inside Electron, uses central URL
- * - If user entered an address in settings, validates it cannot be localhost
- * - If window.location is on cloud, uses cloud origin
- * - If installed on PC-2 / local / file, automatically resolves to DEFAULT_PRODUCTION_SERVER_URL
+ * Enforces correct runtime environment detection:
+ * - If running in browser over HTTP/HTTPS, uses current window origin (authoritative host)
+ * - If running inside Electron, uses Electron config or cached setting
+ * - If user explicitly set custom server address, validates compatibility
  */
 export function getCentralServerUrl(): string {
   const finalize = (
     resolvedUrl: string,
-    source: 'Electron config' | 'cached localStorage' | 'current window origin' | 'build env var' | 'hardcoded default'
+    source: 'current window origin' | 'Electron config' | 'cached localStorage' | 'build env var' | 'hardcoded default'
   ): string => {
     if (!hasLoggedResolution) {
       hasLoggedResolution = true;
@@ -111,56 +103,55 @@ export function getCentralServerUrl(): string {
     return resolvedUrl;
   };
 
-  // 1. Check environment variable injected at build time
-  const metaEnv = typeof import.meta !== 'undefined' ? (import.meta as any).env : undefined;
-  const envUrl = metaEnv && metaEnv.VITE_CENTRAL_SERVER_URL
-    ? String(metaEnv.VITE_CENTRAL_SERVER_URL).trim()
-    : '';
-
-  // 1. Check Electron injected API (Source: Electron config)
-  if (typeof window !== 'undefined' && (window as any).electronAPI?.centralServerUrl) {
-    const rawElectronUrl = String((window as any).electronAPI.centralServerUrl).trim();
-    const electronUrl = sanitizePublicAppUrl(rawElectronUrl);
-    if (electronUrl && !isLocalhostAddress(electronUrl)) {
-      return finalize(electronUrl.replace(/\/+$/, ''), 'Electron config');
-    }
-  }
-
-  // 2. Check cached settings (Source: cached localStorage)
-  if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
-    const cached = localStorage.getItem('juwei_wms_server_address');
-    if (cached) {
-      if (isLocalhostAddress(cached)) {
-        console.warn('[JUWEI-WMS] Disallowed localhost found in cached server address. Purging and redirecting to Central Cloud Server.');
-        localStorage.removeItem('juwei_wms_server_address');
-      } else {
-        const sanitizedCached = sanitizePublicAppUrl(cached);
-        if (sanitizedCached !== cached) {
-          localStorage.setItem('juwei_wms_server_address', sanitizedCached);
-        }
-        const cleanCached = sanitizeServerHost(sanitizedCached);
-        if (cleanCached && cleanCached.length > 0) {
-          const isHttps = isSecureHost(cleanCached, sanitizedCached);
-          return finalize(`${isHttps ? 'https:' : 'http:'}//${cleanCached}`, 'cached localStorage');
-        }
-      }
-    }
-  }
-
-  // 3. Check if currently browsing on a genuine host (Source: current window origin)
-  if (typeof window !== 'undefined' && window.location && window.location.host) {
+  // 1. Check if browsing on a genuine web host (browser environment)
+  // When running on Web / Cloud / Dev server, window.location.origin is the authoritative backend
+  const isElectron = typeof window !== 'undefined' && Boolean((window as any).electronAPI?.isElectron);
+  if (!isElectron && typeof window !== 'undefined' && window.location && window.location.host && !window.location.protocol.startsWith('file')) {
     const currentHost = window.location.host;
     if (window.location.protocol.startsWith('http')) {
       return finalize(`${window.location.protocol}//${currentHost}`, 'current window origin');
     }
   }
 
-  // 4. Use build env URL if valid non-localhost (Source: build env var)
-  if (envUrl && !isLocalhostAddress(envUrl)) {
+  // 2. Check Electron injected API (Source: Electron config)
+  if (typeof window !== 'undefined' && (window as any).electronAPI?.centralServerUrl) {
+    const rawElectronUrl = String((window as any).electronAPI.centralServerUrl).trim();
+    if (rawElectronUrl) {
+      return finalize(rawElectronUrl.replace(/\/+$/, ''), 'Electron config');
+    }
+  }
+
+  // 3. Check environment variable injected at build time
+  const metaEnv = typeof import.meta !== 'undefined' ? (import.meta as any).env : undefined;
+  const envUrl = metaEnv && metaEnv.VITE_CENTRAL_SERVER_URL
+    ? String(metaEnv.VITE_CENTRAL_SERVER_URL).trim()
+    : '';
+
+  // 4. Check cached settings (Source: cached localStorage)
+  if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+    const cached = localStorage.getItem('juwei_wms_server_address');
+    if (cached) {
+      // If browsing over HTTPS and cached is plain HTTP IP, ignore cached to prevent mixed content failure
+      const isPageHttps = window.location && window.location.protocol === 'https:';
+      const isCachedInsecure = cached.startsWith('http://192.') || cached.startsWith('http://10.') || cached.startsWith('http://172.');
+      if (isPageHttps && isCachedInsecure) {
+        localStorage.removeItem('juwei_wms_server_address');
+      } else {
+        const cleanCached = sanitizeServerHost(cached);
+        if (cleanCached && cleanCached.length > 0) {
+          const isHttps = isSecureHost(cleanCached, cached);
+          return finalize(`${isHttps ? 'https:' : 'http:'}//${cleanCached}`, 'cached localStorage');
+        }
+      }
+    }
+  }
+
+  // 5. Use build env URL if valid non-localhost (Source: build env var)
+  if (envUrl) {
     return finalize(envUrl.replace(/\/+$/, ''), 'build env var');
   }
 
-  // 5. Absolute Fallback: Default Central Production Cloud Server (Source: hardcoded default)
+  // 6. Fallback for Electron / Standalone: Default Central Production Server
   return finalize(DEFAULT_PRODUCTION_SERVER_URL, 'hardcoded default');
 }
 
@@ -193,3 +184,24 @@ export function getCentralWebSocketUrl(accountId?: string, warehouseId?: string)
   
   return `${wsProto}//${cleanHost}/ws?accountId=${encodeURIComponent(acc)}&warehouseId=${encodeURIComponent(wh)}`;
 }
+
+/**
+ * Returns the stored session token from localStorage, if available.
+ */
+export function getStoredSessionToken(): string | null {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    return localStorage.getItem('juwei_wms_sessionToken');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Builds request headers including Authorization Bearer token when signed in.
+ */
+export function getAuthHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const token = getStoredSessionToken();
+  return token ? { ...extra, Authorization: `Bearer ${token}` } : { ...extra };
+}
+

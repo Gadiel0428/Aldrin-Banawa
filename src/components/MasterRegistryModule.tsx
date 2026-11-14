@@ -13,21 +13,15 @@ import {
   Barcode,
   Plus, 
   Search, 
-  Edit3, 
-  Trash2, 
   CheckCircle2, 
   XCircle, 
   RefreshCw,
   FolderPlus,
   SlidersHorizontal,
-  Info,
   AlertTriangle,
   AlertOctagon,
   X,
-  Warehouse,
-  Boxes,
-  Factory,
-  FileText
+  Warehouse
 } from 'lucide-react';
 import { MasterRegistryItem, RegistryType, PresetSourceType } from '../types';
 import { ConfirmActionConfig } from './ConfirmModal';
@@ -171,7 +165,7 @@ export default function MasterRegistryModule({
   onDeleteItem,
   onResetDefaults,
   isSuperAdmin = false,
-  canEdit = false,
+  canEdit: _canEdit = false,
   defaultType = 'ALL',
   categories
 }: MasterRegistryModuleProps) {

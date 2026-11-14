@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { MaterialStockItem, getCustomerForPart } from '../types';
+import { renderPdfDocToPages } from './printDocument';
 
 export interface InventoryReportOptions {
   customerFilter?: string;
@@ -499,16 +500,17 @@ export function generateInventoryReportPDF(
   return doc;
 }
 
-export function downloadInventoryReportPDF(
+export async function generateInventoryReportPages(
   stocks: MaterialStockItem[],
   options: InventoryReportOptions
-): void {
+): Promise<{ doc: jsPDF; pages: string[]; filename: string }> {
   const doc = generateInventoryReportPDF(stocks, options);
   const dateStamp = new Date().toISOString().split('T')[0];
   const customerSlug = options.customerFilter && options.customerFilter !== 'ALL' ? `_${options.customerFilter.replace(/\s+/g, '_')}` : '';
   const statusSlug = options.statusFilter && options.statusFilter !== 'ALL' ? `_${options.statusFilter}` : '';
   const filename = `Juwei_Inventory_Report${customerSlug}${statusSlug}_${dateStamp}.pdf`;
-  doc.save(filename);
+  const pages = await renderPdfDocToPages(doc);
+  return { doc, pages, filename };
 }
 
 export function generateInventoryReportCSV(

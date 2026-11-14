@@ -8,49 +8,34 @@ import { createPortal } from 'react-dom';
 import { 
   Plus, 
   Search, 
-  FileCheck2, 
-  FileX2, 
   AlertOctagon, 
   ShieldCheck, 
   Sparkles, 
   Truck, 
-  Warehouse, 
-  History, 
   RotateCcw, 
   Trash2, 
   Edit, 
-  FolderPlus, 
   ScanLine, 
-  Barcode, 
   AlertTriangle, 
   X, 
   CheckCircle2, 
   XCircle, 
-  Boxes, 
   Factory, 
   FileText,
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
   ChevronDown,
-  ChevronUp,
   ChevronRight,
-  ClipboardList,
-  Package,
   PackageCheck,
   Tag,
-  MapPin,
-  Calendar,
-  Layers,
   Activity,
-  Info,
   Check,
   Pencil,
-  AlertCircle,
-  ExternalLink
+  AlertCircle
 } from 'lucide-react';
 import { ReceivingRecord, ReturnRecord, MaterialStockItem, getCustomerForPart, UOM_OPTIONS, MasterRegistryItem, RegistryType, FifoColorsMap } from '../types';
-import { FIFO_COLORS_BY_MONTH, resolveFifoColor, getFifoColorForDate, normalizeFifoColor } from '../data';
+import { resolveFifoColor, getFifoColorForDate, normalizeFifoColor } from '../data';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAuthoritativeId } from '../lib/idGenerator';
@@ -103,7 +88,7 @@ export default function ReceivingModule({
   isSuperAdmin = false,
   canEdit = false,
   registries = [],
-  onOpenRegisterModal,
+  onOpenRegisterModal: _onOpenRegisterModal,
   receivingCategories,
   onUpdateReceivingCategories,
   fifoColorsByMonth
@@ -425,11 +410,6 @@ export default function ReceivingModule({
   const [bomItems, setBomItems] = useState<{ partCode: string; description: string; quantityRequired: number; unit: string }[]>(
     Array.isArray(initialReceivingDraft?.bomItems) ? initialReceivingDraft.bomItems : []
   );
-  const [selectedStockIdForBom, setSelectedStockIdForBom] = useState('');
-  const [newBomPartCode, setNewBomPartCode] = useState('');
-  const [newBomDescription, setNewBomDescription] = useState('');
-  const [newBomQty, setNewBomQty] = useState(0);
-  const [newBomUnit, setNewBomUnit] = useState('PCS');
   const [autoDeductBom, setAutoDeductBom] = useState(initialReceivingDraft?.autoDeductBom ?? true);
   
   // SOP Receiving Condition Verification Checklist
@@ -599,11 +579,6 @@ export default function ReceivingModule({
     setSopMaterialCondition(true);
     setSopSystemRecording(true);
     setBomItems([]);
-    setSelectedStockIdForBom('');
-    setNewBomPartCode('');
-    setNewBomDescription('');
-    setNewBomQty(0);
-    setNewBomUnit('pcs');
     setAutoDeductBom(true);
     setShowAddForm(false);
   };
@@ -626,50 +601,6 @@ export default function ReceivingModule({
     setRetCondition('Good');
     setRetSlip('');
     setShowReturnForm(false);
-  };
-
-  // Helper functions for BOM item management
-  const handleBomItemSelection = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const id = e.target.value;
-    setSelectedStockIdForBom(id);
-    if (id === '') {
-      setNewBomPartCode('');
-      setNewBomDescription('');
-      setNewBomUnit('pcs');
-    } else {
-      const found = stocks.find(s => s.id === id);
-      if (found) {
-        setNewBomPartCode(found.partCode);
-        setNewBomDescription(found.description);
-        setNewBomUnit(found.unit);
-      }
-    }
-  };
-
-  const handleAddBomItem = () => {
-    if (!newBomPartCode || !newBomDescription || newBomQty <= 0) {
-      alert('Please specify a valid component part code, description, and quantity.');
-      return;
-    }
-
-    const itemExists = bomItems.some(item => item.partCode === newBomPartCode);
-    if (itemExists) {
-      alert('This part code is already added to the BOM list. Remove it first to re-add.');
-      return;
-    }
-
-    setBomItems(prev => [...prev, {
-      partCode: newBomPartCode,
-      description: newBomDescription,
-      quantityRequired: newBomQty,
-      unit: newBomUnit
-    }]);
-
-    setSelectedStockIdForBom('');
-    setNewBomPartCode('');
-    setNewBomDescription('');
-    setNewBomQty(0);
-    setNewBomUnit('pcs');
   };
 
   // Handle Receiving Submission
@@ -775,11 +706,6 @@ export default function ReceivingModule({
     setSopMaterialCondition(true);
     setSopSystemRecording(true);
     setBomItems([]);
-    setSelectedStockIdForBom('');
-    setNewBomPartCode('');
-    setNewBomDescription('');
-    setNewBomQty(0);
-    setNewBomUnit('pcs');
     setAutoDeductBom(true);
     setShowAddForm(false);
   };

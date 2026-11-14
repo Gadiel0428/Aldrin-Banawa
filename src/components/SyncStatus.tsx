@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Wifi, WifiOff, RefreshCw, AlertCircle, Database, CheckCircle2, ChevronDown, ChevronUp, Clock, Laptop, ShieldCheck, Settings2, Globe, Activity } from 'lucide-react';
+import { Wifi, WifiOff, RefreshCw, AlertCircle, Database, CheckCircle2, Clock, Laptop, ShieldCheck, Settings2, Globe, Activity } from 'lucide-react';
 import { syncManager } from '../sync/syncManager';
 import { OfflineQueue } from '../sync/offlineQueue';
 import { SyncStatusInfo, OfflineQueueItem } from '../types/sync';

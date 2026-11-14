@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Database, Server, Wifi, RefreshCw, CheckCircle2, ShieldAlert, Laptop, Clock, Activity, HardDrive, Globe } from 'lucide-react';
+import { Database, RefreshCw, CheckCircle2, Activity } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { getApiBaseUrl, getCentralServerUrl } from '../config/serverConfig';
 
@@ -32,26 +32,15 @@ export default function CentralDatabaseModal({
   totalRecordsCount = 0,
   totalUsersCount = 1,
 }: CentralDatabaseModalProps) {
-  const [healthInfo, setHealthInfo] = useState<{
-    status: string;
-    uptime?: number;
-    dbCommitted?: boolean;
-  } | null>(null);
   const [isChecking, setIsChecking] = useState(false);
 
   const checkServerHealth = async () => {
     setIsChecking(true);
     try {
       const baseUrl = getApiBaseUrl();
-      const res = await fetch(`${baseUrl}/api/health`);
-      if (res.ok) {
-        const data = await res.json();
-        setHealthInfo({ status: 'OK', uptime: data.uptime, dbCommitted: true });
-      } else {
-        setHealthInfo({ status: 'ERROR', dbCommitted: false });
-      }
+      await fetch(`${baseUrl}/api/health`);
     } catch {
-      setHealthInfo({ status: 'OFFLINE', dbCommitted: false });
+      // Health check failed silently
     } finally {
       setIsChecking(false);
     }

@@ -3,34 +3,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Barcode, 
-  QrCode, 
   Search, 
   X, 
-  ExternalLink, 
   Layers, 
   Package, 
   Truck, 
   ArrowLeftRight, 
   RotateCcw, 
-  FileText, 
-  CheckCircle2, 
-  AlertCircle, 
-  Boxes, 
   Copy, 
   Check, 
-  Calendar, 
   MapPin, 
-  User, 
-  Tag, 
   ChevronRight,
-  Sparkles,
-  Building,
-  RefreshCw,
   FolderOpen
 } from 'lucide-react';
 import { 
@@ -72,7 +60,7 @@ export default function QuickRecordLookupModal({
   issuances,
   deliveries,
   returns,
-  recycling,
+  recycling: _recycling,
   registries,
   onNavigateToModule
 }: QuickRecordLookupModalProps) {

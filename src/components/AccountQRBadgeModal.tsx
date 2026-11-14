@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
@@ -6,14 +6,11 @@ import {
   QrCode, 
   Printer, 
   X, 
-  ShieldCheck, 
   Lock, 
-  Building2, 
   UserCheck, 
   Check, 
   Copy, 
   CreditCard, 
-  Sparkles, 
   Eye, 
   EyeOff, 
   Phone, 
@@ -22,7 +19,13 @@ import {
   AlertTriangle 
 } from 'lucide-react';
 import { RegisteredAccount } from '../types';
-import { exportElementAsPDF } from '../utils/printDocument';
+import { PrintPreviewModal } from './PrintPreviewModal';
+import {
+  renderDocumentPages,
+  printPages,
+  showPrintToast,
+  formatPrintErrorMessage
+} from '../utils/printDocument';
 
 interface AccountQRBadgeModalProps {
   account: RegisteredAccount;
@@ -40,6 +43,10 @@ export default function AccountQRBadgeModal({
   const [copied, setCopied] = useState(false);
   const [showPin, setShowPin] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [showPrintPreview, setShowPrintPreview] = useState(false);
+  const [previewPages, setPreviewPages] = useState<string[]>([]);
+  const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
+  const badgeRef = useRef<HTMLDivElement>(null);
 
   const hasPin = Boolean(account?.pin && String(account.pin).trim() !== '');
   const isCompromised = account?.pin === '1234' || !!account?.isPinCompromised;
@@ -158,26 +165,53 @@ export default function AccountQRBadgeModal({
 
   const [isExportingPDF, setIsExportingPDF] = useState(false);
 
+  const handleOpenPreview = async () => {
+    if (isGeneratingPreview) return;
+    const el = badgeRef.current;
+    if (!el) {
+      showPrintToast('Could not locate QR badge card element.', 'error');
+      return;
+    }
+    setShowPrintPreview(true);
+    setIsGeneratingPreview(true);
+    try {
+      const pages = await renderDocumentPages(el);
+      setPreviewPages(pages);
+    } catch (err) {
+      console.error('[AccountQRBadgeModal] Preview render error:', err);
+      showPrintToast(
+        `Failed to render QR badge preview: ${formatPrintErrorMessage(err)}`,
+        'error'
+      );
+    } finally {
+      setIsGeneratingPreview(false);
+    }
+  };
+
   const handlePrintBadge = async () => {
     if (isExportingPDF) return;
-    const el = (document.querySelector('.printable-badge') as HTMLElement | null)
-      || (document.querySelector('.printable-area') as HTMLElement | null);
-    if (el) {
-      setIsExportingPDF(true);
-      try {
-        const empId = account.employeeId || 'operator';
-        const filename = `JUWEI-Badge-${empId}.pdf`;
-        await exportElementAsPDF(el, filename);
-      } catch (err) {
-        console.error('[AccountQRBadgeModal] PDF export error:', err);
-      } finally {
-        setIsExportingPDF(false);
-      }
+    const el = badgeRef.current;
+    if (!el) {
+      showPrintToast('Could not locate QR badge card element.', 'error');
+      return;
+    }
+    setIsExportingPDF(true);
+    try {
+      const pages = await renderDocumentPages(el);
+      await printPages(pages);
+    } catch (err) {
+      console.error('[AccountQRBadgeModal] Print error:', err);
+      showPrintToast(
+        `Print failed: ${formatPrintErrorMessage(err)}`,
+        'error'
+      );
+    } finally {
+      setIsExportingPDF(false);
     }
   };
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || showPrintPreview) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
         e.preventDefault();
@@ -186,7 +220,7 @@ export default function AccountQRBadgeModal({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, isExportingPDF, account]);
+  }, [isOpen, showPrintPreview, isExportingPDF, account]);
 
   const modalContent = (
     <AnimatePresence>
@@ -238,7 +272,7 @@ export default function AccountQRBadgeModal({
             {/* Badge Card Body - Scrollable if screen height is constrained */}
             <div className="p-4 sm:p-5 space-y-3.5 overflow-y-auto flex-1 print:p-0 print:overflow-visible">
               {/* Official Pass Badge Graphic (Full Badge Printable Area) */}
-              <div className="bg-white rounded-2xl p-4 sm:p-5 border-2 border-blue-900 shadow-xl text-blue-950 text-center space-y-2.5 relative overflow-hidden printable-area printable-badge print:border-2 print:border-blue-900 print:shadow-none">
+              <div ref={badgeRef} className="avoid-break bg-white rounded-2xl p-4 sm:p-5 border-2 border-blue-900 shadow-xl text-blue-950 text-center space-y-2.5 relative overflow-hidden printable-area printable-badge print:border-2 print:border-blue-900 print:shadow-none">
                 {/* Watermark / Header */}
                 <div className="border-b-2 border-blue-100 pb-2">
                   <div className="text-[10px] font-extrabold text-blue-800 font-mono tracking-widest uppercase">
@@ -332,17 +366,35 @@ export default function AccountQRBadgeModal({
                   </button>
                 )}
 
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <button
+                    type="button"
+                    onClick={handleOpenPreview}
+                    disabled={isGeneratingPreview || isExportingPDF}
+                    className={`bg-slate-800 hover:bg-slate-700 text-indigo-200 border border-slate-600 font-bold py-2 px-1 rounded-xl text-[11px] transition flex items-center justify-center gap-1 shadow-sm uppercase ${isGeneratingPreview || isExportingPDF ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'} whitespace-nowrap`}
+                    title="Preview A4 Badge Print Layout"
+                  >
+                    {isGeneratingPreview ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-300 shrink-0" /> PREVIEW...
+                      </>
+                    ) : (
+                      <>
+                        <Eye className="h-3.5 w-3.5 shrink-0 text-indigo-300" /> PREVIEW
+                      </>
+                    )}
+                  </button>
+
                   <button
                     type="button"
                     onClick={handlePrintBadge}
                     disabled={isExportingPDF}
                     className={`bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-1 rounded-xl text-[11px] transition flex items-center justify-center gap-1 shadow-sm uppercase ${isExportingPDF ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'} whitespace-nowrap`}
-                    title="Generate real A4 PDF badge and open directly (Ctrl+P)"
+                    title="Render A4 badge and open Print dialog (Ctrl+P)"
                   >
                     {isExportingPDF ? (
                       <>
-                        <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300 shrink-0" /> PDF...
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300 shrink-0" /> PRINTING...
                       </>
                     ) : (
                       <>
@@ -387,6 +439,18 @@ export default function AccountQRBadgeModal({
             </div>
           </motion.div>
         </motion.div>
+      )}
+      {showPrintPreview && account && (
+        <PrintPreviewModal
+          isOpen={showPrintPreview}
+          onClose={() => setShowPrintPreview(false)}
+          documentTitle={`Operator Login QR Badge — ${account.username}`}
+          documentNumber={`ID: ${account.employeeId}`}
+          documentSubtitle="Juwei WMS Gateway Pass"
+          filename={`JUWEI-Badge-${account.employeeId || 'operator'}.pdf`}
+          pages={previewPages}
+          isRendering={isGeneratingPreview}
+        />
       )}
     </AnimatePresence>
   );

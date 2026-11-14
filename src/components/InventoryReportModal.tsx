@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -13,10 +13,8 @@ import {
   FileText, 
   FileSpreadsheet, 
   Filter, 
-  TrendingUp, 
   Package, 
   ShieldCheck, 
-  CheckCircle2, 
   AlertTriangle,
   Layers, 
   Search, 
@@ -26,11 +24,16 @@ import {
   Loader2 
 } from 'lucide-react';
 import { PrintPreviewModal } from './PrintPreviewModal';
-import { exportElementAsPDF } from '../utils/printDocument';
+import {
+  renderDocumentPages,
+  printPages,
+  showPrintToast,
+  formatPrintErrorMessage
+} from '../utils/printDocument';
 import { MaterialStockItem, getCustomerForPart } from '../types';
 import { 
   filterInventoryData, 
-  downloadInventoryReportPDF, 
+  generateInventoryReportPages, 
   downloadInventoryReportCSV,
   InventoryReportOptions 
 } from '../utils/inventoryReportGenerator';
@@ -55,8 +58,13 @@ export default function InventoryReportModal({
   const [searchQuery, setSearchQuery] = useState('');
   const [isExportingPDF, setIsExportingPDF] = useState(false);
   const [showPrintPreview, setShowPrintPreview] = useState(false);
+  const [previewPages, setPreviewPages] = useState<string[]>([]);
+  const [previewFilename, setPreviewFilename] = useState<string>('JUWEI-Inventory-Report.pdf');
+  const [previewSubtitle, setPreviewSubtitle] = useState<string>('ISO 9001:2015 Comprehensive Stock Audit');
+  const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
   const [isExportingCSV, setIsExportingCSV] = useState(false);
   const [copiedSuccess, setCopiedSuccess] = useState(false);
+  const reportContainerRef = useRef<HTMLDivElement>(null);
 
   // Editable Signatories State
   const todayStr = new Date().toISOString().split('T')[0];
@@ -99,14 +107,52 @@ export default function InventoryReportModal({
     return filterInventoryData(stocks, reportOptions);
   }, [stocks, reportOptions]);
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
+    if (isExportingPDF) return;
+    setIsExportingPDF(true);
+    setPreviewSubtitle('Formatted Landscape Inventory PDF Report');
+    setShowPrintPreview(true);
+    setIsGeneratingPreview(true);
     try {
-      setIsExportingPDF(true);
-      downloadInventoryReportPDF(stocks, reportOptions);
+      const { pages, filename } = await generateInventoryReportPages(stocks, reportOptions);
+      setPreviewPages(pages);
+      setPreviewFilename(filename);
     } catch (err) {
-      console.error('Failed to export PDF:', err);
+      console.error('Failed to render inventory report PDF:', err);
+      setShowPrintPreview(false);
+      showPrintToast(
+        `Failed to generate inventory PDF report: ${formatPrintErrorMessage(err)}`,
+        'error'
+      );
     } finally {
-      setTimeout(() => setIsExportingPDF(false), 600);
+      setIsGeneratingPreview(false);
+      setIsExportingPDF(false);
+    }
+  };
+
+  const handleOpenPreview = async () => {
+    if (isGeneratingPreview) return;
+    const el = reportContainerRef.current;
+    if (!el) {
+      showPrintToast('Could not locate printable inventory report container.', 'error');
+      return;
+    }
+    const dateStr = new Date().toISOString().split('T')[0];
+    setPreviewFilename(`JUWEI-Inventory-Report-${dateStr}.pdf`);
+    setPreviewSubtitle('ISO 9001:2015 Comprehensive Stock Audit');
+    setShowPrintPreview(true);
+    setIsGeneratingPreview(true);
+    try {
+      const pages = await renderDocumentPages(el);
+      setPreviewPages(pages);
+    } catch (err) {
+      console.error('[InventoryReportModal] Preview render error:', err);
+      showPrintToast(
+        `Failed to render print preview: ${formatPrintErrorMessage(err)}`,
+        'error'
+      );
+    } finally {
+      setIsGeneratingPreview(false);
     }
   };
 
@@ -118,8 +164,12 @@ export default function InventoryReportModal({
       setTimeout(() => setCopiedSuccess(false), 2500);
     } catch (err) {
       console.error('Failed to export CSV:', err);
+      showPrintToast(
+        `Failed to export CSV: ${formatPrintErrorMessage(err)}`,
+        'error'
+      );
     } finally {
-      setTimeout(() => setIsExportingCSV(false), 600);
+      setIsExportingCSV(false);
     }
   };
 
@@ -127,23 +177,28 @@ export default function InventoryReportModal({
 
   const handlePrint = async () => {
     if (isPrintingPDF) return;
-    const el = (document.getElementById('printable-inventory-report') as HTMLElement | null)
-      || (document.querySelector('.printable-area') as HTMLElement | null);
-    if (el) {
-      setIsPrintingPDF(true);
-      try {
-        const dateStr = new Date().toISOString().split('T')[0];
-        const filename = `JUWEI-Inventory-Report-${dateStr}.pdf`;
-        await exportElementAsPDF(el, filename);
-      } catch (err) {
-        console.error('[InventoryReportModal] PDF export error:', err);
-      } finally {
-        setIsPrintingPDF(false);
-      }
+    const el = reportContainerRef.current;
+    if (!el) {
+      showPrintToast('Could not locate printable inventory report container.', 'error');
+      return;
+    }
+    setIsPrintingPDF(true);
+    try {
+      const pages = await renderDocumentPages(el);
+      await printPages(pages);
+    } catch (err) {
+      console.error('[InventoryReportModal] Print error:', err);
+      showPrintToast(
+        `Print failed: ${formatPrintErrorMessage(err)}`,
+        'error'
+      );
+    } finally {
+      setIsPrintingPDF(false);
     }
   };
 
   useEffect(() => {
+    if (showPrintPreview) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
         e.preventDefault();
@@ -152,7 +207,7 @@ export default function InventoryReportModal({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPrintingPDF]);
+  }, [isPrintingPDF, showPrintPreview]);
 
   const reportContent = (
     <div className="space-y-6">
@@ -191,7 +246,7 @@ export default function InventoryReportModal({
             </div>
 
             {/* Executive KPI Summary 4-Grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+            <div className="avoid-break grid grid-cols-2 sm:grid-cols-4 gap-3.5">
               {/* Approved Stock */}
               <div className="p-3.5 rounded-2xl border border-emerald-200 bg-emerald-50/50">
                 <div className="flex justify-between items-center text-emerald-800 mb-1">
@@ -264,7 +319,7 @@ export default function InventoryReportModal({
             </div>
 
             {/* Customer Allocation Breakdown Tags */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs space-y-2">
+            <div className="avoid-break bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs space-y-2">
               <div className="flex justify-between items-center">
                 <span className="text-[11px] font-extrabold text-slate-700 uppercase font-mono flex items-center gap-1.5">
                   <Building className="h-3.5 w-3.5 text-indigo-600" /> Customer Allocation Breakdown:
@@ -379,7 +434,7 @@ export default function InventoryReportModal({
             </div>
 
             {/* Official Manager Sign-off & Audit Stamp */}
-            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4.5 space-y-3 print:bg-white print:border-slate-300">
+            <div className="avoid-break bg-slate-50 border border-slate-200 rounded-2xl p-4.5 space-y-3 print:bg-white print:border-slate-300">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-200 pb-2">
                 <span className="text-[10px] font-bold text-slate-700 uppercase font-mono tracking-wider">
                   OFFICIAL INVENTORY AUDIT SIGN-OFF & MANAGER ENDORSEMENT
@@ -549,14 +604,6 @@ export default function InventoryReportModal({
             <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
-                onClick={() => setShowPrintPreview(true)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border border-slate-700"
-              >
-                <Eye className="h-4 w-4 text-indigo-400" />
-                <span>Print Preview</span>
-              </button>
-              <button
-                type="button"
                 onClick={handleExportCSV}
                 disabled={isExportingCSV}
                 className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer border border-emerald-400/30"
@@ -571,32 +618,33 @@ export default function InventoryReportModal({
                 onClick={handleExportPDF}
                 disabled={isExportingPDF}
                 className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer border border-indigo-400/30"
-                title="Download formatted multi-page PDF audit report"
+                title="Preview & download formatted multi-page PDF audit report"
               >
-                <FileText className="h-3.5 w-3.5" />
-                <span>{isExportingPDF ? 'Generating...' : 'Export PDF'}</span>
+                {isExportingPDF ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
+                <span>{isExportingPDF ? 'Rendering...' : 'PDF Report Preview'}</span>
               </button>
 
               <button
                 type="button"
-                onClick={() => setShowPrintPreview(true)}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border border-slate-700"
-                title="Preview report in A4 layout before opening system print dialog"
+                onClick={handleOpenPreview}
+                disabled={isGeneratingPreview}
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-indigo-300 hover:text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border border-slate-700"
+                title="Preview report in A4 layout before printing"
               >
-                <Eye className="h-3.5 w-3.5 text-indigo-400" />
-                <span className="hidden sm:inline">Print Preview</span>
+                {isGeneratingPreview ? <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" /> : <Eye className="h-3.5 w-3.5 text-indigo-400" />}
+                <span className="hidden sm:inline">{isGeneratingPreview ? 'Rendering...' : 'Print Preview'}</span>
               </button>
               <button
                 type="button"
                 onClick={handlePrint}
                 disabled={isPrintingPDF}
                 className={`px-3 py-1.5 ${isPrintingPDF ? 'bg-slate-800 text-slate-400 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer'} rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-slate-700`}
-                title="Generate real A4 PDF file and open directly (Ctrl+P)"
+                title="Render A4 pages and open Print dialog (Ctrl+P)"
               >
                 {isPrintingPDF ? (
                   <>
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300" />
-                    <span className="hidden sm:inline">Generating PDF...</span>
+                    <span className="hidden sm:inline">Preparing Print...</span>
                   </>
                 ) : (
                   <>
@@ -673,7 +721,7 @@ export default function InventoryReportModal({
           </div>
 
           {/* Scrollable Report Body */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-6 printable-area print:p-0 print:overflow-visible" id="printable-inventory-report">
+          <div ref={reportContainerRef} className="flex-1 overflow-y-auto p-6 space-y-6 printable-area print:p-0 print:overflow-visible" id="printable-inventory-report">
             {reportContent}
           </div>
 
@@ -699,10 +747,10 @@ export default function InventoryReportModal({
                 type="button"
                 onClick={handleExportPDF}
                 disabled={isExportingPDF}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer"
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer"
               >
-                <Download className="h-4 w-4" />
-                <span>{isExportingPDF ? 'Generating PDF...' : 'Download PDF Report'}</span>
+                {isExportingPDF ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                <span>{isExportingPDF ? 'Rendering PDF...' : 'Preview & Save PDF'}</span>
               </button>
 
               <button
@@ -721,11 +769,11 @@ export default function InventoryReportModal({
             onClose={() => setShowPrintPreview(false)}
             documentTitle="Warehouse Inventory Audit & Material Status Report"
             documentNumber="DOC REF: JPM-WMS-INV-001"
-            documentSubtitle="ISO 9001:2015 Comprehensive Stock Audit"
-            onPrint={handlePrint}
-          >
-            {reportContent}
-          </PrintPreviewModal>
+            documentSubtitle={previewSubtitle}
+            filename={previewFilename}
+            pages={previewPages}
+            isRendering={isGeneratingPreview}
+          />
         )}
         </motion.div>
       </motion.div>

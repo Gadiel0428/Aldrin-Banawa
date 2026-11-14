@@ -297,7 +297,7 @@ export interface QueuedMutation {
   reset_version?: number;
 }
 
-export function getCustomerForPart(partCode?: string, description?: string): string {
+export function getCustomerForPart(_partCode?: string, _description?: string): string {
   // No hardcoded placeholder entries (CISCO Systems, NISSAN Motors, EPSON Precision, General / Internal removed).
   // Return empty string; customer assignments are sourced strictly from registered master records.
   return '';

@@ -319,6 +319,11 @@ button, a, input, select, textarea, .transition-smooth {
   margin: 10mm;
 }
 
+.avoid-break {
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
 /* Print-specific stylesheet */
 @media print {
   html, body, #root {

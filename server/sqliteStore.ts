@@ -1,7 +1,6 @@
 import { createRequire } from "module";
 import path from "path";
 import fs from "fs";
-import crypto from "crypto";
 
 // Use createRequire(path.join(process.cwd(), "noop.cjs")) so esbuild bundle does not break
 const dynamicRequire = createRequire(path.join(process.cwd(), "noop.cjs"));

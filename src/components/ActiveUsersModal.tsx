@@ -1,6 +1,5 @@
-import React from 'react';
 import { createPortal } from 'react-dom';
-import { Users, X, Activity, Server, Radio, Shield, Clock, CheckCircle2, Monitor, MapPin } from 'lucide-react';
+import { Users, X, Activity, Server, Radio, Clock, CheckCircle2, Monitor } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { RegisteredAccount, ActivePresenceUser } from '../types';
 

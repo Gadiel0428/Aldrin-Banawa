@@ -6,16 +6,10 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { 
-  Package, 
   Search, 
   Plus, 
   Barcode, 
-  Tag, 
-  DollarSign, 
-  Boxes,
-  RefreshCw,
-  CheckCircle2,
-  AlertCircle
+  RefreshCw
 } from 'lucide-react';
 import { Product } from '../types/product';
 import { fetchProducts, upsertProduct } from '../database/products';
@@ -34,7 +28,6 @@ export const ProductList: React.FC = () => {
   const [barcode, setBarcode] = useState('');
   const [unit, setUnit] = useState('PCS');
   const [category, setCategory] = useState('RAW');
-  const [cost, setCost] = useState(0);
   const [minStock, setMinStock] = useState(10);
 
   const loadProducts = async () => {
@@ -67,7 +60,7 @@ export const ProductList: React.FC = () => {
         barcode: barcode || undefined,
         unit,
         category,
-        cost: Number(cost),
+        cost: 0,
         min_stock: Number(minStock),
         is_active: true,
       });

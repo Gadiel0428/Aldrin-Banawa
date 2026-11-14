@@ -21,8 +21,8 @@ let currentAppVersion = '';
 function getFormattedWindowTitle(ver) {
   const v = ver ? String(ver).replace(/^v/i, '').trim() : '';
   return v 
-    ? `JUWEI WAREHOUSE MANAGEMENT SYSTEM v${v} (CENTRAL CLOUD CONNECTED)`
-    : 'JUWEI WAREHOUSE MANAGEMENT SYSTEM (CENTRAL CLOUD CONNECTED)';
+    ? `JUWEI WAREHOUSE MANAGEMENT SYSTEM v${v} (WAREHOUSE SERVER)`
+    : 'JUWEI WAREHOUSE MANAGEMENT SYSTEM (WAREHOUSE SERVER)';
 }
 
 function setElectronWindowTitle(ver) {
@@ -103,8 +103,8 @@ function createWindow() {
   }
 
   const windowTitle = appVersion 
-    ? `JUWEI WAREHOUSE MANAGEMENT SYSTEM v${appVersion} (CENTRAL CLOUD CONNECTED)`
-    : 'JUWEI WAREHOUSE MANAGEMENT SYSTEM (CENTRAL CLOUD CONNECTED)';
+    ? `JUWEI WAREHOUSE MANAGEMENT SYSTEM v${appVersion} (WAREHOUSE SERVER)`
+    : 'JUWEI WAREHOUSE MANAGEMENT SYSTEM (WAREHOUSE SERVER)';
 
   const windowOptions = {
     width: 1366,
@@ -201,9 +201,9 @@ function createWindow() {
       if (match && match[1]) {
         currentAppVersion = match[1];
       }
-      const formattedTitle = title.includes('(CENTRAL CLOUD CONNECTED)')
+      const formattedTitle = title.includes('(WAREHOUSE SERVER)')
         ? title
-        : `${title} (CENTRAL CLOUD CONNECTED)`;
+        : `${title} (WAREHOUSE SERVER)`;
       mainWindow.setTitle(formattedTitle);
     }
   });
@@ -278,45 +278,3 @@ ipcMain.handle('open-external', async (event, url) => {
   }
   return false;
 });
-
-// IPC handler to write generated PDF to a temp file and open with host default viewer
-ipcMain.handle('open-generated-pdf', async (event, { pdfData, filename }) => {
-  try {
-    const tempDir = app.getPath('temp');
-    const safeFilename = (filename || 'juwei-wms-document.pdf').replace(/[/\\?%*:|"<>]/g, '_');
-    const finalFilename = safeFilename.endsWith('.pdf') ? safeFilename : `${safeFilename}.pdf`;
-    const filePath = path.join(tempDir, finalFilename);
-
-    let buffer;
-    if (Buffer.isBuffer(pdfData)) {
-      buffer = pdfData;
-    } else if (pdfData instanceof ArrayBuffer || ArrayBuffer.isView(pdfData)) {
-      buffer = Buffer.from(pdfData);
-    } else if (typeof pdfData === 'string') {
-      const base64Data = pdfData.replace(/^data:application\/pdf;base64,/, '');
-      buffer = Buffer.from(base64Data, 'base64');
-    } else {
-      buffer = Buffer.from(pdfData);
-    }
-
-    fs.writeFileSync(filePath, buffer);
-    const result = await shell.openPath(filePath);
-    if (result) {
-      console.warn('[JUWEI Electron] shell.openPath warning/error:', result);
-      // Fallback: reveal in File Explorer for manual opening if no default PDF viewer is registered
-      try {
-        shell.showItemInFolder(filePath);
-        console.log('[JUWEI Electron] Successfully revealed PDF file in folder as fallback:', filePath);
-        return { success: true, fallback: 'shown_in_folder', filePath };
-      } catch (revealErr) {
-        console.error('[JUWEI Electron] shell.showItemInFolder failed:', revealErr);
-        return { success: false, error: result };
-      }
-    }
-    return { success: true, filePath };
-  } catch (err) {
-    console.error('[JUWEI Electron] Error opening generated PDF:', err);
-    return { success: false, error: err?.message || String(err) };
-  }
-});
-

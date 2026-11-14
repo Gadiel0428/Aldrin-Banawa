@@ -12,28 +12,22 @@ import {
   ShieldAlert, 
   ShieldCheck, 
   CheckCircle2, 
-  HelpCircle, 
   User, 
   CornerDownRight,
   Edit,
-  Trash2,
   ScanLine,
-  Barcode,
   Printer,
   ChevronDown,
   ChevronRight,
   PackageCheck,
   ClipboardList,
-  Layers,
-  Calendar,
-  Building2,
-  Factory,
   Tag,
   Check
 } from 'lucide-react';
 import { MaterialStockItem, IssuanceRecord, MasterRegistryItem } from '../types';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import PrintablePickingListModal, { DocViewMode } from './PrintablePickingListModal';
+import { showPrintToast } from '../utils/printDocument';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAuthoritativeId } from '../lib/idGenerator';
@@ -336,7 +330,7 @@ export default function IssuanceModule({
                   setPrintInitialView('OFFICIAL_DOC');
                   setSelectedPickingDocIssuance(target);
                 } else {
-                  alert('No material issuance records available to print.');
+                  showPrintToast('No material issuance records available to print.', 'warning');
                 }
               }}
               className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 px-3.5 rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer whitespace-nowrap shrink-0"
@@ -353,7 +347,7 @@ export default function IssuanceModule({
                   setPrintInitialView('SUMMARY_LOG');
                   setSelectedPickingDocIssuance(filteredIssuances[0] || issuances[0]);
                 } else {
-                  alert('No material issuance records available to print log summary.');
+                  showPrintToast('No material issuance records available to print log summary.', 'warning');
                 }
               }}
               className="bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-2 px-3.5 rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer whitespace-nowrap shrink-0"

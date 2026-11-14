@@ -1,34 +1,34 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { 
   X, 
   Printer, 
   Download, 
   FileText, 
   Calendar, 
-  Filter, 
   TrendingUp, 
   TrendingDown, 
   ArrowDownLeft, 
   ArrowUpRight, 
   Package, 
   ShieldCheck, 
-  CheckCircle2, 
   Layers, 
-  Building,
-  RefreshCw,
-  Search,
-  Users,
+  Search, 
   Eye,
   Loader2
 } from 'lucide-react';
 import { PrintPreviewModal } from './PrintPreviewModal';
-import { exportElementAsPDF } from '../utils/printDocument';
+import {
+  renderDocumentPages,
+  printPages,
+  showPrintToast,
+  formatPrintErrorMessage
+} from '../utils/printDocument';
 import { ReceivingRecord, IssuanceRecord, MaterialStockItem, MasterRegistryItem } from '../types';
 import { 
   filterReceivingAndIssuanceData, 
-  downloadReceivingVsIssuancePDF, 
+  generateReceivingVsIssuanceReportPages, 
   ReportFilterOptions 
 } from '../utils/reportGenerator';
 
@@ -46,7 +46,7 @@ export default function ReceivingVsIssuanceReportModal({
   receiving,
   issuances,
   stocks,
-  registries = [],
+  registries: _registries = [],
   currentUser = 'Aldrin Banawa',
   isSuperAdmin = true,
   onClose
@@ -58,6 +58,11 @@ export default function ReceivingVsIssuanceReportModal({
   const [partFilter, setPartFilter] = useState('');
   const [isExporting, setIsExporting] = useState(false);
   const [showPrintPreview, setShowPrintPreview] = useState(false);
+  const [previewPages, setPreviewPages] = useState<string[]>([]);
+  const [previewFilename, setPreviewFilename] = useState('JUWEI-Receiving-vs-Issuance.pdf');
+  const [previewSubtitle, setPreviewSubtitle] = useState('ISO 9001:2015 Material Flow Audit');
+  const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
+  const reportContainerRef = useRef<HTMLDivElement>(null);
 
   // Editable Signatories State (Defaulted to current user & system defaults, user-customizable)
   const todayStr = new Date().toISOString().split('T')[0];
@@ -97,14 +102,57 @@ export default function ReceivingVsIssuanceReportModal({
     return filterReceivingAndIssuanceData(receiving, issuances, stocks, filterOptions);
   }, [receiving, issuances, stocks, filterOptions]);
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
+    if (isExporting) return;
+    setIsExporting(true);
+    setPreviewSubtitle('Formatted Receiving vs Issuance PDF Report');
+    setShowPrintPreview(true);
+    setIsGeneratingPreview(true);
     try {
-      setIsExporting(true);
-      downloadReceivingVsIssuancePDF(receiving, issuances, stocks, filterOptions);
+      const { pages, filename } = await generateReceivingVsIssuanceReportPages(
+        receiving,
+        issuances,
+        stocks,
+        filterOptions
+      );
+      setPreviewPages(pages);
+      setPreviewFilename(filename);
     } catch (err) {
-      console.error('Error generating PDF:', err);
+      console.error('Error generating PDF report pages:', err);
+      setShowPrintPreview(false);
+      showPrintToast(
+        `Failed to generate PDF report: ${formatPrintErrorMessage(err)}`,
+        'error'
+      );
     } finally {
+      setIsGeneratingPreview(false);
       setIsExporting(false);
+    }
+  };
+
+  const handleOpenPreview = async () => {
+    if (isGeneratingPreview) return;
+    const el = reportContainerRef.current;
+    if (!el) {
+      showPrintToast('Could not locate printable summary container.', 'error');
+      return;
+    }
+    const dateStr = new Date().toISOString().split('T')[0];
+    setPreviewFilename(`JUWEI-Receiving-vs-Issuance-${dateStr}.pdf`);
+    setPreviewSubtitle('ISO 9001:2015 Material Flow Audit');
+    setShowPrintPreview(true);
+    setIsGeneratingPreview(true);
+    try {
+      const pages = await renderDocumentPages(el);
+      setPreviewPages(pages);
+    } catch (err) {
+      console.error('[ReceivingVsIssuanceReportModal] Preview render error:', err);
+      showPrintToast(
+        `Failed to render print preview: ${formatPrintErrorMessage(err)}`,
+        'error'
+      );
+    } finally {
+      setIsGeneratingPreview(false);
     }
   };
 
@@ -112,23 +160,28 @@ export default function ReceivingVsIssuanceReportModal({
 
   const handlePrint = async () => {
     if (isExportingPrintPDF) return;
-    const el = (document.getElementById('printable-summary-content') as HTMLElement | null)
-      || (document.querySelector('.printable-area') as HTMLElement | null);
-    if (el) {
-      setIsExportingPrintPDF(true);
-      try {
-        const dateStr = new Date().toISOString().split('T')[0];
-        const filename = `JUWEI-Receiving-vs-Issuance-${dateStr}.pdf`;
-        await exportElementAsPDF(el, filename);
-      } catch (err) {
-        console.error('[ReceivingVsIssuanceReportModal] PDF export error:', err);
-      } finally {
-        setIsExportingPrintPDF(false);
-      }
+    const el = reportContainerRef.current;
+    if (!el) {
+      showPrintToast('Could not locate printable summary container.', 'error');
+      return;
+    }
+    setIsExportingPrintPDF(true);
+    try {
+      const pages = await renderDocumentPages(el);
+      await printPages(pages);
+    } catch (err) {
+      console.error('[ReceivingVsIssuanceReportModal] Print error:', err);
+      showPrintToast(
+        `Print failed: ${formatPrintErrorMessage(err)}`,
+        'error'
+      );
+    } finally {
+      setIsExportingPrintPDF(false);
     }
   };
 
   useEffect(() => {
+    if (showPrintPreview) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
         e.preventDefault();
@@ -137,7 +190,7 @@ export default function ReceivingVsIssuanceReportModal({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isExportingPrintPDF]);
+  }, [isExportingPrintPDF, showPrintPreview]);
 
   const isNetPositive = summary.netDelta >= 0;
   const totalVolume = summary.totalReceivedQty + summary.totalIssuedQty;
@@ -172,7 +225,7 @@ export default function ReceivingVsIssuanceReportModal({
             </div>
 
             {/* Executive KPI Summary 4-Grid */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+            <div className="avoid-break grid grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
               
               {/* Total Received */}
               <div className="p-3.5 bg-emerald-50/80 border border-emerald-200 rounded-xl space-y-1">
@@ -484,7 +537,7 @@ export default function ReceivingVsIssuanceReportModal({
           </div>
 
           {/* Section 4: ISO 9001:2015 Quality & Operations Sign-off Block */}
-          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4 print:border-slate-300">
+          <div className="avoid-break bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4 print:border-slate-300">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-200 pb-2">
               <h4 className="font-bold text-xs uppercase tracking-wider text-slate-700 font-mono">
                 MANAGER AUTHORIZATION & AUDIT SIGN-OFF BLOCK
@@ -660,29 +713,30 @@ export default function ReceivingVsIssuanceReportModal({
               onClick={handleExportPDF}
               disabled={isExporting}
               className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition shadow-sm flex items-center gap-1.5 cursor-pointer"
-              title="Download formatted vector PDF file"
+              title="Preview & save formatted vector PDF file"
             >
-              <Download className="h-3.5 w-3.5" />
-              {isExporting ? 'Generating PDF...' : 'Export PDF Document'}
+              {isExporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+              {isExporting ? 'Rendering PDF...' : 'PDF Report Preview'}
             </button>
             <button
-              onClick={() => setShowPrintPreview(true)}
-              className="bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white text-xs font-bold px-3.5 py-2 rounded-xl transition border border-slate-700 flex items-center gap-1.5 cursor-pointer"
-              title="Preview report in A4 layout before opening system print dialog"
+              onClick={handleOpenPreview}
+              disabled={isGeneratingPreview}
+              className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-indigo-300 hover:text-white text-xs font-bold px-3.5 py-2 rounded-xl transition border border-slate-700 flex items-center gap-1.5 cursor-pointer"
+              title="Preview report in A4 layout before printing"
             >
-              <Eye className="h-3.5 w-3.5 text-indigo-400" />
-              Print Preview
+              {isGeneratingPreview ? <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" /> : <Eye className="h-3.5 w-3.5 text-indigo-400" />}
+              {isGeneratingPreview ? 'Rendering...' : 'Print Preview'}
             </button>
             <button
               onClick={handlePrint}
               disabled={isExportingPrintPDF}
               className={`bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold px-3.5 py-2 rounded-xl transition border border-slate-700 flex items-center gap-1.5 ${isExportingPrintPDF ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
-              title="Generate real A4 PDF file and open directly (Ctrl+P)"
+              title="Render A4 pages and open Print dialog (Ctrl+P)"
             >
               {isExportingPrintPDF ? (
                 <>
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300" />
-                  Generating PDF...
+                  Preparing Print...
                 </>
               ) : (
                 <>
@@ -773,7 +827,7 @@ export default function ReceivingVsIssuanceReportModal({
         </div>
 
         {/* Printable Document Body */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6 print:p-0 print:space-y-4 print:overflow-visible bg-slate-100/60 print:bg-white printable-area" id="printable-summary-content">
+        <div ref={reportContainerRef} className="flex-1 overflow-y-auto p-6 space-y-6 print:p-0 print:space-y-4 print:overflow-visible bg-slate-100/60 print:bg-white printable-area" id="printable-summary-content">
           {reportContent}
         </div>
 
@@ -784,11 +838,12 @@ export default function ReceivingVsIssuanceReportModal({
           </p>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setShowPrintPreview(true)}
-              className="bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold px-4 py-2 rounded-xl transition border border-slate-300 flex items-center gap-1.5 cursor-pointer"
+              onClick={handleOpenPreview}
+              disabled={isGeneratingPreview}
+              className="bg-white hover:bg-slate-100 disabled:opacity-50 text-slate-700 text-xs font-bold px-4 py-2 rounded-xl transition border border-slate-300 flex items-center gap-1.5 cursor-pointer"
             >
-              <Eye className="h-3.5 w-3.5 text-indigo-600" />
-              Print Preview
+              {isGeneratingPreview ? <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-600" /> : <Eye className="h-3.5 w-3.5 text-indigo-600" />}
+              {isGeneratingPreview ? 'Rendering...' : 'Print Preview'}
             </button>
             <button
               onClick={handlePrint}
@@ -798,7 +853,7 @@ export default function ReceivingVsIssuanceReportModal({
               {isExportingPrintPDF ? (
                 <>
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300" />
-                  Generating PDF...
+                  Preparing Print...
                 </>
               ) : (
                 <>
@@ -812,8 +867,8 @@ export default function ReceivingVsIssuanceReportModal({
               disabled={isExporting}
               className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold px-4 py-2 rounded-xl transition shadow-sm flex items-center gap-1.5 cursor-pointer"
             >
-              <Download className="h-3.5 w-3.5" />
-              {isExporting ? 'Generating PDF...' : 'Download PDF (.pdf)'}
+              {isExporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+              {isExporting ? 'Rendering PDF...' : 'Preview & Save PDF'}
             </button>
           </div>
         </div>
@@ -825,11 +880,11 @@ export default function ReceivingVsIssuanceReportModal({
             onClose={() => setShowPrintPreview(false)}
             documentTitle="Receiving vs Issuance Material Flow Audit Snapshot"
             documentNumber="DOC REF: JPM-WMS-REP-008"
-            documentSubtitle="ISO 9001:2015 Material Flow Audit"
-            onPrint={handlePrint}
-          >
-            {reportContent}
-          </PrintPreviewModal>
+            documentSubtitle={previewSubtitle}
+            filename={previewFilename}
+            pages={previewPages}
+            isRendering={isGeneratingPreview}
+          />
         )}
       </motion.div>
     </motion.div>

@@ -11,20 +11,15 @@ import {
   RotateCcw, 
   Trash2, 
   Truck, 
-  Thermometer, 
   Download, 
   Upload, 
   RefreshCw,
   Clock,
   Briefcase,
-  Wifi,
-  WifiOff,
-  UserPlus,
   LogIn,
   LogOut,
   UserCheck,
   Fingerprint,
-  IdCard,
   User,
   Lock,
   Unlock,
@@ -38,23 +33,13 @@ import {
   QrCode,
   Printer,
   ScanLine,
-  Sparkles,
-  CheckCircle2,
-  Monitor,
   Loader2,
-  Copy,
-  Check,
   X,
   Database,
   Archive,
   Phone,
   Smartphone,
-  Radio,
-  Activity,
-  Server,
-  ShieldCheck,
-  Info,
-  ExternalLink
+  Activity
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -74,17 +59,7 @@ import { InventoryTable } from './components/InventoryTable';
 import { createStockMovement } from './database/movements';
 
 import { 
-  fetchCentralDatabaseSnapshot,
-  verifyCentralCredentials,
-  registerCentralAccount,
-  updateCentralAccount,
-  updateCentralPin,
-  deleteCentralAccount,
-  clearAllAccountsExceptSuperAdmin,
-  upsertCentralRecord,
-  deleteCentralRecord,
-  performCentralGlobalReset,
-  resolveAccountPin
+  verifyCentralCredentials
 } from './lib/centralApi';
 
 import { 
@@ -107,16 +82,7 @@ import {
 import { generateAuthoritativeId } from './lib/idGenerator';
 
 import { 
-  INITIAL_STOCK, 
-  INITIAL_RECEIVING, 
-  INITIAL_RETURNS, 
-  INITIAL_RECYCLING, 
-  INITIAL_ISSUANCE, 
-  INITIAL_DELIVERIES, 
-  INITIAL_ENV_LOGS, 
-  INITIAL_FORKLIFT_CHECKS,
   DEFAULT_FIFO_COLORS_BY_MONTH,
-  FIFO_COLORS_BY_MONTH,
   getFifoColorForDate,
   normalizeFifoColor
 } from './data';
@@ -134,12 +100,10 @@ import VersionUpdateBanner from './components/VersionUpdateBanner';
 
 import {
   DEFAULT_PRODUCTION_SERVER_HOST,
-  DEFAULT_PRODUCTION_SERVER_URL,
   getCentralServerUrl,
   getCentralServerHost,
   getApiBaseUrl,
   getCentralWebSocketUrl,
-  isLocalhostAddress,
   sanitizeServerHost,
   isSecureHost as isSecureServerHost
 } from './config/serverConfig';
@@ -175,27 +139,8 @@ export function wsOpen(ws: WebSocket | null): boolean {
   return ws !== null && ws.readyState === WebSocket.OPEN;
 }
 
-// Helpers for offline mutation sync queue
-function getPendingSyncQueue(): Record<string, any[]> {
-  try {
-    const raw = localStorage.getItem('juwei_wms_pending_sync');
-    if (raw) return JSON.parse(raw);
-  } catch (e) {}
-  return {};
-}
-
-function savePendingSyncQueue(queue: Record<string, any[]>) {
-  try {
-    localStorage.setItem('juwei_wms_pending_sync', JSON.stringify(queue));
-  } catch (e) {}
-}
-
-function markPendingSync(collection: string, data: any[]) {
-  // Direct live synchronizations are transmitted immediately via WebSockets and REST server endpoints.
-  // We do not queue whole collection arrays to prevent stale overwrites across users.
-}
-
-function clearPendingSync(collection: string) {
+// Clear offline mutation sync queue
+function clearPendingSync() {
   try {
     localStorage.removeItem('juwei_wms_pending_sync');
   } catch (e) {}
@@ -219,7 +164,7 @@ export default function App() {
     setShowQuickLookupResults(true);
   };
 
-  const handleNavigateFromLookup = (moduleView: string, filterQuery?: string) => {
+  const handleNavigateFromLookup = (moduleView: string, _filterQuery?: string) => {
     setView(moduleView);
     setShowQuickLookupResults(false);
   };
@@ -308,7 +253,6 @@ export default function App() {
       return false;
     }
   });
-  const [authTab, setAuthTab] = useState<'login' | 'register'>('login');
 
   // Central Database modal state
   const [showCentralDatabaseModal, setShowCentralDatabaseModal] = useState<boolean>(false);
@@ -399,7 +343,7 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
-  const [serverAddress, setServerAddress] = useState<string>(() => getCentralServerHost());
+  const serverAddress = getCentralServerHost();
   const [wsLatency, setWsLatency] = useState<number | null>(null);
   const [lastSyncedTime, setLastSyncedTime] = useState<Date>(new Date());
   const [liveSyncToast, setLiveSyncToast] = useState<{ id: string; author: string; action: string; time: string } | null>(null);
@@ -961,11 +905,6 @@ export default function App() {
   const [showLoginQrScanner, setShowLoginQrScanner] = useState<boolean>(false);
   const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
   const [qrBadgeAccount, setQrBadgeAccount] = useState<RegisteredAccount | null>(null);
-  
-  // PIN code security flow states
-  const [pinPromptUser, setPinPromptUser] = useState<RegisteredAccount | null>(null);
-  const [pinInput, setPinInput] = useState<string>('');
-  const [pinError, setPinError] = useState<string>('');
   const [newlyRegisteredUser, setNewlyRegisteredUser] = useState<RegisteredAccount | null>(null);
   const [showNewlyRegisteredPin, setShowNewlyRegisteredPin] = useState<boolean>(false);
   const [confirmActionApp, setConfirmActionApp] = useState<ConfirmActionConfig | null>(null);
@@ -1019,41 +958,6 @@ export default function App() {
         localStorage.setItem('juwei_wms_deletedAccounts', JSON.stringify(Array.from(set)));
       }
     } catch (e) {}
-  };
-
-  const sanitizeUsersList = (incomingList?: any[]): RegisteredAccount[] => {
-    const userMap = new Map<string, RegisteredAccount>();
-    userMap.set('JPMP-002', { ...superAdminAccount });
-
-    const source = Array.isArray(incomingList) ? incomingList : [];
-
-    const deletedSet = getDeletedUserIds();
-
-    source.forEach((u: any) => {
-      if (!u || (!u.employeeId && !u.employee_id)) return;
-      const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase();
-      const empId = rawEmpId.startsWith('JPMP-') ? rawEmpId : `JPMP-${rawEmpId.replace(/^EMP-/, '')}`;
-      if (deletedSet.has(empId) && empId !== 'JPMP-002') return;
-
-      const cleanPin = (u?.pin && String(u.pin).trim()) || (empId === 'JPMP-002' ? '0423' : '');
-      const isCompromised = cleanPin === '1234' || !!u.isPinCompromised;
-      userMap.set(empId, {
-        username: (u.username || 'OPERATOR').toUpperCase(),
-        role: (u.role || 'WAREHOUSE CLERK').toUpperCase(),
-        employeeId: empId,
-        phoneNumber: u.phoneNumber || u.phone_number || '',
-        permission: u.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
-        pin: cleanPin,
-        isPinCompromised: isCompromised,
-        status: u.status || 'ACTIVE',
-        lastActive: u.lastActive || u.last_active || undefined
-      });
-    });
-
-    // Guarantee Super Admin
-    userMap.set('JPMP-002', { ...superAdminAccount });
-
-    return Array.from(userMap.values());
   };
 
   const [registeredUsers, setRegisteredUsers] = useState<RegisteredAccount[]>([superAdminAccount]);
@@ -1330,9 +1234,6 @@ export default function App() {
       localStorage.setItem('juwei_wms_currentUser', currentRecord.username);
     }
   }, [registeredUsers, isLoggedIn, currentEmployeeId, currentPermission, currentRole, currentUser]);
-
-  // Clipboard feedback state
-  const [linkCopied, setLinkCopied] = useState<boolean>(false);
 
   // Initialize standard fallback state
   const resetStateToDefaults = () => {
@@ -1749,7 +1650,7 @@ export default function App() {
   };
 
   // Directly sets in-memory state to pure authoritative central database data without merging stale leftovers
-  const applyAuthoritativeResetState = (dataPayload: any, activeUsersList?: string[], activePresenceList?: ActivePresenceUser[]) => {
+  const applyAuthoritativeResetState = (dataPayload: any, _activeUsersList?: string[], activePresenceList?: ActivePresenceUser[]) => {
     if (!dataPayload || typeof dataPayload !== 'object') {
       return;
     }
@@ -2672,7 +2573,7 @@ export default function App() {
     let retryDelay = 1000;
     let missedPongs = 0;
 
-    const applyStatePayload = (dataPayload: any, activeUsersList?: string[], activePresenceList?: ActivePresenceUser[]) => {
+    const applyStatePayload = (dataPayload: any, _activeUsersList?: string[], activePresenceList?: ActivePresenceUser[]) => {
       if (!dataPayload) return;
       const { stocks, receiving, returns, recycling, issuances, deliveries, envLogs, forkliftChecks, registries, registeredUsers: serverUsers, chatMessages: msgs } = dataPayload;
 
@@ -3196,7 +3097,7 @@ export default function App() {
                 console.warn(`[JUWEI WMS] Discarding stale upsert from reset_version ${payload.systemResetVersion}`);
                 break;
               }
-              const { collection, record, author, actionDesc, employeeId, device_id, stationId } = payload;
+              const { collection, record, author, actionDesc } = payload;
               if (record && record.id && collection) {
                 setLastSyncedTime(new Date());
 
@@ -3261,7 +3162,7 @@ export default function App() {
                 console.warn(`[JUWEI WMS] Discarding stale delete from reset_version ${payload.systemResetVersion}`);
                 break;
               }
-              const { collection, id, author, actionDesc, employeeId, device_id, stationId } = payload;
+              const { collection, id, author, actionDesc } = payload;
               if (id && collection) {
                 markRecordAsDeletedLocally(id);
                 setLastSyncedTime(new Date());
@@ -3533,7 +3434,7 @@ export default function App() {
       window.removeEventListener('focus', handleOnlineOrFocus);
       document.removeEventListener('visibilitychange', handleOnlineOrFocus);
     };
-  }, [serverAddress]);
+  }, []);
 
   // Keep WebSocket presence and active view module in sync dynamically across all connected operators
   useEffect(() => {
@@ -3568,9 +3469,6 @@ export default function App() {
     const persistentDevId = getPersistentDeviceId();
     const effectiveAuthor = currentUser || 'OPERATOR';
     const effectiveUserId = currentEmployeeId ? `USR-${currentEmployeeId}` : `USR-${effectiveAuthor}`;
-
-    // Mark as pending before network request
-    markPendingSync(collection, data);
 
     // 0. Cross-tab BroadcastChannel
     if (syncChannelRef.current) {
@@ -3641,7 +3539,7 @@ export default function App() {
         return;
       }
       if (res.ok) {
-        clearPendingSync(collection);
+        clearPendingSync();
       }
     })
     .catch(() => {
@@ -3664,7 +3562,7 @@ export default function App() {
           return;
         }
         if (res.ok) {
-          clearPendingSync(collection);
+          clearPendingSync();
         }
       })
       .catch(err => console.warn('HTTP REST sync warning:', err));
@@ -4896,8 +4794,6 @@ export default function App() {
     }
   };
 
-  const handleExportBackup = handleExportCurrentData;
-
   // Import JSON Backup helper
   const handleImportBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileReader = new FileReader();
@@ -5108,7 +5004,6 @@ export default function App() {
                 onClick={() => {
                   const targetUser = newlyRegisteredUser;
                   setNewlyRegisteredUser(null);
-                  setAuthTab('login');
                   setLoginError('');
                   setLoginEmployeeId('');
                   setLoginPin('');

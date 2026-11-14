@@ -11,17 +11,13 @@ import {
   Barcode, 
   X, 
   Upload, 
-  CheckCircle2, 
   AlertCircle, 
   Keyboard, 
   Volume2, 
   VolumeX, 
-  Radio, 
   Loader2,
   Camera,
-  CameraOff,
-  RefreshCw,
-  ScanLine
+  CameraOff
 } from 'lucide-react';
 
 interface BarcodeScannerModalProps {
