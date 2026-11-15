@@ -9,29 +9,39 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig(() => {
   const buildTimestamp = Date.now();
-  let appVersion = '';
+  const normalizeVer = (v: unknown) => String(v || '').replace(/^v/i, '').trim();
+  const cmpVer = (a: string, b: string) => {
+    const pa = normalizeVer(a).split(/[.-]/).map((p) => (/^\d+$/.test(p) ? parseInt(p, 10) : 0));
+    const pb = normalizeVer(b).split(/[.-]/).map((p) => (/^\d+$/.test(p) ? parseInt(p, 10) : 0));
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const diff = (pa[i] || 0) - (pb[i] || 0);
+      if (diff !== 0) return diff > 0 ? 1 : -1;
+    }
+    return 0;
+  };
+
+  const candidates: string[] = [];
   try {
     const buildInfoPath = path.resolve(__dirname, 'public/build-info.json');
     if (fs.existsSync(buildInfoPath)) {
       const bInfo = JSON.parse(fs.readFileSync(buildInfoPath, 'utf8'));
-      if (bInfo.version) appVersion = bInfo.version;
+      if (bInfo.version) candidates.push(normalizeVer(bInfo.version));
     }
   } catch (e) {}
 
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8'));
+    if (pkg.version) candidates.push(normalizeVer(pkg.version));
+  } catch (e) {}
+
+  let appVersion = candidates.filter(Boolean).sort((a, b) => cmpVer(b, a))[0] || '';
   if (!appVersion) {
     try {
       const relPath = path.resolve(__dirname, 'latest-github-release.json');
       if (fs.existsSync(relPath)) {
         const rInfo = JSON.parse(fs.readFileSync(relPath, 'utf8'));
-        if (rInfo.version) appVersion = rInfo.version;
+        if (rInfo.version) appVersion = normalizeVer(rInfo.version);
       }
-    } catch (e) {}
-  }
-
-  if (!appVersion) {
-    try {
-      const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8'));
-      if (pkg.version) appVersion = pkg.version;
     } catch (e) {}
   }
 

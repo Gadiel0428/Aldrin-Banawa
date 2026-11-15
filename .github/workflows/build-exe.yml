@@ -88,6 +88,8 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD_VERSION: ${{ steps.versioning.outputs.version }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: npm run dist:exe
 
       - name: Publish EXE to GitHub Releases and Generate Download Summary

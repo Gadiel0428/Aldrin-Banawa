@@ -353,16 +353,37 @@ export default function App() {
   const [newVersionString, setNewVersionString] = useState<string>('');
   const [installedDesktopVersion, setInstalledDesktopVersion] = useState<string>(() => {
     try {
+      const electronLocalVer = typeof window !== 'undefined' && window.electronAPI?.localVersion
+        ? String(window.electronAPI.localVersion).replace(/^v/i, '').trim()
+        : '';
+      if (electronLocalVer) return electronLocalVer;
       return localStorage.getItem('juwei_wms_installed_version') || '';
     } catch (e) {
       return '';
     }
   });
+  const installedDesktopVersionRef = useRef<string>(installedDesktopVersion);
+  useEffect(() => {
+    installedDesktopVersionRef.current = installedDesktopVersion;
+  }, [installedDesktopVersion]);
+
   const [appVersion, setAppVersion] = useState<string>(() => {
-    if (typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__) {
-      return String(__APP_VERSION__).replace(/^v/i, '');
+    const electronLocalVer = typeof window !== 'undefined' && window.electronAPI?.localVersion
+      ? String(window.electronAPI.localVersion).replace(/^v/i, '').trim()
+      : '';
+    const buildVer = typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__
+      ? String(__APP_VERSION__).replace(/^v/i, '').trim()
+      : '';
+    if (electronLocalVer && buildVer) {
+      const eParts = electronLocalVer.split('.').map(n => parseInt(n, 10) || 0);
+      const bParts = buildVer.split('.').map(n => parseInt(n, 10) || 0);
+      for (let i = 0; i < Math.max(eParts.length, bParts.length); i++) {
+        if ((eParts[i] || 0) > (bParts[i] || 0)) return electronLocalVer;
+        if ((eParts[i] || 0) < (bParts[i] || 0)) return buildVer;
+      }
+      return electronLocalVer;
     }
-    return '';
+    return electronLocalVer || buildVer;
   });
   const updateAvailableRef = useRef<boolean>(false);
 
@@ -373,8 +394,8 @@ export default function App() {
     const c = String(currentVer).replace(/^v/i, '').trim();
     if (!s || !c || s === c) return false;
 
-    const sParts = s.split('.').map(n => parseInt(n, 10) || 0);
-    const cParts = c.split('.').map(n => parseInt(n, 10) || 0);
+    const sParts = s.split(/[.-]/).map(n => parseInt(n, 10) || 0);
+    const cParts = c.split(/[.-]/).map(n => parseInt(n, 10) || 0);
     const maxLen = Math.max(sParts.length, cParts.length);
 
     for (let i = 0; i < maxLen; i++) {
@@ -835,46 +856,34 @@ export default function App() {
   }, [appVersion]);
 
   useEffect(() => {
-    // Sync version from authoritative build-info endpoint
-    const fetchBuildInfo = async () => {
-      try {
-        const centralUrl = getCentralServerUrl();
-        const endpoints = [
-          '/api/build-info',
-          '/build-info.json',
-          ...(centralUrl ? [`${centralUrl}/api/build-info`, `${centralUrl}/build-info.json`] : [])
-        ];
-        const uniqueEndpoints = Array.from(new Set(endpoints.filter(Boolean)));
-        for (const ep of uniqueEndpoints) {
-          try {
-            const res = await fetch(ep, { cache: 'no-store', headers: { Accept: 'application/json' } });
-            if (res.ok) {
-              const data = await res.json();
-              if (data?.version) {
-                const cleanVer = String(data.version).replace(/^v/i, '').trim();
-                if (cleanVer) {
-                  setAppVersion(cleanVer);
-                  if (typeof window !== 'undefined' && window.electronAPI?.updateAppVersion) {
-                    window.electronAPI.updateAppVersion(cleanVer);
-                  }
-                }
-                break;
-              }
-            }
-          } catch (e) {}
-        }
-      } catch (e) {}
-    };
-    fetchBuildInfo();
+    const isFileOrigin = typeof window !== 'undefined' && window.location?.protocol === 'file:';
+    const isElectronEnv = typeof window !== 'undefined' && Boolean(window.electronAPI?.isElectron);
 
-    // Query installed desktop version from Electron if running inside Electron wrapper
-    if (typeof window !== 'undefined' && window.electronAPI?.getAppVersion) {
+    // Query installed desktop version from Electron immediately if running inside Electron wrapper
+    if (isElectronEnv && window.electronAPI?.localVersion) {
+      const syncLocal = String(window.electronAPI.localVersion).replace(/^v/i, '').trim();
+      if (syncLocal) {
+        installedDesktopVersionRef.current = syncLocal;
+        setInstalledDesktopVersion(syncLocal);
+        setAppVersion((prev) => (isNewerVersion(syncLocal, prev) || !prev ? syncLocal : prev));
+        try {
+          localStorage.setItem('juwei_wms_installed_version', syncLocal);
+        } catch (e) {}
+      }
+    }
+
+    if (isElectronEnv && window.electronAPI?.getAppVersion) {
       try {
         Promise.resolve(window.electronAPI.getAppVersion()).then((ver) => {
           if (ver) {
             const cleanVer = String(ver).replace(/^v/i, '').trim();
+            if (!cleanVer) return;
             console.log('[JUWEI WMS] Installed Electron Desktop version:', cleanVer);
+            installedDesktopVersionRef.current = cleanVer;
             setInstalledDesktopVersion(cleanVer);
+            if (isFileOrigin) {
+              setAppVersion(cleanVer);
+            }
             try {
               localStorage.setItem('juwei_wms_installed_version', cleanVer);
             } catch (e) {}
@@ -882,6 +891,69 @@ export default function App() {
         }).catch(() => {});
       } catch (e) {}
     }
+
+    // Sync version from authoritative build-info endpoint
+    const fetchBuildInfo = async () => {
+      try {
+        const centralUrl = getCentralServerUrl();
+        const endpoints = (isElectronEnv || isFileOrigin)
+          ? [
+              ...(centralUrl ? [`${centralUrl}/api/build-info`, `${centralUrl}/build-info.json`] : []),
+              './build-info.json'
+            ]
+          : [
+              '/api/build-info',
+              '/build-info.json',
+              ...(centralUrl ? [`${centralUrl}/api/build-info`, `${centralUrl}/build-info.json`] : [])
+            ];
+        const uniqueEndpoints = Array.from(new Set(endpoints.filter(Boolean)));
+        for (const ep of uniqueEndpoints) {
+          try {
+            const res = await fetch(ep, { cache: 'no-store', headers: { Accept: 'application/json' } });
+            if (res.ok) {
+              const data = await res.json();
+              const bundleVer = data?.bundleVersion ? String(data.bundleVersion).replace(/^v/i, '').trim() : '';
+              const latestVer = (data?.latestGitHubVersion || data?.version)
+                ? String(data.latestGitHubVersion || data.version).replace(/^v/i, '').trim()
+                : '';
+              const buildTimeVer = typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__
+                ? String(__APP_VERSION__).replace(/^v/i, '').trim()
+                : '';
+              const desktopVer = (installedDesktopVersionRef.current || '').replace(/^v/i, '').trim();
+
+              // Running version reflects what this window actually executed (local Electron bundle or server bundle)
+              const runningVer = isFileOrigin
+                ? (desktopVer || buildTimeVer || bundleVer || latestVer)
+                : (bundleVer || buildTimeVer || desktopVer || latestVer);
+
+              if (runningVer) {
+                setAppVersion((prev) => (prev !== runningVer ? runningVer : prev));
+                if (typeof window !== 'undefined' && window.electronAPI?.updateAppVersion) {
+                  window.electronAPI.updateAppVersion(runningVer);
+                }
+                try {
+                  localStorage.setItem('juwei_wms_installed_version', runningVer);
+                } catch (e) {}
+              }
+
+              if (latestVer && runningVer && isNewerVersion(latestVer, runningVer)) {
+                let dismissedVer = '';
+                try {
+                  dismissedVer = (localStorage.getItem('juwei_wms_dismissed_version') || '').replace(/^v/i, '').trim();
+                } catch (e) {}
+                if (dismissedVer !== latestVer) {
+                  updateAvailableRef.current = true;
+                  setUpdateAvailable(true);
+                  setNewVersionString(latestVer);
+                }
+              }
+              break;
+            }
+          } catch (e) {}
+        }
+      } catch (e) {}
+    };
+    fetchBuildInfo();
   }, []);
 
   // Direct employee ID and PIN login form states with Remember Login
@@ -2709,11 +2781,19 @@ export default function App() {
     const checkBuildVersion = async () => {
       try {
         const centralUrl = getCentralServerUrl();
-        const endpoints = [
-          '/api/build-info',
-          '/build-info.json',
-          ...(centralUrl ? [`${centralUrl}/api/build-info`, `${centralUrl}/build-info.json`] : [])
-        ];
+        const isFileOrigin = typeof window !== 'undefined' && window.location?.protocol === 'file:';
+        const isElectronEnv = typeof window !== 'undefined' && Boolean(window.electronAPI?.isElectron);
+
+        const endpoints = (isElectronEnv || isFileOrigin)
+          ? [
+              ...(centralUrl ? [`${centralUrl}/api/build-info`, `${centralUrl}/build-info.json`] : []),
+              './build-info.json'
+            ]
+          : [
+              '/api/build-info',
+              '/build-info.json',
+              ...(centralUrl ? [`${centralUrl}/api/build-info`, `${centralUrl}/build-info.json`] : [])
+            ];
         const uniqueEndpoints = Array.from(new Set(endpoints.filter(Boolean)));
 
         for (const ep of uniqueEndpoints) {
@@ -2725,40 +2805,53 @@ export default function App() {
             });
             if (res.ok) {
               const data = await res.json();
-              const serverVer = data?.version ? String(data.version).replace(/^v/i, '').trim() : '';
-              if (serverVer) {
-                setAppVersion((prev) => (prev !== serverVer ? serverVer : prev));
-                if (typeof window !== 'undefined' && window.electronAPI?.updateAppVersion) {
-                  window.electronAPI.updateAppVersion(serverVer);
-                }
-              }
+              const bundleVer = data?.bundleVersion ? String(data.bundleVersion).replace(/^v/i, '').trim() : '';
+              const latestRemoteVer = (data?.latestGitHubVersion || data?.version)
+                ? String(data.latestGitHubVersion || data.version).replace(/^v/i, '').trim()
+                : '';
 
-              // Determine current installed/running app version:
-              // 1. Electron installed desktop version (from OS desktop installation)
-              // 2. Previously acknowledged/saved version in localStorage
-              // 3. Static __APP_VERSION__ defined at build time
-              let currentInstalled = (installedDesktopVersion || '').replace(/^v/i, '').trim();
-              if (!currentInstalled) {
+              const desktopVer = (
+                installedDesktopVersionRef.current ||
+                (typeof window !== 'undefined' && window.electronAPI?.localVersion ? String(window.electronAPI.localVersion) : '')
+              ).replace(/^v/i, '').trim();
+
+              const buildTimeVer = typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__
+                ? String(__APP_VERSION__).replace(/^v/i, '').trim()
+                : '';
+
+              let storedInstalled = '';
+              try {
+                storedInstalled = (localStorage.getItem('juwei_wms_installed_version') || '').replace(/^v/i, '').trim();
+              } catch (e) {}
+
+              // Running version:
+              // - In Electron local bundle (file://): always use desktopVer / buildTimeVer (never downgrade or falsely show uninstalled GitHub version)
+              // - On server HTTP: use server's bundleVer / buildTimeVer / desktopVer
+              const runningVersion = isFileOrigin
+                ? (desktopVer || buildTimeVer || storedInstalled)
+                : (bundleVer || buildTimeVer || desktopVer || storedInstalled || latestRemoteVer);
+
+              if (runningVersion) {
+                setAppVersion((prev) => (prev !== runningVersion ? runningVersion : prev));
+                if (typeof window !== 'undefined' && window.electronAPI?.updateAppVersion) {
+                  window.electronAPI.updateAppVersion(runningVersion);
+                }
                 try {
-                  currentInstalled = (localStorage.getItem('juwei_wms_installed_version') || '').replace(/^v/i, '').trim();
+                  localStorage.setItem('juwei_wms_installed_version', runningVersion);
                 } catch (e) {}
               }
-              if (!currentInstalled && typeof __APP_VERSION__ !== 'undefined') {
-                currentInstalled = String(__APP_VERSION__).replace(/^v/i, '').trim();
-              }
 
-              // =========================================================================
-              // MANDATORY RULE: Once app is installed / updated to the latest version,
-              // ALWAYS REMOVE THIS BANNER!
-              // =========================================================================
+              // Compare latest available GitHub/server release against actually running version
               const isUpToDate = Boolean(
-                (currentInstalled && serverVer && !isNewerVersion(serverVer, currentInstalled)) ||
-                (serverVer && currentInstalled && serverVer === currentInstalled)
+                runningVersion && latestRemoteVer && !isNewerVersion(latestRemoteVer, runningVersion)
               );
 
               if (isUpToDate) {
-                if (updateAvailable || updateAvailableRef.current) {
-                  console.log(`[JUWEI WMS UPDATE] Installed app (${currentInstalled}) is up-to-date with server (${serverVer}). Removing banner.`);
+                try {
+                  localStorage.removeItem('juwei_wms_dismissed_version');
+                } catch (e) {}
+                if (updateAvailableRef.current) {
+                  console.log(`[JUWEI WMS UPDATE] Installed app (${runningVersion}) is up-to-date with latest (${latestRemoteVer}). Removing banner.`);
                   updateAvailableRef.current = false;
                   setUpdateAvailable(false);
                   setNewVersionString('');
@@ -2766,19 +2859,17 @@ export default function App() {
                 break;
               }
 
-              // ONLY show update banner if the server version is strictly NEWER than current version
-              if (serverVer && currentInstalled && isNewerVersion(serverVer, currentInstalled)) {
-                if (!updateAvailableRef.current) {
-                  console.log(`[JUWEI WMS UPDATE] Update available: server ${serverVer} > client ${currentInstalled}`);
+              if (latestRemoteVer && runningVersion && isNewerVersion(latestRemoteVer, runningVersion)) {
+                let dismissedVer = '';
+                try {
+                  dismissedVer = (localStorage.getItem('juwei_wms_dismissed_version') || '').replace(/^v/i, '').trim();
+                } catch (e) {}
+                if (!updateAvailableRef.current && dismissedVer !== latestRemoteVer) {
+                  console.log(`[JUWEI WMS UPDATE] Update available: latest ${latestRemoteVer} > running ${runningVersion}`);
                   updateAvailableRef.current = true;
                   setUpdateAvailable(true);
-                  setNewVersionString(serverVer);
+                  setNewVersionString(latestRemoteVer);
                 }
-              } else if (!isNewerVersion(serverVer, currentInstalled)) {
-                // Not newer: ensure banner is removed
-                updateAvailableRef.current = false;
-                setUpdateAvailable(false);
-                setNewVersionString('');
               }
               break;
             }
@@ -4875,20 +4966,17 @@ export default function App() {
           <div className="fixed top-0 left-0 right-0 z-50">
             <VersionUpdateBanner
               onReload={() => {
-                if (newVersionString) {
-                  try {
-                    localStorage.setItem('juwei_wms_installed_version', newVersionString);
-                  } catch (e) {}
-                }
                 setUpdateAvailable(false);
                 updateAvailableRef.current = false;
                 window.location.reload();
               }}
               onLater={() => {
                 setBannerDismissed(true);
+                updateAvailableRef.current = false;
+                setUpdateAvailable(false);
                 if (newVersionString) {
                   try {
-                    localStorage.setItem('juwei_wms_installed_version', newVersionString);
+                    localStorage.setItem('juwei_wms_dismissed_version', newVersionString);
                   } catch (e) {}
                 }
               }}
@@ -5063,7 +5151,7 @@ export default function App() {
           <div className="flex flex-col items-center text-center">
             <div className="mb-3 flex justify-center">
               <img 
-                src="/juwei-logo.png" 
+                src="./juwei-logo.png" 
                 alt="Juwei Logo" 
                 className="h-12 w-auto" 
               />
@@ -5269,7 +5357,7 @@ export default function App() {
           {/* Logged in Operator badge */}
           <div className="p-4 bg-slate-950/70 border-b border-slate-800/80 flex flex-col gap-2.5 backdrop-blur-md shrink-0">
             <img 
-              src="/juwei-logo.png" 
+              src="./juwei-logo.png" 
               alt="Juwei Logo" 
               className="h-8 w-auto mb-2" 
             />
@@ -5541,20 +5629,17 @@ export default function App() {
         {updateAvailable && !bannerDismissed && (
           <VersionUpdateBanner
             onReload={() => {
-              if (newVersionString) {
-                try {
-                  localStorage.setItem('juwei_wms_installed_version', newVersionString);
-                } catch (e) {}
-              }
               setUpdateAvailable(false);
               updateAvailableRef.current = false;
               window.location.reload();
             }}
             onLater={() => {
               setBannerDismissed(true);
+              updateAvailableRef.current = false;
+              setUpdateAvailable(false);
               if (newVersionString) {
                 try {
-                  localStorage.setItem('juwei_wms_installed_version', newVersionString);
+                  localStorage.setItem('juwei_wms_dismissed_version', newVersionString);
                 } catch (e) {}
               }
             }}

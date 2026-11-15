@@ -7,12 +7,12 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="JUWEI WMS Desktop" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192.png" />
-    <link rel="icon" type="image/png" sizes="512x512" href="/pwa-512.png" />
-    <link rel="shortcut icon" href="/favicon.ico" />
-    <link rel="apple-touch-icon" href="/pwa-192.png" />
-    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="icon" type="image/png" sizes="192x192" href="./pwa-192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="./pwa-512.png" />
+    <link rel="shortcut icon" href="./favicon.ico" />
+    <link rel="apple-touch-icon" href="./pwa-192.png" />
+    <link rel="manifest" href="./manifest.json" />
     <title>JUWEI WAREHOUSE MANAGEMENT SYSTEM</title>
     <meta name="description" content="A comprehensive Warehouse Management System (JUWEI WMS) built according to standard operating procedures for material receiving, control, stock rotation (FIFO/FEFO), shelf life monitoring, recycling, issuance, and delivery." />
     <meta property="og:title" content="JUWEI WAREHOUSE MANAGEMENT SYSTEM" />
@@ -38,7 +38,8 @@
     <script>
       (function() {
         try {
-          fetch('/build-info.json', { cache: 'no-store' })
+          var buildInfoUrl = window.location && window.location.protocol === 'file:' ? './build-info.json' : '/build-info.json';
+          fetch(buildInfoUrl, { cache: 'no-store' })
             .then(function(r) { return r.json(); })
             .then(function(d) {
               if (d && d.version) {

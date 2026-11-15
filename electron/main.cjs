@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, ipcMain, net } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, net, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -16,41 +16,120 @@ process.on('unhandledRejection', (reason, promise) => {
 
 let mainWindow = null;
 let currentAppVersion = '';
+let loadedFromLocalBundle = false;
+
+function normalizeVersion(ver) {
+  return ver ? String(ver).replace(/^v/i, '').trim() : '';
+}
+
+function compareSemver(a, b) {
+  const cleanA = normalizeVersion(a);
+  const cleanB = normalizeVersion(b);
+  if (!cleanA && !cleanB) return 0;
+  if (!cleanA) return -1;
+  if (!cleanB) return 1;
+
+  const pa = cleanA.split(/[.-]/).map((part) => (/^\d+$/.test(part) ? parseInt(part, 10) : 0));
+  const pb = cleanB.split(/[.-]/).map((part) => (/^\d+$/.test(part) ? parseInt(part, 10) : 0));
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+function getLocalInstalledVersion() {
+  const candidates = [];
+
+  try {
+    if (app && typeof app.getVersion === 'function') {
+      const v = normalizeVersion(app.getVersion());
+      if (v && v !== '0.0.0') {
+        candidates.push(v);
+      }
+    }
+  } catch (e) {}
+
+  try {
+    const buildInfoPaths = [
+      path.join(__dirname, '../dist/build-info.json'),
+      path.join(__dirname, '../public/build-info.json'),
+      path.join(__dirname, 'dist/build-info.json'),
+      path.join(__dirname, '../package.json'),
+    ];
+    for (const bip of buildInfoPaths) {
+      if (fs.existsSync(bip)) {
+        const bInfo = JSON.parse(fs.readFileSync(bip, 'utf8'));
+        const v = normalizeVersion(bInfo && bInfo.version);
+        if (v && v !== '0.0.0') {
+          candidates.push(v);
+        }
+      }
+    }
+  } catch (e) {}
+
+  if (candidates.length === 0) return '';
+  candidates.sort((a, b) => compareSemver(b, a));
+  return candidates[0];
+}
 
 // Helper to format window title with live version
 function getFormattedWindowTitle(ver) {
-  const v = ver ? String(ver).replace(/^v/i, '').trim() : '';
-  return v 
+  const v = normalizeVersion(ver);
+  return v
     ? `JUWEI WAREHOUSE MANAGEMENT SYSTEM v${v} (WAREHOUSE SERVER)`
     : 'JUWEI WAREHOUSE MANAGEMENT SYSTEM (WAREHOUSE SERVER)';
 }
 
 function setElectronWindowTitle(ver) {
   if (!mainWindow) return;
-  if (ver) {
-    currentAppVersion = String(ver).replace(/^v/i, '').trim();
+  const localVer = getLocalInstalledVersion();
+  const nextVer = normalizeVersion(ver);
+  // Never downgrade displayed title version below the actually installed EXE version
+  if (nextVer && (!localVer || compareSemver(nextVer, localVer) >= 0 || !loadedFromLocalBundle)) {
+    currentAppVersion = nextVer;
+  } else if (localVer && !currentAppVersion) {
+    currentAppVersion = localVer;
   }
-  const title = getFormattedWindowTitle(currentAppVersion);
+  const title = getFormattedWindowTitle(currentAppVersion || localVer);
   if (mainWindow.getTitle() !== title) {
     mainWindow.setTitle(title);
   }
 }
 
-// Queries authoritative /api/build-info to reflect live GitHub release version
-async function fetchVersionAndUpdateWindowTitle() {
-  if (!mainWindow) return;
+async function fetchRemoteBuildInfo(timeoutMs = 2500) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const targetUrl = (CENTRAL_SERVER_URL || 'http://192.168.20.214:3000').replace(/\/+$/, '');
     const apiUrl = `${targetUrl}/api/build-info`;
-    const response = await net.fetch(apiUrl, { cache: 'no-store' });
+    const response = await net.fetch(apiUrl, { cache: 'no-store', signal: controller.signal });
     if (response.ok) {
-      const data = await response.json();
-      if (data && data.version) {
-        setElectronWindowTitle(data.version);
-      }
+      return await response.json();
     }
   } catch (err) {
-    // quiet fallback
+    // Server offline or unreachable
+  } finally {
+    clearTimeout(timeoutId);
+  }
+  return null;
+}
+
+// Queries authoritative /api/build-info without downgrading installed EXE version
+async function fetchVersionAndUpdateWindowTitle() {
+  if (!mainWindow) return;
+  const localVer = getLocalInstalledVersion();
+  const data = await fetchRemoteBuildInfo(3000);
+  if (data) {
+    const remoteBundleVer = normalizeVersion(data.bundleVersion || data.version);
+    if (!loadedFromLocalBundle && remoteBundleVer) {
+      setElectronWindowTitle(remoteBundleVer);
+    } else if (localVer) {
+      setElectronWindowTitle(localVer);
+    }
+  } else if (localVer && !currentAppVersion) {
+    setElectronWindowTitle(localVer);
   }
 }
 
@@ -62,49 +141,14 @@ try {
   console.warn('Could not determine userData directory:', e);
 }
 
-function createWindow() {
+async function createWindow() {
   const iconPath = path.join(__dirname, '..', 'public', 'juwei-icon.ico');
   const fallbackIconPath = path.join(__dirname, '../public/favicon.ico');
 
-  let appVersion = '';
-  try {
-    if (app && typeof app.getVersion === 'function') {
-      const v = app.getVersion();
-      if (v && v !== '0.0.0') {
-        appVersion = v;
-      }
-    }
-  } catch (e) {}
+  const appVersion = getLocalInstalledVersion();
+  currentAppVersion = appVersion;
 
-  if (!appVersion) {
-    try {
-      const buildInfoPaths = [
-        path.join(__dirname, '../dist/build-info.json'),
-        path.join(__dirname, '../public/build-info.json'),
-        path.join(__dirname, 'dist/build-info.json'),
-      ];
-      for (const bip of buildInfoPaths) {
-        if (fs.existsSync(bip)) {
-          const bInfo = JSON.parse(fs.readFileSync(bip, 'utf8'));
-          if (bInfo && bInfo.version) {
-            appVersion = bInfo.version;
-            break;
-          }
-        }
-      }
-    } catch (e) {}
-  }
-
-  if (!appVersion) {
-    try {
-      const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
-      if (pkg.version) appVersion = pkg.version;
-    } catch (e) {}
-  }
-
-  const windowTitle = appVersion 
-    ? `JUWEI WAREHOUSE MANAGEMENT SYSTEM v${appVersion} (WAREHOUSE SERVER)`
-    : 'JUWEI WAREHOUSE MANAGEMENT SYSTEM (WAREHOUSE SERVER)';
+  const windowTitle = getFormattedWindowTitle(appVersion);
 
   const windowOptions = {
     width: 1366,
@@ -134,41 +178,72 @@ function createWindow() {
   const isDev = process.env.NODE_ENV === 'development' && process.env.VITE_DEV_SERVER_URL;
 
   if (isDev && process.env.VITE_DEV_SERVER_URL) {
+    loadedFromLocalBundle = false;
     console.log('[JUWEI WMS Desktop] Loading local development server:', process.env.VITE_DEV_SERVER_URL);
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    // Installed Client Mode: Automatically connect to CENTRAL PRODUCTION SERVER
-    // NEVER use localhost or local per-PC database for client synchronization!
-    console.log('[JUWEI WMS Desktop] Connecting to Central Production Server:', CENTRAL_SERVER_URL);
-    
-    let retries = 0;
-    const maxRetries = 10;
-    const loadCentralApp = () => {
-      mainWindow.loadURL(CENTRAL_SERVER_URL).catch((err) => {
-        console.warn(`[JUWEI WMS Desktop] Connection to Central Server attempt ${retries + 1}/${maxRetries} failed:`, err.message);
-        if (retries < maxRetries) {
-          retries++;
-          setTimeout(loadCentralApp, 1500);
-        } else {
-          console.warn('[JUWEI WMS Desktop] Loading offline fallback local interface...');
-          const indexPath = path.join(__dirname, '../dist/index.html');
-          if (fs.existsSync(indexPath)) {
-            mainWindow.loadFile(indexPath).catch(loadErr => {
+    const indexPath = path.join(__dirname, '../dist/index.html');
+    const hasLocalDist = fs.existsSync(indexPath);
+
+    // Check whether the central warehouse server has a strictly newer web bundle than this installed EXE.
+    // If the installed GitHub EXE is newer or equal, ALWAYS run the local bundle so newly installed updates
+    // take effect immediately while still syncing all database & WebSocket traffic to CENTRAL_SERVER_URL.
+    const remoteInfo = await fetchRemoteBuildInfo(2500);
+    const remoteBundleVer = normalizeVersion(remoteInfo && (remoteInfo.bundleVersion || remoteInfo.version));
+    const serverHasNewerBundle = Boolean(
+      remoteBundleVer && (!appVersion || compareSemver(remoteBundleVer, appVersion) > 0)
+    );
+
+    if (hasLocalDist && !serverHasNewerBundle) {
+      loadedFromLocalBundle = true;
+      console.log(
+        `[JUWEI WMS Desktop] Loading newly installed local bundle (v${appVersion || 'unknown'}) connected to Central Server: ${CENTRAL_SERVER_URL}`
+      );
+      mainWindow.loadFile(indexPath).catch((loadErr) => {
+        console.error('[JUWEI WMS Desktop] Failed to load local dist/index.html:', loadErr);
+      });
+    } else {
+      loadedFromLocalBundle = false;
+      console.log(
+        `[JUWEI WMS Desktop] Connecting to Central Production Server (${CENTRAL_SERVER_URL}) [local=${appVersion || 'none'}, serverBundle=${remoteBundleVer || 'unknown'}]`
+      );
+
+      if (serverHasNewerBundle && session?.defaultSession) {
+        try {
+          await session.defaultSession.clearCache();
+        } catch (e) {}
+      }
+
+      let retries = 0;
+      const maxRetries = 6;
+      const loadCentralApp = () => {
+        if (!mainWindow) return;
+        mainWindow.loadURL(CENTRAL_SERVER_URL).catch((err) => {
+          console.warn(`[JUWEI WMS Desktop] Connection to Central Server attempt ${retries + 1}/${maxRetries} failed:`, err.message);
+          if (retries < maxRetries) {
+            retries++;
+            setTimeout(loadCentralApp, 1500);
+          } else if (hasLocalDist) {
+            loadedFromLocalBundle = true;
+            console.warn('[JUWEI WMS Desktop] Loading local dist/index.html fallback...');
+            mainWindow.loadFile(indexPath).catch((loadErr) => {
               console.error('[JUWEI WMS Desktop] Failed to load local HTML fallback:', loadErr);
             });
           } else {
             console.error('[JUWEI WMS Desktop] dist/index.html does not exist at path:', indexPath);
           }
-        }
-      });
-    };
+        });
+      };
 
-    loadCentralApp();
+      loadCentralApp();
+    }
   }
 
   mainWindow.once('ready-to-show', () => {
-    mainWindow.maximize();
-    mainWindow.show();
+    if (mainWindow) {
+      mainWindow.maximize();
+      mainWindow.show();
+    }
   });
 
   // Handle external links safely in system default browser and allow blob: URLs in native window
@@ -193,18 +268,21 @@ function createWindow() {
     return { action: 'deny' };
   });
 
-  // Intercept document.title changes to keep window title in sync with live version
+  // Intercept document.title changes to keep window title in sync with running version
   mainWindow.webContents.on('page-title-updated', (event, title) => {
     event.preventDefault();
+    if (!mainWindow) return;
+    const localVer = getLocalInstalledVersion();
     if (title) {
       const match = title.match(/v(\d+\.\d+\.\d+[\w.-]*)/i);
-      if (match && match[1]) {
-        currentAppVersion = match[1];
+      const matchedVer = match && match[1] ? normalizeVersion(match[1]) : '';
+      if (matchedVer && (!localVer || compareSemver(matchedVer, localVer) >= 0 || !loadedFromLocalBundle)) {
+        currentAppVersion = matchedVer;
       }
-      const formattedTitle = title.includes('(WAREHOUSE SERVER)')
-        ? title
-        : `${title} (WAREHOUSE SERVER)`;
-      mainWindow.setTitle(formattedTitle);
+      const effectiveTitle = (loadedFromLocalBundle && localVer && (!matchedVer || compareSemver(matchedVer, localVer) < 0))
+        ? getFormattedWindowTitle(localVer)
+        : (title.includes('(WAREHOUSE SERVER)') ? title : `${title} (WAREHOUSE SERVER)`);
+      mainWindow.setTitle(effectiveTitle);
     }
   });
 
@@ -213,7 +291,7 @@ function createWindow() {
     fetchVersionAndUpdateWindowTitle();
   });
 
-  // Periodically query /api/build-info to update window title if a new GitHub release is pushed
+  // Periodically query /api/build-info to update window title if needed
   const versionPollTimer = setInterval(() => {
     if (mainWindow) {
       fetchVersionAndUpdateWindowTitle();
@@ -231,6 +309,7 @@ function createWindow() {
   });
 
   mainWindow.on('closed', () => {
+    clearInterval(versionPollTimer);
     mainWindow = null;
   });
 }
@@ -251,23 +330,21 @@ app.on('window-all-closed', () => {
   }
 });
 
+// Synchronous IPC so preload exposes installed EXE version before React first render
+ipcMain.on('get-local-version-sync', (event) => {
+  event.returnValue = getLocalInstalledVersion();
+});
 
-// IPC listener to update window title immediately when renderer detects a new version
+// IPC listener to update window title when renderer updates version
 ipcMain.on('app-version-updated', (event, version) => {
   if (version) {
     setElectronWindowTitle(version);
   }
 });
 
-// IPC handler to return the current known app version
+// IPC handler to return the actual installed desktop app version
 ipcMain.handle('get-app-version', () => {
-  try {
-    if (app && typeof app.getVersion === 'function') {
-      const v = app.getVersion();
-      if (v && v !== '0.0.0') return v;
-    }
-  } catch (e) {}
-  return currentAppVersion || '';
+  return getLocalInstalledVersion() || currentAppVersion || '';
 });
 
 // IPC handler to safely launch external URLs in the system's default browser

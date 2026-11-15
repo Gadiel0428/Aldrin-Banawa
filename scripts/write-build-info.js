@@ -2,78 +2,120 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 
+function normalizeVersion(v) {
+  return String(v || '').replace(/^v/i, '').trim();
+}
+
+function compareSemver(a, b) {
+  const cleanA = normalizeVersion(a);
+  const cleanB = normalizeVersion(b);
+  if (!cleanA && !cleanB) return 0;
+  if (!cleanA) return -1;
+  if (!cleanB) return 1;
+
+  const pa = cleanA.split(/[.-]/).map((part) => (/^\d+$/.test(part) ? parseInt(part, 10) : 0));
+  const pb = cleanB.split(/[.-]/).map((part) => (/^\d+$/.test(part) ? parseInt(part, 10) : 0));
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
 try {
   const pkgPath = path.resolve(process.cwd(), 'package.json');
   const pkgData = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  const pkgVersion = normalizeVersion(pkgData.version);
 
   let version = '';
   let versionSource = '';
 
-  // 1. Fetch remote tags if inside a git repository (essential for shallow clones on Render or CI)
-  try {
-    execSync('git fetch --tags origin', {
-      stdio: ['ignore', 'ignore', 'ignore'],
-      timeout: 10000,
-      windowsHide: true
-    });
-    console.log('[WRITE-BUILD-INFO] Successfully fetched tags from origin.');
-  } catch (fetchOriginErr) {
+  // 1. Honor explicit CI / GitHub Actions release version env var first
+  const envBuildVersion = normalizeVersion(
+    process.env.BUILD_VERSION || process.env.GITHUB_RELEASE_VERSION || ''
+  );
+  if (envBuildVersion) {
+    version = envBuildVersion;
+    versionSource = 'BUILD_VERSION env';
+    console.log(`[WRITE-BUILD-INFO] Resolved authoritative version from BUILD_VERSION env: ${version}`);
+  }
+
+  // 2. Otherwise inspect git tags and compare against package.json (picking highest semver)
+  let gitTagVersion = '';
+  let gitTagSource = '';
+  if (!version) {
     try {
-      execSync('git fetch --tags', {
+      execSync('git fetch --tags origin', {
         stdio: ['ignore', 'ignore', 'ignore'],
         timeout: 10000,
         windowsHide: true
       });
-      console.log('[WRITE-BUILD-INFO] Successfully fetched tags.');
-    } catch (fetchErr) {
-      // Ignored if offline, shallow with no remote, or not a git repository
+      console.log('[WRITE-BUILD-INFO] Successfully fetched tags from origin.');
+    } catch {
+      try {
+        execSync('git fetch --tags', {
+          stdio: ['ignore', 'ignore', 'ignore'],
+          timeout: 10000,
+          windowsHide: true
+        });
+        console.log('[WRITE-BUILD-INFO] Successfully fetched tags.');
+      } catch {
+        // Ignored if offline, shallow with no remote, or not a git repository
+      }
     }
-  }
 
-  // 2. Try git describe --tags --abbrev=0 at build time
-  try {
-    const gitTag = execSync('git describe --tags --abbrev=0', {
-      stdio: ['ignore', 'pipe', 'ignore'],
-      encoding: 'utf8',
-      timeout: 5000,
-      windowsHide: true
-    }).trim();
-
-    if (gitTag) {
-      // Strip leading 'v' or 'V' if present to normalize version string
-      version = gitTag.replace(/^v/i, '');
-      versionSource = 'git describe --tags';
-      console.log(`[WRITE-BUILD-INFO] Resolved version from git tag: ${gitTag} -> ${version}`);
-    }
-  } catch (gitErr) {
-    // If git describe fails, try getting the latest release tag from git tag -l
     try {
-      const allTagsRaw = execSync('git tag -l "v*"', {
+      const gitTag = execSync('git describe --tags --abbrev=0', {
         stdio: ['ignore', 'pipe', 'ignore'],
         encoding: 'utf8',
         timeout: 5000,
         windowsHide: true
       }).trim();
 
-      const allTags = allTagsRaw.split('\n').map(t => t.trim()).filter(Boolean);
-      if (allTags.length > 0) {
-        // Sort tags by semver descending
-        allTags.sort((a, b) => {
-          const parse = (str) => str.replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
-          const pa = parse(a);
-          const pb = parse(b);
-          for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-            const diff = (pb[i] || 0) - (pa[i] || 0);
-            if (diff !== 0) return diff;
-          }
-          return b.localeCompare(a);
-        });
-        version = allTags[0].replace(/^v/i, '');
-        versionSource = 'git tag -l (latest semver tag)';
-        console.log(`[WRITE-BUILD-INFO] Resolved version from latest git tag: ${allTags[0]} -> ${version}`);
+      if (gitTag) {
+        gitTagVersion = normalizeVersion(gitTag);
+        gitTagSource = 'git describe --tags';
       }
-    } catch (tagErr) {
-      console.log('[WRITE-BUILD-INFO] git describe/tag failed or has no tags. Falling back to package.json.');
+    } catch {
+      // Fallback to listing semver tags
+    }
+
+    if (!gitTagVersion) {
+      try {
+        const allTagsRaw = execSync('git tag -l "v*"', {
+          stdio: ['ignore', 'pipe', 'ignore'],
+          encoding: 'utf8',
+          timeout: 5000,
+          windowsHide: true
+        }).trim();
+
+        const allTags = allTagsRaw.split('\n').map((t) => t.trim()).filter(Boolean);
+        if (allTags.length > 0) {
+          allTags.sort((a, b) => compareSemver(b, a));
+          gitTagVersion = normalizeVersion(allTags[0]);
+          gitTagSource = 'git tag -l (latest semver tag)';
+        }
+      } catch {
+        // Ignore if not a git repo
+      }
+    }
+
+    // Never downgrade a newer package.json version to an older git tag
+    if (pkgVersion && gitTagVersion) {
+      if (compareSemver(pkgVersion, gitTagVersion) >= 0) {
+        version = pkgVersion;
+        versionSource = 'package.json';
+      } else {
+        version = gitTagVersion;
+        versionSource = gitTagSource;
+      }
+    } else if (pkgVersion) {
+      version = pkgVersion;
+      versionSource = 'package.json';
+    } else if (gitTagVersion) {
+      version = gitTagVersion;
+      versionSource = gitTagSource;
     }
   }
 
@@ -84,22 +126,15 @@ try {
       if (fs.existsSync(relPath)) {
         const relData = JSON.parse(fs.readFileSync(relPath, 'utf8'));
         if (relData && relData.version) {
-          version = String(relData.version).replace(/^v/i, '');
+          version = normalizeVersion(relData.version);
           versionSource = 'latest-github-release.json';
-          console.log(`[WRITE-BUILD-INFO] Resolved version from latest-github-release.json: ${version}`);
         }
       }
-    } catch (relErr) {}
-  }
-
-  // 4. Fall back to package.json version field
-  if (!version) {
-    version = (pkgData.version || '').replace(/^v/i, '');
-    versionSource = 'package.json';
-    console.log(`[WRITE-BUILD-INFO] Resolved version from package.json: ${version}`);
+    } catch {}
   }
 
   const buildId = Date.now();
+  const repository = (process.env.GITHUB_REPOSITORY || process.env.GITHUB_REPO || 'Gadiel0428/Aldrin-Banawa').trim();
 
   const distDir = path.resolve(process.cwd(), 'dist');
   if (!fs.existsSync(distDir)) {
@@ -115,6 +150,7 @@ try {
     buildId,
     version,
     versionSource,
+    repository,
     builtAt: new Date(buildId).toISOString()
   };
 

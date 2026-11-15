@@ -3787,6 +3787,36 @@ async function startServer() {
     });
   });
 
+  const DEFAULT_GITHUB_REPO = "Gadiel0428/Aldrin-Banawa";
+
+  function compareServerSemver(a: string, b: string): number {
+    const cleanA = String(a || "").replace(/^v/i, "").trim();
+    const cleanB = String(b || "").replace(/^v/i, "").trim();
+    if (!cleanA && !cleanB) return 0;
+    if (!cleanA) return -1;
+    if (!cleanB) return 1;
+    const pa = cleanA.split(/[.-]/).map((p) => (/^\d+$/.test(p) ? parseInt(p, 10) : 0));
+    const pb = cleanB.split(/[.-]/).map((p) => (/^\d+$/.test(p) ? parseInt(p, 10) : 0));
+    const len = Math.max(pa.length, pb.length);
+    for (let i = 0; i < len; i++) {
+      const diff = (pa[i] || 0) - (pb[i] || 0);
+      if (diff !== 0) return diff > 0 ? 1 : -1;
+    }
+    return 0;
+  }
+
+  function maxSemverVersion(...versions: Array<string | null | undefined>): string {
+    let best = "";
+    for (const v of versions) {
+      const clean = String(v || "").replace(/^v/i, "").trim();
+      if (!clean) continue;
+      if (!best || compareServerSemver(clean, best) > 0) {
+        best = clean;
+      }
+    }
+    return best;
+  }
+
   // In-memory cache for latest GitHub release version (e.g. "v1.0.86" -> "1.0.86")
   let cachedGitHubVersion: string | null = null;
   let lastGitHubFetchTimestamp = 0;
@@ -3794,50 +3824,42 @@ async function startServer() {
   const GITHUB_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes cache
   const RELEASE_PERSIST_FILE = getStorageFilePath("latest-github-release.json");
 
-  // Load persisted GitHub release on startup if available
+  // Load persisted GitHub release as initial fallback only (do NOT mark lastGitHubFetchTimestamp so live GitHub check still runs)
   try {
     if (fs.existsSync(RELEASE_PERSIST_FILE)) {
       const persisted = JSON.parse(fs.readFileSync(RELEASE_PERSIST_FILE, "utf8"));
       if (persisted && persisted.version) {
         cachedGitHubVersion = String(persisted.version).replace(/^v/i, "").trim();
-        lastGitHubFetchTimestamp = Date.now();
-        console.log(`[RELEASE SYNC] Loaded persisted GitHub release version: ${cachedGitHubVersion}`);
+        console.log(`[RELEASE SYNC] Loaded persisted GitHub release fallback: ${cachedGitHubVersion}`);
       }
     }
   } catch (e) {}
 
   // Resolves the latest release version from GitHub Releases API or disk cache
-  async function getLatestGitHubReleaseVersion(buildTimeFallback: string): Promise<string> {
-    // If not cached yet in memory, try loading from disk
+  async function getLatestGitHubReleaseVersion(buildTimeFallback: string, forceRefresh = false): Promise<string> {
     if (!cachedGitHubVersion) {
       try {
         if (fs.existsSync(RELEASE_PERSIST_FILE)) {
           const persisted = JSON.parse(fs.readFileSync(RELEASE_PERSIST_FILE, "utf8"));
           if (persisted && persisted.version) {
             cachedGitHubVersion = String(persisted.version).replace(/^v/i, "").trim();
-            lastGitHubFetchTimestamp = Date.now();
           }
         }
       } catch (e) {}
     }
 
-    const rawRepo = process.env.GITHUB_REPO?.trim();
-    if (!rawRepo) {
-      return cachedGitHubVersion || buildTimeFallback;
-    }
-
-    // Support both "owner/repo" and full url "https://github.com/owner/repo"
+    const rawRepo = process.env.GITHUB_REPO?.trim() || DEFAULT_GITHUB_REPO;
     const cleanRepo = rawRepo.replace(/^https?:\/\/github\.com\//i, '').replace(/\/+$/, '');
     const now = Date.now();
 
-    // Return cached value if still fresh within 5 minutes
-    if (cachedGitHubVersion && (now - lastGitHubFetchTimestamp < GITHUB_CACHE_TTL_MS)) {
-      return cachedGitHubVersion;
+    // Return cached value if still fresh within 5 minutes (unless forceRefresh requested)
+    if (!forceRefresh && cachedGitHubVersion && lastGitHubFetchTimestamp > 0 && (now - lastGitHubFetchTimestamp < GITHUB_CACHE_TTL_MS)) {
+      return maxSemverVersion(cachedGitHubVersion, buildTimeFallback);
     }
 
     // Avoid stampedes if an asynchronous fetch is already in flight
     if (isFetchingGitHubRelease) {
-      return cachedGitHubVersion || buildTimeFallback;
+      return maxSemverVersion(cachedGitHubVersion, buildTimeFallback);
     }
 
     isFetchingGitHubRelease = true;
@@ -3873,10 +3895,11 @@ async function startServer() {
               fs.writeFileSync(RELEASE_PERSIST_FILE, JSON.stringify({
                 version: parsed,
                 tag: releaseData.tag_name,
+                repository: cleanRepo,
                 updatedAt: new Date().toISOString()
               }, null, 2), "utf8");
             } catch (wErr) {}
-            console.log(`[GITHUB RELEASE SYNC] Authoritative release tag resolved from GitHub: ${releaseData.tag_name} -> version ${parsed}`);
+            console.log(`[GITHUB RELEASE SYNC] Authoritative release tag resolved from GitHub (${cleanRepo}): ${releaseData.tag_name} -> version ${parsed}`);
           }
         }
       } else {
@@ -3888,8 +3911,7 @@ async function startServer() {
       isFetchingGitHubRelease = false;
     }
 
-    // Fall back to last known cached value, or build-time fallback if nothing was ever fetched
-    return cachedGitHubVersion || buildTimeFallback;
+    return maxSemverVersion(cachedGitHubVersion, buildTimeFallback);
   }
 
   // REST API: Webhook / Direct publish from GitHub Actions
@@ -3910,7 +3932,7 @@ async function startServer() {
       const releaseRecord = {
         version: newVersion,
         tag: tag || `v${newVersion}`,
-        repository: repository || process.env.GITHUB_REPO || "",
+        repository: repository || process.env.GITHUB_REPO || DEFAULT_GITHUB_REPO,
         releaseUrl: releaseUrl || "",
         buildId: buildId || Date.now(),
         updatedAt: new Date().toISOString()
@@ -3927,12 +3949,7 @@ async function startServer() {
     }
   });
 
-  // REST API: Build Info for Live Application Updates
-  app.get(["/api/build-info", "/build-info.json"], async (_req, res) => {
-    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-    res.setHeader("Pragma", "no-cache");
-    res.setHeader("Expires", "0");
-
+  function resolveServerBundleVersion(): { fileContent: any; bundleVersion: string } {
     const possiblePaths = [
       path.join(process.cwd(), "dist", "build-info.json"),
       path.join(process.cwd(), "public", "build-info.json"),
@@ -3949,31 +3966,48 @@ async function startServer() {
       }
     }
 
-    // Dynamic fallback if running in dev mode or prior to write-build-info
-    let buildTimeVersion = "";
-    if (fileContent?.version) {
-      buildTimeVersion = String(fileContent.version).replace(/^v/i, "");
-    } else {
-      try {
-        const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
-        if (pkg.version) buildTimeVersion = String(pkg.version).replace(/^v/i, "");
-      } catch (e) {}
-    }
+    let pkgVersion = "";
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
+      if (pkg.version) pkgVersion = String(pkg.version).replace(/^v/i, "").trim();
+    } catch (e) {}
+
+    const fileVersion = fileContent?.version ? String(fileContent.version).replace(/^v/i, "").trim() : "";
+    const bundleVersion = maxSemverVersion(fileVersion, pkgVersion);
+
+    return { fileContent, bundleVersion };
+  }
+
+  // REST API: Build Info for Live Application Updates
+  app.get(["/api/build-info", "/build-info.json"], async (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+
+    const forceRefresh = req.query.refresh === "1" || req.query.refresh === "true";
+    const { fileContent, bundleVersion } = resolveServerBundleVersion();
 
     // Resolve authoritative live version from latest GitHub Release (cached 5 min)
-    const activeVersion = await getLatestGitHubReleaseVersion(buildTimeVersion);
+    const latestGitHubVersion = await getLatestGitHubReleaseVersion(bundleVersion, forceRefresh);
+    const activeVersion = maxSemverVersion(latestGitHubVersion, bundleVersion);
 
     if (fileContent) {
       return res.json({
         ...fileContent,
         version: activeVersion,
-        versionSource: cachedGitHubVersion ? "github-releases-latest" : (fileContent.versionSource || "build-info.json")
+        bundleVersion,
+        latestGitHubVersion,
+        versionSource: cachedGitHubVersion && compareServerSemver(cachedGitHubVersion, bundleVersion) >= 0
+          ? "github-releases-latest"
+          : (fileContent.versionSource || "package.json")
       });
     }
 
     return res.json({
       buildId: 0,
       version: activeVersion,
+      bundleVersion,
+      latestGitHubVersion,
       versionSource: cachedGitHubVersion ? "github-releases-latest" : "fallback",
       isDevelopmentFallback: true
     });
@@ -3981,21 +4015,10 @@ async function startServer() {
 
   // REST API: Direct Installer Download Redirect (downloads JUWEI.WMS.Desktop.System.Setup.1.0.XX.exe directly)
   app.get("/api/download/latest-installer", async (_req, res) => {
-    let targetVer = "";
-    if (fs.existsSync(RELEASE_PERSIST_FILE)) {
-      try {
-        const persisted = JSON.parse(fs.readFileSync(RELEASE_PERSIST_FILE, "utf8"));
-        if (persisted?.version) targetVer = String(persisted.version).replace(/^v/i, "").trim();
-      } catch (e) {}
-    }
-    if (!targetVer) {
-      try {
-        const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
-        if (pkg.version) targetVer = String(pkg.version).replace(/^v/i, "").trim();
-      } catch (e) {}
-    }
-    const cleanVer = targetVer || "1.0.93";
-    const rawRepo = process.env.GITHUB_REPO?.trim() || "Gadiel0428/Aldrin-Banawa";
+    const { bundleVersion } = resolveServerBundleVersion();
+    const targetVer = await getLatestGitHubReleaseVersion(bundleVersion);
+    const cleanVer = targetVer || bundleVersion || "1.0.94";
+    const rawRepo = process.env.GITHUB_REPO?.trim() || DEFAULT_GITHUB_REPO;
     const cleanRepo = rawRepo.replace(/^https?:\/\/github\.com\//i, "").replace(/\/+$/, "");
     const assetName = `JUWEI.WMS.Desktop.System.Setup.${cleanVer}.exe`;
     const directDownloadUrl = `https://github.com/${cleanRepo}/releases/download/v${cleanVer}/${assetName}`;

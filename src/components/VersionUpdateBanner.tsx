@@ -5,6 +5,7 @@
 
 import React from 'react';
 import { Sparkles, RefreshCw, X, Download } from 'lucide-react';
+import { getCentralServerUrl } from '../config/serverConfig';
 
 interface VersionUpdateBannerProps {
   onReload: () => void;
@@ -23,11 +24,14 @@ export const VersionUpdateBanner: React.FC<VersionUpdateBannerProps> = ({
 
     if (!targetVer) {
       try {
-        const res = await fetch('/api/build-info', { headers: { 'Accept': 'application/json' } });
+        const centralUrl = getCentralServerUrl();
+        const endpoint = centralUrl ? `${centralUrl}/api/build-info` : '/api/build-info';
+        const res = await fetch(endpoint, { cache: 'no-store', headers: { 'Accept': 'application/json' } });
         if (res.ok) {
           const info = await res.json();
-          if (info?.version) {
-            targetVer = String(info.version).replace(/^v/i, '').trim();
+          const candidate = info?.latestGitHubVersion || info?.version;
+          if (candidate) {
+            targetVer = String(candidate).replace(/^v/i, '').trim();
           }
         }
       } catch (e) {}
@@ -43,7 +47,6 @@ export const VersionUpdateBanner: React.FC<VersionUpdateBannerProps> = ({
     const directDownloadUrl = `https://github.com/${repo}/releases/download/v${targetVer}/${filename}`;
 
     try {
-      localStorage.setItem('juwei_wms_installed_version', targetVer);
       localStorage.setItem('juwei_wms_downloaded_version', targetVer);
     } catch (e) {}
 
