@@ -3817,11 +3817,11 @@ async function startServer() {
     return best;
   }
 
-  // In-memory cache for latest GitHub release version (e.g. "v1.0.86" -> "1.0.86")
+  // In-memory cache for latest GitHub release version (e.g. "v1.0.117" -> "1.0.117")
   let cachedGitHubVersion: string | null = null;
   let lastGitHubFetchTimestamp = 0;
   let isFetchingGitHubRelease = false;
-  const GITHUB_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes cache
+  const GITHUB_CACHE_TTL_MS = 60 * 1000; // 60 seconds cache so AI Studio stays synced with GitHub Releases
   const RELEASE_PERSIST_FILE = getStorageFilePath("latest-github-release.json");
 
   // Load persisted GitHub release as initial fallback only (do NOT mark lastGitHubFetchTimestamp so live GitHub check still runs)
@@ -3834,6 +3834,38 @@ async function startServer() {
       }
     }
   } catch (e) {}
+
+  async function fetchGitHubJson(url: string, token?: string): Promise<Response> {
+    const headers: Record<string, string> = {
+      'Accept': 'application/vnd.github.v3+json',
+      'User-Agent': 'JUWEI-WMS-Cloud-Server'
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    try {
+      const resp = await fetch(url, { headers, signal: controller.signal });
+      // If a configured/injected token is invalid, expired, or lacks permission, retry unauthenticated for public repos
+      if (token && (resp.status === 401 || resp.status === 403 || resp.status === 404)) {
+        const publicHeaders: Record<string, string> = {
+          'Accept': 'application/vnd.github.v3+json',
+          'User-Agent': 'JUWEI-WMS-Cloud-Server'
+        };
+        const retryController = new AbortController();
+        const retryTimeout = setTimeout(() => retryController.abort(), 8000);
+        try {
+          return await fetch(url, { headers: publicHeaders, signal: retryController.signal });
+        } finally {
+          clearTimeout(retryTimeout);
+        }
+      }
+      return resp;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
 
   // Resolves the latest release version from GitHub Releases API or disk cache
   async function getLatestGitHubReleaseVersion(buildTimeFallback: string, forceRefresh = false): Promise<string> {
@@ -3852,7 +3884,7 @@ async function startServer() {
     const cleanRepo = rawRepo.replace(/^https?:\/\/github\.com\//i, '').replace(/\/+$/, '');
     const now = Date.now();
 
-    // Return cached value if still fresh within 5 minutes (unless forceRefresh requested)
+    // Return cached value if still fresh within TTL (unless forceRefresh requested)
     if (!forceRefresh && cachedGitHubVersion && lastGitHubFetchTimestamp > 0 && (now - lastGitHubFetchTimestamp < GITHUB_CACHE_TTL_MS)) {
       return maxSemverVersion(cachedGitHubVersion, buildTimeFallback);
     }
@@ -3864,46 +3896,51 @@ async function startServer() {
 
     isFetchingGitHubRelease = true;
     try {
-      const headers: Record<string, string> = {
-        'Accept': 'application/vnd.github.v3+json',
-        'User-Agent': 'JUWEI-WMS-Cloud-Server'
-      };
-
-      const token = process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim();
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-
+      const token = process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() || undefined;
       const apiUrl = `https://api.github.com/repos/${cleanRepo}/releases/latest`;
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      let resolvedTag = "";
 
-      const resp = await fetch(apiUrl, {
-        headers,
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-
+      const resp = await fetchGitHubJson(apiUrl, token);
       if (resp.ok) {
         const releaseData: any = await resp.json();
         if (releaseData && releaseData.tag_name) {
-          const parsed = String(releaseData.tag_name).replace(/^v/i, '').trim();
-          if (parsed) {
-            cachedGitHubVersion = parsed;
-            lastGitHubFetchTimestamp = Date.now();
-            try {
-              fs.writeFileSync(RELEASE_PERSIST_FILE, JSON.stringify({
-                version: parsed,
-                tag: releaseData.tag_name,
-                repository: cleanRepo,
-                updatedAt: new Date().toISOString()
-              }, null, 2), "utf8");
-            } catch (wErr) {}
-            console.log(`[GITHUB RELEASE SYNC] Authoritative release tag resolved from GitHub (${cleanRepo}): ${releaseData.tag_name} -> version ${parsed}`);
-          }
+          resolvedTag = String(releaseData.tag_name).trim();
         }
       } else {
-        console.warn(`[GITHUB RELEASE SYNC] GitHub API returned HTTP ${resp.status} for ${apiUrl}`);
+        console.warn(`[GITHUB RELEASE SYNC] GitHub Releases API returned HTTP ${resp.status} for ${apiUrl}, checking tags fallback...`);
+      }
+
+      // Fallback to highest semver tag from GitHub Tags API if /releases/latest didn't return a tag
+      if (!resolvedTag) {
+        const tagsUrl = `https://api.github.com/repos/${cleanRepo}/tags?per_page=20`;
+        const tagsResp = await fetchGitHubJson(tagsUrl, token);
+        if (tagsResp.ok) {
+          const tagsData: any[] = await tagsResp.json();
+          if (Array.isArray(tagsData) && tagsData.length > 0) {
+            const semverTags = tagsData
+              .map((t) => String(t?.name || "").trim())
+              .filter(Boolean)
+              .sort((a, b) => compareServerSemver(b, a));
+            if (semverTags[0]) {
+              resolvedTag = semverTags[0];
+            }
+          }
+        }
+      }
+
+      const parsed = resolvedTag.replace(/^v/i, '').trim();
+      if (parsed) {
+        cachedGitHubVersion = parsed;
+        lastGitHubFetchTimestamp = Date.now();
+        try {
+          fs.writeFileSync(RELEASE_PERSIST_FILE, JSON.stringify({
+            version: parsed,
+            tag: resolvedTag,
+            repository: cleanRepo,
+            updatedAt: new Date().toISOString()
+          }, null, 2), "utf8");
+        } catch (wErr) {}
+        console.log(`[GITHUB RELEASE SYNC] Authoritative release tag resolved from GitHub (${cleanRepo}): ${resolvedTag} -> version ${parsed}`);
       }
     } catch (err: any) {
       console.warn(`[GITHUB RELEASE SYNC] Request to GitHub Releases API failed:`, err?.message || err);

@@ -921,22 +921,36 @@ export default function App() {
                 : '';
               const desktopVer = (installedDesktopVersionRef.current || '').replace(/^v/i, '').trim();
 
-              // Running version reflects what this window actually executed (local Electron bundle or server bundle)
-              const runningVer = isFileOrigin
+              // Display version:
+              // - In Electron local bundle (file://): show the installed EXE's version
+              // - In Google AI Studio / Web browser: sync directly to latest GitHub release version (latestVer)
+              const displayVer = isFileOrigin
                 ? (desktopVer || buildTimeVer || bundleVer || latestVer)
-                : (bundleVer || buildTimeVer || desktopVer || latestVer);
+                : (latestVer || bundleVer || buildTimeVer || desktopVer);
 
-              if (runningVer) {
-                setAppVersion((prev) => (prev !== runningVer ? runningVer : prev));
+              const comparisonInstalledVer = isElectronEnv
+                ? (desktopVer || buildTimeVer)
+                : (() => {
+                    try {
+                      return (localStorage.getItem('juwei_wms_web_acknowledged_version') || '').replace(/^v/i, '').trim() || buildTimeVer;
+                    } catch {
+                      return buildTimeVer;
+                    }
+                  })();
+
+              if (displayVer) {
+                setAppVersion((prev) => (prev !== displayVer ? displayVer : prev));
                 if (typeof window !== 'undefined' && window.electronAPI?.updateAppVersion) {
-                  window.electronAPI.updateAppVersion(runningVer);
+                  window.electronAPI.updateAppVersion(displayVer);
                 }
-                try {
-                  localStorage.setItem('juwei_wms_installed_version', runningVer);
-                } catch (e) {}
+                if (isElectronEnv && desktopVer) {
+                  try {
+                    localStorage.setItem('juwei_wms_installed_version', desktopVer);
+                  } catch (e) {}
+                }
               }
 
-              if (latestVer && runningVer && isNewerVersion(latestVer, runningVer)) {
+              if (latestVer && comparisonInstalledVer && isNewerVersion(latestVer, comparisonInstalledVer)) {
                 let dismissedVer = '';
                 try {
                   dismissedVer = (localStorage.getItem('juwei_wms_dismissed_version') || '').replace(/^v/i, '').trim();
@@ -2819,31 +2833,37 @@ export default function App() {
                 ? String(__APP_VERSION__).replace(/^v/i, '').trim()
                 : '';
 
-              let storedInstalled = '';
+              let storedAck = '';
               try {
-                storedInstalled = (localStorage.getItem('juwei_wms_installed_version') || '').replace(/^v/i, '').trim();
+                storedAck = (localStorage.getItem('juwei_wms_web_acknowledged_version') || '').replace(/^v/i, '').trim();
               } catch (e) {}
 
-              // Running version:
-              // - In Electron local bundle (file://): always use desktopVer / buildTimeVer (never downgrade or falsely show uninstalled GitHub version)
-              // - On server HTTP: use server's bundleVer / buildTimeVer / desktopVer
-              const runningVersion = isFileOrigin
-                ? (desktopVer || buildTimeVer || storedInstalled)
-                : (bundleVer || buildTimeVer || desktopVer || storedInstalled || latestRemoteVer);
+              // Displayed version:
+              // - In Electron local bundle (file://): show installed EXE's version
+              // - In Google AI Studio / Web browser: sync directly to latest GitHub release version
+              const displayVer = isFileOrigin
+                ? (desktopVer || buildTimeVer || bundleVer || latestRemoteVer)
+                : (latestRemoteVer || bundleVer || buildTimeVer || desktopVer);
 
-              if (runningVersion) {
-                setAppVersion((prev) => (prev !== runningVersion ? runningVersion : prev));
+              const comparisonInstalledVer = isElectronEnv
+                ? (desktopVer || buildTimeVer)
+                : (storedAck || buildTimeVer);
+
+              if (displayVer) {
+                setAppVersion((prev) => (prev !== displayVer ? displayVer : prev));
                 if (typeof window !== 'undefined' && window.electronAPI?.updateAppVersion) {
-                  window.electronAPI.updateAppVersion(runningVersion);
+                  window.electronAPI.updateAppVersion(displayVer);
                 }
-                try {
-                  localStorage.setItem('juwei_wms_installed_version', runningVersion);
-                } catch (e) {}
+                if (isElectronEnv && desktopVer) {
+                  try {
+                    localStorage.setItem('juwei_wms_installed_version', desktopVer);
+                  } catch (e) {}
+                }
               }
 
-              // Compare latest available GitHub/server release against actually running version
+              // Compare latest available GitHub release against installed/acknowledged version
               const isUpToDate = Boolean(
-                runningVersion && latestRemoteVer && !isNewerVersion(latestRemoteVer, runningVersion)
+                comparisonInstalledVer && latestRemoteVer && !isNewerVersion(latestRemoteVer, comparisonInstalledVer)
               );
 
               if (isUpToDate) {
@@ -2851,7 +2871,7 @@ export default function App() {
                   localStorage.removeItem('juwei_wms_dismissed_version');
                 } catch (e) {}
                 if (updateAvailableRef.current) {
-                  console.log(`[JUWEI WMS UPDATE] Installed app (${runningVersion}) is up-to-date with latest (${latestRemoteVer}). Removing banner.`);
+                  console.log(`[JUWEI WMS UPDATE] App (${comparisonInstalledVer}) is up-to-date with latest (${latestRemoteVer}). Removing banner.`);
                   updateAvailableRef.current = false;
                   setUpdateAvailable(false);
                   setNewVersionString('');
@@ -2859,13 +2879,13 @@ export default function App() {
                 break;
               }
 
-              if (latestRemoteVer && runningVersion && isNewerVersion(latestRemoteVer, runningVersion)) {
+              if (latestRemoteVer && comparisonInstalledVer && isNewerVersion(latestRemoteVer, comparisonInstalledVer)) {
                 let dismissedVer = '';
                 try {
                   dismissedVer = (localStorage.getItem('juwei_wms_dismissed_version') || '').replace(/^v/i, '').trim();
                 } catch (e) {}
                 if (!updateAvailableRef.current && dismissedVer !== latestRemoteVer) {
-                  console.log(`[JUWEI WMS UPDATE] Update available: latest ${latestRemoteVer} > running ${runningVersion}`);
+                  console.log(`[JUWEI WMS UPDATE] Update available: latest ${latestRemoteVer} > running ${comparisonInstalledVer}`);
                   updateAvailableRef.current = true;
                   setUpdateAvailable(true);
                   setNewVersionString(latestRemoteVer);
@@ -4966,6 +4986,11 @@ export default function App() {
           <div className="fixed top-0 left-0 right-0 z-50">
             <VersionUpdateBanner
               onReload={() => {
+                if (newVersionString && !window.electronAPI?.isElectron) {
+                  try {
+                    localStorage.setItem('juwei_wms_web_acknowledged_version', newVersionString);
+                  } catch (e) {}
+                }
                 setUpdateAvailable(false);
                 updateAvailableRef.current = false;
                 window.location.reload();
@@ -5629,6 +5654,11 @@ export default function App() {
         {updateAvailable && !bannerDismissed && (
           <VersionUpdateBanner
             onReload={() => {
+              if (newVersionString && !window.electronAPI?.isElectron) {
+                try {
+                  localStorage.setItem('juwei_wms_web_acknowledged_version', newVersionString);
+                } catch (e) {}
+              }
               setUpdateAvailable(false);
               updateAvailableRef.current = false;
               window.location.reload();
