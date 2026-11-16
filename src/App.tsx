@@ -855,7 +855,14 @@ export default function App() {
     } catch (e) {}
   }, [appVersion]);
 
+  const initialBuildIdRef = useRef<number | string | null>(
+    typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : null
+  );
+  const lastBuildInfoCheckRef = useRef<number>(0);
+
   useEffect(() => {
+    let isMounted = true;
+    const BUILD_INFO_INTERVAL_MS = 60 * 60 * 1000; // 60 minutes
     const isFileOrigin = typeof window !== 'undefined' && window.location?.protocol === 'file:';
     const isElectronEnv = typeof window !== 'undefined' && Boolean(window.electronAPI?.isElectron);
 
@@ -875,6 +882,7 @@ export default function App() {
     if (isElectronEnv && window.electronAPI?.getAppVersion) {
       try {
         Promise.resolve(window.electronAPI.getAppVersion()).then((ver) => {
+          if (!isMounted) return;
           if (ver) {
             const cleanVer = String(ver).replace(/^v/i, '').trim();
             if (!cleanVer) return;
@@ -892,19 +900,21 @@ export default function App() {
       } catch (e) {}
     }
 
-    // Sync version from authoritative build-info endpoint
+    // Periodic background 'build-info.json' check (runs on mount and every 60 minutes)
     const fetchBuildInfo = async () => {
+      if (!isMounted) return;
+      lastBuildInfoCheckRef.current = Date.now();
       try {
         const centralUrl = getCentralServerUrl();
         const endpoints = (isElectronEnv || isFileOrigin)
           ? [
-              ...(centralUrl ? [`${centralUrl}/api/build-info`, `${centralUrl}/build-info.json`] : []),
+              ...(centralUrl ? [`${centralUrl}/build-info.json`, `${centralUrl}/api/build-info`] : []),
               './build-info.json'
             ]
           : [
-              '/api/build-info',
               '/build-info.json',
-              ...(centralUrl ? [`${centralUrl}/api/build-info`, `${centralUrl}/build-info.json`] : [])
+              '/api/build-info',
+              ...(centralUrl ? [`${centralUrl}/build-info.json`, `${centralUrl}/api/build-info`] : [])
             ];
         const uniqueEndpoints = Array.from(new Set(endpoints.filter(Boolean)));
         for (const ep of uniqueEndpoints) {
@@ -912,6 +922,8 @@ export default function App() {
             const res = await fetch(ep, { cache: 'no-store', headers: { Accept: 'application/json' } });
             if (res.ok) {
               const data = await res.json();
+              if (!isMounted) return;
+
               const bundleVer = data?.bundleVersion ? String(data.bundleVersion).replace(/^v/i, '').trim() : '';
               const latestVer = (data?.latestGitHubVersion || data?.version)
                 ? String(data.latestGitHubVersion || data.version).replace(/^v/i, '').trim()
@@ -950,15 +962,42 @@ export default function App() {
                 }
               }
 
-              if (latestVer && comparisonInstalledVer && isNewerVersion(latestVer, comparisonInstalledVer)) {
+              const remoteBuildId = data?.buildId ? Number(data.buildId) : 0;
+              if (remoteBuildId && !initialBuildIdRef.current) {
+                initialBuildIdRef.current = remoteBuildId;
+              }
+              const hasNewBuildId = Boolean(
+                !isFileOrigin &&
+                remoteBuildId &&
+                initialBuildIdRef.current &&
+                remoteBuildId > Number(initialBuildIdRef.current)
+              );
+
+              const hasNewerSemver = Boolean(
+                latestVer && comparisonInstalledVer && isNewerVersion(latestVer, comparisonInstalledVer)
+              );
+
+              if (hasNewerSemver || hasNewBuildId) {
+                const targetBannerVer = latestVer || bundleVer || buildTimeVer;
                 let dismissedVer = '';
                 try {
                   dismissedVer = (localStorage.getItem('juwei_wms_dismissed_version') || '').replace(/^v/i, '').trim();
                 } catch (e) {}
-                if (dismissedVer !== latestVer) {
+                if (!targetBannerVer || dismissedVer !== targetBannerVer) {
                   updateAvailableRef.current = true;
                   setUpdateAvailable(true);
-                  setNewVersionString(latestVer);
+                  if (targetBannerVer) {
+                    setNewVersionString(targetBannerVer);
+                  }
+                }
+              } else if (comparisonInstalledVer && latestVer && !isNewerVersion(latestVer, comparisonInstalledVer)) {
+                try {
+                  localStorage.removeItem('juwei_wms_dismissed_version');
+                } catch (e) {}
+                if (updateAvailableRef.current) {
+                  updateAvailableRef.current = false;
+                  setUpdateAvailable(false);
+                  setNewVersionString('');
                 }
               }
               break;
@@ -967,7 +1006,14 @@ export default function App() {
         }
       } catch (e) {}
     };
+
     fetchBuildInfo();
+    const buildInfoTimer = setInterval(fetchBuildInfo, BUILD_INFO_INTERVAL_MS);
+
+    return () => {
+      isMounted = false;
+      clearInterval(buildInfoTimer);
+    };
   }, []);
 
   // Direct employee ID and PIN login form states with Remember Login
@@ -2793,6 +2839,11 @@ export default function App() {
     };
 
     const checkBuildVersion = async () => {
+      const now = Date.now();
+      if (now - lastBuildInfoCheckRef.current < 60 * 60 * 1000) {
+        return;
+      }
+      lastBuildInfoCheckRef.current = now;
       try {
         const centralUrl = getCentralServerUrl();
         const isFileOrigin = typeof window !== 'undefined' && window.location?.protocol === 'file:';
@@ -2800,13 +2851,13 @@ export default function App() {
 
         const endpoints = (isElectronEnv || isFileOrigin)
           ? [
-              ...(centralUrl ? [`${centralUrl}/api/build-info`, `${centralUrl}/build-info.json`] : []),
+              ...(centralUrl ? [`${centralUrl}/build-info.json`, `${centralUrl}/api/build-info`] : []),
               './build-info.json'
             ]
           : [
-              '/api/build-info',
               '/build-info.json',
-              ...(centralUrl ? [`${centralUrl}/api/build-info`, `${centralUrl}/build-info.json`] : [])
+              '/api/build-info',
+              ...(centralUrl ? [`${centralUrl}/build-info.json`, `${centralUrl}/api/build-info`] : [])
             ];
         const uniqueEndpoints = Array.from(new Set(endpoints.filter(Boolean)));
 
