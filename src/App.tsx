@@ -5801,7 +5801,14 @@ export default function App() {
         )}
 
         {/* View screen renderer with silky smooth frosted glass transitions */}
-        <div className="p-4 sm:p-6 lg:p-7 overflow-y-auto flex-1 w-full z-10 relative" id="main-content-viewport">
+        <div
+          className={
+            view === 'dashboard'
+              ? 'p-3 overflow-y-auto lg:overflow-hidden flex-1 min-h-0 w-full z-10 relative'
+              : 'p-4 sm:p-6 lg:p-7 overflow-y-auto flex-1 w-full z-10 relative'
+          }
+          id="main-content-viewport"
+        >
           <AnimatePresence mode="wait">
             <motion.div 
               key={view} 
@@ -5809,7 +5816,7 @@ export default function App() {
               animate={{ opacity: 1, y: 0, scale: 1, filter: 'blur(0px)' }}
               exit={{ opacity: 0, y: -8, scale: 0.992, filter: 'blur(8px)' }}
               transition={{ duration: 0.32, ease: [0.16, 1, 0.3, 1] }}
-              className="w-full"
+              className={view === 'dashboard' ? 'w-full lg:h-full lg:min-h-0' : 'w-full'}
             >
               {view === 'dashboard' && (
                 <DashboardOverview 
