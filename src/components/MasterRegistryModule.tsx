@@ -28,6 +28,7 @@ import { ConfirmActionConfig } from './ConfirmModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAuthoritativeId } from '../lib/idGenerator';
 import { DEFAULT_RECEIVING_CATEGORIES } from './ReceivingModule';
+import { showPrintToast } from '../utils/printDocument';
 
 export const STARTER_BARCODE_PRESETS: MasterRegistryItem[] = [
   {
@@ -248,15 +249,15 @@ export default function MasterRegistryModule({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formName.trim()) {
-      alert('Please provide a name for this registration entry.');
+      showPrintToast('Please provide a name for this registration entry.', 'warning');
       return;
     }
     if (formType === 'BARCODE_PRESET' && !formCode.trim()) {
-      alert('Please provide an Item Code / Barcode for this preset.');
+      showPrintToast('Please provide an Item Code / Barcode for this preset.', 'warning');
       return;
     }
     if (formType === 'BARCODE_PRESET' && !formCategory.trim()) {
-      alert('Please select a Category from the unified registry.');
+      showPrintToast('Please select a Category from the unified registry.', 'warning');
       return;
     }
 

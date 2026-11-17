@@ -47,10 +47,7 @@ export default function PrintablePickingListModal({
   // Determine primary mode (Delivery vs Issuance)
   const isDeliveryMode = !!delivery || deliveriesList.length > 0;
   const isIssuanceMode = !!issuance || (issuancesList.length > 0 && !isDeliveryMode);
-
-  if (!delivery && !issuance && deliveriesList.length === 0 && issuancesList.length === 0) {
-    return null;
-  }
+  const hasAnyRecord = Boolean(delivery || issuance || deliveriesList.length > 0 || issuancesList.length > 0);
 
   const [viewMode, setViewMode] = useState<DocViewMode>(
     (!delivery && !issuance) ? 'SUMMARY_LOG' : initialView
@@ -193,6 +190,10 @@ export default function PrintablePickingListModal({
     approvedBy: 'Warehouse Operations Manager',
     approvedDate: todayIso,
   });
+
+  if (!hasAnyRecord) {
+    return null;
+  }
 
   const documentContent = (
   <div className="max-w-4xl mx-auto space-y-6 text-slate-900 font-sans">

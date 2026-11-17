@@ -39,6 +39,7 @@ import { resolveFifoColor, getFifoColorForDate, normalizeFifoColor } from '../da
 import BarcodeScannerModal from './BarcodeScannerModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAuthoritativeId } from '../lib/idGenerator';
+import { showPrintToast } from '../utils/printDocument';
 
 // Default Receiving and Return Categories
 export const DEFAULT_RECEIVING_CATEGORIES: string[] = [
@@ -608,17 +609,17 @@ export default function ReceivingModule({
     e.preventDefault();
 
     if (!supplierOrDept) {
-      alert('Please select a Category first.');
+      showPrintToast('Please select a Category first.', 'warning');
       return;
     }
 
     if (quantity <= 0) {
-      alert('Please enter a valid Quantity greater than 0.');
+      showPrintToast('Please enter a valid Quantity greater than 0.', 'warning');
       return;
     }
 
     if (!partCode.trim() || !location.trim()) {
-      alert('Please fill in all required fields.');
+      showPrintToast('Please fill in all required fields.', 'warning');
       return;
     }
 
@@ -714,11 +715,11 @@ export default function ReceivingModule({
   const handleSubmitReturn = (e: React.FormEvent) => {
     e.preventDefault();
     if (!retCategory) {
-      alert('Please select a Category first.');
+      showPrintToast('Please select a Category first.', 'warning');
       return;
     }
     if (!retDesc || !retPartCode || retQty <= 0 || !retLot || !retDept || !retSlip) {
-      alert('Please fill in all required fields.');
+      showPrintToast('Please fill in all required fields.', 'warning');
       return;
     }
 

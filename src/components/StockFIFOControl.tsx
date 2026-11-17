@@ -39,6 +39,7 @@ import { MaterialStockItem, MaterialType, getCustomerForPart, UOM_OPTIONS, Recei
 import { FIFO_COLORS_BY_MONTH, DEFAULT_FIFO_COLORS_BY_MONTH, FIFO_COLOR_PRESETS, resolveFifoColor, getFifoColorForDate, normalizeFifoColor } from '../data';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { generateAuthoritativeId } from '../lib/idGenerator';
+import { showPrintToast } from '../utils/printDocument';
 
 interface StockFIFOControlProps {
   stocks: MaterialStockItem[];
@@ -137,7 +138,7 @@ export default function StockFIFOControl({
   const handleAddStockSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newPartCode || !newDesc || newQty <= 0 || !newLot || !newLocation) {
-      alert('Please fill out all required fields.');
+      showPrintToast('Please fill out all required fields.', 'warning');
       return;
     }
 
@@ -284,7 +285,7 @@ export default function StockFIFOControl({
   // Generate printable CSV summary of current stock levels
   const handleDownloadCSV = () => {
     if (sortedStocks.length === 0) {
-      alert('No stock items available in current view to export.');
+      showPrintToast('No stock items available in current view to export.', 'warning');
       return;
     }
 

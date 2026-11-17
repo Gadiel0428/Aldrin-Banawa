@@ -44,7 +44,7 @@ export function filterInventoryData(
   stocks: MaterialStockItem[],
   options: InventoryReportOptions
 ): FilteredInventoryData {
-  const todayStr = '2026-07-22';
+  const todayStr = new Date().toISOString().split('T')[0];
   const todayTime = new Date(todayStr).getTime();
 
   // Part code total approved quantities and max reorder thresholds

@@ -10,6 +10,7 @@ interface State {
   error: Error | null;
   errorInfo: ErrorInfo | null;
   copied: boolean;
+  confirmingReset: boolean;
 }
 
 export class ErrorBoundary extends Component<Props, State> {
@@ -20,11 +21,12 @@ export class ErrorBoundary extends Component<Props, State> {
       error: null,
       errorInfo: null,
       copied: false,
+      confirmingReset: false,
     };
   }
 
   public static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error, errorInfo: null, copied: false };
+    return { hasError: true, error, errorInfo: null, copied: false, confirmingReset: false };
   }
 
   public override componentDidCatch(error: Error, errorInfo: ErrorInfo) {
@@ -37,14 +39,16 @@ export class ErrorBoundary extends Component<Props, State> {
   };
 
   private handleResetData = () => {
-    if (window.confirm('Reset local cache data and restore default JUWEI WMS database?')) {
-      try {
-        localStorage.clear();
-      } catch (e) {
-        console.error(e);
-      }
-      window.location.reload();
+    if (!this.state.confirmingReset) {
+      this.setState({ confirmingReset: true });
+      return;
     }
+    try {
+      localStorage.clear();
+    } catch (e) {
+      console.error(e);
+    }
+    window.location.reload();
   };
 
   private handleCopyError = () => {
@@ -96,9 +100,10 @@ export class ErrorBoundary extends Component<Props, State> {
               <button
                 type="button"
                 onClick={this.handleResetData}
-                className="w-full bg-slate-800 hover:bg-slate-700 text-rose-300 border border-rose-950/60 font-bold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition cursor-pointer font-mono uppercase"
+                className={`w-full ${this.state.confirmingReset ? 'bg-rose-700 hover:bg-rose-600 text-white border-rose-500' : 'bg-slate-800 hover:bg-slate-700 text-rose-300 border-rose-950/60'} border font-bold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition cursor-pointer font-mono uppercase`}
               >
-                <Trash2 className="h-4 w-4 text-rose-400" /> 🧹 RESET LOCAL DATA & RESTART
+                <Trash2 className="h-4 w-4" />
+                {this.state.confirmingReset ? 'CLICK AGAIN TO CONFIRM LOCAL RESET' : '🧹 RESET LOCAL DATA & RESTART'}
               </button>
 
               <button

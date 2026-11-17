@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { getPublicAppUrl } from '../config/serverConfig';
+import { showPrintToast } from '../utils/printDocument';
 
 interface MobileAppDownloadModalProps {
   isOpen: boolean;
@@ -79,7 +80,10 @@ export default function MobileAppDownloadModal({
   const handleInstallClick = async () => {
     if (!deferredPrompt) {
       // If browser doesn't expose beforeinstallprompt, guide the user
-      alert("To install on Android:\n1. Open this page in Chrome / Samsung Internet\n2. Tap the (⋮) menu button\n3. Tap 'Install app' or 'Add to Home screen'");
+      showPrintToast(
+        "To install on Android: 1) Open this page in Chrome / Samsung Internet, 2) Tap the (⋮) menu button, 3) Tap 'Install app' or 'Add to Home screen'.",
+        'info'
+      );
       return;
     }
 

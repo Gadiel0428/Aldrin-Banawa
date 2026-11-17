@@ -12,16 +12,7 @@
 
 // Authoritative Production Central Server URL (Warehouse Local Server Host)
 export const DEFAULT_PRODUCTION_SERVER_HOST = '192.168.20.214:3000';
-export const DEFAULT_PRODUCTION_SERVER_URL = `http://${DEFAULT_PRODUCTION_SERVER_HOST}`;
-
-/**
- * Ensures any URL or host that contains legacy Google Cloud Run, dev domains, or legacy Render
- * is automatically replaced with the authoritative local production URL.
- */
-export function sanitizePublicAppUrl(urlOrHost: string): string {
-  if (!urlOrHost) return getPublicAppUrl();
-  return urlOrHost;
-}
+const DEFAULT_PRODUCTION_SERVER_URL = `http://${DEFAULT_PRODUCTION_SERVER_HOST}`;
 
 /**
  * Returns the clean, authoritative application URL.
@@ -35,23 +26,6 @@ export function getPublicAppUrl(): string {
     }
   }
   return DEFAULT_PRODUCTION_SERVER_URL;
-}
-
-/**
- * Returns whether a given host or address is a forbidden local loopback address.
- * Allows warehouse LAN IPs (e.g. 192.168.20.214:3000).
- */
-export function isLocalhostAddress(addr: string): boolean {
-  if (!addr) return false;
-  const clean = addr.toLowerCase().trim().replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').split('/')[0].split(':')[0];
-  return (
-    clean === 'localhost' ||
-    clean === '127.0.0.1' ||
-    clean === '0.0.0.0' ||
-    clean === '::1' ||
-    clean === '[::1]' ||
-    clean.startsWith('127.')
-  );
 }
 
 /**

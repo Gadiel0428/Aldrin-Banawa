@@ -30,6 +30,7 @@ import PrintablePickingListModal, { DocViewMode } from './PrintablePickingListMo
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAuthoritativeId } from '../lib/idGenerator';
+import { showPrintToast } from '../utils/printDocument';
 
 interface DeliveryModuleProps {
   deliveries: DeliveryRecord[];
@@ -103,7 +104,7 @@ export default function DeliveryModule({
   const handlePickSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!pickingListNumber || !poNumber || !modelName || !partCode || quantity <= 0) {
-      alert('Please fill out all fields correctly.');
+      showPrintToast('Please fill out all fields correctly.', 'warning');
       return;
     }
 
@@ -137,7 +138,7 @@ export default function DeliveryModule({
   const handleForkliftCheckSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!operator) {
-      alert('Operator name is required.');
+      showPrintToast('Operator name is required.', 'warning');
       return;
     }
 
@@ -163,7 +164,7 @@ export default function DeliveryModule({
 
   const handleGatePassReleaseSubmit = (id: string) => {
     if (!drNumber || !salesInvoice || !wayBill) {
-      alert('Please key in all release references (DR #, Sales Invoice #, and Waybill #) as required by standard gate protocols.');
+      showPrintToast('Please key in all release references (DR #, Sales Invoice #, and Waybill #) as required by standard gate protocols.', 'warning');
       return;
     }
 
@@ -266,7 +267,7 @@ export default function DeliveryModule({
                       setPrintInitialView('OFFICIAL_DOC');
                       setSelectedPickingDocDelivery(target);
                     } else {
-                      alert('No delivery records available to print.');
+                      showPrintToast('No delivery records available to print.', 'warning');
                     }
                   }}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 px-3.5 rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer whitespace-nowrap shrink-0"
@@ -283,7 +284,7 @@ export default function DeliveryModule({
                       setPrintInitialView('SUMMARY_LOG');
                       setSelectedPickingDocDelivery(filteredDeliveries[0] || deliveries[0]);
                     } else {
-                      alert('No delivery records available to print log summary.');
+                      showPrintToast('No delivery records available to print log summary.', 'warning');
                     }
                   }}
                   className="bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-2 px-3.5 rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer whitespace-nowrap shrink-0"
@@ -555,7 +556,7 @@ export default function DeliveryModule({
                                 } else if (val === 'LOAD') {
                                   if (!effectiveCanEdit) return;
                                   if (!isForkliftPrechecked) {
-                                    alert('Cannot load pallets! Standard operating procedure requires completing the Daily Forklift Checklist first.');
+                                    showPrintToast('Cannot load pallets! Standard operating procedure requires completing the Daily Forklift Checklist first.', 'error');
                                     e.target.value = '';
                                     return;
                                   }

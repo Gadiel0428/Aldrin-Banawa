@@ -237,14 +237,14 @@ export default function IssuanceModule({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!requisitionNumber || !selectedPartCode || !selectedLotNumber || quantityIssued <= 0 || !receivedBy) {
-      alert('Please complete all required fields.');
+      showPrintToast('Please complete all required fields.', 'warning');
       return;
     }
 
     // Attempt to deduct the inventory
     const success = onDeductStock(selectedPartCode, selectedLotNumber, quantityIssued);
     if (!success) {
-      alert('Error: Not enough stock quantity available in the selected lot to fulfill this issuance.');
+      showPrintToast('Error: Not enough stock quantity available in the selected lot to fulfill this issuance.', 'error');
       return;
     }
 

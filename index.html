@@ -23,8 +23,8 @@
           var svgIcon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%231e1b4b"/><polygon points="32,10 52,21 32,32 12,21" fill="%23818cf8"/><polygon points="12,21 32,32 32,53 12,42" fill="%234338ca"/><polygon points="32,32 52,21 52,42 32,53" fill="%23312e81"/><circle cx="32" cy="21" r="5" fill="%2310b981"/></svg>';
           var dataUrl = 'data:image/svg+xml;utf8,' + svgIcon;
           
-          // Remove any default / external favicons
-          var links = document.querySelectorAll("link[rel*='icon']");
+          // Remove any default / external favicons (preserve apple-touch-icon)
+          var links = document.querySelectorAll("link[rel='icon'], link[rel='shortcut icon']");
           links.forEach(function(el) { el.parentNode.removeChild(el); });
           
           var link = document.createElement('link');
@@ -60,7 +60,7 @@
           if ('caches' in window) {
             caches.keys().then(function(keys) {
               keys.forEach(function(k) {
-                if (k.startsWith('juwei-wms-') && k !== 'juwei-wms-v5') {
+                if (k.startsWith('juwei-wms-') && k !== 'juwei-wms-v6') {
                   caches.delete(k);
                 }
               });

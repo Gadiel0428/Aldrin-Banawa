@@ -25,6 +25,7 @@ import {
 import { EnvironmentalLog, StorageZone, MasterRegistryItem } from '../types';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { generateAuthoritativeId } from '../lib/idGenerator';
+import { showPrintToast } from '../utils/printDocument';
 
 interface EnvironmentalModuleProps {
   envLogs: EnvironmentalLog[];
@@ -132,7 +133,7 @@ export default function EnvironmentalModule({
   const handleLocationFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!locCode.trim() || !locName.trim()) {
-      alert('Please enter both location code and location name.');
+      showPrintToast('Please enter both location code and location name.', 'warning');
       return;
     }
 
@@ -170,11 +171,11 @@ export default function EnvironmentalModule({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (occupiedSlots < 0 || totalSlots <= 0 || !recordedBy) {
-      alert('Please fill out all fields correctly.');
+      showPrintToast('Please fill out all fields correctly.', 'warning');
       return;
     }
     if (occupiedSlots > totalSlots) {
-      alert('Occupied slots cannot exceed the total available slots in this zone.');
+      showPrintToast('Occupied slots cannot exceed the total available slots in this zone.', 'warning');
       return;
     }
 

@@ -3,11 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { InventoryItem, Warehouse, InventorySummary } from '../types/inventory';
+import { InventoryItem, Warehouse } from '../types/inventory';
 import { Product } from '../types/product';
 import { getApiBaseUrl, getAuthHeaders } from '../config/serverConfig';
 
-export const DEFAULT_WAREHOUSES: Warehouse[] = [
+const DEFAULT_WAREHOUSES: Warehouse[] = [
   { id: 'wh-main', name: 'Main Warehouse (Bays 1-4)', location: 'Building A', code: 'WH-MAIN', is_active: true },
   { id: 'wh-secondary', name: 'Raw Material Bay (Bays 5-8)', location: 'Building B', code: 'WH-RAW', is_active: true },
   { id: 'wh-quarantine', name: 'QC / Quarantine Holding Bay', location: 'Section Q', code: 'WH-QC', is_active: true },
@@ -67,34 +67,4 @@ export async function fetchInventory(warehouseId?: string): Promise<InventoryIte
   }
 
   return [];
-}
-
-export async function fetchInventorySummary(): Promise<InventorySummary> {
-  const items = await fetchInventory();
-  let totalQuantity = 0;
-  let lowStockCount = 0;
-  let outOfStockCount = 0;
-  let totalValuation = 0;
-
-  for (const item of items) {
-    const qty = item.quantity || 0;
-    const min = item.product?.min_stock || 10;
-    const cost = item.product?.cost || 0;
-
-    totalQuantity += qty;
-    totalValuation += qty * cost;
-    if (qty <= 0) {
-      outOfStockCount++;
-    } else if (qty <= min) {
-      lowStockCount++;
-    }
-  }
-
-  return {
-    totalSkus: items.length,
-    totalQuantity,
-    lowStockCount,
-    outOfStockCount,
-    totalValuation,
-  };
 }

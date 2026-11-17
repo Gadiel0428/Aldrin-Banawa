@@ -17,6 +17,7 @@ import {
 import { RecyclingRecord } from '../types';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { generateAuthoritativeId } from '../lib/idGenerator';
+import { showPrintToast } from '../utils/printDocument';
 
 interface RecyclingModuleProps {
   recycling: RecyclingRecord[];
@@ -49,7 +50,7 @@ export default function RecyclingModule({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!logSheetNumber || quantity <= 0) {
-      alert('Please fill out all fields correctly.');
+      showPrintToast('Please fill out all fields correctly.', 'warning');
       return;
     }
 

@@ -108,6 +108,7 @@ import {
   isSecureHost as isSecureServerHost
 } from './config/serverConfig';
 import StartupDiagnosticsModal from './components/StartupDiagnosticsModal';
+import { showPrintToast } from './utils/printDocument';
 
 // Isolated real-time clock component to prevent full application re-render cycles every second
 function LiveClock() {
@@ -129,13 +130,11 @@ function LiveClock() {
 
 const DEFAULT_ONLINE_CLOUD_HOST = DEFAULT_PRODUCTION_SERVER_HOST;
 
-export { getApiBaseUrl, getCentralServerUrl, getCentralServerHost, sanitizeServerHost, isSecureServerHost };
-
 function getDefaultServerAddress(): string {
   return getCentralServerHost();
 }
 
-export function wsOpen(ws: WebSocket | null): boolean {
+function wsOpen(ws: WebSocket | null): boolean {
   return ws !== null && ws.readyState === WebSocket.OPEN;
 }
 
@@ -1379,7 +1378,7 @@ export default function App() {
       currentRole === 'SUPER ADMINISTRATOR';
 
     if (!isSuperAdminOperating) {
-      alert("UNAUTHORIZED: Only Super Administrator (JPMP-002) is authorized to wipe operator accounts.");
+      showPrintToast("UNAUTHORIZED: Only Super Administrator (JPMP-002) is authorized to wipe operator accounts.", 'error');
       return;
     }
 
@@ -1846,7 +1845,7 @@ export default function App() {
       currentRole === 'SUPER ADMINISTRATOR';
 
     if (!isSuperAdminOperating) {
-      alert("UNAUTHORIZED: Only Super Administrator (JPMP-002) is authorized to execute a complete global database reset.");
+      showPrintToast("UNAUTHORIZED: Only Super Administrator (JPMP-002) is authorized to execute a complete global database reset.", 'error');
       return;
     }
 
@@ -3747,7 +3746,7 @@ export default function App() {
       currentRole === 'SUPER ADMINISTRATOR';
 
     if (!isSuperAdminOperating) {
-      alert("AUTHORIZATION RESTRICTION: Only accounts registered by Super Administrator (ALDRIN BANAWA - JPMP-002) in this computer will be authorized for use by other users and computers.");
+      showPrintToast("AUTHORIZATION RESTRICTION: Only accounts registered by Super Administrator (ALDRIN BANAWA - JPMP-002) in this computer will be authorized for use by other users and computers.", 'error');
       return null;
     }
 
@@ -3760,7 +3759,7 @@ export default function App() {
     }
     const cleanRole = (role || '').toUpperCase();
     if (!cleanUsername || !cleanRole || !cleanEmployeeId) {
-      alert("ALL FIELDS ARE REQUIRED.");
+      showPrintToast("ALL FIELDS ARE REQUIRED.", 'warning');
       return null;
     }
     const exists = registeredUsers.some(
@@ -3768,7 +3767,7 @@ export default function App() {
            (u.username || '').toUpperCase() === cleanUsername
     );
     if (exists) {
-      alert("AN OPERATOR WITH THIS NAME OR REGISTER ID ALREADY EXISTS.");
+      showPrintToast("AN OPERATOR WITH THIS NAME OR REGISTER ID ALREADY EXISTS.", 'warning');
       return null;
     }
 
@@ -3869,7 +3868,7 @@ export default function App() {
     ));
 
     if (isAldrin) {
-      alert('PROTECTED ROOT ACCOUNT: ALDRIN BANAWA (JPMP-002) CANNOT BE DELETED.');
+      showPrintToast('PROTECTED ROOT ACCOUNT: ALDRIN BANAWA (JPMP-002) CANNOT BE DELETED.', 'error');
       return;
     }
 
@@ -3955,7 +3954,7 @@ export default function App() {
 
     // Check if new ID is already taken by another account
     if (cleanNewId !== cleanOldId && registeredUsers.some(u => (u.employeeId || '').toUpperCase() === cleanNewId)) {
-      alert(`An operator account with ID "${cleanNewId}" already exists.`);
+      showPrintToast(`An operator account with ID "${cleanNewId}" already exists.`, 'warning');
       return;
     }
 
@@ -4362,7 +4361,7 @@ export default function App() {
   // State mutators with automatic procedural linking
   const handleAddReceiving = (record: ReceivingRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
+      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
       return;
     }
     const nextReceiving = [record, ...receiving];
@@ -4435,7 +4434,7 @@ export default function App() {
 
   const handleUpdateIqc = (id: string, iqcStatus: ReceivingRecord['iqcStatus']) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
+      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
       return;
     }
     const updatedReceivingRecord = receiving.find(r => r.id === id);
@@ -4470,7 +4469,7 @@ export default function App() {
 
   const handleAddReturn = (record: ReturnRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
+      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
       return;
     }
     const nextReturns = [record, ...returns];
@@ -4509,7 +4508,7 @@ export default function App() {
 
   const handleUpdateReturnStatus = (id: string, status: ReturnRecord['status']) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
+      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
       return;
     }
     const nextReturns: ReturnRecord[] = returns.map(r => r.id === id ? { ...r, status, iqcEvaluation: 'APPROVED_IQC' as const } : r);
@@ -4534,7 +4533,7 @@ export default function App() {
 
   const handleAddRecycling = (record: RecyclingRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
+      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
       return;
     }
     const nextRecycling = [record, ...recycling];
@@ -4547,7 +4546,7 @@ export default function App() {
 
   const handleDeleteRecycling = (id: string) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
+      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
       return;
     }
     deleteRecordLocallyAndRemotely('recycling', id);
@@ -4558,7 +4557,7 @@ export default function App() {
 
   const handleAddIssuance = (record: IssuanceRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
+      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
       return;
     }
     const nextIssuances = [record, ...issuances];
@@ -4571,7 +4570,7 @@ export default function App() {
 
   const handleDeductStock = (partCode: string, lotNumber: string, quantity: number): boolean => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
+      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
       return false;
     }
     const stockIdx = stocks.findIndex(s => s.partCode === partCode && s.lotNumber === lotNumber && s.status === 'APPROVED');
@@ -4606,7 +4605,7 @@ export default function App() {
 
   const handleAddDelivery = (record: DeliveryRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
+      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
       return;
     }
     const nextDeliveries = [record, ...deliveries];
@@ -4619,7 +4618,7 @@ export default function App() {
 
   const handleUpdateDeliveryStatus = (id: string, status: DeliveryRecord['status'], extDoc?: { drNumber?: string, salesInvoice?: string, wayBill?: string }) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
+      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
       return;
     }
     let updatedRecord: DeliveryRecord | null = null;
@@ -4663,7 +4662,7 @@ export default function App() {
 
   const handleAddEnvLog = (log: EnvironmentalLog) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
+      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
       return;
     }
     const nextEnvLogs = [...envLogs, log];
@@ -4681,7 +4680,7 @@ export default function App() {
     const isSuperOrSystem = normRole.includes('SUPER') || normRole.includes('SYSTEM') || normUser.includes('SUPER') || normUser.includes('SYSTEM') || currentPermission === 'FULL_ACCESS';
     
     if (!isSuperOrSystem) {
-      alert("PERMISSION DENIED: ONLY SUPER ADMIN AND SYSTEM ADMIN CAN CLEAR HISTORICAL SPACE AUDIT LOGS.");
+      showPrintToast("PERMISSION DENIED: ONLY SUPER ADMIN AND SYSTEM ADMIN CAN CLEAR HISTORICAL SPACE AUDIT LOGS.", 'error');
       return;
     }
     setEnvLogs([]);
@@ -4695,7 +4694,7 @@ export default function App() {
     const isSuperOrSystem = normRole.includes('SUPER') || normRole.includes('SYSTEM') || normUser.includes('SUPER') || normUser.includes('SYSTEM') || currentPermission === 'FULL_ACCESS';
 
     if (!isSuperOrSystem) {
-      alert("PERMISSION DENIED: ONLY SUPER ADMIN AND SYSTEM ADMIN CAN DELETE SPACE AUDIT LOG RECORDS.");
+      showPrintToast("PERMISSION DENIED: ONLY SUPER ADMIN AND SYSTEM ADMIN CAN DELETE SPACE AUDIT LOG RECORDS.", 'error');
       return;
     }
     deleteRecordLocallyAndRemotely('envLogs', id);
@@ -4707,7 +4706,7 @@ export default function App() {
 
   const handleAddForkliftCheck = (check: ForkliftChecklist) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
+      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
       return;
     }
     const nextForkliftChecks = [check, ...forkliftChecks];
@@ -4721,7 +4720,7 @@ export default function App() {
   // OPERATOR EDIT / DELETE HANDLERS
   const handleAddStock = (item: MaterialStockItem) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
+      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
       return;
     }
     const next = [item, ...stocks];
@@ -4733,7 +4732,7 @@ export default function App() {
 
   const handleUpdateStockQty = (id: string, qty: number) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
+      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
       return;
     }
     let updatedItem: MaterialStockItem | null = null;
@@ -4754,7 +4753,7 @@ export default function App() {
 
   const handleUpdateStockStatus = (id: string, status: MaterialStockItem['status']) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.");
+      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
       return;
     }
     let updatedItem: MaterialStockItem | null = null;
@@ -4775,7 +4774,7 @@ export default function App() {
 
   const handleEditStock = (item: MaterialStockItem) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: OPERATORS IN VIEW ONLY MODE CANNOT EDIT STOCK ITEMS.");
+      showPrintToast("PERMISSION DENIED: OPERATORS IN VIEW ONLY MODE CANNOT EDIT STOCK ITEMS.", 'error');
       return;
     }
     const next = stocks.map(s => s.id === item.id ? item : s);
@@ -4788,7 +4787,7 @@ export default function App() {
 
   const handleDeleteStock = (id: string) => {
     if (currentPermission !== 'FULL_ACCESS') {
-      alert("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE STOCK TRANSACTIONS.");
+      showPrintToast("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE STOCK TRANSACTIONS.", 'error');
       return;
     }
     deleteRecordLocallyAndRemotely('stocks', id);
@@ -4800,7 +4799,7 @@ export default function App() {
 
   const handleEditReceiving = (record: ReceivingRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: OPERATORS IN VIEW ONLY MODE CANNOT EDIT RECEIVING RECORDS.");
+      showPrintToast("PERMISSION DENIED: OPERATORS IN VIEW ONLY MODE CANNOT EDIT RECEIVING RECORDS.", 'error');
       return;
     }
     const next = receiving.map(r => r.id === record.id ? record : r);
@@ -4813,7 +4812,7 @@ export default function App() {
 
   const handleDeleteReceiving = (id: string) => {
     if (currentPermission !== 'FULL_ACCESS') {
-      alert("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE RECEIVING TRANSACTIONS.");
+      showPrintToast("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE RECEIVING TRANSACTIONS.", 'error');
       return;
     }
     deleteRecordLocallyAndRemotely('receiving', id);
@@ -4825,7 +4824,7 @@ export default function App() {
 
   const handleEditReturn = (record: ReturnRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: OPERATORS IN VIEW ONLY MODE CANNOT EDIT RETURN RECORDS.");
+      showPrintToast("PERMISSION DENIED: OPERATORS IN VIEW ONLY MODE CANNOT EDIT RETURN RECORDS.", 'error');
       return;
     }
     const next = returns.map(r => r.id === record.id ? record : r);
@@ -4838,7 +4837,7 @@ export default function App() {
 
   const handleDeleteReturn = (id: string) => {
     if (currentPermission !== 'FULL_ACCESS') {
-      alert("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE RETURN TRANSACTIONS.");
+      showPrintToast("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE RETURN TRANSACTIONS.", 'error');
       return;
     }
     deleteRecordLocallyAndRemotely('returns', id);
@@ -4850,7 +4849,7 @@ export default function App() {
 
   const handleEditIssuance = (record: IssuanceRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: OPERATORS IN VIEW ONLY MODE CANNOT EDIT ISSUANCE RECORDS.");
+      showPrintToast("PERMISSION DENIED: OPERATORS IN VIEW ONLY MODE CANNOT EDIT ISSUANCE RECORDS.", 'error');
       return;
     }
     const next = issuances.map(i => i.id === record.id ? record : i);
@@ -4863,7 +4862,7 @@ export default function App() {
 
   const handleDeleteIssuance = (id: string) => {
     if (currentPermission !== 'FULL_ACCESS') {
-      alert("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE ISSUANCE TRANSACTIONS.");
+      showPrintToast("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE ISSUANCE TRANSACTIONS.", 'error');
       return;
     }
     deleteRecordLocallyAndRemotely('issuances', id);
@@ -4875,7 +4874,7 @@ export default function App() {
 
   const handleEditDelivery = (record: DeliveryRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
-      alert("PERMISSION DENIED: OPERATORS IN VIEW ONLY MODE CANNOT EDIT DELIVERY RECORDS.");
+      showPrintToast("PERMISSION DENIED: OPERATORS IN VIEW ONLY MODE CANNOT EDIT DELIVERY RECORDS.", 'error');
       return;
     }
     const next = deliveries.map(d => d.id === record.id ? record : d);
@@ -4888,7 +4887,7 @@ export default function App() {
 
   const handleDeleteDelivery = (id: string) => {
     if (currentPermission !== 'FULL_ACCESS') {
-      alert("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE DELIVERY TRANSACTIONS.");
+      showPrintToast("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE DELIVERY TRANSACTIONS.", 'error');
       return;
     }
     deleteRecordLocallyAndRemotely('deliveries', id);
@@ -4952,7 +4951,7 @@ export default function App() {
       URL.revokeObjectURL(blobUrl);
     } catch (e) {
       console.error('Failed to export current data JSON:', e);
-      alert('Failed to generate export file. Please check console for details.');
+      showPrintToast('Failed to generate export file. Please check console for details.', 'error');
     }
   };
 
@@ -4972,9 +4971,9 @@ export default function App() {
           if (parsed.deliveries) { setDeliveries(parsed.deliveries); syncCollection('deliveries', parsed.deliveries); }
           if (parsed.envLogs) { setEnvLogs(parsed.envLogs); syncCollection('envLogs', parsed.envLogs); }
           if (parsed.forkliftChecks) { setForkliftChecks(parsed.forkliftChecks); syncCollection('forkliftChecks', parsed.forkliftChecks); }
-          alert('Backup restored and synchronized successfully across all JUWEI real-time clients!');
+          showPrintToast('Backup restored and synchronized successfully across all JUWEI real-time clients!', 'info');
         } catch (err) {
-          alert('Invalid backup file structure.');
+          showPrintToast('Invalid backup file structure.', 'error');
         }
       };
     }
