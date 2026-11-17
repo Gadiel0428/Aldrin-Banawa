@@ -115,7 +115,36 @@ export function showPrintToast(
   setTimeout(removeToast, 8000);
 }
 
-const UNSUPPORTED_COLOR_FN_REGEX = /\b(oklch|oklab|lab|lch|color-mix|color)\s*\(/i;
+const UNSUPPORTED_COLOR_FN_REGEX = /(?:^|[^a-zA-Z0-9_-])(oklch|oklab|lab|lch|color-mix|color)\s*\(/i;
+
+/**
+ * Expands CSS custom property references (`var(--...)`) across multiple passes so nested
+ * theme variables (e.g. Tailwind v4 `--color-*` or `--tw-*`) can be color-resolved cleanly.
+ */
+function expandCssVariables(
+  input: string,
+  rootStyles?: CSSStyleDeclaration | null
+): string {
+  if (!input || !rootStyles || !input.includes('var(')) {
+    return input;
+  }
+
+  let current = input;
+  for (let pass = 0; pass < 4; pass++) {
+    if (!current.includes('var(')) break;
+    const next = current.replace(
+      /var\(\s*(--[a-zA-Z0-9_-]+)(?:\s*,\s*([^()]+))?\s*\)/g,
+      (_m, varName: string, fallback?: string) => {
+        const val = rootStyles.getPropertyValue(varName)?.trim();
+        if (val) return val;
+        return fallback ? fallback.trim() : 'transparent';
+      }
+    );
+    if (next === current) break;
+    current = next;
+  }
+  return current;
+}
 
 /**
  * Resolves a single CSS color expression (e.g. oklch(...), color-mix(...)) to rgba(...)
@@ -167,20 +196,20 @@ function sanitizeCssColorText(
   cache: Map<string, string | null>,
   rootStyles?: CSSStyleDeclaration | null
 ): string {
-  if (!input || !samplerCtx || !UNSUPPORTED_COLOR_FN_REGEX.test(input)) {
+  if (!input || !samplerCtx) {
+    return input;
+  }
+  const hasVar = input.includes('var(');
+  if (!hasVar && !UNSUPPORTED_COLOR_FN_REGEX.test(input)) {
     return input;
   }
 
-  // Resolve any CSS var(--...) references if present inside raw stylesheet text
-  let working = input;
-  if (rootStyles && working.includes('var(')) {
-    working = working.replace(/var\(\s*(--[a-zA-Z0-9_-]+)(?:\s*,\s*([^)]+))?\s*\)/g, (_m, varName, fallback) => {
-      const val = rootStyles.getPropertyValue(varName)?.trim();
-      return val || (fallback ? fallback.trim() : 'transparent');
-    });
+  const working = hasVar ? expandCssVariables(input, rootStyles) : input;
+  if (!UNSUPPORTED_COLOR_FN_REGEX.test(working)) {
+    return input;
   }
 
-  const fnStartRegex = /\b(oklch|oklab|color-mix|color|lab|lch)\s*\(/gi;
+  const fnStartRegex = /(?:^|[^a-zA-Z0-9_-])(oklch|oklab|color-mix|color|lab|lch)\s*\(/gi;
   let result = '';
   let lastIndex = 0;
 
@@ -192,8 +221,10 @@ function sanitizeCssColorText(
       break;
     }
 
-    const start = match.index;
-    const openParenIdx = start + match[0].length - 1;
+    const fnNameOffset = match[0].toLowerCase().indexOf(match[1].toLowerCase());
+    const start = match.index + (fnNameOffset >= 0 ? fnNameOffset : 0);
+    const openParenIdx = match.index + match[0].length - 1;
+
     let depth = 0;
     let end = openParenIdx;
     for (let i = openParenIdx; i < working.length; i++) {
@@ -216,7 +247,6 @@ function sanitizeCssColorText(
     result += working.slice(lastIndex, start);
     const fullExpr = working.slice(start, end + 1);
 
-    // Avoid converting inside var(...) or unresolvable expressions; use fallback rgba if needed
     const resolved = resolveSingleColorExpr(fullExpr, samplerCtx, cache);
     if (resolved) {
       result += resolved;
@@ -229,7 +259,48 @@ function sanitizeCssColorText(
     lastIndex = end + 1;
   }
 
+  // Final guard against any unbalanced/malformed residual tokens
+  if (UNSUPPORTED_COLOR_FN_REGEX.test(result)) {
+    result = result.replace(/(^|[^a-zA-Z0-9_-])(oklch|oklab|color-mix|color|lab|lch)\s*\([^)]*\)?/gi, '$1rgba(15, 23, 42, 1)');
+  }
+
   return result;
+}
+
+/**
+ * Wraps CSSStyleDeclaration returned by getComputedStyle so any property accessed by
+ * html2canvas (including webkitTextStrokeColor, textDecorationColor, borders, shadows,
+ * gradients, getPropertyValue, etc.) never surfaces oklch/oklab/color-mix/lab/lch/color().
+ */
+function createSanitizedComputedStyleProxy(
+  styleDecl: CSSStyleDeclaration,
+  samplerCtx: CanvasRenderingContext2D | null,
+  cache: Map<string, string | null>,
+  rootStyles?: CSSStyleDeclaration | null
+): CSSStyleDeclaration {
+  if (!samplerCtx) return styleDecl;
+
+  return new Proxy(styleDecl, {
+    get(target, prop) {
+      const raw = (target as any)[prop];
+      if (typeof raw === 'function') {
+        if (prop === 'getPropertyValue') {
+          return (name: string) => {
+            const val = target.getPropertyValue(name);
+            if (typeof val === 'string' && val && UNSUPPORTED_COLOR_FN_REGEX.test(val)) {
+              return sanitizeCssColorText(val, samplerCtx, cache, rootStyles);
+            }
+            return val;
+          };
+        }
+        return raw.bind(target);
+      }
+      if (typeof raw === 'string' && raw && UNSUPPORTED_COLOR_FN_REGEX.test(raw)) {
+        return sanitizeCssColorText(raw, samplerCtx, cache, rootStyles);
+      }
+      return raw;
+    },
+  });
 }
 
 const COLOR_STYLE_PROPS: Array<[string, keyof CSSStyleDeclaration]> = [
@@ -240,8 +311,11 @@ const COLOR_STYLE_PROPS: Array<[string, keyof CSSStyleDeclaration]> = [
   ['border-right-color', 'borderRightColor'],
   ['border-bottom-color', 'borderBottomColor'],
   ['border-left-color', 'borderLeftColor'],
+  ['border-image-source', 'borderImageSource'],
   ['outline-color', 'outlineColor'],
   ['text-decoration-color', 'textDecorationColor'],
+  ['-webkit-text-stroke-color', 'webkitTextStrokeColor'],
+  ['list-style-image', 'listStyleImage'],
   ['caret-color', 'caretColor'],
   ['accent-color', 'accentColor'],
   ['column-rule-color', 'columnRuleColor'],
@@ -265,11 +339,21 @@ function normalizeDocumentColorsForHtml2Canvas(
   const win = targetDoc.defaultView || window;
   const rootStyles = win.getComputedStyle(targetDoc.documentElement);
 
-  // 1. Rewrite inline <style> blocks and convert accessible <link rel="stylesheet"> sheets in clonedDoc
+  // 1. Rewrite inline <style> blocks (using both textContent and CSSOM rules) and accessible <link> sheets
   const styleElements = Array.from(targetDoc.querySelectorAll('style'));
   styleElements.forEach((styleEl) => {
-    const cssText = styleEl.textContent || '';
-    if (UNSUPPORTED_COLOR_FN_REGEX.test(cssText)) {
+    let cssText = styleEl.textContent || '';
+    if (!cssText) {
+      try {
+        const sheet = styleEl.sheet as CSSStyleSheet | null;
+        if (sheet && sheet.cssRules) {
+          cssText = Array.from(sheet.cssRules).map((r) => r.cssText).join('\n');
+        }
+      } catch {
+        // Ignore
+      }
+    }
+    if (cssText && UNSUPPORTED_COLOR_FN_REGEX.test(cssText)) {
       styleEl.textContent = sanitizeCssColorText(cssText, samplerCtx, cache, rootStyles);
     }
   });
@@ -316,11 +400,13 @@ function normalizeDocumentColorsForHtml2Canvas(
     targetDoc.documentElement.style.setProperty('background', '#ffffff', 'important');
     targetDoc.documentElement.style.setProperty('background-color', '#ffffff', 'important');
     targetDoc.documentElement.style.setProperty('color', '#0f172a', 'important');
+    targetDoc.documentElement.style.setProperty('-webkit-text-stroke-color', '#0f172a', 'important');
   }
   if (targetDoc.body) {
     targetDoc.body.style.setProperty('background', '#ffffff', 'important');
     targetDoc.body.style.setProperty('background-color', '#ffffff', 'important');
     targetDoc.body.style.setProperty('color', '#0f172a', 'important');
+    targetDoc.body.style.setProperty('-webkit-text-stroke-color', '#0f172a', 'important');
     targetDoc.body.style.setProperty('box-shadow', 'none', 'important');
   }
 
@@ -612,18 +698,30 @@ export async function renderDocumentPages(el: HTMLElement | null | undefined): P
       })
       .filter((r) => r.bottom > r.top && r.bottom > 0);
 
-    const canvas = await html2canvas(clonedEl, {
-      scale: 3,
-      backgroundColor: '#ffffff',
-      useCORS: true,
-      allowTaint: false,
-      logging: false,
-      width: CLONE_WIDTH_PX,
-      windowWidth: CLONE_WIDTH_PX,
-      onclone: (clonedDoc, clonedNode) => {
-        normalizeDocumentColorsForHtml2Canvas(clonedDoc, clonedNode, samplerCtx, colorCache);
-      },
-    });
+    const origGetComputedStyle = window.getComputedStyle.bind(window);
+    const wrappedGetComputedStyle: typeof window.getComputedStyle = (targetElt: Element, pseudoElt?: string | null) => {
+      const decl = origGetComputedStyle(targetElt, pseudoElt);
+      return createSanitizedComputedStyleProxy(decl, samplerCtx, colorCache, rootComputedStyles);
+    };
+
+    let canvas: HTMLCanvasElement;
+    window.getComputedStyle = wrappedGetComputedStyle;
+    try {
+      canvas = await html2canvas(clonedEl, {
+        scale: 3,
+        backgroundColor: '#ffffff',
+        useCORS: true,
+        allowTaint: false,
+        logging: false,
+        width: CLONE_WIDTH_PX,
+        windowWidth: CLONE_WIDTH_PX,
+        onclone: (clonedDoc, clonedNode) => {
+          normalizeDocumentColorsForHtml2Canvas(clonedDoc, clonedNode, samplerCtx, colorCache);
+        },
+      });
+    } finally {
+      window.getComputedStyle = origGetComputedStyle;
+    }
 
     if (!canvas || canvas.width === 0 || canvas.height === 0) {
       throw new Error('Rendered document canvas is empty.');
