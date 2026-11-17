@@ -4,49 +4,66 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Wifi, WifiOff, RefreshCw, AlertCircle, Database, CheckCircle2, Clock, Laptop, ShieldCheck, Settings2, Globe, Activity } from 'lucide-react';
-import { syncManager } from '../sync/syncManager';
-import { OfflineQueue } from '../sync/offlineQueue';
-import { SyncStatusInfo, OfflineQueueItem } from '../types/sync';
+import { Wifi, WifiOff, RefreshCw, AlertCircle, Database, CheckCircle2, Clock, Laptop, ShieldCheck, Settings2, Globe, Activity, Ban } from 'lucide-react';
+import { syncManager, getMutationQueue } from '../sync/syncManager';
+import { SyncStatusInfo } from '../types/sync';
+import { QueuedMutation } from '../types';
 import { getCentralServerUrl } from '../config/serverConfig';
 
 interface SyncStatusProps {
   onOpenSettings?: () => void;
   onOpenDiagnostics?: () => void;
+  onOpenConflicts?: () => void;
 }
 
-export const SyncStatus: React.FC<SyncStatusProps> = ({ onOpenSettings, onOpenDiagnostics }) => {
+export const SyncStatus: React.FC<SyncStatusProps> = ({
+  onOpenSettings,
+  onOpenDiagnostics,
+  onOpenConflicts,
+}) => {
   const [status, setStatus] = useState<SyncStatusInfo>(syncManager.getStatus());
   const [isOpen, setIsOpen] = useState(false);
-  const [queueItems, setQueueItems] = useState<OfflineQueueItem[]>([]);
+  const [queueItems, setQueueItems] = useState<QueuedMutation[]>(() => getMutationQueue());
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
     const unsub = syncManager.subscribe((newStatus) => {
       setStatus(newStatus);
-      setQueueItems(OfflineQueue.getAll());
+      setQueueItems(getMutationQueue());
     });
-    setQueueItems(OfflineQueue.getAll());
+    setQueueItems(getMutationQueue());
     return unsub;
   }, []);
 
   const handleForceSync = async () => {
+    if (status.isRevoked) return;
     setIsRefreshing(true);
     try {
-      await syncManager.forceSyncNow();
-      setQueueItems(OfflineQueue.getAll());
+      await syncManager.forceSyncNow(true);
+      setQueueItems(getMutationQueue());
     } finally {
       setIsRefreshing(false);
     }
   };
 
+  const pendingCount = queueItems.length;
+  const conflictCount = queueItems.filter((q) => q.status === 'CONFLICT').length;
+
   const getBadgeStyle = () => {
+    if (status.isRevoked || status.state === 'REVOKED') {
+      return {
+        bg: 'bg-rose-600/15 text-rose-700 border-rose-500/40 dark:bg-rose-950/60 dark:text-rose-300',
+        dot: 'bg-rose-600',
+        icon: <Ban className="w-3.5 h-3.5" />,
+        label: 'This computer was removed from the system',
+      };
+    }
     if (status.state === 'SYNCING' || isRefreshing) {
       return {
         bg: 'bg-amber-500/10 text-amber-600 border-amber-500/30 dark:bg-amber-500/20 dark:text-amber-400',
         dot: 'bg-amber-500 animate-spin',
         icon: <RefreshCw className="w-3.5 h-3.5 animate-spin" />,
-        label: 'Synchronizing...',
+        label: pendingCount > 0 ? `${pendingCount} changes not yet saved` : 'Synchronizing...',
       };
     }
     if (!status.isOnline || status.state === 'OFFLINE') {
@@ -54,22 +71,22 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({ onOpenSettings, onOpenDi
         bg: 'bg-orange-500/10 text-orange-600 border-orange-500/30 dark:bg-orange-500/20 dark:text-orange-400',
         dot: 'bg-orange-500',
         icon: <WifiOff className="w-3.5 h-3.5" />,
-        label: status.pendingCount > 0 ? `Offline (${status.pendingCount} pending)` : 'Offline Mode',
+        label: pendingCount > 0 ? `Offline (${pendingCount} changes not yet saved)` : 'Offline Mode',
       };
     }
-    if (status.state === 'ERROR') {
+    if (status.state === 'ERROR' || conflictCount > 0) {
       return {
         bg: 'bg-rose-500/10 text-rose-600 border-rose-500/30 dark:bg-rose-500/20 dark:text-rose-400',
         dot: 'bg-rose-500',
         icon: <AlertCircle className="w-3.5 h-3.5" />,
-        label: 'Sync Conflict',
+        label: `${pendingCount} changes not yet saved (${conflictCount} conflict)`,
       };
     }
     return {
       bg: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/30 dark:bg-emerald-500/20 dark:text-emerald-300',
       dot: 'bg-emerald-500 animate-pulse',
       icon: <Wifi className="w-3.5 h-3.5" />,
-      label: status.pendingCount > 0 ? `Online (${status.pendingCount} pending)` : 'Online • Live Sync',
+      label: pendingCount > 0 ? `${pendingCount} changes not yet saved` : 'Online • Live Sync',
     };
   };
 
@@ -77,7 +94,7 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({ onOpenSettings, onOpenDi
 
   return (
     <div className="relative inline-block text-xs font-medium">
-      {/* Status Pill Button - Icon Only (Connection Status & Central Endpoint) */}
+      {/* Status Button */}
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
@@ -87,9 +104,9 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({ onOpenSettings, onOpenDi
       >
         <span className="relative flex items-center justify-center shrink-0">
           {badge.icon}
-          {status.pendingCount > 0 && (
+          {pendingCount > 0 && (
             <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-white text-[9px] font-bold rounded-full min-w-3.5 h-3.5 flex items-center justify-center px-0.5">
-              {status.pendingCount}
+              {pendingCount}
             </span>
           )}
         </span>
@@ -105,13 +122,20 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({ onOpenSettings, onOpenDi
             </div>
             <button
               onClick={handleForceSync}
-              disabled={isRefreshing}
+              disabled={isRefreshing || status.isRevoked}
               className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:hover:bg-indigo-900 dark:text-indigo-300 transition-colors disabled:opacity-50"
             >
               <RefreshCw className={`w-3 h-3 ${isRefreshing ? 'animate-spin' : ''}`} />
               Sync Now
             </button>
           </div>
+
+          {status.isRevoked && (
+            <div className="mb-3 p-2.5 rounded-lg bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-semibold flex items-center gap-2">
+              <Ban className="w-4 h-4 shrink-0" />
+              <span>This computer was removed from the system</span>
+            </div>
+          )}
 
           <div className="space-y-2.5 text-xs">
             <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 dark:bg-slate-800/60">
@@ -155,17 +179,18 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({ onOpenSettings, onOpenDi
           <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800">
             <div className="flex items-center justify-between mb-2">
               <span className="font-bold text-xs uppercase tracking-wider text-slate-500">
-                Offline Queue ({queueItems.length})
+                {pendingCount > 0 ? `${pendingCount} changes not yet saved` : 'Unsaved Changes (0)'}
               </span>
-              {queueItems.length > 0 && (
+              {conflictCount > 0 && onOpenConflicts && (
                 <button
+                  type="button"
                   onClick={() => {
-                    OfflineQueue.clearCompleted();
-                    setQueueItems(OfflineQueue.getAll());
+                    setIsOpen(false);
+                    onOpenConflicts();
                   }}
-                  className="text-[10px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                  className="text-[10px] font-bold text-rose-600 hover:text-rose-500 dark:text-rose-400 cursor-pointer"
                 >
-                  Clear Completed
+                  Review {conflictCount} Conflict{conflictCount === 1 ? '' : 's'}
                 </button>
               )}
             </div>
@@ -173,41 +198,48 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({ onOpenSettings, onOpenDi
             {queueItems.length === 0 ? (
               <div className="flex items-center gap-2 py-3 px-2 text-xs text-slate-400 dark:text-slate-500 italic">
                 <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                <span>All transactions synchronized across computers.</span>
+                <span>All changes confirmed by central server.</span>
               </div>
             ) : (
               <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
-                {queueItems.map((item) => (
-                  <div
-                    key={item.id}
-                    className="p-2 rounded border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 text-[11px]"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-700 dark:text-slate-300">{item.type}</span>
-                      <span
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                          item.status === 'COMPLETED'
-                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-                            : item.status === 'SYNCING'
-                            ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
-                            : item.status === 'FAILED'
-                            ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
-                            : 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300'
-                        }`}
-                      >
-                        {item.status}
-                      </span>
-                    </div>
-                    <div className="text-slate-500 dark:text-slate-400 mt-1 truncate">
-                      Idemp: <span className="font-mono">{item.idempotencyKey.slice(0, 16)}...</span>
-                    </div>
-                    {item.lastError && (
-                      <div className="text-rose-600 dark:text-rose-400 mt-1 text-[10px]">
-                        Err: {item.lastError}
+                {queueItems.map((item) => {
+                  const itemStatus = item.status || 'PENDING';
+                  const targetRecordId = item.recordId || item.record?.id || item.idempotencyKey || item.id;
+                  return (
+                    <div
+                      key={item.id}
+                      className="p-2 rounded border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 text-[11px]"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-slate-700 dark:text-slate-300 uppercase">
+                          {item.collection || 'stocks'} • {item.type}
+                        </span>
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                            itemStatus === 'CONFLICT'
+                              ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                              : itemStatus === 'SYNCING'
+                              ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'
+                              : itemStatus === 'FAILED'
+                              ? 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
+                              : 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300'
+                          }`}
+                        >
+                          {itemStatus}
+                        </span>
                       </div>
-                    )}
-                  </div>
-                ))}
+                      <div className="text-slate-500 dark:text-slate-400 mt-1 truncate">
+                        Record: <span className="font-mono">{String(targetRecordId).slice(0, 20)}</span>
+                        {item.retryCount ? ` • Retries: ${item.retryCount}` : ''}
+                      </div>
+                      {item.lastError && (
+                        <div className="text-rose-600 dark:text-rose-400 mt-1 text-[10px] truncate" title={item.lastError}>
+                          Err: {item.lastError}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

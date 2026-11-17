@@ -195,6 +195,13 @@ async function startServer() {
     deletedUserTombstones.delete(employeeId.trim().toUpperCase());
   }
 
+  function isDeviceRevoked(deviceId?: string): boolean {
+    const clean = String(deviceId || "").trim();
+    if (!clean) return false;
+    const record = authorizedDevicesMap.get(clean);
+    return Boolean(record && (record.status === "REVOKED" || record.status === "PENDING"));
+  }
+
   interface ChatMessage {
     id: string;
     sender: string;
@@ -1358,14 +1365,6 @@ async function startServer() {
         }
       });
 
-      broadcast({
-        type: "DATABASE_RESTORED",
-        restoredBackup: cleanName,
-        author,
-        timestamp: new Date().toISOString(),
-        stateRevision
-      });
-
       return {
         success: true,
         recordCounts: {
@@ -1440,6 +1439,30 @@ async function startServer() {
   // Keyed strictly by unique connection_id
   const connectionRegistry = new Map<string, ActiveConnectionRecord>();
   const socketToConnectionId = new WeakMap<WebSocket, string>();
+
+  function closeDeviceSockets(deviceId?: string, reason: string = "DEVICE_REVOKED") {
+    const clean = String(deviceId || "").trim();
+    if (!clean) return;
+    for (const [cId, conn] of Array.from(connectionRegistry.entries())) {
+      if (conn.device_id === clean || conn.deviceId === clean) {
+        try {
+          if (conn.ws.readyState === WebSocket.OPEN) {
+            conn.ws.send(JSON.stringify({
+              type: "DEVICE_REVOKED",
+              deviceId: clean,
+              error: "DEVICE_REVOKED",
+              systemResetVersion
+            }));
+          }
+        } catch {}
+        connectionRegistry.delete(cId);
+        socketToConnectionId.delete(conn.ws);
+        try {
+          conn.ws.close(4003, reason);
+        } catch {}
+      }
+    }
+  }
 
   // Room-based broadcasting mapping for Warehouse and Account groups
   const accountRooms = new Map<string, Set<WebSocket>>();
@@ -1908,6 +1931,7 @@ async function startServer() {
     status: number;
     error?: string;
     confirmedRecord?: any;
+    currentRecord?: any;
     isCreation?: boolean;
     systemResetVersion?: number;
     systemResetId?: string;
@@ -1927,6 +1951,16 @@ async function startServer() {
     excludeSocket?: WebSocket;
   }): UpsertExecutionResult {
     const { collection, record, author, employeeId, user_id, device_id, actionDesc, expectedVersion, reset_version, userPermission, excludeSocket } = params;
+
+    const rawDeviceId = String(device_id || record?.device_id || record?.deviceId || "").trim();
+    if (isDeviceRevoked(rawDeviceId)) {
+      closeDeviceSockets(rawDeviceId, "DEVICE_REVOKED");
+      return {
+        success: false,
+        status: 403,
+        error: "DEVICE_REVOKED"
+      };
+    }
 
     const clientResetVersion = Number(reset_version) || Number(record?.reset_version) || systemResetVersion;
     if (clientResetVersion < systemResetVersion) {
@@ -1965,12 +1999,14 @@ async function startServer() {
 
     if (existingRecord) {
       // Optimistic concurrency check
-      if (expectedVersion !== undefined && existingRecord.version && existingRecord.version > expectedVersion) {
+      const serverVer = Number(existingRecord.version) || 1;
+      if (expectedVersion !== undefined && expectedVersion !== null && !Number.isNaN(Number(expectedVersion)) && serverVer > Number(expectedVersion)) {
         return {
           success: false,
           status: 409,
           error: "VERSION_CONFLICT: Newer revision exists in central database.",
           confirmedRecord: existingRecord,
+          currentRecord: existingRecord,
           systemResetVersion
         };
       }
@@ -2103,6 +2139,8 @@ async function startServer() {
     error?: string;
     id?: string;
     collection?: string;
+    currentRecord?: any;
+    confirmedRecord?: any;
     systemResetVersion?: number;
     systemResetId?: string;
   }
@@ -2115,11 +2153,22 @@ async function startServer() {
     user_id?: string;
     device_id?: string;
     actionDesc?: string;
+    expectedVersion?: number;
     reset_version?: number;
     userPermission?: string;
     excludeSocket?: WebSocket;
   }): DeleteExecutionResult {
-    const { collection, id, author, employeeId, user_id, device_id, actionDesc, reset_version, userPermission, excludeSocket } = params;
+    const { collection, id, author, employeeId, user_id, device_id, actionDesc, expectedVersion, reset_version, userPermission, excludeSocket } = params;
+
+    const rawDeviceId = String(device_id || "").trim();
+    if (isDeviceRevoked(rawDeviceId)) {
+      closeDeviceSockets(rawDeviceId, "DEVICE_REVOKED");
+      return {
+        success: false,
+        status: 403,
+        error: "DEVICE_REVOKED"
+      };
+    }
 
     const clientResetVersion = Number(reset_version) || systemResetVersion;
     if (clientResetVersion < systemResetVersion) {
@@ -2145,8 +2194,24 @@ async function startServer() {
     }
 
     const recordId = String(id);
+    const currentList: any[] = (state as any)[collection] || [];
+    const existingRecord = currentList.find((item: any) => item && (String(item.id) === recordId || String(item.record_id) === recordId)) || null;
+    if (existingRecord && expectedVersion !== undefined && expectedVersion !== null && !Number.isNaN(Number(expectedVersion))) {
+      const serverVer = Number(existingRecord.version) || 1;
+      if (serverVer > Number(expectedVersion)) {
+        return {
+          success: false,
+          status: 409,
+          error: "VERSION_CONFLICT: Newer revision exists in central database.",
+          currentRecord: existingRecord,
+          confirmedRecord: existingRecord,
+          systemResetVersion
+        };
+      }
+    }
+
     markRecordTombstone(recordId);
-    (state as any)[collection] = ((state as any)[collection] || []).filter((item: any) => String(item.id) !== recordId && String(item.record_id) !== recordId);
+    (state as any)[collection] = currentList.filter((item: any) => String(item.id) !== recordId && String(item.record_id) !== recordId);
     stateRevision++;
 
     // COMMIT DATABASE SYNCHRONOUSLY BEFORE BROADCAST
@@ -2465,10 +2530,27 @@ async function startServer() {
             const devName = String(payload.deviceName || `${devPlatform} Terminal`).trim();
             const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || systemResetVersion;
 
+            if (isDeviceRevoked(deviceId)) {
+              try {
+                ws.send(JSON.stringify({
+                  type: "DEVICE_REVOKED",
+                  deviceId,
+                  error: "DEVICE_REVOKED",
+                  systemResetVersion
+                }));
+              } catch {}
+              connectionRegistry.delete(connId);
+              socketToConnectionId.delete(ws);
+              removeSocketFromGroups(ws);
+              try { ws.close(4003, "DEVICE_REVOKED"); } catch {}
+              break;
+            }
+
             // Update this specific connection record in the central registry
             conn.user_id = userId;
             conn.session_id = sessionId;
             conn.device_id = deviceId;
+            conn.deviceId = deviceId;
             conn.stationId = stationId;
             conn.employeeId = employeeId;
             conn.username = username;
@@ -2685,13 +2767,20 @@ async function startServer() {
           case "adjust_stock": {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
+            const reqDevId = String(payload.device_id || payload.deviceId || conn?.device_id || conn?.deviceId || "").trim();
+            if (isDeviceRevoked(reqDevId)) {
+              ws.send(JSON.stringify({ type: "ERROR", error: "DEVICE_REVOKED", status: 403, deviceId: reqDevId }));
+              closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+              break;
+            }
             const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
             const targetWh = normalizeGroupId(payload.warehouseId || conn?.warehouseId, "WH-MAIN");
-            const { productId, delta, newQuantity, location, lotNumber, notes } = payload;
+            const { productId, delta, location, lotNumber, notes } = payload;
 
             let stockItem = state.stocks.find((s: any) => String(s.id) === String(productId) || s.partCode === productId);
             const prevQty = stockItem ? Number(stockItem.quantity) || 0 : 0;
-            const calculatedQty = newQuantity !== undefined ? Number(newQuantity) : (prevQty + Number(delta || 0));
+            const appliedDelta = Number(delta !== undefined ? delta : (payload.quantity !== undefined ? payload.quantity : 0)) || 0;
+            const calculatedQty = prevQty + appliedDelta;
 
             const serverTime = new Date().toISOString();
             if (stockItem) {
@@ -2729,7 +2818,7 @@ async function startServer() {
               warehouse_id: targetWh,
               account_id: targetAcc,
               type: payload.type || 'STOCK_ADJUSTMENT',
-              quantity: delta !== undefined ? Number(delta) : (calculatedQty - prevQty),
+              quantity: appliedDelta,
               previous_quantity: prevQty,
               new_quantity: stockItem ? stockItem.quantity : calculatedQty,
               notes: notes || 'Stock adjustment via WebSocket',
@@ -2767,6 +2856,12 @@ async function startServer() {
           case "transfer_location": {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
+            const reqDevId = String(payload.device_id || payload.deviceId || conn?.device_id || conn?.deviceId || "").trim();
+            if (isDeviceRevoked(reqDevId)) {
+              ws.send(JSON.stringify({ type: "ERROR", error: "DEVICE_REVOKED", status: 403, deviceId: reqDevId }));
+              closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+              break;
+            }
             const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
             const sourceWh = normalizeGroupId(payload.fromWarehouseId || payload.warehouseId || conn?.warehouseId, "WH-MAIN");
             const targetWh = normalizeGroupId(payload.toWarehouseId || payload.warehouseId || conn?.warehouseId, "WH-MAIN");
@@ -2823,6 +2918,12 @@ async function startServer() {
           case "pick_pack_ship": {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
+            const reqDevId = String(payload.device_id || payload.deviceId || conn?.device_id || conn?.deviceId || "").trim();
+            if (isDeviceRevoked(reqDevId)) {
+              ws.send(JSON.stringify({ type: "ERROR", error: "DEVICE_REVOKED", status: 403, deviceId: reqDevId }));
+              closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+              break;
+            }
             const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
             const targetWh = normalizeGroupId(payload.warehouseId || conn?.warehouseId, "WH-MAIN");
             const { orderId, operationType, items, notes } = payload;
@@ -2892,6 +2993,23 @@ async function startServer() {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
             const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || conn?.resetVersion || systemResetVersion;
+            const reqDevId = String(payload.device_id || payload.deviceId || conn?.device_id || conn?.deviceId || payload.record?.device_id || payload.record?.deviceId || "").trim();
+            const clientMutationId = payload.clientMutationId || payload.id;
+
+            if (isDeviceRevoked(reqDevId)) {
+              ws.send(JSON.stringify({
+                type: "ERROR",
+                error: "DEVICE_REVOKED",
+                status: 403,
+                deviceId: reqDevId,
+                collection: payload.collection,
+                recordId: payload.record?.id || payload.record_id,
+                clientMutationId,
+                systemResetVersion
+              }));
+              closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+              break;
+            }
 
             const upsertRes = executeRecordUpsert({
               collection: payload.collection,
@@ -2899,7 +3017,7 @@ async function startServer() {
               author: payload.author || conn?.username || "Operator",
               employeeId: payload.employeeId || conn?.employeeId,
               user_id: payload.user_id || conn?.user_id,
-              device_id: payload.device_id || conn?.deviceId || payload.record?.device_id,
+              device_id: reqDevId,
               actionDesc: payload.actionDesc,
               expectedVersion: payload.expectedVersion,
               reset_version: clientResetVersion,
@@ -2912,13 +3030,18 @@ async function startServer() {
                 type: "ERROR",
                 error: upsertRes.error,
                 status: upsertRes.status,
+                collection: payload.collection,
+                recordId: payload.record?.id || payload.record_id,
+                clientMutationId,
+                currentRecord: upsertRes.currentRecord || upsertRes.confirmedRecord,
+                confirmedRecord: upsertRes.confirmedRecord || upsertRes.currentRecord,
                 systemResetVersion,
                 systemResetId
               }));
-              if (upsertRes.status === 409) {
+              if (upsertRes.status === 409 && typeof upsertRes.error === "string" && upsertRes.error.includes("STALE_RESET_VERSION")) {
                 ws.send(JSON.stringify({
                   type: "SYNC_REQUIRED",
-                  reason: "STALE_RESET_VERSION_OR_CONFLICT",
+                  reason: "STALE_RESET_VERSION",
                   systemResetVersion,
                   systemResetId
                 }));
@@ -2926,6 +3049,7 @@ async function startServer() {
             } else {
               ws.send(JSON.stringify({
                 type: "UPSERT_CONFIRMED",
+                clientMutationId,
                 collection: payload.collection,
                 record: upsertRes.confirmedRecord,
                 isCreation: upsertRes.isCreation,
@@ -2942,6 +3066,23 @@ async function startServer() {
             const conn = connectionRegistry.get(connId);
             const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || conn?.resetVersion || systemResetVersion;
             const targetId = String(payload.id || payload.record_id || payload.recordId || "");
+            const reqDevId = String(payload.device_id || payload.deviceId || conn?.device_id || conn?.deviceId || "").trim();
+            const clientMutationId = payload.clientMutationId;
+
+            if (isDeviceRevoked(reqDevId)) {
+              ws.send(JSON.stringify({
+                type: "ERROR",
+                error: "DEVICE_REVOKED",
+                status: 403,
+                deviceId: reqDevId,
+                collection: payload.collection,
+                recordId: targetId,
+                clientMutationId,
+                systemResetVersion
+              }));
+              closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+              break;
+            }
 
             const deleteRes = executeRecordDelete({
               collection: payload.collection,
@@ -2949,8 +3090,9 @@ async function startServer() {
               author: payload.author || conn?.username || "Operator",
               employeeId: payload.employeeId || conn?.employeeId,
               user_id: payload.user_id || conn?.user_id,
-              device_id: payload.device_id || conn?.deviceId,
+              device_id: reqDevId,
               actionDesc: payload.actionDesc,
+              expectedVersion: payload.expectedVersion,
               reset_version: clientResetVersion,
               userPermission: conn?.permission,
               excludeSocket: ws
@@ -2961,12 +3103,18 @@ async function startServer() {
                 type: "ERROR",
                 error: deleteRes.error,
                 status: deleteRes.status,
+                collection: payload.collection,
+                recordId: targetId,
+                clientMutationId,
+                currentRecord: deleteRes.currentRecord || deleteRes.confirmedRecord,
+                confirmedRecord: deleteRes.confirmedRecord || deleteRes.currentRecord,
                 systemResetVersion,
                 systemResetId
               }));
             } else {
               ws.send(JSON.stringify({
                 type: "DELETE_CONFIRMED",
+                clientMutationId,
                 collection: payload.collection,
                 id: targetId,
                 systemResetVersion
@@ -2981,6 +3129,13 @@ async function startServer() {
             const conn = connectionRegistry.get(connId);
             const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || conn?.resetVersion || systemResetVersion;
             const col = payload.collection;
+            const reqDevId = String(payload.device_id || payload.deviceId || conn?.device_id || conn?.deviceId || "").trim();
+
+            if (isDeviceRevoked(reqDevId)) {
+              ws.send(JSON.stringify({ type: "ERROR", error: "DEVICE_REVOKED", status: 403, deviceId: reqDevId, collection: col }));
+              closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+              break;
+            }
 
             if (clientResetVersion < systemResetVersion) {
               ws.send(JSON.stringify({
@@ -3181,7 +3336,14 @@ async function startServer() {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
             const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || conn?.resetVersion || systemResetVersion;
-            
+            const reqDevId = String(payload.device_id || payload.deviceId || conn?.device_id || conn?.deviceId || "").trim();
+
+            if (isDeviceRevoked(reqDevId)) {
+              ws.send(JSON.stringify({ type: "ERROR", error: "DEVICE_REVOKED", status: 403, deviceId: reqDevId }));
+              closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+              break;
+            }
+
             if (clientResetVersion < systemResetVersion) {
               ws.send(JSON.stringify({
                 type: "ERROR",
@@ -3195,6 +3357,7 @@ async function startServer() {
 
             const mutations = Array.isArray(payload.mutations) ? payload.mutations : [];
             let processed = 0;
+            const results: any[] = [];
             for (const m of mutations) {
               if (m.type === 'upsert' && m.collection && m.record) {
                 const res = executeRecordUpsert({
@@ -3203,29 +3366,63 @@ async function startServer() {
                   author: m.author || conn?.username || "Operator",
                   employeeId: m.employeeId || conn?.employeeId,
                   user_id: m.user_id || conn?.user_id,
-                  device_id: m.device_id || conn?.deviceId,
-                  reset_version: clientResetVersion
+                  device_id: m.device_id || m.deviceId || reqDevId,
+                  actionDesc: m.actionDesc,
+                  expectedVersion: m.expectedVersion,
+                  reset_version: clientResetVersion,
+                  userPermission: conn?.permission,
+                  excludeSocket: ws
                 });
                 if (res.success) processed++;
+                results.push({
+                  id: m.id,
+                  mutationId: m.id,
+                  type: m.type,
+                  collection: m.collection,
+                  recordId: String(m.record?.id || m.record?.record_id || ""),
+                  success: res.success,
+                  status: res.status,
+                  error: res.error,
+                  record: res.confirmedRecord,
+                  currentRecord: res.currentRecord || res.confirmedRecord
+                });
               } else if (m.type === 'delete' && m.collection && (m.id || m.recordId)) {
+                const targetId = String(m.id || m.recordId);
                 const res = executeRecordDelete({
                   collection: m.collection,
-                  id: String(m.id || m.recordId),
+                  id: targetId,
                   author: m.author || conn?.username || "Operator",
                   employeeId: m.employeeId || conn?.employeeId,
                   user_id: m.user_id || conn?.user_id,
-                  device_id: m.device_id || conn?.deviceId,
-                  reset_version: clientResetVersion
+                  device_id: m.device_id || m.deviceId || reqDevId,
+                  actionDesc: m.actionDesc,
+                  expectedVersion: m.expectedVersion,
+                  reset_version: clientResetVersion,
+                  userPermission: conn?.permission,
+                  excludeSocket: ws
                 });
                 if (res.success) processed++;
+                results.push({
+                  id: m.id,
+                  mutationId: m.id,
+                  type: m.type,
+                  collection: m.collection,
+                  recordId: targetId,
+                  success: res.success,
+                  status: res.status,
+                  error: res.error,
+                  currentRecord: res.currentRecord || res.confirmedRecord
+                });
               }
             }
 
-            console.log(`[CENTRAL-DB] [WS-BATCH-MUTATIONS] Processed ${processed}/${mutations.length} mutations | User: ${conn?.username || 'Operator'} | Device: ${conn?.deviceId || 'Terminal'}`);
+            console.log(`[CENTRAL-DB] [WS-BATCH-MUTATIONS] Processed ${processed}/${mutations.length} mutations | User: ${conn?.username || 'Operator'} | Device: ${reqDevId || 'Terminal'}`);
 
             ws.send(JSON.stringify({
               type: "BATCH_SYNC_CONFIRMED",
               processed,
+              total: mutations.length,
+              results,
               systemResetVersion
             }));
             break;
@@ -4147,6 +4344,12 @@ async function startServer() {
   app.post("/api/sync", async (req, res) => {
     try {
       const { collection, data, reset_version, author, employeeId, device_id } = req.body;
+      const reqDevId = String(device_id || req.body?.deviceId || req.headers['x-device-id'] || "").trim();
+      if (isDeviceRevoked(reqDevId)) {
+        closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+        return res.status(403).json({ error: "DEVICE_REVOKED" });
+      }
+
       const clientResetVersion = Number(reset_version || req.headers['x-reset-version']) || systemResetVersion;
       if (clientResetVersion < systemResetVersion) {
         return res.status(409).json({
@@ -4331,6 +4534,12 @@ async function startServer() {
   app.post("/api/sync/batch", async (req, res) => {
     try {
       const { mutations, reset_version, author, employeeId, device_id } = req.body;
+      const reqDevId = String(device_id || req.body?.deviceId || req.headers['x-device-id'] || "").trim();
+      if (isDeviceRevoked(reqDevId)) {
+        closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+        return res.status(403).json({ error: "DEVICE_REVOKED" });
+      }
+
       const clientResetVersion = Number(reset_version || req.headers['x-reset-version']) || systemResetVersion;
       
       if (clientResetVersion < systemResetVersion) {
@@ -4343,11 +4552,19 @@ async function startServer() {
 
       const mutList = Array.isArray(mutations) ? mutations : [];
       let processed = 0;
-      const effectiveDevId = String(device_id || req.headers['x-device-id'] || 'DEV-OFFLINE').trim();
+      const results: any[] = [];
+      const effectiveDevId = reqDevId || 'DEV-OFFLINE';
       const effectiveAuthor = author || employeeId || "Operator";
       const effectiveUserId = String(req.body.user_id || (employeeId ? `USR-${employeeId}` : `USR-${effectiveAuthor}`)).trim();
+      const userPermission = (req.headers['x-user-permission'] || req.body.permission || '').toString().toUpperCase();
 
       for (const m of mutList) {
+        const mutDevId = String(m.device_id || m.deviceId || effectiveDevId).trim();
+        if (isDeviceRevoked(mutDevId)) {
+          closeDeviceSockets(mutDevId, "DEVICE_REVOKED");
+          return res.status(403).json({ error: "DEVICE_REVOKED" });
+        }
+
         if (m.type === 'upsert' && m.collection && m.record) {
           const r = executeRecordUpsert({
             collection: m.collection,
@@ -4355,23 +4572,51 @@ async function startServer() {
             author: m.author || effectiveAuthor,
             employeeId: m.employeeId || employeeId,
             user_id: m.user_id || effectiveUserId,
-            device_id: m.device_id || effectiveDevId,
+            device_id: mutDevId,
             actionDesc: m.actionDesc,
-            reset_version: clientResetVersion
+            expectedVersion: m.expectedVersion,
+            reset_version: m.reset_version ?? clientResetVersion,
+            userPermission
           });
           if (r.success) processed++;
+          results.push({
+            id: m.id,
+            mutationId: m.id,
+            type: m.type,
+            collection: m.collection,
+            recordId: String(m.record?.id || m.record?.record_id || ""),
+            success: r.success,
+            status: r.status,
+            error: r.error,
+            record: r.confirmedRecord,
+            currentRecord: r.currentRecord || r.confirmedRecord
+          });
         } else if (m.type === 'delete' && m.collection && (m.id || m.recordId)) {
+          const targetId = String(m.id || m.recordId);
           const r = executeRecordDelete({
             collection: m.collection,
-            id: String(m.id || m.recordId),
+            id: targetId,
             author: m.author || effectiveAuthor,
             employeeId: m.employeeId || employeeId,
             user_id: m.user_id || effectiveUserId,
-            device_id: m.device_id || effectiveDevId,
+            device_id: mutDevId,
             actionDesc: m.actionDesc,
-            reset_version: clientResetVersion
+            expectedVersion: m.expectedVersion,
+            reset_version: m.reset_version ?? clientResetVersion,
+            userPermission
           });
           if (r.success) processed++;
+          results.push({
+            id: m.id,
+            mutationId: m.id,
+            type: m.type,
+            collection: m.collection,
+            recordId: targetId,
+            success: r.success,
+            status: r.status,
+            error: r.error,
+            currentRecord: r.currentRecord || r.confirmedRecord
+          });
         }
       }
 
@@ -4381,6 +4626,7 @@ async function startServer() {
         success: true,
         processed,
         total: mutList.length,
+        results,
         systemResetVersion
       });
     } catch (err: any) {
@@ -4501,24 +4747,33 @@ async function startServer() {
       return res.status(403).json({ error: "PERMISSION_DENIED: Only Super Administrator can revoke devices." });
     }
 
-    if (deviceId === primaryDeviceId) {
+    const cleanDeviceId = String(deviceId).trim();
+    if (cleanDeviceId === primaryDeviceId) {
       return res.status(400).json({ error: "CANNOT_REVOKE_PRIMARY: The primary administrator device cannot be revoked." });
     }
 
-    const existing = authorizedDevicesMap.get(deviceId);
-    if (existing) {
-      existing.status = 'REVOKED';
-      authorizedDevicesMap.set(deviceId, existing);
-      commitDatabase();
+    const existing = authorizedDevicesMap.get(cleanDeviceId);
+    const revokedRecord: AuthorizedDeviceRecord = existing
+      ? { ...existing, status: 'REVOKED' }
+      : {
+          deviceId: cleanDeviceId,
+          deviceName: `Revoked Device (${cleanDeviceId})`,
+          isPrimaryAdminDevice: false,
+          status: 'REVOKED',
+          authorizedBy: 'REVOKED_BY_SUPER_ADMIN',
+          authorizedAt: new Date().toISOString()
+        };
+    authorizedDevicesMap.set(cleanDeviceId, revokedRecord);
+    commitDatabase();
 
-      broadcast({
-        type: "DEVICE_REVOKED",
-        deviceId,
-        systemResetVersion
-      });
-    }
+    broadcast({
+      type: "DEVICE_REVOKED",
+      deviceId: cleanDeviceId,
+      systemResetVersion
+    });
+    closeDeviceSockets(cleanDeviceId, "DEVICE_REVOKED");
 
-    return res.json({ success: true, message: `Device ${deviceId} revoked` });
+    return res.json({ success: true, message: `Device ${cleanDeviceId} revoked` });
   });
 
   // REST API: Terminal Fresh Install & Primary Administrator Device Binding
@@ -5611,6 +5866,12 @@ async function startServer() {
   app.post("/api/records/upsert", async (req, res) => {
     try {
       const { collection, record, author, employeeId, actionDesc, expectedVersion } = req.body;
+      const reqDevId = String(req.body.device_id || req.body.deviceId || req.headers['x-device-id'] || record?.device_id || record?.deviceId || "").trim();
+      if (isDeviceRevoked(reqDevId)) {
+        closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+        return res.status(403).json({ error: "DEVICE_REVOKED" });
+      }
+
       const userPermission = (req.body.permission || req.headers['x-user-permission'] || '').toString().toUpperCase();
       const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version'] || record?.reset_version) || systemResetVersion;
 
@@ -5620,7 +5881,7 @@ async function startServer() {
         author,
         employeeId,
         user_id: req.body.user_id || record?.user_id,
-        device_id: req.body.device_id || req.headers['x-device-id'] || record?.device_id,
+        device_id: reqDevId,
         actionDesc,
         expectedVersion,
         reset_version: clientResetVersion,
@@ -5630,7 +5891,8 @@ async function startServer() {
       if (!result.success) {
         return res.status(result.status).json({
           error: result.error,
-          confirmedRecord: result.confirmedRecord,
+          currentRecord: result.currentRecord || result.confirmedRecord,
+          confirmedRecord: result.confirmedRecord || result.currentRecord,
           systemResetVersion: result.systemResetVersion,
           systemResetId: result.systemResetId
         });
@@ -5653,7 +5915,13 @@ async function startServer() {
    */
   app.post("/api/records/delete", async (req, res) => {
     try {
-      const { collection, id, author, employeeId, actionDesc } = req.body;
+      const { collection, id, author, employeeId, actionDesc, expectedVersion } = req.body;
+      const reqDevId = String(req.body.device_id || req.body.deviceId || req.headers['x-device-id'] || "").trim();
+      if (isDeviceRevoked(reqDevId)) {
+        closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+        return res.status(403).json({ error: "DEVICE_REVOKED" });
+      }
+
       const userPermission = (req.body.permission || req.headers['x-user-permission'] || '').toString().toUpperCase();
       const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version']) || systemResetVersion;
 
@@ -5663,8 +5931,9 @@ async function startServer() {
         author,
         employeeId,
         user_id: req.body.user_id,
-        device_id: req.body.device_id || req.headers['x-device-id'],
+        device_id: reqDevId,
         actionDesc,
+        expectedVersion,
         reset_version: clientResetVersion,
         userPermission
       });
@@ -5672,6 +5941,8 @@ async function startServer() {
       if (!result.success) {
         return res.status(result.status).json({
           error: result.error,
+          currentRecord: result.currentRecord || result.confirmedRecord,
+          confirmedRecord: result.confirmedRecord || result.currentRecord,
           systemResetVersion: result.systemResetVersion,
           systemResetId: result.systemResetId
         });
@@ -5694,6 +5965,12 @@ async function startServer() {
    */
   app.post("/api/stock-movements", async (req, res) => {
     try {
+      const reqDevId = String(req.body.deviceId || req.body.device_id || req.headers['x-device-id'] || "").trim();
+      if (isDeviceRevoked(reqDevId)) {
+        closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+        return res.status(403).json({ error: "DEVICE_REVOKED" });
+      }
+
       const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version']);
       if (clientResetVersion && clientResetVersion < systemResetVersion) {
         return res.status(409).json({

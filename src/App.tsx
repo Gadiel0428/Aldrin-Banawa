@@ -39,7 +39,9 @@ import {
   Archive,
   Phone,
   Smartphone,
-  Activity
+  Activity,
+  AlertTriangle,
+  Ban
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -57,6 +59,16 @@ import { StockMovementView } from './components/StockMovement';
 import { ProductList } from './components/ProductList';
 import { InventoryTable } from './components/InventoryTable';
 import { createStockMovement } from './database/movements';
+import {
+  syncManager,
+  FORCE_FLUSH_MUTATIONS_EVENT,
+  DEVICE_REVOKED_EVENT,
+  calculateRetryBackoffMs,
+  getMutationQueue,
+  saveMutationQueue,
+  enqueueMutation,
+  removeConfirmedMutations
+} from './sync/syncManager';
 
 import { 
   verifyCentralCredentials
@@ -76,6 +88,7 @@ import {
   RegisteredAccount,
   ActivePresenceUser,
   QueuedMutation,
+  SyncConflictItem,
   FifoColorsMap,
   FifoMonthColor
 } from './types';
@@ -104,6 +117,7 @@ import {
   getCentralServerHost,
   getApiBaseUrl,
   getCentralWebSocketUrl,
+  getAuthHeaders,
   sanitizeServerHost,
   isSecureHost as isSecureServerHost
 } from './config/serverConfig';
@@ -136,13 +150,6 @@ function getDefaultServerAddress(): string {
 
 function wsOpen(ws: WebSocket | null): boolean {
   return ws !== null && ws.readyState === WebSocket.OPEN;
-}
-
-// Clear offline mutation sync queue
-function clearPendingSync() {
-  try {
-    localStorage.removeItem('juwei_wms_pending_sync');
-  } catch (e) {}
 }
 
 export default function App() {
@@ -200,6 +207,57 @@ export default function App() {
   const [envLogs, setEnvLogs] = useState<EnvironmentalLog[]>([]);
   const [forkliftChecks, setForkliftChecks] = useState<ForkliftChecklist[]>([]);
   const [registries, setRegistries] = useState<MasterRegistryItem[]>([]);
+
+  // Live snapshot ref & last-known server versions map for expectedVersion optimistic concurrency
+  const collectionsRef = useRef<Record<string, any[]>>({
+    stocks: [],
+    receiving: [],
+    returns: [],
+    recycling: [],
+    issuances: [],
+    deliveries: [],
+    envLogs: [],
+    forkliftChecks: [],
+    registries: []
+  });
+  collectionsRef.current = {
+    stocks,
+    receiving,
+    returns,
+    recycling,
+    issuances,
+    deliveries,
+    envLogs,
+    forkliftChecks,
+    registries
+  };
+  const lastKnownVersionsRef = useRef<Map<string, number>>(new Map());
+  const inFlightWsMutationsRef = useRef<Map<string, { mutation: QueuedMutation; timer: any }>>(new Map());
+
+  const recordKnownVersions = (colName: string, items: any[]) => {
+    if (!colName || !Array.isArray(items)) return;
+    for (const item of items) {
+      if (!item) continue;
+      const id = String(item.id || item.record_id || '').trim();
+      if (id && item.version !== undefined && item.version !== null && !Number.isNaN(Number(item.version))) {
+        lastKnownVersionsRef.current.set(`${colName}:${id}`, Number(item.version));
+      }
+    }
+  };
+
+  const getExpectedVersionForRecord = (colName: string, recordId: string, fallbackRecord?: any): number => {
+    const mapVer = lastKnownVersionsRef.current.get(`${colName}:${recordId}`);
+    if (mapVer !== undefined) return mapVer;
+    const list = collectionsRef.current[colName] || [];
+    const existing = list.find((item: any) => item && String(item.id || item.record_id) === String(recordId));
+    if (existing && existing.version !== undefined && existing.version !== null) {
+      return Number(existing.version);
+    }
+    if (fallbackRecord && fallbackRecord.version !== undefined && fallbackRecord.version !== null) {
+      return Number(fallbackRecord.version);
+    }
+    return 0;
+  };
 
   // Startup cleanup: Purge any legacy stale client-side caches to prevent resurrection
   useEffect(() => {
@@ -335,6 +393,32 @@ export default function App() {
 
   // Real-time states
   const [socket, setSocket] = useState<WebSocket | null>(null);
+  const socketRef = useRef<WebSocket | null>(null);
+  const [isDeviceRevoked, setIsDeviceRevoked] = useState<boolean>(false);
+  const isDeviceRevokedRef = useRef<boolean>(false);
+  const [syncConflicts, setSyncConflicts] = useState<SyncConflictItem[]>(() => {
+    try {
+      return getMutationQueue()
+        .filter((m) => m.status === 'CONFLICT')
+        .map((m) => ({
+          id: m.id,
+          collection: m.collection,
+          recordId: String(m.recordId || m.record?.id || ''),
+          type: m.type === 'delete' ? 'delete' : 'upsert',
+          localRecord: m.record,
+          currentServerRecord: m.currentServerRecord,
+          expectedVersion: m.expectedVersion,
+          serverVersion: m.currentServerRecord?.version !== undefined ? Number(m.currentServerRecord.version) : undefined,
+          author: m.author,
+          actionDesc: m.actionDesc,
+          error: m.lastError || 'VERSION_CONFLICT: Newer revision exists on server.',
+          timestamp: m.timestamp
+        }));
+    } catch {
+      return [];
+    }
+  });
+  const [showConflictsModal, setShowConflictsModal] = useState<boolean>(false);
   const [activeUsers, setActiveUsers] = useState<string[]>([]);
   const [activePresence, setActivePresence] = useState<ActivePresenceUser[]>([]);
   const [wsPresence, setWsPresence] = useState<ActivePresenceUser[]>([]);
@@ -1417,8 +1501,13 @@ export default function App() {
   // Normalizer helper for records coming from central database, REST, and WebSocket
   const normalizeRecords = (colName: string, items: any[]): any[] => {
     if (!Array.isArray(items)) return [];
-    return items.map((r: any) => {
+    const normalized = items.map((r: any) => {
       if (!r || typeof r !== 'object') return r;
+      const versionMeta = {
+        ...(r.version !== undefined && r.version !== null ? { version: Number(r.version) } : {}),
+        ...(r.updated_at ? { updated_at: r.updated_at } : {}),
+        ...(r.reset_version !== undefined && r.reset_version !== null ? { reset_version: Number(r.reset_version) } : {})
+      };
       switch (colName) {
         case 'stocks':
           return {
@@ -1441,7 +1530,8 @@ export default function App() {
             customer: r.customer,
             reorderMin: r.reorderMin || r.reorder_min ? Number(r.reorderMin || r.reorder_min) : undefined,
             remarks: r.remarks,
-            bom: r.bom || []
+            bom: r.bom || [],
+            ...versionMeta
           };
         case 'receiving':
           return {
@@ -1473,7 +1563,8 @@ export default function App() {
             fifoColorCode: normalizeFifoColor(r.fifoColorCode || r.fifo_color_code || r.fifoColor, r.receivedDate || r.received_date || r.date, fifoColorsByMonth),
             bom: r.bom || [],
             autoDeductBom: Boolean(r.autoDeductBom || r.auto_deduct_bom),
-            customer: r.customer
+            customer: r.customer,
+            ...versionMeta
           };
         case 'returns':
           return {
@@ -1490,7 +1581,8 @@ export default function App() {
             condition: r.condition || 'Good',
             iqcEvaluation: r.iqcEvaluation || r.iqc_evaluation || 'PENDING_IQC',
             status: r.status || 'PENDING',
-            returnSlipFormNumber: r.returnSlipFormNumber || r.return_slip_form_number || ''
+            returnSlipFormNumber: r.returnSlipFormNumber || r.return_slip_form_number || '',
+            ...versionMeta
           };
         case 'recycling':
           return {
@@ -1501,7 +1593,8 @@ export default function App() {
             condition: r.condition || 'Reusable',
             reuseCycleCount: Number(r.reuseCycleCount || r.reuse_cycle_count) || 1,
             disposition: r.disposition || 'Re-used',
-            logSheetNumber: r.logSheetNumber || r.log_sheet_number || ''
+            logSheetNumber: r.logSheetNumber || r.log_sheet_number || '',
+            ...versionMeta
           };
         case 'issuances':
           return {
@@ -1516,7 +1609,8 @@ export default function App() {
             lotNumber: r.lotNumber || r.lot_number || '',
             fifoVerified: Boolean(r.fifoVerified || r.fifo_verified),
             issuedBy: r.issuedBy || r.issued_by || 'Storekeeper',
-            receivedBy: r.receivedBy || r.received_by || 'Line Operator'
+            receivedBy: r.receivedBy || r.received_by || 'Line Operator',
+            ...versionMeta
           };
         case 'deliveries':
           return {
@@ -1536,7 +1630,8 @@ export default function App() {
             wayBill: r.wayBill || r.way_bill,
             status: r.status || 'PREPARING',
             preparedBy: r.preparedBy || r.preparedBy || 'Dispatch Supervisor',
-            loadedBy: r.loadedBy || r.loaded_by
+            loadedBy: r.loadedBy || r.loaded_by,
+            ...versionMeta
           };
         case 'envLogs':
           return {
@@ -1548,7 +1643,8 @@ export default function App() {
             cleanlinessOk: Boolean(r.cleanlinessOk ?? r.cleanliness_ok ?? true),
             ventilationOk: Boolean(r.ventilationOk ?? r.ventilation_ok ?? true),
             pestFree: Boolean(r.pestFree ?? r.pest_free ?? true),
-            recordedBy: r.recordedBy || r.recorded_by || 'Inspector'
+            recordedBy: r.recordedBy || r.recorded_by || 'Inspector',
+            ...versionMeta
           };
         case 'forkliftChecks':
           return {
@@ -1562,7 +1658,8 @@ export default function App() {
             steeringOk: Boolean(r.steeringOk ?? r.steering_ok ?? true),
             tiresOk: Boolean(r.tiresOk ?? r.tires_ok ?? true),
             batteryFluidOk: Boolean(r.batteryFluidOk ?? r.battery_fluid_ok ?? true),
-            remarks: r.remarks
+            remarks: r.remarks,
+            ...versionMeta
           };
         case 'registries':
           return {
@@ -1577,12 +1674,15 @@ export default function App() {
             category: r.category,
             vendorSupplier: r.vendorSupplier || r.vendor_supplier,
             unit: r.unit,
-            location: r.location
+            location: r.location,
+            ...versionMeta
           };
         default:
           return r;
       }
     });
+    recordKnownVersions(colName, normalized);
+    return normalized;
   };
 
   const getDeletedRecordIds = (): Set<string> => {
@@ -1645,58 +1745,178 @@ export default function App() {
     return Boolean(id && (deletedRecordIds.current.has(id) || getDeletedRecordIds().has(id)));
   };
 
-  // Offline Mutations Queue Storage & Processor
-  const PENDING_MUTATIONS_KEY = 'juwei_wms_mutation_queue_v1';
-
+  // Offline Mutations Queue Storage & Processor (single queue: juwei_wms_mutation_queue_v1)
   const getPendingMutations = (): QueuedMutation[] => {
-    try {
-      const raw = localStorage.getItem(PENDING_MUTATIONS_KEY);
-      return raw ? JSON.parse(raw) : [];
-    } catch (e) {
-      return [];
-    }
+    return getMutationQueue();
   };
 
   const savePendingMutations = (mutations: QueuedMutation[]) => {
-    try {
-      localStorage.setItem(PENDING_MUTATIONS_KEY, JSON.stringify(mutations));
-    } catch (e) {}
+    saveMutationQueue(mutations);
   };
 
-  const queueOfflineMutation = (mutation: Omit<QueuedMutation, 'id' | 'timestamp'>) => {
-    const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
-    const item: QueuedMutation = {
-      ...mutation,
-      id: `MUT-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-      timestamp: Date.now(),
-      reset_version: currentResetVer
+  const applyConfirmedRecordToState = (collection: string, confirmedRecord: any) => {
+    if (!collection || !confirmedRecord || !confirmedRecord.id) return;
+    recordKnownVersions(collection, [confirmedRecord]);
+    const normalized = normalizeRecords(collection, [confirmedRecord])[0] || confirmedRecord;
+    const upsertFn = (prev: any[]) => {
+      const idx = prev.findIndex(it => it.id === normalized.id);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = normalized;
+        return next;
+      }
+      return [normalized, ...prev];
     };
-    const list = getPendingMutations();
-    list.push(item);
-    savePendingMutations(list);
+    switch (collection) {
+      case 'stocks': setStocks(upsertFn); break;
+      case 'receiving': setReceiving(upsertFn); break;
+      case 'returns': setReturns(upsertFn); break;
+      case 'recycling': setRecycling(upsertFn); break;
+      case 'issuances': setIssuances(upsertFn); break;
+      case 'deliveries': setDeliveries(upsertFn); break;
+      case 'envLogs': setEnvLogs(upsertFn); break;
+      case 'forkliftChecks': setForkliftChecks(upsertFn); break;
+      case 'registries': setRegistries(upsertFn); break;
+    }
   };
 
-  const flushPendingMutationsQueue = async () => {
+  const removeRecordFromState = (collection: string, id: string) => {
+    if (!collection || !id) return;
+    const filterFn = (prev: any[]) => prev.filter(it => it.id !== id);
+    switch (collection) {
+      case 'stocks': setStocks(filterFn); break;
+      case 'receiving': setReceiving(filterFn); break;
+      case 'returns': setReturns(filterFn); break;
+      case 'recycling': setRecycling(filterFn); break;
+      case 'issuances': setIssuances(filterFn); break;
+      case 'deliveries': setDeliveries(filterFn); break;
+      case 'envLogs': setEnvLogs(filterFn); break;
+      case 'forkliftChecks': setForkliftChecks(filterFn); break;
+      case 'registries': setRegistries(filterFn); break;
+    }
+  };
+
+  const handleDeviceRevoked = (targetDeviceId?: string) => {
+    const myDevId = getPersistentDeviceId();
+    if (targetDeviceId && targetDeviceId.trim() !== '' && targetDeviceId.trim() !== myDevId) {
+      return;
+    }
+    if (!isDeviceRevokedRef.current) {
+      isDeviceRevokedRef.current = true;
+      setIsDeviceRevoked(true);
+      setConnectionStatus('disconnected');
+      syncManager.markDeviceRevoked();
+      for (const [, entry] of inFlightWsMutationsRef.current.entries()) {
+        clearTimeout(entry.timer);
+      }
+      inFlightWsMutationsRef.current.clear();
+      if (socketRef.current) {
+        try { socketRef.current.close(); } catch {}
+        socketRef.current = null;
+      }
+      setSocket(null);
+      showPrintToast('This computer was removed from the system', 'error');
+    }
+  };
+
+  const recordSyncConflict = (conflictInput: {
+    id?: string;
+    collection: string;
+    recordId: string;
+    type: 'upsert' | 'delete';
+    localRecord?: any;
+    currentServerRecord?: any;
+    expectedVersion?: number;
+    author?: string;
+    actionDesc?: string;
+    error: string;
+  }) => {
+    const mutationId = conflictInput.id || `MUT-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const serverRec = conflictInput.currentServerRecord;
+    const serverVersion = serverRec?.version !== undefined ? Number(serverRec.version) : undefined;
+    if (serverRec && serverRec.id) {
+      recordKnownVersions(conflictInput.collection, [serverRec]);
+    }
+
+    const queue = getPendingMutations();
+    const existingIdx = queue.findIndex((m) => m.id === mutationId);
+    const queuedConflict: QueuedMutation = {
+      ...(existingIdx >= 0 ? queue[existingIdx] : {}),
+      id: mutationId,
+      type: conflictInput.type,
+      collection: conflictInput.collection,
+      record: conflictInput.localRecord ?? (existingIdx >= 0 ? queue[existingIdx].record : undefined),
+      recordId: conflictInput.recordId,
+      expectedVersion: conflictInput.expectedVersion ?? (existingIdx >= 0 ? queue[existingIdx].expectedVersion : undefined),
+      author: conflictInput.author || currentUser || 'Operator',
+      actionDesc: conflictInput.actionDesc,
+      timestamp: existingIdx >= 0 ? queue[existingIdx].timestamp : Date.now(),
+      reset_version: Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0,
+      status: 'CONFLICT',
+      lastError: conflictInput.error,
+      currentServerRecord: serverRec
+    };
+    if (existingIdx >= 0) {
+      queue[existingIdx] = queuedConflict;
+    } else {
+      queue.push(queuedConflict);
+    }
+    savePendingMutations(queue);
+
+    const conflictObj: SyncConflictItem = {
+      id: mutationId,
+      collection: conflictInput.collection,
+      recordId: conflictInput.recordId,
+      type: conflictInput.type,
+      localRecord: queuedConflict.record,
+      currentServerRecord: serverRec,
+      expectedVersion: queuedConflict.expectedVersion,
+      serverVersion,
+      author: queuedConflict.author,
+      actionDesc: queuedConflict.actionDesc,
+      error: conflictInput.error,
+      timestamp: queuedConflict.timestamp
+    };
+
+    setSyncConflicts((prev) => {
+      const idx = prev.findIndex((c) => c.id === mutationId || (c.collection === conflictInput.collection && c.recordId === conflictInput.recordId));
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = conflictObj;
+        return next;
+      }
+      return [conflictObj, ...prev];
+    });
+    showPrintToast(`Sync conflict on ${conflictInput.collection} (${conflictInput.recordId}). Open Conflicts to review.`, 'warning');
+  };
+
+  const flushPendingMutationsQueue = async (forceRetry = false) => {
+    if (isDeviceRevokedRef.current) return;
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+
     const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
     const allMutations = getPendingMutations();
-    // Drop any mutation created under an older reset version
-    const mutations = allMutations.filter(m => !m.reset_version || m.reset_version >= currentResetVer);
-    if (mutations.length !== allMutations.length) {
-      savePendingMutations(mutations);
+    // Drop only mutations created under an older reset version
+    const validResetMutations = allMutations.filter(m => !m.reset_version || m.reset_version >= currentResetVer);
+    if (validResetMutations.length !== allMutations.length) {
+      savePendingMutations(validResetMutations);
     }
-    if (mutations.length === 0) return;
 
-    let targetAddr = serverAddress.trim() || getDefaultServerAddress();
-    const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
-    const isHttps = isSecureServerHost(cleanHost, targetAddr);
-    const httpProto = isHttps ? 'https:' : 'http:';
+    const now = Date.now();
+    const mutationsToSend = validResetMutations.filter(
+      (m) =>
+        (m.type === 'upsert' || m.type === 'delete') &&
+        m.status !== 'CONFLICT' &&
+        (forceRetry || !m.nextRetryAt || m.nextRetryAt <= now)
+    );
+    if (mutationsToSend.length === 0) return;
 
     const baseUrl = getApiBaseUrl();
     const persistentDevId = getPersistentDeviceId();
     const effectiveAuthor = currentUser || 'OPERATOR';
     const effectiveUserId = currentEmployeeId ? `USR-${currentEmployeeId}` : `USR-${effectiveAuthor}`;
     const batchPayload = {
-      mutations,
+      mutations: mutationsToSend,
       reset_version: currentResetVer,
       device_id: persistentDevId,
       author: effectiveAuthor,
@@ -1707,50 +1927,127 @@ export default function App() {
     try {
       const res = await fetch(`${baseUrl}/api/sync/batch`, {
         method: 'POST',
-        headers: { 
+        headers: getAuthHeaders({
           'Content-Type': 'application/json',
           'x-device-id': persistentDevId,
           'x-employee-id': currentEmployeeId || '',
           'x-user-permission': currentPermission || ''
-        },
+        }),
         body: JSON.stringify(batchPayload)
       });
+
+      if (res.status === 403) {
+        const errJson = await res.json().catch(() => ({}));
+        if (errJson.error === 'DEVICE_REVOKED') {
+          handleDeviceRevoked(persistentDevId);
+        }
+        return;
+      }
+
       if (res.status === 409) {
         const errJson = await res.json().catch(() => ({}));
-        const newVer = Number(errJson.systemResetVersion) || Date.now();
-        console.warn(`[JUWEI WMS] Batch sync rejected with 409 STALE_RESET_VERSION. Purging offline queues.`);
-        purgeAllLocalOfflineCachesAndQueues(newVer);
-        handleManualSync();
+        if (typeof errJson.error === 'string' && errJson.error.includes('STALE_RESET_VERSION')) {
+          const newVer = Number(errJson.systemResetVersion) || Date.now();
+          console.warn(`[JUWEI WMS] Batch sync rejected with 409 STALE_RESET_VERSION. Purging stale offline queues.`);
+          purgeAllLocalOfflineCachesAndQueues(newVer);
+          handleManualSync();
+        }
         return;
       }
-      if (res.ok) {
-        localStorage.removeItem(PENDING_MUTATIONS_KEY);
-        return;
-      }
-    } catch (e) {}
 
-    try {
-      const resFallback = await fetch(`${httpProto}//${cleanHost}/api/sync/batch`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-device-id': persistentDevId,
-          'x-employee-id': currentEmployeeId || '',
-          'x-user-permission': currentPermission || ''
-        },
-        body: JSON.stringify(batchPayload)
-      });
-      if (resFallback.status === 409) {
-        const errJson = await resFallback.json().catch(() => ({}));
-        const newVer = Number(errJson.systemResetVersion) || Date.now();
-        purgeAllLocalOfflineCachesAndQueues(newVer);
-        handleManualSync();
+      if (res.ok) {
+        const json = await res.json().catch(() => ({}));
+        const results: any[] = Array.isArray(json.results) ? json.results : [];
+        if (results.length > 0) {
+          const confirmedIds: string[] = [];
+          const resultById = new Map<string, any>();
+          for (const r of results) {
+            const key = String(r.mutationId || r.id || '');
+            if (key) resultById.set(key, r);
+          }
+
+          let currentQueue = getPendingMutations();
+          let queueModified = false;
+
+          for (const mut of mutationsToSend) {
+            const r = resultById.get(mut.id);
+            if (!r) continue;
+            if (r.success) {
+              confirmedIds.push(mut.id);
+              if (r.record && r.collection) {
+                applyConfirmedRecordToState(r.collection, r.record);
+              }
+            } else if (r.status === 403 && r.error === 'DEVICE_REVOKED') {
+              handleDeviceRevoked(persistentDevId);
+              return;
+            } else if (r.status === 409) {
+              recordSyncConflict({
+                id: mut.id,
+                collection: mut.collection,
+                recordId: String(mut.recordId || mut.record?.id || r.recordId || ''),
+                type: mut.type === 'delete' ? 'delete' : 'upsert',
+                localRecord: mut.record,
+                currentServerRecord: r.currentRecord,
+                expectedVersion: mut.expectedVersion,
+                author: mut.author,
+                actionDesc: mut.actionDesc,
+                error: r.error || 'VERSION_CONFLICT: Newer revision exists on server.'
+              });
+              currentQueue = getPendingMutations();
+            } else {
+              const nextRetry = (mut.retryCount || 0) + 1;
+              currentQueue = currentQueue.map((q) =>
+                q.id === mut.id
+                  ? {
+                      ...q,
+                      status: 'FAILED' as const,
+                      retryCount: nextRetry,
+                      nextRetryAt: Date.now() + calculateRetryBackoffMs(nextRetry),
+                      lastError: r.error || `Server status ${r.status}`
+                    }
+                  : q
+              );
+              queueModified = true;
+            }
+          }
+
+          if (queueModified) {
+            savePendingMutations(currentQueue);
+          }
+          if (confirmedIds.length > 0) {
+            removeConfirmedMutations(confirmedIds);
+          }
+        }
         return;
       }
-      if (resFallback.ok) {
-        localStorage.removeItem(PENDING_MUTATIONS_KEY);
-      }
-    } catch (err) {}
+
+      // Non-OK 5xx response: mark retry backoff instead of removing
+      const nextQueue = getPendingMutations().map((q) => {
+        if (!mutationsToSend.some((m) => m.id === q.id)) return q;
+        const nextRetry = (q.retryCount || 0) + 1;
+        return {
+          ...q,
+          status: 'FAILED' as const,
+          retryCount: nextRetry,
+          nextRetryAt: Date.now() + calculateRetryBackoffMs(nextRetry),
+          lastError: `Server returned status ${res.status}`
+        };
+      });
+      savePendingMutations(nextQueue);
+    } catch (e: any) {
+      const nextQueue = getPendingMutations().map((q) => {
+        if (!mutationsToSend.some((m) => m.id === q.id)) return q;
+        const nextRetry = (q.retryCount || 0) + 1;
+        return {
+          ...q,
+          status: 'FAILED' as const,
+          retryCount: nextRetry,
+          nextRetryAt: Date.now() + calculateRetryBackoffMs(nextRetry),
+          lastError: e?.message || 'Network failure'
+        };
+      });
+      savePendingMutations(nextQueue);
+    }
   };
 
   // Completely wipes all cached tables, pending queues, tombstones, and synchronizes reset version
@@ -1767,17 +2064,17 @@ export default function App() {
         localStorage.removeItem(`juwei_wms_cache_${col}`);
       });
       localStorage.removeItem('juwei_wms_master_registries');
-      localStorage.removeItem('juwei_wms_pending_sync');
-      localStorage.removeItem(PENDING_MUTATIONS_KEY);
-      localStorage.removeItem('juwei_wms_offline_queue_v1');
+      savePendingMutations([]);
       localStorage.removeItem('juwei_wms_deleted_records_v1');
       localStorage.removeItem('juwei_wms_draft_receiving');
       localStorage.removeItem('juwei_wms_draft_receiving_return');
       localStorage.removeItem('juwei_wms_draft_issuance');
     } catch (e) {}
 
+    setSyncConflicts([]);
     deletedRecordIds.current.clear();
     recentlyMutatedRecords.current.clear();
+    lastKnownVersionsRef.current.clear();
   };
 
   // Directly sets in-memory state to pure authoritative central database data without merging stale leftovers
@@ -1984,7 +2281,7 @@ export default function App() {
     return true;
   };
 
-  // Helper to reconcile incoming remote collections with local state cleanly without data loss, disappearing records, or resurrection of reset data
+  // Helper to reconcile incoming remote collections with local state cleanly without data loss or resurrection of stale mutations
   const reconcileCollection = (colName: string, currentArr: any[], incomingArr: any[], forceOverwrite = false): any[] => {
     const safeCurrent = Array.isArray(currentArr) ? currentArr : [];
 
@@ -1999,17 +2296,14 @@ export default function App() {
     const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
     const deletedSet = getDeletedRecordIds();
 
-    // Check for active unconfirmed local mutations with valid reset version
-    const pendingMutations = getPendingMutations().filter(
-      mut => mut && mut.collection === colName && (!mut.reset_version || mut.reset_version >= currentResetVer)
+    // Check for active unconfirmed local mutations (including in-flight WS writes) with valid reset version
+    const inFlightList = Array.from(inFlightWsMutationsRef.current.values())
+      .map(entry => entry.mutation)
+      .filter(mut => mut && mut.collection === colName && (!mut.reset_version || mut.reset_version >= currentResetVer));
+    const queuedList = getPendingMutations().filter(
+      mut => mut && mut.collection === colName && mut.status !== 'CONFLICT' && (!mut.reset_version || mut.reset_version >= currentResetVer)
     );
-
-    // Prevent data flickering bug: If server returned empty array and forceOverwrite is false,
-    // only preserve current if it has valid data and we are in transit
-    if (incomingArr.length === 0 && !forceOverwrite && safeCurrent.length > 0) {
-      // If we haven't synced yet or network blip, keep current temporarily
-      return safeCurrent;
-    }
+    const pendingMutations = [...queuedList, ...inFlightList];
 
     // Filter incoming records from server to exclude stale reset versions
     const filteredIncoming = incomingArr.filter(item => {
@@ -2027,15 +2321,29 @@ export default function App() {
       mergedMap.set(recId, remoteItem);
     }
 
-    // 2. Overlay ONLY pending unconfirmed offline mutations created on this device
+    // 2. Overlay ONLY unconfirmed offline mutations whose base version is not older than the server's version
     for (const mut of pendingMutations) {
-      if (mut && mut.type === 'upsert' && mut.record && (mut.record.id || mut.record.record_id)) {
-        const id = String(mut.record.id || mut.record.record_id);
+      const id = String(mut?.record?.id || mut?.record?.record_id || mut?.recordId || (mut as any)?.id || '');
+      if (!id) continue;
+
+      const serverRec = mergedMap.get(id);
+      const serverVer = serverRec && serverRec.version !== undefined && serverRec.version !== null
+        ? Number(serverRec.version)
+        : undefined;
+      const mutVer = mut.expectedVersion !== undefined && mut.expectedVersion !== null
+        ? Number(mut.expectedVersion)
+        : (mut.record?.version !== undefined && mut.record?.version !== null ? Number(mut.record.version) : undefined);
+
+      // Never overlay a queued change that is older than the server's version of that record
+      if (serverVer !== undefined && mutVer !== undefined && mutVer < serverVer) {
+        continue;
+      }
+
+      if (mut.type === 'upsert' && mut.record && (mut.record.id || mut.record.record_id)) {
         if (!deletedSet.has(id)) {
-          mergedMap.set(id, { ...(mergedMap.get(id) || {}), ...mut.record });
+          mergedMap.set(id, { ...(serverRec || {}), ...mut.record });
         }
-      } else if (mut && mut.type === 'delete' && (mut.recordId || (mut as any).id)) {
-        const id = String(mut.recordId || (mut as any).id);
+      } else if (mut.type === 'delete') {
         mergedMap.delete(id);
       }
     }
@@ -2179,18 +2487,18 @@ export default function App() {
   // Fresh install protocol: wipes local cache, fetches pure authoritative snapshot from central server,
   // and broadcasts live synchronization to all connected users and workstations across the cluster.
   const performFreshInstallAndSync = async (isUserInitiated = false) => {
+    if (isDeviceRevokedRef.current) return;
     try {
       const stationId = getStationId();
+      const persistentDevId = getPersistentDeviceId();
       const installId = 'INS-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 6).toUpperCase();
       localStorage.setItem('juwei_wms_install_id', installId);
       localStorage.setItem('juwei_wms_installed_at', new Date().toISOString());
       localStorage.setItem('juwei_wms_installed_flag_v1', 'true');
       localStorage.removeItem('juwei_wms_is_fresh_install');
-      localStorage.removeItem('juwei_wms_pending_sync');
 
       // Clear stale local caches
       const staleKeys = [
-        'juwei_wms_pending_sync',
         'juwei_wms_mutation_queue_v1',
         'juwei_wms_cache_stocks',
         'juwei_wms_cache_receiving',
@@ -2207,6 +2515,8 @@ export default function App() {
       staleKeys.forEach(k => {
         try { localStorage.removeItem(k); } catch (e) {}
       });
+      setSyncConflicts([]);
+      lastKnownVersionsRef.current.clear();
 
       // Purge any legacy Cloud Run or dev server addresses to ensure zero Google/Gmail account login prompt
       try {
@@ -2221,15 +2531,23 @@ export default function App() {
       try {
         const res = await fetch(`${baseUrl}/api/terminal/fresh-install`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders({ 'Content-Type': 'application/json', 'x-device-id': persistentDevId }),
           body: JSON.stringify({
             stationId,
             installId,
+            deviceId: persistentDevId,
             username: currentUser || 'JUWEI OPERATOR',
             employeeId: currentEmployeeId || '',
             platform: getPlatformName()
           })
         });
+        if (res.status === 403) {
+          const errJson = await res.json().catch(() => ({}));
+          if (errJson.error === 'DEVICE_REVOKED') {
+            handleDeviceRevoked(persistentDevId);
+            return;
+          }
+        }
 
         if (res.ok) {
           const json = await res.json();
@@ -2329,133 +2647,228 @@ export default function App() {
     } catch (e) {}
   }, []);
 
-  // Helper to execute coordinated single-record upsert across local state, WebSocket, and Express server
+  // Helper to execute coordinated single-record upsert across ONE active transport path (WS if open, else HTTP, else Queue)
   const upsertRecordLocallyAndRemotely = (
-    collection: string, 
-    record: any, 
-    actionDesc?: string
+    collection: string,
+    record: any,
+    actionDesc?: string,
+    options?: { overrideExpectedVersion?: number; existingMutationId?: string }
   ) => {
     if (!record || !record.id || !collection) return;
+    if (isDeviceRevokedRef.current) {
+      showPrintToast('This computer was removed from the system', 'error');
+      return;
+    }
+
     unmarkRecordAsDeletedLocally(record.id);
     markRecordMutatedLocally(record.id);
     lastMutationTimes.current[collection] = Date.now();
     setLastSyncedTime(new Date());
 
-    // If an application update is available and user previously clicked 'Later', gently re-surface notification
     if (updateAvailableRef.current) {
       setBannerDismissed(false);
     }
 
-    // Queue for offline resilience
-    queueOfflineMutation({
-      type: 'upsert',
-      collection,
-      record,
-      author: currentUser || 'Operator',
-      actionDesc
-    });
+    const persistentDevId = getPersistentDeviceId();
+    const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
+    const expectedVersion = options?.overrideExpectedVersion !== undefined
+      ? options.overrideExpectedVersion
+      : getExpectedVersionForRecord(collection, record.id, record);
+    const effectiveAuthor = currentUser || 'Operator';
+    const effectiveUserId = currentEmployeeId ? `USR-${currentEmployeeId}` : `USR-${effectiveAuthor}`;
+    const clientMutationId = options?.existingMutationId || `MUT-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
-    // 0. Cross-tab BroadcastChannel
+    // 0. Cross-tab BroadcastChannel (local browser tab sync only)
     if (syncChannelRef.current) {
       try {
         syncChannelRef.current.postMessage({
           type: 'upsert_record',
           collection,
           record,
-          author: currentUser || 'Operator',
+          author: effectiveAuthor,
           actionDesc,
-          reset_version: Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0
+          reset_version: currentResetVer
         });
       } catch (e) {}
     }
 
-    const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
+    const mutationRecord: QueuedMutation = {
+      id: clientMutationId,
+      type: 'upsert',
+      collection,
+      record,
+      recordId: record.id,
+      expectedVersion,
+      author: effectiveAuthor,
+      actionDesc,
+      deviceId: persistentDevId,
+      timestamp: Date.now(),
+      reset_version: currentResetVer,
+      status: 'PENDING',
+      retryCount: 0
+    };
 
-    // 1. WebSocket targeted delta broadcast to central server
-    if (wsOpen(socket)) {
+    const wsPayload = {
+      type: 'upsert_record',
+      clientMutationId,
+      collection,
+      record,
+      expectedVersion,
+      author: effectiveAuthor,
+      employeeId: currentEmployeeId,
+      user_id: effectiveUserId,
+      device_id: persistentDevId,
+      actionDesc,
+      reset_version: currentResetVer,
+      record_id: record.id || record.record_id
+    };
+
+    // ONE WRITE PATH: 1) WebSocket if open
+    const activeSocket = socketRef.current || socket;
+    if (wsOpen(activeSocket)) {
       try {
-        socket!.send(JSON.stringify({
-          type: 'upsert_record',
-          collection,
-          record,
-          author: currentUser || 'Operator',
-          actionDesc,
-          reset_version: currentResetVer,
-          record_id: record.id || record.record_id
-        }));
-      } catch (e) {}
-    }
-
-    // 2. HTTP REST upsert endpoint
-    let targetAddr = serverAddress.trim() || getDefaultServerAddress();
-    const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
-    const isHttps = isSecureServerHost(cleanHost, targetAddr);
-    const httpProto = isHttps ? 'https:' : 'http:';
-    const baseUrl = getApiBaseUrl();
-
-    fetch(`${baseUrl}/api/records/upsert`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        collection,
-        record,
-        author: currentUser || 'Operator',
-        actionDesc,
-        reset_version: currentResetVer,
-        record_id: record.id || record.record_id
-      })
-    })
-    .then(async res => {
-      if (res.status === 409) {
-        const errJson = await res.json().catch(() => ({}));
-        const serverVer = Number(errJson.serverResetVersion) || currentResetVer + 1;
-        purgeAllLocalOfflineCachesAndQueues(serverVer);
-        handleManualSync();
+        const ackTimeout = setTimeout(() => {
+          const entry = inFlightWsMutationsRef.current.get(clientMutationId);
+          if (!entry) return;
+          inFlightWsMutationsRef.current.delete(clientMutationId);
+          enqueueMutation({
+            ...entry.mutation,
+            status: 'FAILED',
+            retryCount: 1,
+            nextRetryAt: Date.now() + calculateRetryBackoffMs(1),
+            lastError: 'WebSocket acknowledgment timeout'
+          });
+        }, 8000);
+        inFlightWsMutationsRef.current.set(clientMutationId, { mutation: mutationRecord, timer: ackTimeout });
+        activeSocket!.send(JSON.stringify(wsPayload));
+        return;
+      } catch (e) {
+        const entry = inFlightWsMutationsRef.current.get(clientMutationId);
+        if (entry) {
+          clearTimeout(entry.timer);
+          inFlightWsMutationsRef.current.delete(clientMutationId);
+        }
+        enqueueMutation({
+          ...mutationRecord,
+          status: 'FAILED',
+          retryCount: 1,
+          nextRetryAt: Date.now() + calculateRetryBackoffMs(1),
+          lastError: 'WebSocket send failed'
+        });
         return;
       }
-      if (res.ok) flushPendingMutationsQueue();
-    })
-    .catch(() => {
-      fetch(`${httpProto}//${cleanHost}/api/records/upsert`, {
+    }
+
+    // ONE WRITE PATH: 2) HTTP POST if online
+    const isBrowserOnline = typeof navigator === 'undefined' || navigator.onLine;
+    if (isBrowserOnline) {
+      const baseUrl = getApiBaseUrl();
+      fetch(`${baseUrl}/api/records/upsert`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json',
+          'x-device-id': persistentDevId,
+          'x-employee-id': currentEmployeeId || '',
+          'x-user-permission': currentPermission || ''
+        }),
         body: JSON.stringify({
           collection,
           record,
-          author: currentUser || 'Operator',
+          expectedVersion,
+          author: effectiveAuthor,
+          employeeId: currentEmployeeId,
+          user_id: effectiveUserId,
+          device_id: persistentDevId,
           actionDesc,
           reset_version: currentResetVer,
           record_id: record.id || record.record_id
         })
       })
-      .then(async res => {
+      .then(async (res) => {
+        if (res.status === 403) {
+          const errJson = await res.json().catch(() => ({}));
+          if (errJson.error === 'DEVICE_REVOKED') {
+            handleDeviceRevoked(persistentDevId);
+            return;
+          }
+        }
         if (res.status === 409) {
           const errJson = await res.json().catch(() => ({}));
-          const serverVer = Number(errJson.serverResetVersion) || currentResetVer + 1;
-          purgeAllLocalOfflineCachesAndQueues(serverVer);
-          handleManualSync();
+          if (typeof errJson.error === 'string' && errJson.error.includes('STALE_RESET_VERSION')) {
+            const serverVer = Number(errJson.systemResetVersion || errJson.serverResetVersion) || currentResetVer + 1;
+            purgeAllLocalOfflineCachesAndQueues(serverVer);
+            handleManualSync();
+            return;
+          }
+          recordSyncConflict({
+            id: clientMutationId,
+            collection,
+            recordId: String(record.id || record.record_id),
+            type: 'upsert',
+            localRecord: record,
+            currentServerRecord: errJson.currentRecord || errJson.confirmedRecord,
+            expectedVersion,
+            author: effectiveAuthor,
+            actionDesc,
+            error: errJson.error || 'VERSION_CONFLICT: Newer revision exists on server.'
+          });
+          return;
         }
+        if (res.ok) {
+          const json = await res.json().catch(() => ({}));
+          if (json.record) {
+            applyConfirmedRecordToState(collection, json.record);
+          }
+          removeConfirmedMutations([clientMutationId]);
+          return;
+        }
+        enqueueMutation({
+          ...mutationRecord,
+          status: 'FAILED',
+          retryCount: 1,
+          nextRetryAt: Date.now() + calculateRetryBackoffMs(1),
+          lastError: `Server returned status ${res.status}`
+        });
       })
-      .catch(() => {});
-    });
+      .catch((err) => {
+        enqueueMutation({
+          ...mutationRecord,
+          status: 'FAILED',
+          retryCount: 1,
+          nextRetryAt: Date.now() + calculateRetryBackoffMs(1),
+          lastError: err?.message || 'HTTP upsert failed'
+        });
+      });
+      return;
+    }
+
+    // ONE WRITE PATH: 3) Offline Queue (juwei_wms_mutation_queue_v1)
+    enqueueMutation(mutationRecord);
   };
 
-  // Helper to execute coordinated deletion across local state, WebSocket, and Express server
-  const deleteRecordLocallyAndRemotely = (collection: string, id: string) => {
+  // Helper to execute coordinated deletion across ONE active transport path (WS if open, else HTTP, else Queue)
+  const deleteRecordLocallyAndRemotely = (
+    collection: string,
+    id: string,
+    options?: { overrideExpectedVersion?: number; existingMutationId?: string }
+  ) => {
     if (!id || !collection) return;
+    if (isDeviceRevokedRef.current) {
+      showPrintToast('This computer was removed from the system', 'error');
+      return;
+    }
+
     markRecordAsDeletedLocally(id);
     setLastSyncedTime(new Date());
 
     const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
-
-    // Queue for offline resilience
-    queueOfflineMutation({
-      type: 'delete',
-      collection,
-      recordId: id,
-      author: currentUser || 'Operator',
-      reset_version: currentResetVer
-    });
+    const persistentDevId = getPersistentDeviceId();
+    const effectiveAuthor = currentUser || 'Operator';
+    const effectiveUserId = currentEmployeeId ? `USR-${currentEmployeeId}` : `USR-${effectiveAuthor}`;
+    const expectedVersion = options?.overrideExpectedVersion !== undefined
+      ? options.overrideExpectedVersion
+      : getExpectedVersionForRecord(collection, id);
+    const clientMutationId = options?.existingMutationId || `MUT-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
     // 0. Cross-tab BroadcastChannel
     if (syncChannelRef.current) {
@@ -2469,77 +2882,166 @@ export default function App() {
       } catch (e) {}
     }
 
-    // 1. WebSocket deletion to central database
-    if (wsOpen(socket)) {
+    const mutationRecord: QueuedMutation = {
+      id: clientMutationId,
+      type: 'delete',
+      collection,
+      recordId: id,
+      expectedVersion,
+      author: effectiveAuthor,
+      deviceId: persistentDevId,
+      timestamp: Date.now(),
+      reset_version: currentResetVer,
+      status: 'PENDING',
+      retryCount: 0
+    };
+
+    // ONE WRITE PATH: 1) WebSocket if open
+    const activeSocket = socketRef.current || socket;
+    if (wsOpen(activeSocket)) {
       try {
-        socket!.send(JSON.stringify({
+        const ackTimeout = setTimeout(() => {
+          const entry = inFlightWsMutationsRef.current.get(clientMutationId);
+          if (!entry) return;
+          inFlightWsMutationsRef.current.delete(clientMutationId);
+          enqueueMutation({
+            ...entry.mutation,
+            status: 'FAILED',
+            retryCount: 1,
+            nextRetryAt: Date.now() + calculateRetryBackoffMs(1),
+            lastError: 'WebSocket delete acknowledgment timeout'
+          });
+        }, 8000);
+        inFlightWsMutationsRef.current.set(clientMutationId, { mutation: mutationRecord, timer: ackTimeout });
+        activeSocket!.send(JSON.stringify({
           type: 'delete_record',
+          clientMutationId,
           collection,
           id,
+          expectedVersion,
+          author: effectiveAuthor,
+          employeeId: currentEmployeeId,
+          user_id: effectiveUserId,
+          device_id: persistentDevId,
           reset_version: currentResetVer
         }));
-      } catch (e) {}
-    }
-
-    // 2. HTTP REST deletion
-    let targetAddr = serverAddress.trim() || getDefaultServerAddress();
-    const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
-    const isHttps = isSecureServerHost(cleanHost, targetAddr);
-    const httpProto = isHttps ? 'https:' : 'http:';
-    const baseUrl = getApiBaseUrl();
-
-    fetch(`${baseUrl}/api/records/delete`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ collection, id, reset_version: currentResetVer })
-    })
-    .then(async res => {
-      if (res.status === 409) {
-        const errJson = await res.json().catch(() => ({}));
-        const serverVer = Number(errJson.serverResetVersion) || currentResetVer + 1;
-        purgeAllLocalOfflineCachesAndQueues(serverVer);
-        handleManualSync();
+        return;
+      } catch (e) {
+        const entry = inFlightWsMutationsRef.current.get(clientMutationId);
+        if (entry) {
+          clearTimeout(entry.timer);
+          inFlightWsMutationsRef.current.delete(clientMutationId);
+        }
+        enqueueMutation({
+          ...mutationRecord,
+          status: 'FAILED',
+          retryCount: 1,
+          nextRetryAt: Date.now() + calculateRetryBackoffMs(1),
+          lastError: 'WebSocket delete send failed'
+        });
         return;
       }
-      if (res.ok) flushPendingMutationsQueue();
-    })
-    .catch(() => {
-      fetch(`${httpProto}//${cleanHost}/api/records/delete`, {
+    }
+
+    // ONE WRITE PATH: 2) HTTP POST if online
+    const isBrowserOnline = typeof navigator === 'undefined' || navigator.onLine;
+    if (isBrowserOnline) {
+      const baseUrl = getApiBaseUrl();
+      fetch(`${baseUrl}/api/records/delete`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ collection, id, reset_version: currentResetVer })
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json',
+          'x-device-id': persistentDevId,
+          'x-employee-id': currentEmployeeId || '',
+          'x-user-permission': currentPermission || ''
+        }),
+        body: JSON.stringify({
+          collection,
+          id,
+          expectedVersion,
+          author: effectiveAuthor,
+          employeeId: currentEmployeeId,
+          user_id: effectiveUserId,
+          device_id: persistentDevId,
+          reset_version: currentResetVer
+        })
       })
-      .then(async res => {
+      .then(async (res) => {
+        if (res.status === 403) {
+          const errJson = await res.json().catch(() => ({}));
+          if (errJson.error === 'DEVICE_REVOKED') {
+            handleDeviceRevoked(persistentDevId);
+            return;
+          }
+        }
         if (res.status === 409) {
           const errJson = await res.json().catch(() => ({}));
-          const serverVer = Number(errJson.serverResetVersion) || currentResetVer + 1;
-          purgeAllLocalOfflineCachesAndQueues(serverVer);
-          handleManualSync();
+          if (typeof errJson.error === 'string' && errJson.error.includes('STALE_RESET_VERSION')) {
+            const serverVer = Number(errJson.systemResetVersion || errJson.serverResetVersion) || currentResetVer + 1;
+            purgeAllLocalOfflineCachesAndQueues(serverVer);
+            handleManualSync();
+            return;
+          }
+          recordSyncConflict({
+            id: clientMutationId,
+            collection,
+            recordId: id,
+            type: 'delete',
+            currentServerRecord: errJson.currentRecord || errJson.confirmedRecord,
+            expectedVersion,
+            author: effectiveAuthor,
+            error: errJson.error || 'VERSION_CONFLICT: Newer revision exists on server.'
+          });
+          return;
         }
+        if (res.ok) {
+          removeConfirmedMutations([clientMutationId]);
+          return;
+        }
+        enqueueMutation({
+          ...mutationRecord,
+          status: 'FAILED',
+          retryCount: 1,
+          nextRetryAt: Date.now() + calculateRetryBackoffMs(1),
+          lastError: `Server returned status ${res.status}`
+        });
       })
-      .catch(() => {});
-    });
+      .catch((err) => {
+        enqueueMutation({
+          ...mutationRecord,
+          status: 'FAILED',
+          retryCount: 1,
+          nextRetryAt: Date.now() + calculateRetryBackoffMs(1),
+          lastError: err?.message || 'HTTP delete failed'
+        });
+      });
+      return;
+    }
+
+    // ONE WRITE PATH: 3) Offline Queue
+    enqueueMutation(mutationRecord);
   };
 
   // Manual Full-Sync across WebSocket, REST & Local Terminals
   const handleManualSync = async () => {
+    if (isDeviceRevokedRef.current) return;
     setIsManualSyncing(true);
     try {
       // 1. Broadcast force sync over WebSocket & request latest cluster presence
-      if (wsOpen(socket)) {
+      const activeSocket = socketRef.current || socket;
+      if (wsOpen(activeSocket)) {
         try {
-          socket!.send(JSON.stringify({ 
+          activeSocket!.send(JSON.stringify({
             type: 'force_sync_all',
             author: currentUser || 'SUPER ADMINISTRATOR'
           }));
-          socket!.send(JSON.stringify({ 
+          activeSocket!.send(JSON.stringify({
             type: 'get_presence'
           }));
         } catch (e) {}
       }
 
-
-      // 3. Broadcast force sync over local BroadcastChannel
+      // 2. Broadcast force sync over local BroadcastChannel
       if (syncChannelRef.current) {
         try {
           syncChannelRef.current.postMessage({
@@ -2556,8 +3058,19 @@ export default function App() {
       const httpProto = isHttps ? 'https:' : 'http:';
       const baseUrl = getApiBaseUrl();
 
+      const persistentDevId = getPersistentDeviceId();
       try {
-        const res = await fetch(`${baseUrl}/api/sync`, { cache: 'no-store', headers: { 'Accept': 'application/json' } });
+        const res = await fetch(`${baseUrl}/api/sync`, {
+          cache: 'no-store',
+          headers: getAuthHeaders({ 'Accept': 'application/json', 'x-device-id': persistentDevId })
+        });
+        if (res.status === 403) {
+          const errJson = await res.json().catch(() => ({}));
+          if (errJson.error === 'DEVICE_REVOKED') {
+            handleDeviceRevoked(persistentDevId);
+            return;
+          }
+        }
         if (res.ok) {
           const json = await res.json();
           if (json.systemResetVersion) {
@@ -2777,19 +3290,28 @@ export default function App() {
     let syncSequenceId = 0;
 
     const tryFetchSync = async (url: string): Promise<boolean> => {
+      if (isDeviceRevokedRef.current) return false;
       const thisReqId = ++syncSequenceId;
+      const persistentDevId = getPersistentDeviceId();
       try {
         if (activeSyncAbortCtrl) {
           try { activeSyncAbortCtrl.abort(); } catch (e) {}
         }
         activeSyncAbortCtrl = new AbortController();
-        const res = await fetch(url, { 
-          method: 'GET', 
-          cache: 'no-store', 
-          headers: { 'Accept': 'application/json' },
+        const res = await fetch(url, {
+          method: 'GET',
+          cache: 'no-store',
+          headers: getAuthHeaders({ 'Accept': 'application/json', 'x-device-id': persistentDevId }),
           signal: activeSyncAbortCtrl.signal
         });
         if (thisReqId !== syncSequenceId) return false;
+        if (res.status === 403) {
+          const errJson = await res.json().catch(() => ({}));
+          if (errJson.error === 'DEVICE_REVOKED') {
+            handleDeviceRevoked(persistentDevId);
+          }
+          return false;
+        }
         if (res.ok) {
           const json = await res.json();
           if (thisReqId !== syncSequenceId) return false;
@@ -2826,15 +3348,8 @@ export default function App() {
         }
       } catch (e: any) {
         if (e && e.name === 'AbortError') return false;
-        // Fetch failed
       }
       return false;
-    };
-
-    const flushPendingSyncQueue = async () => {
-      try {
-        localStorage.removeItem('juwei_wms_pending_sync');
-      } catch (e) {}
     };
 
     const checkBuildVersion = async () => {
@@ -2953,6 +3468,8 @@ export default function App() {
     };
 
     const runSyncCheck = async (): Promise<boolean> => {
+      if (isDeviceRevokedRef.current) return false;
+
       // Check for newly deployed application build
       checkBuildVersion();
 
@@ -2974,14 +3491,14 @@ export default function App() {
         }
       }
 
-      if (isMounted && !hasConnectedOnce) {
+      if (isMounted && !hasConnectedOnce && !isDeviceRevokedRef.current) {
         setConnectionStatus('disconnected');
       }
       return false;
     };
 
     const connectWebSocket = async () => {
-      if (!isMounted) return;
+      if (!isMounted || isDeviceRevokedRef.current) return;
       if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
         return;
       }
@@ -3005,11 +3522,15 @@ export default function App() {
       }
 
       ws.onopen = () => {
-        if (!isMounted) return;
+        if (!isMounted || isDeviceRevokedRef.current) {
+          try { ws?.close(); } catch {}
+          return;
+        }
         hasConnectedOnce = true;
         missedPongs = 0;
         retryDelay = 1000;
         setConnectionStatus('connected');
+        socketRef.current = ws;
         setSocket(ws);
         
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -3240,11 +3761,13 @@ export default function App() {
               setLastSyncedTime(new Date());
               break;
             }
-            case 'SYNC_REQUIRED':
-            case 'STALE_RESET_VERSION': {
+            case 'SYNC_REQUIRED': {
               const resetVerNum = Number(payload.systemResetVersion) || Date.now();
-              console.warn(`[JUWEI WMS] Received ${payload.type} from server. Purging local queues and refetching fresh state.`);
-              purgeAllLocalOfflineCachesAndQueues(resetVerNum);
+              const localResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
+              if (payload.reason === 'STALE_RESET_VERSION' && resetVerNum > localResetVer) {
+                console.warn(`[JUWEI WMS] Received SYNC_REQUIRED (STALE_RESET_VERSION). Purging local caches and refetching.`);
+                purgeAllLocalOfflineCachesAndQueues(resetVerNum);
+              }
               handleManualSync();
               break;
             }
@@ -3261,35 +3784,15 @@ export default function App() {
               const { collection, record, author, actionDesc } = payload;
               if (record && record.id && collection) {
                 setLastSyncedTime(new Date());
+                recordKnownVersions(collection, [record]);
 
-                const updateFn = (prev: any[]) => {
-                  if (isRecordDeletedLocally(record.id)) return prev;
-                  const idx = prev.findIndex(it => it.id === record.id);
-                  if (idx >= 0) {
-                    if (JSON.stringify(prev[idx]) === JSON.stringify(record)) return prev;
-                    const next = [...prev];
-                    next[idx] = record;
-                    return next;
-                  }
-                  return [record, ...prev];
-                };
-
-                const applyChange = () => {
-                  switch (collection) {
-                    case 'stocks': setStocks(updateFn); break;
-                    case 'receiving': setReceiving(updateFn); break;
-                    case 'returns': setReturns(updateFn); break;
-                    case 'recycling': setRecycling(updateFn); break;
-                    case 'issuances': setIssuances(updateFn); break;
-                    case 'deliveries': setDeliveries(updateFn); break;
-                    case 'envLogs': setEnvLogs(updateFn); break;
-                    case 'forkliftChecks': setForkliftChecks(updateFn); break;
-                    case 'registries': setRegistries(updateFn); break;
-                  }
-                };
-
-                // Apply state update in the background for consistency
-                applyChange();
+                // Do not overwrite local unsaved changes if this record has a pending conflict or newer queued edit
+                const hasLocalOverride = getPendingMutations().some(
+                  (m) => m.collection === collection && String(m.recordId || m.record?.id) === String(record.id)
+                );
+                if (!hasLocalOverride) {
+                  applyConfirmedRecordToState(collection, record);
+                }
 
                 // Auto-merged incoming record changes without requiring manual confirmation
                 const isFromOtherUser = author && author.toUpperCase() !== (currentUser || '').toUpperCase();
@@ -3538,10 +4041,34 @@ export default function App() {
         runSyncCheck();
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event: CloseEvent) => {
         if (!isMounted) return;
         if (pingInterval) clearInterval(pingInterval);
+        socketRef.current = null;
         setSocket(null);
+
+        // Move any unconfirmed in-flight WS writes to the single offline queue with backoff
+        if (inFlightWsMutationsRef.current.size > 0) {
+          for (const [, entry] of inFlightWsMutationsRef.current.entries()) {
+            clearTimeout(entry.timer);
+            enqueueMutation({
+              ...entry.mutation,
+              status: 'FAILED',
+              retryCount: (entry.mutation.retryCount || 0) + 1,
+              nextRetryAt: Date.now() + calculateRetryBackoffMs((entry.mutation.retryCount || 0) + 1),
+              lastError: 'WebSocket connection closed before acknowledgment'
+            });
+          }
+          inFlightWsMutationsRef.current.clear();
+        }
+
+        if (event?.code === 4003 || event?.reason === 'DEVICE_REVOKED' || isDeviceRevokedRef.current) {
+          if (reconnectTimeout) clearTimeout(reconnectTimeout);
+          if (httpPollInterval) clearInterval(httpPollInterval);
+          handleDeviceRevoked();
+          return;
+        }
+
         runSyncCheck();
         reconnectTimeout = setTimeout(() => {
           retryDelay = Math.min(retryDelay * 1.5, 6000);
@@ -3553,11 +4080,11 @@ export default function App() {
     // Re-sync handlers when internet connection is restored or page is focused (throttled to avoid rapid background re-fetch)
     let lastFocusSyncTime = 0;
     const handleOnlineOrFocus = () => {
-      if (isMounted) {
+      if (isMounted && !isDeviceRevokedRef.current) {
         const now = Date.now();
         if (now - lastFocusSyncTime > 15000) {
           lastFocusSyncTime = now;
-          flushPendingSyncQueue().then(() => runSyncCheck());
+          runSyncCheck();
         }
         if (!ws || (ws.readyState !== WebSocket.OPEN && ws.readyState !== WebSocket.CONNECTING)) {
           connectWebSocket();
@@ -3565,28 +4092,45 @@ export default function App() {
       }
     };
 
+    const handleForceFlushEvent = () => {
+      if (isMounted && !isDeviceRevokedRef.current) {
+        flushPendingMutationsQueue(true);
+      }
+    };
+
+    const handleDeviceRevokedEvent = (ev: any) => {
+      handleDeviceRevoked(ev?.detail?.deviceId);
+    };
+
     window.addEventListener('online', handleOnlineOrFocus);
     window.addEventListener('focus', handleOnlineOrFocus);
     document.addEventListener('visibilitychange', handleOnlineOrFocus);
+    window.addEventListener(FORCE_FLUSH_MUTATIONS_EVENT, handleForceFlushEvent);
+    window.addEventListener(DEVICE_REVOKED_EVENT, handleDeviceRevokedEvent);
 
     // Run immediate sync on mount
     runSyncCheck().then((ok) => {
-      if (!ok && isMounted) {
+      if (!ok && isMounted && !isDeviceRevokedRef.current) {
         setConnectionStatus('connecting');
       }
     });
 
     connectWebSocket();
 
-    // Continuous background HTTP poll fallback (fixed 5000ms interval regardless of ws.readyState)
+    // Continuous background HTTP poll fallback (fixed 5000ms interval)
     httpPollInterval = setInterval(() => {
-      if (isMounted) {
+      if (isMounted && !isDeviceRevokedRef.current) {
         runSyncCheck();
       }
     }, 5000);
 
     return () => {
       isMounted = false;
+      for (const [, entry] of inFlightWsMutationsRef.current.entries()) {
+        clearTimeout(entry.timer);
+      }
+      inFlightWsMutationsRef.current.clear();
+      socketRef.current = null;
       if (ws) ws.close();
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (httpPollInterval) clearInterval(httpPollInterval);
@@ -3594,6 +4138,8 @@ export default function App() {
       window.removeEventListener('online', handleOnlineOrFocus);
       window.removeEventListener('focus', handleOnlineOrFocus);
       document.removeEventListener('visibilitychange', handleOnlineOrFocus);
+      window.removeEventListener(FORCE_FLUSH_MUTATIONS_EVENT, handleForceFlushEvent);
+      window.removeEventListener(DEVICE_REVOKED_EVENT, handleDeviceRevokedEvent);
     };
   }, []);
 
@@ -3614,8 +4160,13 @@ export default function App() {
     }
   }, [currentUser, currentEmployeeId, currentRole, currentPermission, view, socket]);
 
-  // Sync state helpers (supports Central Database, WebSocket, and HTTP POST REST)
+  // Sync state helpers for bulk collection sync (ONE write path: WebSocket if open, else HTTP)
   const syncCollection = (collection: string, data: any[]) => {
+    if (isDeviceRevokedRef.current) {
+      showPrintToast('This computer was removed from the system', 'error');
+      return;
+    }
+
     lastMutationTimes.current[collection] = Date.now();
     setLastSyncedTime(new Date());
 
@@ -3646,10 +4197,11 @@ export default function App() {
       } catch (e) {}
     }
 
-    // 1. Send via WebSocket if active
-    if (wsOpen(socket)) {
+    // ONE WRITE PATH: 1. Send via WebSocket if open
+    const activeSocket = socketRef.current || socket;
+    if (wsOpen(activeSocket)) {
       try {
-        socket!.send(JSON.stringify({
+        activeSocket!.send(JSON.stringify({
           type: 'update_collection',
           collection,
           data,
@@ -3659,17 +4211,13 @@ export default function App() {
           author: effectiveAuthor,
           employeeId: currentEmployeeId
         }));
+        return;
       } catch (e) {
-        console.warn('WS send error:', e);
+        console.warn('WS send error, falling back to HTTP:', e);
       }
     }
-    
-    // 2. Dual-send via HTTP POST REST to Central Database
-    let targetAddr = serverAddress.trim() || getDefaultServerAddress();
-    const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
-    const isHttps = isSecureServerHost(cleanHost, targetAddr);
-    const httpProto = isHttps ? 'https:' : 'http:';
-    
+
+    // ONE WRITE PATH: 2. HTTP POST REST when WebSocket is not open
     const baseUrl = getApiBaseUrl();
     const syncPayload = {
       collection,
@@ -3683,51 +4231,33 @@ export default function App() {
 
     fetch(`${baseUrl}/api/sync`, {
       method: 'POST',
-      headers: { 
+      headers: getAuthHeaders({
         'Content-Type': 'application/json',
         'x-device-id': persistentDevId,
         'x-employee-id': currentEmployeeId || '',
         'x-user-permission': currentPermission || ''
-      },
+      }),
       body: JSON.stringify(syncPayload)
     })
     .then(async res => {
-      if (res.status === 409) {
+      if (res.status === 403) {
         const errJson = await res.json().catch(() => ({}));
-        const serverVer = Number(errJson.serverResetVersion) || currentResetVer + 1;
-        purgeAllLocalOfflineCachesAndQueues(serverVer);
-        handleManualSync();
-        return;
-      }
-      if (res.ok) {
-        clearPendingSync();
-      }
-    })
-    .catch(() => {
-      fetch(`${httpProto}//${cleanHost}/api/sync`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-device-id': persistentDevId,
-          'x-employee-id': currentEmployeeId || '',
-          'x-user-permission': currentPermission || ''
-        },
-        body: JSON.stringify(syncPayload)
-      })
-      .then(async res => {
-        if (res.status === 409) {
-          const errJson = await res.json().catch(() => ({}));
-          const serverVer = Number(errJson.serverResetVersion) || currentResetVer + 1;
-          purgeAllLocalOfflineCachesAndQueues(serverVer);
-          handleManualSync();
+        if (errJson.error === 'DEVICE_REVOKED') {
+          handleDeviceRevoked(persistentDevId);
           return;
         }
-        if (res.ok) {
-          clearPendingSync();
+      }
+      if (res.status === 409) {
+        const errJson = await res.json().catch(() => ({}));
+        if (typeof errJson.error === 'string' && errJson.error.includes('STALE_RESET_VERSION')) {
+          const serverVer = Number(errJson.systemResetVersion || errJson.serverResetVersion) || currentResetVer + 1;
+          purgeAllLocalOfflineCachesAndQueues(serverVer);
+          handleManualSync();
         }
-      })
-      .catch(err => console.warn('HTTP REST sync warning:', err));
-    });
+        return;
+      }
+    })
+    .catch(err => console.warn('HTTP REST sync warning:', err));
   };
 
   const handleRegister = (
@@ -4358,7 +4888,7 @@ export default function App() {
     }
   };
 
-  // State mutators with automatic procedural linking
+  // State mutators with automatic procedural linking (ONE write path per mutation via upsertRecordLocallyAndRemotely / deleteRecordLocallyAndRemotely)
   const handleAddReceiving = (record: ReceivingRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
       showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
@@ -4366,7 +4896,6 @@ export default function App() {
     }
     const nextReceiving = [record, ...receiving];
     setReceiving(nextReceiving);
-    syncCollection('receiving', nextReceiving);
 
     const newStockItem: MaterialStockItem = {
       id: generateAuthoritativeId('STK'),
@@ -4420,7 +4949,6 @@ export default function App() {
     }
 
     setStocks(nextStocks);
-    syncCollection('stocks', nextStocks);
     upsertRecordLocallyAndRemotely('receiving', record, `Received ${record.quantity} of ${record.partCode}`);
     upsertRecordLocallyAndRemotely('stocks', newStockItem, `Created stock item for ${record.partCode}`);
 
@@ -4440,7 +4968,6 @@ export default function App() {
     const updatedReceivingRecord = receiving.find(r => r.id === id);
     const nextReceiving: ReceivingRecord[] = receiving.map(r => r.id === id ? { ...r, iqcStatus, status: (iqcStatus === 'APPROVED_IQC' ? 'VERIFIED' : 'QUARANTINED') as ReceivingRecord['status'] } : r);
     setReceiving(nextReceiving);
-    syncCollection('receiving', nextReceiving);
     if (updatedReceivingRecord) {
       upsertRecordLocallyAndRemotely('receiving', { ...updatedReceivingRecord, iqcStatus, status: (iqcStatus === 'APPROVED_IQC' ? 'VERIFIED' : 'QUARANTINED') as ReceivingRecord['status'] }, `Updated IQC status to ${iqcStatus}`);
     }
@@ -4460,7 +4987,6 @@ export default function App() {
         return s;
       });
       setStocks(nextStocks);
-      syncCollection('stocks', nextStocks);
 
       sendSystemActivity(`${currentUser} updated IQC evaluation for ${targetRec.partCode} (Lot: ${targetRec.lotNumber}) to ${iqcStatus}.`);
     }
@@ -4474,7 +5000,6 @@ export default function App() {
     }
     const nextReturns = [record, ...returns];
     setReturns(nextReturns);
-    syncCollection('returns', nextReturns);
     upsertRecordLocallyAndRemotely('returns', record, `Returned ${record.quantity} of ${record.partCode}`);
     
     const catUpper = (record.category || '').toUpperCase();
@@ -4500,7 +5025,6 @@ export default function App() {
     };
     const nextStocks = [newStockItem, ...stocks];
     setStocks(nextStocks);
-    syncCollection('stocks', nextStocks);
     upsertRecordLocallyAndRemotely('stocks', newStockItem, `Created stock item from return for ${record.partCode}`);
 
     sendSystemActivity(`${currentUser} registered shop-floor return for ${record.partCode} (Lot: ${record.lotNumber}).`);
@@ -4511,20 +5035,24 @@ export default function App() {
       showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
       return;
     }
+    const existingRet = returns.find(r => r.id === id);
     const nextReturns: ReturnRecord[] = returns.map(r => r.id === id ? { ...r, status, iqcEvaluation: 'APPROVED_IQC' as const } : r);
     setReturns(nextReturns);
-    syncCollection('returns', nextReturns);
+    if (existingRet) {
+      upsertRecordLocallyAndRemotely('returns', { ...existingRet, status, iqcEvaluation: 'APPROVED_IQC' as const }, `Updated return status to ${status}`);
+    }
 
-    const targetRet = returns.find(r => r.id === id);
+    const targetRet = existingRet;
     if (targetRet) {
       const nextStocks: MaterialStockItem[] = stocks.map(s => {
         if (s.lotNumber === targetRet.lotNumber && s.partCode === targetRet.partCode) {
-          return { ...s, status: 'APPROVED' as const, location: 'Designated Storage Bin' };
+          const updatedStock = { ...s, status: 'APPROVED' as const, location: 'Designated Storage Bin' };
+          upsertRecordLocallyAndRemotely('stocks', updatedStock, `Approved returned stock for ${targetRet.partCode}`);
+          return updatedStock;
         }
         return s;
       });
       setStocks(nextStocks);
-      syncCollection('stocks', nextStocks);
 
       sendSystemActivity(`${currentUser} approved returned item ${targetRet.partCode} back to active inventory.`);
     }
@@ -4538,7 +5066,6 @@ export default function App() {
     }
     const nextRecycling = [record, ...recycling];
     setRecycling(nextRecycling);
-    syncCollection('recycling', nextRecycling);
     upsertRecordLocallyAndRemotely('recycling', record, `Recycled ${record.quantity} ${record.itemType}(s)`);
 
     sendSystemActivity(`${currentUser} recorded recycling of ${record.quantity} ${record.itemType}(s) under Log Sheet: ${record.logSheetNumber}.`);
@@ -4552,7 +5079,6 @@ export default function App() {
     deleteRecordLocallyAndRemotely('recycling', id);
     const nextRecycling = recycling.filter(r => r.id !== id);
     setRecycling(nextRecycling);
-    syncCollection('recycling', nextRecycling);
   };
 
   const handleAddIssuance = (record: IssuanceRecord) => {
@@ -4562,7 +5088,6 @@ export default function App() {
     }
     const nextIssuances = [record, ...issuances];
     setIssuances(nextIssuances);
-    syncCollection('issuances', nextIssuances);
     upsertRecordLocallyAndRemotely('issuances', record, `Issued ${record.quantityIssued} units for Requisition: ${record.requisitionNumber}`);
 
     sendSystemActivity(`${currentUser} logged materials issuance of ${record.quantityIssued} units for Requisition: ${record.requisitionNumber}.`);
@@ -4585,15 +5110,15 @@ export default function App() {
       return s;
     });
     setStocks(nextStocks);
-    syncCollection('stocks', nextStocks);
     upsertRecordLocallyAndRemotely('stocks', updatedItem, `Deducted ${quantity} from stock ${partCode} (Lot: ${lotNumber})`);
 
-    // Record atomic ledger stock movement with idempotency and database RPC
+    // Record atomic ledger stock movement using delta (not newQuantity)
     createStockMovement({
       productId: partCode,
       warehouseId: 'wh-main',
       type: 'ADJUSTMENT_OUT',
-      quantity: -quantity,
+      quantity,
+      delta: -Math.abs(quantity),
       referenceNumber: lotNumber,
       notes: `Stock deducted for part ${partCode} (Lot: ${lotNumber})`,
       userName: currentUser,
@@ -4610,7 +5135,6 @@ export default function App() {
     }
     const nextDeliveries = [record, ...deliveries];
     setDeliveries(nextDeliveries);
-    syncCollection('deliveries', nextDeliveries);
     upsertRecordLocallyAndRemotely('deliveries', record, `Created delivery request ${record.id}`);
 
     sendSystemActivity(`${currentUser} created Delivery request ${record.id} for model ${record.modelName} (Qty: ${record.quantity}).`);
@@ -4634,7 +5158,6 @@ export default function App() {
       return d;
     });
     setDeliveries(nextDeliveries);
-    syncCollection('deliveries', nextDeliveries);
     if (updatedRecord) {
       upsertRecordLocallyAndRemotely('deliveries', updatedRecord, `Updated delivery status to ${status}`);
     }
@@ -4651,7 +5174,6 @@ export default function App() {
           return s;
         });
         setStocks(nextStocks);
-        syncCollection('stocks', nextStocks);
 
         sendSystemActivity(`${currentUser} released Delivery Request ${id} & Gate Pass to gate guards.`);
       }
@@ -4667,7 +5189,6 @@ export default function App() {
     }
     const nextEnvLogs = [...envLogs, log];
     setEnvLogs(nextEnvLogs);
-    syncCollection('envLogs', nextEnvLogs);
     upsertRecordLocallyAndRemotely('envLogs', log, `Logged space utilization for ${log.zone}`);
 
     const pct = ((log.occupiedSlots / log.totalSlots) * 100).toFixed(1);
@@ -4700,7 +5221,6 @@ export default function App() {
     deleteRecordLocallyAndRemotely('envLogs', id);
     const next = envLogs.filter(l => l.id !== id);
     setEnvLogs(next);
-    syncCollection('envLogs', next);
     sendSystemActivity(`ADMIN ${currentUser} deleted space audit log record ${id}.`);
   };
 
@@ -4711,7 +5231,7 @@ export default function App() {
     }
     const nextForkliftChecks = [check, ...forkliftChecks];
     setForkliftChecks(nextForkliftChecks);
-    syncCollection('forkliftChecks', nextForkliftChecks);
+    upsertRecordLocallyAndRemotely('forkliftChecks', check, `Logged Forklift ${check.forkliftId} pre-op inspection`);
 
     const isForkliftOk = check.brakesOk && check.lightsOk && check.hydraulicOk && check.steeringOk && check.tiresOk && check.batteryFluidOk;
     sendSystemActivity(`${currentUser} logged Forklift ${check.forkliftId} pre-op check. Passed: ${isForkliftOk}.`);
@@ -4725,7 +5245,6 @@ export default function App() {
     }
     const next = [item, ...stocks];
     setStocks(next);
-    syncCollection('stocks', next);
     upsertRecordLocallyAndRemotely('stocks', item, `Added stock batch ${item.partCode}`);
     sendSystemActivity(`${currentUser} added stock batch ${item.partCode} (${item.quantity} ${item.unit}).`);
   };
@@ -4744,7 +5263,6 @@ export default function App() {
       return s;
     });
     setStocks(next);
-    syncCollection('stocks', next);
     if (updatedItem) {
       upsertRecordLocallyAndRemotely('stocks', updatedItem, `Updated stock ${id} quantity to ${qty}`);
     }
@@ -4765,7 +5283,6 @@ export default function App() {
       return s;
     });
     setStocks(next);
-    syncCollection('stocks', next);
     if (updatedItem) {
       upsertRecordLocallyAndRemotely('stocks', updatedItem, `Updated stock ${id} status to ${status}`);
     }
@@ -4779,7 +5296,6 @@ export default function App() {
     }
     const next = stocks.map(s => s.id === item.id ? item : s);
     setStocks(next);
-    syncCollection('stocks', next);
     upsertRecordLocallyAndRemotely('stocks', item, `Updated stock record ${item.id}`);
     const actorRole = currentPermission === 'FULL_ACCESS' ? 'SUPER ADMIN' : 'OPERATOR';
     sendSystemActivity(`${actorRole} ${currentUser} updated stock record ${item.id} (${item.partCode}).`);
@@ -4793,7 +5309,6 @@ export default function App() {
     deleteRecordLocallyAndRemotely('stocks', id);
     const next = stocks.filter(s => s.id !== id);
     setStocks(next);
-    syncCollection('stocks', next);
     sendSystemActivity(`SUPER ADMIN ${currentUser} deleted stock record ${id}.`);
   };
 
@@ -4804,7 +5319,6 @@ export default function App() {
     }
     const next = receiving.map(r => r.id === record.id ? record : r);
     setReceiving(next);
-    syncCollection('receiving', next);
     upsertRecordLocallyAndRemotely('receiving', record, `Updated receiving record ${record.id}`);
     const actorRole = currentPermission === 'FULL_ACCESS' ? 'SUPER ADMIN' : 'OPERATOR';
     sendSystemActivity(`${actorRole} ${currentUser} updated receiving record ${record.id} (${record.partCode}).`);
@@ -4818,7 +5332,6 @@ export default function App() {
     deleteRecordLocallyAndRemotely('receiving', id);
     const next = receiving.filter(r => r.id !== id);
     setReceiving(next);
-    syncCollection('receiving', next);
     sendSystemActivity(`SUPER ADMIN ${currentUser} deleted receiving record ${id}.`);
   };
 
@@ -4829,7 +5342,6 @@ export default function App() {
     }
     const next = returns.map(r => r.id === record.id ? record : r);
     setReturns(next);
-    syncCollection('returns', next);
     upsertRecordLocallyAndRemotely('returns', record, `Updated return record ${record.id}`);
     const actorRole = currentPermission === 'FULL_ACCESS' ? 'SUPER ADMIN' : 'OPERATOR';
     sendSystemActivity(`${actorRole} ${currentUser} updated return record ${record.id} (${record.partCode}).`);
@@ -4843,7 +5355,6 @@ export default function App() {
     deleteRecordLocallyAndRemotely('returns', id);
     const next = returns.filter(r => r.id !== id);
     setReturns(next);
-    syncCollection('returns', next);
     sendSystemActivity(`SUPER ADMIN ${currentUser} deleted return record ${id}.`);
   };
 
@@ -4854,7 +5365,6 @@ export default function App() {
     }
     const next = issuances.map(i => i.id === record.id ? record : i);
     setIssuances(next);
-    syncCollection('issuances', next);
     upsertRecordLocallyAndRemotely('issuances', record, `Updated issuance record ${record.id}`);
     const actorRole = currentPermission === 'FULL_ACCESS' ? 'SUPER ADMIN' : 'OPERATOR';
     sendSystemActivity(`${actorRole} ${currentUser} updated issuance record ${record.id} (${record.partCode}).`);
@@ -4868,7 +5378,6 @@ export default function App() {
     deleteRecordLocallyAndRemotely('issuances', id);
     const next = issuances.filter(i => i.id !== id);
     setIssuances(next);
-    syncCollection('issuances', next);
     sendSystemActivity(`SUPER ADMIN ${currentUser} deleted issuance record ${id}.`);
   };
 
@@ -4879,7 +5388,6 @@ export default function App() {
     }
     const next = deliveries.map(d => d.id === record.id ? record : d);
     setDeliveries(next);
-    syncCollection('deliveries', next);
     upsertRecordLocallyAndRemotely('deliveries', record, `Updated delivery record ${record.id}`);
     const actorRole = currentPermission === 'FULL_ACCESS' ? 'SUPER ADMIN' : 'OPERATOR';
     sendSystemActivity(`${actorRole} ${currentUser} updated delivery record ${record.id} (${record.gatePassNumber}).`);
@@ -4893,7 +5401,6 @@ export default function App() {
     deleteRecordLocallyAndRemotely('deliveries', id);
     const next = deliveries.filter(d => d.id !== id);
     setDeliveries(next);
-    syncCollection('deliveries', next);
     sendSystemActivity(`SUPER ADMIN ${currentUser} deleted delivery record ${id}.`);
   };
 
@@ -4982,14 +5489,12 @@ export default function App() {
   const handleRegisterMasterItem = (item: MasterRegistryItem) => {
     const next = [item, ...registries];
     setRegistries(next);
-    syncCollection('registries', next);
     upsertRecordLocallyAndRemotely('registries', item, `Registered master item ${item.name} (${item.code})`);
   };
 
   const handleUpdateMasterItem = (item: MasterRegistryItem) => {
     const next = registries.map(r => r.id === item.id ? item : r);
     setRegistries(next);
-    syncCollection('registries', next);
     upsertRecordLocallyAndRemotely('registries', item, `Updated master item ${item.name} (${item.code})`);
   };
 
@@ -4997,12 +5502,51 @@ export default function App() {
     deleteRecordLocallyAndRemotely('registries', id);
     const next = registries.filter(r => r.id !== id);
     setRegistries(next);
-    syncCollection('registries', next);
   };
 
   const handleResetMasterDefaults = () => {
     setRegistries(DEFAULT_MASTER_REGISTRIES);
     syncCollection('registries', DEFAULT_MASTER_REGISTRIES);
+  };
+
+  const handleResolveConflictKeepMine = (conflict: SyncConflictItem) => {
+    setSyncConflicts((prev) => prev.filter((c) => c.id !== conflict.id));
+    const latestServerVer = Number(
+      conflict.currentServerRecord?.version ??
+      conflict.serverVersion ??
+      getExpectedVersionForRecord(conflict.collection, conflict.recordId)
+    ) || 0;
+
+    if (conflict.type === 'upsert' && conflict.localRecord) {
+      const mergedRecord = {
+        ...(conflict.currentServerRecord || {}),
+        ...conflict.localRecord,
+        version: latestServerVer
+      };
+      upsertRecordLocallyAndRemotely(
+        conflict.collection,
+        mergedRecord,
+        conflict.actionDesc || `Resolved conflict for ${conflict.recordId}`,
+        { overrideExpectedVersion: latestServerVer, existingMutationId: conflict.id }
+      );
+    } else if (conflict.type === 'delete') {
+      deleteRecordLocallyAndRemotely(conflict.collection, conflict.recordId, {
+        overrideExpectedVersion: latestServerVer,
+        existingMutationId: conflict.id
+      });
+    }
+  };
+
+  const handleResolveConflictAcceptServer = (conflict: SyncConflictItem) => {
+    removeConfirmedMutations([conflict.id]);
+    setSyncConflicts((prev) => prev.filter((c) => c.id !== conflict.id));
+    if (conflict.currentServerRecord) {
+      unmarkRecordAsDeletedLocally(conflict.recordId);
+      applyConfirmedRecordToState(conflict.collection, conflict.currentServerRecord);
+    } else {
+      removeRecordFromState(conflict.collection, conflict.recordId);
+      markRecordAsDeletedLocally(conflict.recordId);
+    }
   };
 
   const getPageTitle = () => {
@@ -5191,6 +5735,12 @@ export default function App() {
           animate={{ opacity: 1, y: 0, scale: 1, filter: 'blur(0px)' }}
           transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
         >
+          {isDeviceRevoked && (
+            <div className="bg-rose-950/90 border border-rose-500/60 text-rose-200 px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2 font-mono uppercase">
+              <Ban className="h-4 w-4 text-rose-400 shrink-0" />
+              <span>This computer was removed from the system</span>
+            </div>
+          )}
           {/* Central Database Status Quick Settings */}
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-2">
@@ -5741,6 +6291,7 @@ export default function App() {
             <SyncStatus 
               onOpenSettings={() => setShowCentralDatabaseModal(true)} 
               onOpenDiagnostics={() => setShowStartupDiagnosticsModal(true)}
+              onOpenConflicts={() => setShowConflictsModal(true)}
             />
 
             {/* Quick Record Lookup Barcode / QR Scanner Button */}
@@ -5788,6 +6339,37 @@ export default function App() {
             <LiveClock />
           </div>
         </header>
+
+        {/* REVOKED DEVICE HARD STOP BANNER */}
+        {isDeviceRevoked && (
+          <div className="bg-rose-600 text-white px-4 sm:px-6 lg:px-8 py-2.5 text-xs font-semibold flex items-center justify-between gap-4 border-b border-rose-700 font-mono uppercase shrink-0" id="device-revoked-banner">
+            <div className="flex items-center gap-2">
+              <Ban className="h-4 w-4 shrink-0" />
+              <span>This computer was removed from the system — Synchronization suspended</span>
+            </div>
+            <span className="bg-rose-800 text-rose-50 px-2 py-0.5 rounded text-[10px] tracking-wider shrink-0">DEVICE REVOKED</span>
+          </div>
+        )}
+
+        {/* VERSION CONFLICT ALERT BANNER */}
+        {syncConflicts.length > 0 && (
+          <div className="bg-amber-600 text-white px-4 sm:px-6 lg:px-8 py-2 text-xs font-semibold flex items-center justify-between gap-4 border-b border-amber-700 shrink-0" id="sync-conflicts-banner">
+            <div className="flex items-center gap-2 min-w-0">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span className="truncate">
+                {syncConflicts.length} {syncConflicts.length === 1 ? 'record has' : 'records have'} conflicting edits with the central server. Your changes were kept safely for review.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowConflictsModal(true)}
+              className="bg-white text-amber-800 hover:bg-amber-50 px-3 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer shrink-0 shadow-xs"
+              id="btn-review-sync-conflicts"
+            >
+              Review Conflicts ({syncConflicts.length})
+            </button>
+          </div>
+        )}
 
         {/* VIEW ONLY MODE warning banner */}
         {currentPermission === 'VIEW_ONLY' && (
@@ -6181,6 +6763,120 @@ export default function App() {
           registries={registries}
           onNavigateToModule={handleNavigateFromLookup}
         />
+      )}
+
+      {/* Sync Conflict Resolution Review Modal */}
+      {showConflictsModal && (
+        <div
+          className="fixed inset-0 z-[135] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-150"
+          onClick={() => setShowConflictsModal(false)}
+        >
+          <div
+            className="bg-white border border-slate-200 rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl text-slate-900 overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-amber-50/70">
+              <div className="flex items-center gap-2.5">
+                <div className="h-9 w-9 rounded-xl bg-amber-100 border border-amber-200 flex items-center justify-center text-amber-700 shrink-0">
+                  <AlertTriangle className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Sync Conflicts Review ({syncConflicts.length})</h3>
+                  <p className="text-xs text-slate-600">
+                    Another workstation updated these records before your change reached the server.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowConflictsModal(false)}
+                className="text-slate-400 hover:text-slate-700 p-1 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+                aria-label="Close conflict review"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-4 overflow-y-auto space-y-3 flex-1 bg-slate-50/50">
+              {syncConflicts.length === 0 ? (
+                <div className="text-center py-8 text-xs text-slate-500">
+                  No remaining sync conflicts.
+                </div>
+              ) : (
+                syncConflicts.map((conflict) => (
+                  <div key={conflict.id} className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs space-y-3">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 rounded bg-indigo-50 border border-indigo-200 text-indigo-700 font-mono text-[10px] font-bold uppercase">
+                          {conflict.collection}
+                        </span>
+                        <span className="font-mono text-xs font-bold text-slate-800">{conflict.recordId}</span>
+                        <span className="px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800 font-mono text-[10px] uppercase">
+                          {conflict.type}
+                        </span>
+                      </div>
+                      <span className="text-[11px] font-mono text-slate-500">
+                        Expected v{conflict.expectedVersion ?? '?'} vs Server v{conflict.serverVersion ?? conflict.currentServerRecord?.version ?? '?'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
+                      <div className="bg-amber-50/50 border border-amber-200/70 rounded-lg p-2.5 overflow-x-auto">
+                        <div className="font-bold text-amber-900 uppercase font-mono text-[10px] mb-1">Your Local Change</div>
+                        {conflict.type === 'delete' ? (
+                          <div className="text-rose-700 font-mono">Requested Deletion of {conflict.recordId}</div>
+                        ) : (
+                          <pre className="text-[10px] font-mono text-slate-700 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
+                            {JSON.stringify(conflict.localRecord || {}, null, 2)}
+                          </pre>
+                        )}
+                      </div>
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 overflow-x-auto">
+                        <div className="font-bold text-slate-800 uppercase font-mono text-[10px] mb-1">Current Server Record</div>
+                        {conflict.currentServerRecord ? (
+                          <pre className="text-[10px] font-mono text-slate-700 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
+                            {JSON.stringify(conflict.currentServerRecord, null, 2)}
+                          </pre>
+                        ) : (
+                          <div className="text-slate-500 font-mono">Record removed on server</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => handleResolveConflictAcceptServer(conflict)}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition cursor-pointer"
+                      >
+                        Accept Server Version
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleResolveConflictKeepMine(conflict)}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-600 hover:bg-amber-700 text-white transition cursor-pointer"
+                      >
+                        Keep My Change & Retry
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="px-5 py-3 border-t border-slate-200 bg-white flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowConflictsModal(false)}
+                className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white transition cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Live Remote Activity Sync Toast (Minimized, Non-Interfering) */}

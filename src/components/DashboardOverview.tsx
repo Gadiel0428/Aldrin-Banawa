@@ -21,7 +21,6 @@ import {
   ArrowUpRight,
   ClipboardCheck,
   TrendingUp,
-  TrendingDown,
   ArrowDownLeft,
   FlameKindling,
   Timer,
@@ -34,7 +33,6 @@ import {
   FileSpreadsheet,
   Download,
   Printer,
-  Layers,
   Info,
   X,
   ShieldCheck
@@ -124,8 +122,6 @@ export default function DashboardOverview({
   // Receiving vs Issuance Snapshot Aggregates
   const totalReceivedQty = receiving.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
   const totalIssuedQty = issuances.reduce((sum, i) => sum + (Number(i.quantityIssued) || 0), 0);
-  const netMaterialDelta = totalReceivedQty - totalIssuedQty;
-  const isNetPositive = netMaterialDelta >= 0;
   const totalMaterialVolume = totalReceivedQty + totalIssuedQty;
   const rxVelocityPct = totalMaterialVolume > 0 ? Math.round((totalReceivedQty / totalMaterialVolume) * 100) : 50;
   const issVelocityPct = totalMaterialVolume > 0 ? Math.round((totalIssuedQty / totalMaterialVolume) * 100) : 50;
@@ -200,7 +196,6 @@ export default function DashboardOverview({
   };
 
   // Calculate stats
-  const totalStockItems = stocks.reduce((sum, item) => sum + (item.status === 'APPROVED' ? item.quantity : 0), 0);
   const quarantineCount = stocks.filter(item => item.status === 'QUARANTINE' || item.status === 'HOLD').length;
   const pendingIqcCount = receiving.filter(item => item.iqcStatus === 'PENDING_IQC').length;
 
@@ -453,9 +448,9 @@ export default function DashboardOverview({
         </div>
       </div>
 
-      {/* ROW B: Single 8-Tile KPI Strip */}
+      {/* ROW B: Single 4-Tile KPI Strip */}
       <div
-        className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 shrink-0"
+        className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-2 shrink-0"
         id="kpi-grid"
       >
         {/* 1. Inbound Received */}
@@ -506,65 +501,7 @@ export default function DashboardOverview({
           </span>
         </button>
 
-        {/* 3. Net Delta */}
-        <button
-          type="button"
-          onClick={() => setActivePopup('flow')}
-          className={`text-left p-[clamp(0.45rem,0.95vh,0.7rem)] bg-white border rounded-xl shadow-2xs transition cursor-pointer flex flex-col justify-between min-w-0 ${
-            isNetPositive
-              ? 'border-indigo-200 hover:border-indigo-400'
-              : 'border-rose-200 hover:border-rose-400'
-          }`}
-          title="Open Material Flow & Top Velocity Breakdown"
-        >
-          <div className={`flex items-center justify-between gap-1 ${isNetPositive ? 'text-indigo-700' : 'text-rose-700'}`}>
-            <span className="text-[clamp(0.5625rem,0.9vh,0.6875rem)] font-bold uppercase tracking-tight truncate">
-              Net Delta
-            </span>
-            {isNetPositive ? (
-              <TrendingUp className="h-3.5 w-3.5 shrink-0 text-indigo-600" />
-            ) : (
-              <TrendingDown className="h-3.5 w-3.5 shrink-0 text-rose-600" />
-            )}
-          </div>
-          <div className="mt-1 flex items-baseline gap-1 min-w-0">
-            <span
-              className={`text-[clamp(0.95rem,1.9vh,1.25rem)] font-extrabold font-mono tabular-nums leading-none truncate ${
-                isNetPositive ? 'text-indigo-700' : 'text-rose-700'
-              }`}
-            >
-              {netMaterialDelta > 0 ? `+${netMaterialDelta.toLocaleString()}` : netMaterialDelta.toLocaleString()}
-            </span>
-          </div>
-          <span className="text-[9px] text-slate-500 font-mono truncate mt-1">
-            {isNetPositive ? 'Inflow surplus' : 'Net outflow'}
-          </span>
-        </button>
-
-        {/* 4. Flow Ratio */}
-        <button
-          type="button"
-          onClick={() => setActivePopup('flow')}
-          className="text-left p-[clamp(0.45rem,0.95vh,0.7rem)] bg-white border border-slate-200 hover:border-indigo-400 rounded-xl shadow-2xs transition cursor-pointer flex flex-col justify-between min-w-0"
-          title="Open Material Flow & Velocity Ratio Details"
-        >
-          <div className="flex items-center justify-between gap-1 text-slate-600">
-            <span className="text-[clamp(0.5625rem,0.9vh,0.6875rem)] font-bold uppercase tracking-tight truncate">
-              Flow Ratio
-            </span>
-            <Layers className="h-3.5 w-3.5 shrink-0 text-slate-500" />
-          </div>
-          <div className="mt-1 flex items-baseline gap-1 min-w-0">
-            <span className="text-[clamp(0.95rem,1.9vh,1.25rem)] font-extrabold font-mono tabular-nums text-slate-900 leading-none truncate">
-              {rxVelocityPct}:{issVelocityPct}
-            </span>
-          </div>
-          <span className="text-[9px] text-slate-500 font-mono truncate mt-1">
-            RX:ISS ratio
-          </span>
-        </button>
-
-        {/* 5. Low Stock count */}
+        {/* 3. Low Stock count */}
         <button
           type="button"
           onClick={() => setActivePopup('lowStock')}
@@ -607,52 +544,6 @@ export default function DashboardOverview({
           </div>
           <span className="text-[9px] text-slate-500 font-mono truncate mt-1">
             {quarantineCount} hold · {pendingIqcCount} IQC
-          </span>
-        </button>
-
-        {/* 7. Online operators */}
-        <button
-          type="button"
-          onClick={() => setActivePopup('operators')}
-          className="text-left p-[clamp(0.45rem,0.95vh,0.7rem)] bg-white border border-emerald-200 hover:border-emerald-400 rounded-xl shadow-2xs transition cursor-pointer flex flex-col justify-between min-w-0"
-          title="Open Online Operators & Dispatch Feed"
-        >
-          <div className="flex items-center justify-between gap-1 text-emerald-700">
-            <span className="text-[clamp(0.5625rem,0.9vh,0.6875rem)] font-bold uppercase tracking-tight truncate">
-              Operators
-            </span>
-            <Users className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
-          </div>
-          <div className="mt-1 flex items-baseline gap-1 min-w-0">
-            <span className="text-[clamp(0.95rem,1.9vh,1.25rem)] font-extrabold font-mono tabular-nums text-emerald-700 leading-none truncate">
-              {activeUsers.length}
-            </span>
-          </div>
-          <span className="text-[9px] text-slate-500 font-mono truncate mt-1">
-            Dispatch &amp; logs
-          </span>
-        </button>
-
-        {/* 8. Monitored SKUs */}
-        <button
-          type="button"
-          onClick={() => setView('stock')}
-          className="text-left p-[clamp(0.45rem,0.95vh,0.7rem)] bg-white border border-slate-200 hover:border-indigo-400 rounded-xl shadow-2xs transition cursor-pointer flex flex-col justify-between min-w-0"
-          title="Open Stock & FIFO Control Registry"
-        >
-          <div className="flex items-center justify-between gap-1 text-slate-600">
-            <span className="text-[clamp(0.5625rem,0.9vh,0.6875rem)] font-bold uppercase tracking-tight truncate">
-              Monitored SKUs
-            </span>
-            <Package className="h-3.5 w-3.5 shrink-0 text-indigo-600" />
-          </div>
-          <div className="mt-1 flex items-baseline gap-1 min-w-0">
-            <span className="text-[clamp(0.95rem,1.9vh,1.25rem)] font-extrabold font-mono tabular-nums text-slate-900 leading-none truncate">
-              {topActiveSkus.length}
-            </span>
-          </div>
-          <span className="text-[9px] text-slate-500 font-mono truncate mt-1">
-            {totalStockItems.toLocaleString()} PCS
           </span>
         </button>
       </div>

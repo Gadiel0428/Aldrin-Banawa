@@ -45,6 +45,7 @@ export interface CreateStockMovementInput {
   warehouseId: string;
   type: StockMovementType;
   quantity: number; // Absolute quantity or delta
+  delta?: number;   // Signed delta change amount
   preventNegativeStock?: boolean;
   referenceId?: string;
   referenceNumber?: string;
@@ -63,7 +64,7 @@ export interface StockMovementResult {
   productId: string;
   warehouseId: string;
   previousQuantity: number;
-  newQuantity: number;
+  newQuantity?: number;
   delta: number;
   timestamp: string;
   error?: string;

@@ -285,16 +285,43 @@ export interface ActivePresenceUser {
   source?: 'websocket' | 'central' | 'local' | 'self';
 }
 
+export type MutationQueueStatus = 'PENDING' | 'SYNCING' | 'CONFLICT' | 'FAILED';
+
 export interface QueuedMutation {
   id: string;
-  type: 'upsert' | 'delete';
+  idempotencyKey?: string;
+  type: 'upsert' | 'delete' | 'STOCK_MOVEMENT';
   collection: string;
   record?: any;
   recordId?: string;
+  expectedVersion?: number;
+  payload?: any;
+  delta?: number;
   author?: string;
   actionDesc?: string;
+  deviceId?: string;
   timestamp: number;
   reset_version?: number;
+  retryCount?: number;
+  nextRetryAt?: number;
+  status?: MutationQueueStatus;
+  lastError?: string;
+  currentServerRecord?: any;
+}
+
+export interface SyncConflictItem {
+  id: string;
+  collection: string;
+  recordId: string;
+  type: 'upsert' | 'delete';
+  localRecord?: any;
+  currentServerRecord?: any;
+  expectedVersion?: number;
+  serverVersion?: number;
+  author?: string;
+  actionDesc?: string;
+  error: string;
+  timestamp: number;
 }
 
 export function getCustomerForPart(_partCode?: string, _description?: string): string {

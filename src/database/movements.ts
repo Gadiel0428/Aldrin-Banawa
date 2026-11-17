@@ -26,7 +26,7 @@ export async function createStockMovement(input: CreateStockMovementInput): Prom
   const deviceId = input.deviceId || getDeviceId();
   const idempotencyKey = input.idempotencyKey || `SM-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
-  let delta = input.quantity;
+  let delta = Number(input.delta !== undefined ? input.delta : input.quantity) || 0;
   if (['SALE', 'PURCHASE_RETURN', 'ADJUSTMENT_OUT', 'TRANSFER_OUT'].includes(input.type)) {
     if (delta > 0) delta = -delta;
   } else if (['PURCHASE', 'SALE_RETURN', 'ADJUSTMENT_IN', 'TRANSFER_IN'].includes(input.type)) {
@@ -34,18 +34,23 @@ export async function createStockMovement(input: CreateStockMovementInput): Prom
   }
 
   try {
-    const localResetVersion = typeof window !== 'undefined' 
+    const localResetVersion = typeof window !== 'undefined'
       ? (Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0)
       : 0;
 
     const baseUrl = getApiBaseUrl();
+    const { newQuantity: _omitNewQuantity, ...safeInput } = input as CreateStockMovementInput & { newQuantity?: number };
     const resp = await fetch(`${baseUrl}/api/stock-movements`, {
       method: 'POST',
-      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      headers: getAuthHeaders({
+        'Content-Type': 'application/json',
+        'x-device-id': deviceId,
+      }),
       body: JSON.stringify({
-        ...input,
+        ...safeInput,
         delta,
         deviceId,
+        device_id: deviceId,
         idempotencyKey,
         reset_version: localResetVersion,
       }),
@@ -53,11 +58,17 @@ export async function createStockMovement(input: CreateStockMovementInput): Prom
 
     if (!resp.ok) {
       const errorData = await resp.json().catch(() => ({}));
-      if (resp.status === 409 || errorData.error === 'STALE_RESET_VERSION') {
+      if (resp.status === 403 && errorData.error === 'DEVICE_REVOKED') {
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('juwei_device_revoked', { detail: { deviceId } }));
+        }
+        throw new Error('DEVICE_REVOKED: This computer was removed from the system');
+      }
+      if (resp.status === 409 && typeof errorData.error === 'string' && errorData.error.includes('STALE_RESET_VERSION')) {
         if (typeof window !== 'undefined' && errorData.systemResetVersion) {
           localStorage.setItem('juwei_wms_system_reset_version', String(errorData.systemResetVersion));
         }
-        throw new Error(`STALE_RESET_VERSION: Central database was reset. Stale offline transaction rejected.`);
+        throw new Error('Central database was reset. Please refresh and try again.');
       }
       throw new Error(errorData.error || `Server failed with status ${resp.status}`);
     }
