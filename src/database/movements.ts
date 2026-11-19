@@ -64,12 +64,6 @@ export async function createStockMovement(input: CreateStockMovementInput): Prom
         }
         throw new Error('DEVICE_REVOKED: This computer was removed from the system');
       }
-      if (resp.status === 409 && typeof errorData.error === 'string' && errorData.error.includes('STALE_RESET_VERSION')) {
-        if (typeof window !== 'undefined' && errorData.systemResetVersion) {
-          localStorage.setItem('juwei_wms_system_reset_version', String(errorData.systemResetVersion));
-        }
-        throw new Error('Central database was reset. Please refresh and try again.');
-      }
       throw new Error(errorData.error || `Server failed with status ${resp.status}`);
     }
 

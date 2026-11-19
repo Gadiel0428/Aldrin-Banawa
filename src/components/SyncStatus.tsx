@@ -63,7 +63,7 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
         bg: 'bg-amber-500/10 text-amber-600 border-amber-500/30 dark:bg-amber-500/20 dark:text-amber-400',
         dot: 'bg-amber-500 animate-spin',
         icon: <RefreshCw className="w-3.5 h-3.5 animate-spin" />,
-        label: pendingCount > 0 ? `${pendingCount} changes not yet saved` : 'Synchronizing...',
+        label: pendingCount > 0 ? `${pendingCount} changes waiting` : 'Synchronizing...',
       };
     }
     if (!status.isOnline || status.state === 'OFFLINE') {
@@ -71,7 +71,7 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
         bg: 'bg-orange-500/10 text-orange-600 border-orange-500/30 dark:bg-orange-500/20 dark:text-orange-400',
         dot: 'bg-orange-500',
         icon: <WifiOff className="w-3.5 h-3.5" />,
-        label: pendingCount > 0 ? `Offline (${pendingCount} changes not yet saved)` : 'Offline Mode',
+        label: pendingCount > 0 ? `Offline (${pendingCount} changes waiting)` : 'Offline Mode',
       };
     }
     if (status.state === 'ERROR' || conflictCount > 0) {
@@ -79,14 +79,14 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
         bg: 'bg-rose-500/10 text-rose-600 border-rose-500/30 dark:bg-rose-500/20 dark:text-rose-400',
         dot: 'bg-rose-500',
         icon: <AlertCircle className="w-3.5 h-3.5" />,
-        label: `${pendingCount} changes not yet saved (${conflictCount} conflict)`,
+        label: `${pendingCount} changes waiting (${conflictCount} conflict${conflictCount === 1 ? '' : 's'})`,
       };
     }
     return {
       bg: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/30 dark:bg-emerald-500/20 dark:text-emerald-300',
       dot: 'bg-emerald-500 animate-pulse',
       icon: <Wifi className="w-3.5 h-3.5" />,
-      label: pendingCount > 0 ? `${pendingCount} changes not yet saved` : 'Online • Live Sync',
+      label: pendingCount > 0 ? `${pendingCount} changes waiting` : 'Online • Live Sync',
     };
   };
 
@@ -179,7 +179,7 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
           <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800">
             <div className="flex items-center justify-between mb-2">
               <span className="font-bold text-xs uppercase tracking-wider text-slate-500">
-                {pendingCount > 0 ? `${pendingCount} changes not yet saved` : 'Unsaved Changes (0)'}
+                {pendingCount > 0 ? `${pendingCount} changes waiting` : '0 changes waiting'}
               </span>
               {conflictCount > 0 && onOpenConflicts && (
                 <button

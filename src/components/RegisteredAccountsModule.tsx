@@ -118,8 +118,6 @@ export default function RegisteredAccountsModule({
   const [originalEmployeeId, setOriginalEmployeeId] = useState<string>('');
   const [selectedQrAccount, setSelectedQrAccount] = useState<RegisteredAccount | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmActionConfig | null>(null);
-  const [showPins, setShowPins] = useState<{ [key: string]: boolean }>({});
-  const [revealAllPins, setRevealAllPins] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   // Manage Roles Modal States (Super Admin)
@@ -151,12 +149,12 @@ export default function RegisteredAccountsModule({
   const [newStatus, setNewStatus] = useState<'ACTIVE' | 'PENDING' | 'INACTIVE'>('ACTIVE');
   const [addError, setAddError] = useState<string>('');
 
-  // Compromised PIN Detection: Any account with '1234' or isPinCompromised flag
+  // Compromised PIN Detection: Any account flagged as isPinCompromised by server
   const compromisedAccounts = useMemo(() => {
-    return accounts.filter(acc => acc.pin === '1234' || acc.isPinCompromised);
+    return accounts.filter(acc => Boolean(acc.isPinCompromised));
   }, [accounts]);
 
-  // Dedicated Super Admin PIN Change Modal State
+  // Dedicated Super Admin PIN Change / Reset Modal State
   const [pinChangeAccount, setPinChangeAccount] = useState<RegisteredAccount | null>(null);
   const [newPinValue, setNewPinValue] = useState<string>('');
   const [confirmPinValue, setConfirmPinValue] = useState<string>('');
@@ -172,9 +170,9 @@ export default function RegisteredAccountsModule({
     setConfirmPinValue('');
     setSuperAdminPinValue('');
     setPinChangeReason(
-      acc.pin === '1234' || acc.isPinCompromised 
-        ? 'Resolving compromised default PIN (1234)' 
-        : 'Authorized Super Admin PIN update'
+      acc.isPinCompromised 
+        ? 'Resolving compromised PIN' 
+        : 'Authorized Super Admin PIN reset'
     );
     setPinChangeError('');
     setPinChangeSuccess('');
@@ -186,12 +184,12 @@ export default function RegisteredAccountsModule({
     setPinChangeError('');
     setPinChangeSuccess('');
 
-    const cleanNewPin = newPinValue.replace(/\D/g, '').slice(0, 6);
-    const cleanConfirm = confirmPinValue.replace(/\D/g, '').slice(0, 6);
+    const cleanNewPin = newPinValue.replace(/\D/g, '').slice(0, 4);
+    const cleanConfirm = confirmPinValue.replace(/\D/g, '').slice(0, 4);
     const cleanAdminPin = superAdminPinValue.trim();
 
-    if (cleanNewPin.length < 4) {
-      setPinChangeError('New PIN must be between 4 and 6 numeric digits.');
+    if (cleanNewPin.length !== 4) {
+      setPinChangeError('New PIN must be exactly 4 numeric digits.');
       return;
     }
     if (cleanNewPin !== cleanConfirm) {
@@ -199,15 +197,11 @@ export default function RegisteredAccountsModule({
       return;
     }
     if (cleanNewPin === '1234') {
-      setPinChangeError("SECURITY REJECTED: '1234' is a compromised default PIN and is strictly prohibited.");
+      setPinChangeError("SECURITY REJECTED: Weak sequential PINs are prohibited.");
       return;
     }
     if (/^(\d)\1+$/.test(cleanNewPin)) {
       setPinChangeError('SECURITY REJECTED: Repetitive PIN patterns (e.g. 0000, 1111) are not allowed.');
-      return;
-    }
-    if (!cleanAdminPin) {
-      setPinChangeError('Super Administrator confirmation PIN (0423) is required to authorize this security change.');
       return;
     }
 
@@ -219,7 +213,7 @@ export default function RegisteredAccountsModule({
         cleanNewPin,
         currentEmployeeId || 'JPMP-002',
         {
-          adminPin: cleanAdminPin,
+          adminPin: cleanAdminPin || undefined,
           author: `${currentUser || 'ALDRIN BANAWA'} (${currentEmployeeId || 'JPMP-002'})`,
           reason: pinChangeReason.trim() || 'Super Admin PIN reset'
         }
@@ -232,7 +226,8 @@ export default function RegisteredAccountsModule({
         } else {
           onUpdateAccount(pinChangeAccount.employeeId, {
             ...pinChangeAccount,
-            pin: cleanNewPin,
+            hasPin: true,
+            mustChangePin: false,
             isPinCompromised: false
           });
         }
@@ -400,8 +395,7 @@ export default function RegisteredAccountsModule({
         (acc.employeeId || '').toLowerCase().includes(query) ||
         (acc.phoneNumber || '').toLowerCase().includes(query) ||
         (acc.role || '').toLowerCase().includes(query) ||
-        (acc.permission || '').toLowerCase().includes(query) ||
-        (acc.pin || '').includes(query);
+        (acc.permission || '').toLowerCase().includes(query);
 
       const accStatus = acc.status || 'ACTIVE';
       const matchesStatus = statusFilter === 'ALL' || accStatus === statusFilter;
@@ -470,10 +464,6 @@ export default function RegisteredAccountsModule({
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const toggleShowPin = (empId: string) => {
-    setShowPins(prev => ({ ...prev, [empId]: !prev[empId] }));
-  };
-
   const resetAddForm = () => {
     setNewUsername('');
     setNewEmployeeId('');
@@ -521,8 +511,8 @@ export default function RegisteredAccountsModule({
         setAddError('Custom Security PIN must be exactly 4 digits.');
         return;
       }
-      if (newCustomPin === '1234') {
-        setAddError("SECURITY VIOLATION: '1234' is a compromised default PIN and cannot be used. Enter another PIN or leave blank to auto-generate.");
+      if (newCustomPin === '1234' || /^(\d)\1+$/.test(newCustomPin)) {
+        setAddError('SECURITY VIOLATION: Weak or repetitive PINs cannot be used. Enter another PIN or leave blank to auto-generate.');
         return;
       }
     }
@@ -748,7 +738,7 @@ export default function RegisteredAccountsModule({
                   </span>
                 </div>
                 <p className="text-xs text-rose-100 mt-0.5">
-                  {compromisedAccounts.length} operator account(s) currently have the compromised default PIN (&quot;1234&quot;) or are marked as compromised. Default PINs are strictly prohibited and vulnerable. Super Admin must reset these PINs to unique credentials immediately.
+                  {compromisedAccounts.length} operator account(s) are flagged with a compromised or legacy default PIN and must be reset to unique credentials immediately.
                 </p>
               </div>
             </div>
@@ -775,7 +765,7 @@ export default function RegisteredAccountsModule({
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
             <input
               type="text"
-              placeholder="Search by operator name, JPMP ID, role, phone, or PIN..."
+              placeholder="Search by operator name, JPMP ID, role, or phone..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               className="w-full pl-8.5 pr-8 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent font-medium"
@@ -862,25 +852,6 @@ export default function RegisteredAccountsModule({
               <option value="VIEW_ONLY">View Only</option>
             </select>
 
-            {/* Global Reveal PIN Toggle for Super Admin */}
-            {isSuperAdmin && (
-              <button
-                type="button"
-                onClick={() => setRevealAllPins(!revealAllPins)}
-                className={`p-1.5 rounded-lg border text-xs font-bold transition cursor-pointer flex items-center gap-1 ${
-                  revealAllPins
-                    ? 'bg-amber-50 border-amber-300 text-amber-800'
-                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
-                }`}
-                title={revealAllPins ? 'Hide all operator PINs' : 'Reveal all operator PINs for auditing'}
-              >
-                {revealAllPins ? <EyeOff className="h-3.5 w-3.5 text-amber-700" /> : <Eye className="h-3.5 w-3.5 text-slate-500" />}
-                <span className="text-[10px] font-mono uppercase hidden xl:inline">
-                  {revealAllPins ? 'Conceal PINs' : 'Show PINs'}
-                </span>
-              </button>
-            )}
-
             {/* Reset Filters */}
             {(searchQuery || statusFilter !== 'ALL' || roleFilter !== 'ALL' || permissionFilter !== 'ALL') && (
               <button
@@ -910,7 +881,7 @@ export default function RegisteredAccountsModule({
                 <th className="py-2.5 px-3 font-bold">Operational Role</th>
                 <th className="py-2.5 px-3 font-bold">Access Level</th>
                 <th className="py-2.5 px-3 font-bold">Phone / Contact</th>
-                <th className="py-2.5 px-3 font-bold w-28">4-Digit PIN</th>
+                <th className="py-2.5 px-3 font-bold w-32">Reset PIN</th>
                 <th className="py-2.5 px-3 font-bold w-36">Last Active</th>
                 <th className="py-2.5 px-3 font-bold text-right w-44">Actions</th>
               </tr>
@@ -925,8 +896,7 @@ export default function RegisteredAccountsModule({
                     (acc.username || '').toUpperCase() === 'SUPER ADMIN';
                   
                   const currentStatus = acc.status || 'ACTIVE';
-                  const isPinVisible = revealAllPins || !!showPins[acc.employeeId];
-                  const isCompromisedAcc = acc.pin === '1234' || !!acc.isPinCompromised;
+                  const isCompromisedAcc = !!acc.isPinCompromised;
 
                   return (
                     <motion.tr 
@@ -1012,7 +982,7 @@ export default function RegisteredAccountsModule({
                                 </span>
                               )}
                               {isCompromisedAcc && (
-                                <span className="inline-flex items-center gap-0.5 bg-rose-100 text-rose-800 border border-rose-300 text-[8px] px-1.5 py-0.2 rounded font-mono font-bold uppercase shrink-0" title="This account has a compromised default PIN (1234)">
+                                <span className="inline-flex items-center gap-0.5 bg-rose-100 text-rose-800 border border-rose-300 text-[8px] px-1.5 py-0.2 rounded font-mono font-bold uppercase shrink-0" title="This account has a compromised PIN requiring reset">
                                   ⚠️ COMPROMISED PIN
                                 </span>
                               )}
@@ -1136,66 +1106,27 @@ export default function RegisteredAccountsModule({
                         )}
                       </td>
 
-                      {/* 6. 4-Digit Security PIN */}
-                      <td className="py-2.5 px-3 font-mono">
-                        {isCompromisedAcc ? (
-                          <div className="flex flex-col gap-1 items-start">
-                            <span className="inline-flex items-center gap-1 bg-rose-100 text-rose-800 border border-rose-300 px-1.5 py-0.5 rounded text-[10px] font-bold font-mono uppercase tracking-wider">
-                              <AlertTriangle className="h-3 w-3 text-rose-600 shrink-0" />
-                              <span>COMPROMISED (1234)</span>
-                            </span>
-                            {isSuperAdmin && (
-                              <button
-                                type="button"
-                                onClick={() => handleOpenPinModal(acc)}
-                                className="inline-flex items-center gap-1 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-mono font-bold text-[9px] px-2 py-0.5 rounded transition cursor-pointer shadow-2xs uppercase"
-                                title="Reset compromised PIN to secure PIN"
-                              >
-                                <KeyRound className="h-2.5 w-2.5" />
-                                <span>RESET PIN</span>
-                              </button>
-                            )}
-                          </div>
+                      {/* 6. Reset PIN Action */}
+                      <td className="py-2.5 px-3 font-mono whitespace-nowrap">
+                        {isSuperAdmin ? (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenPinModal(acc)}
+                            className={`inline-flex items-center gap-1 font-mono font-bold text-[10px] px-2.5 py-1 rounded-md border transition cursor-pointer shadow-2xs uppercase ${
+                              isCompromisedAcc
+                                ? 'bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white border-rose-700'
+                                : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200/90'
+                            }`}
+                            title={isCompromisedAcc ? 'Reset compromised PIN to a new 4-digit PIN' : 'Reset operator 4-digit PIN'}
+                          >
+                            <KeyRound className="h-3 w-3 shrink-0" />
+                            <span>Reset PIN</span>
+                          </button>
                         ) : (
-                          <div className="flex items-center gap-1.5">
-                            <span className="tracking-widest bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded text-slate-800 text-[11px] font-bold">
-                              {isPinVisible ? (acc.pin || '••••') : '••••'}
-                            </span>
-                            {isSuperAdmin && (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={() => toggleShowPin(acc.employeeId)}
-                                  className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
-                                  title={isPinVisible ? 'Hide PIN' : 'Reveal PIN'}
-                                >
-                                  {isPinVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                                </button>
-                                {isPinVisible && acc.pin && (
-                                  <button
-                                    type="button"
-                                    onClick={() => copyToClipboard(acc.pin, `pin-${acc.employeeId}`)}
-                                    className="text-slate-400 hover:text-indigo-600 p-0.5 cursor-pointer"
-                                    title="Copy PIN"
-                                  >
-                                    {copiedId === `pin-${acc.employeeId}` ? (
-                                      <Check className="h-3 w-3 text-emerald-600" />
-                                    ) : (
-                                      <Copy className="h-3 w-3" />
-                                    )}
-                                  </button>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenPinModal(acc)}
-                                  className="text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 p-0.5 rounded cursor-pointer transition ml-0.5"
-                                  title="Super Admin PIN Edit"
-                                >
-                                  <KeyRound className="h-3 w-3" />
-                                </button>
-                              </>
-                            )}
-                          </div>
+                          <span className="inline-flex items-center gap-1 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-600 text-[10px] font-bold">
+                            <Lock className="h-3 w-3 text-slate-400" />
+                            <span>Protected</span>
+                          </span>
                         )}
                       </td>
 
@@ -1268,10 +1199,10 @@ export default function RegisteredAccountsModule({
                                   ? 'bg-rose-100 hover:bg-rose-200 text-rose-700 border-rose-300'
                                   : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200/80'
                               } border px-2 py-1 rounded-md text-[10px] font-bold transition flex items-center gap-1 cursor-pointer font-mono shadow-2xs`}
-                              title={isCompromisedAcc ? "Reset Compromised PIN (1234)" : "Edit Security PIN"}
+                              title={isCompromisedAcc ? "Reset Compromised PIN" : "Reset 4-Digit PIN"}
                             >
                               <KeyRound className="h-3 w-3" />
-                              <span className="hidden sm:inline">{isCompromisedAcc ? 'RESET PIN' : 'PIN'}</span>
+                              <span className="hidden sm:inline">RESET PIN</span>
                             </button>
                           )}
 
@@ -1824,24 +1755,6 @@ export default function RegisteredAccountsModule({
                 </select>
               </div>
 
-              <div>
-                <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
-                  Reset 4-Digit Security PIN
-                </label>
-                <input
-                  type="text"
-                  maxLength={4}
-                  pattern="\d*"
-                  required
-                  value={editingAccount.pin || ''}
-                  onChange={e => {
-                    const digits = e.target.value.replace(/\D/g, '');
-                    setEditingAccount({ ...editingAccount, pin: digits });
-                  }}
-                  className="w-full border border-slate-200 px-3.5 py-2.5 rounded-xl focus:ring-2 focus:ring-indigo-500 font-mono font-bold tracking-widest text-center text-slate-800 text-xs bg-white"
-                />
-              </div>
-
               <div className="flex justify-end gap-3 text-xs font-semibold pt-4 border-t border-slate-100 shrink-0">
                 <button 
                   type="button"
@@ -1883,7 +1796,7 @@ export default function RegisteredAccountsModule({
             <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white p-5 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-3">
                 <div className={`h-10 w-10 rounded-xl ${
-                  pinChangeAccount.pin === '1234' || pinChangeAccount.isPinCompromised
+                  pinChangeAccount.isPinCompromised
                     ? 'bg-rose-500/20 border-rose-400/30 text-rose-300'
                     : 'bg-indigo-500/20 border-indigo-400/30 text-indigo-300'
                 } border flex items-center justify-center`}>
@@ -1892,9 +1805,9 @@ export default function RegisteredAccountsModule({
                 <div>
                   <div className="flex items-center gap-2">
                     <h3 className="text-base font-bold tracking-tight">
-                      {pinChangeAccount.pin === '1234' || pinChangeAccount.isPinCompromised
+                      {pinChangeAccount.isPinCompromised
                         ? 'RESOLVE COMPROMISED PIN'
-                        : 'SUPER ADMIN PIN UPDATE'}
+                        : 'RESET 4-DIGIT PIN'}
                     </h3>
                     <span className="bg-indigo-500/30 text-indigo-200 text-[10px] font-mono font-bold px-2 py-0.5 rounded-md border border-indigo-400/30">
                       STRICT AUDIT
@@ -1921,12 +1834,12 @@ export default function RegisteredAccountsModule({
             {/* Modal Body Form */}
             <form onSubmit={handleSubmitPinChange} className="p-6 space-y-4 overflow-y-auto">
               {/* Compromised Alert Warning */}
-              {(pinChangeAccount.pin === '1234' || pinChangeAccount.isPinCompromised) && (
+              {pinChangeAccount.isPinCompromised && (
                 <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2.5">
                   <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
                   <div>
-                    <strong className="block font-semibold uppercase text-rose-900 font-mono text-[11px]">Compromised Default PIN Detected:</strong>
-                    This account was assigned the prohibited default PIN &quot;1234&quot;. Please assign a secure 4-6 digit numeric PIN to clear the security alert and protect account integrity.
+                    <strong className="block font-semibold uppercase text-rose-900 font-mono text-[11px]">Compromised PIN Detected:</strong>
+                    This account requires a new 4-digit numeric PIN to clear the security alert and protect account integrity.
                   </div>
                 </div>
               )}
@@ -1964,49 +1877,49 @@ export default function RegisteredAccountsModule({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-700 uppercase font-mono mb-1.5">
-                    New Security PIN <span className="text-rose-500">*</span>
+                    New 4-Digit PIN <span className="text-rose-500">*</span>
                   </label>
                   <div className="relative">
                     <input
                       type="text"
-                      maxLength={6}
+                      maxLength={4}
                       autoFocus
                       required
-                      placeholder="4 to 6 digits"
+                      placeholder="4 numeric digits"
                       value={newPinValue}
-                      onChange={e => setNewPinValue(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      onChange={e => setNewPinValue(e.target.value.replace(/\D/g, '').slice(0, 4))}
                       className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono font-bold text-slate-800 tracking-widest text-sm bg-white"
                     />
                   </div>
                   <span className="text-[10px] text-slate-400 mt-1 block font-mono">
-                    4-6 numeric digits (no &quot;1234&quot;)
+                    4 numeric digits (stored securely hashed)
                   </span>
                 </div>
 
                 <div>
                   <label className="block text-[11px] font-bold text-slate-700 uppercase font-mono mb-1.5">
-                    Confirm New PIN <span className="text-rose-500">*</span>
+                    Confirm New 4-Digit PIN <span className="text-rose-500">*</span>
                   </label>
                   <input
                     type="password"
-                    maxLength={6}
+                    maxLength={4}
                     required
-                    placeholder="Repeat new PIN"
+                    placeholder="Repeat 4-digit PIN"
                     value={confirmPinValue}
-                    onChange={e => setConfirmPinValue(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    onChange={e => setConfirmPinValue(e.target.value.replace(/\D/g, '').slice(0, 4))}
                     className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono font-bold text-slate-800 tracking-widest text-sm bg-white"
                   />
                   <span className="text-[10px] text-slate-400 mt-1 block font-mono">
-                    Must match new PIN
+                    Must match new 4-digit PIN
                   </span>
                 </div>
               </div>
 
-              {/* Super Admin Authorization PIN */}
+              {/* Super Admin Authorization PIN (optional when authenticated via server session token) */}
               <div>
                 <label className="block text-[11px] font-bold text-slate-700 uppercase font-mono mb-1.5 flex items-center justify-between">
-                  <span>Super Admin Confirmation PIN (0423) <span className="text-rose-500">*</span></span>
-                  <span className="text-[10px] text-indigo-600 font-semibold lowercase">authorization step</span>
+                  <span>Super Admin Confirmation PIN (Optional with Session)</span>
+                  <span className="text-[10px] text-indigo-600 font-semibold lowercase">server verified</span>
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
@@ -2015,15 +1928,14 @@ export default function RegisteredAccountsModule({
                   <input
                     type="password"
                     maxLength={6}
-                    required
-                    placeholder="Enter Master Super Admin PIN (0423)"
+                    placeholder="Optional if signed in as Super Admin"
                     value={superAdminPinValue}
                     onChange={e => setSuperAdminPinValue(e.target.value.trim())}
                     className="w-full pl-9.5 pr-3.5 py-2.5 border-2 border-indigo-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none font-mono font-bold text-slate-800 tracking-widest text-xs bg-indigo-50/20"
                   />
                 </div>
                 <span className="text-[10px] text-slate-500 mt-1 block font-mono">
-                  Super Admin authorization is required by server security policy.
+                  Authorized by your server-verified Super Admin session token.
                 </span>
               </div>
 

@@ -238,6 +238,8 @@ export interface RegisteredAccount {
   deviceId?: string;
   isPrimaryAdminDevice?: boolean;
   authorizedDevices?: string[];
+  hasPin?: boolean;
+  mustChangePin?: boolean;
   isPinCompromised?: boolean;
   pinChangedAt?: string;
   pinChangedBy?: string;

@@ -14,7 +14,7 @@ import {
   PlusCircle,
   FolderOpen
 } from 'lucide-react';
-import { getApiBaseUrl } from '../config/serverConfig';
+import { getApiBaseUrl, getAuthHeaders } from '../config/serverConfig';
 
 interface BackupItem {
   filename: string;
@@ -57,18 +57,30 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
 
   // Restore Confirmation Dialog States
   const [backupToRestore, setBackupToRestore] = useState<BackupItem | null>(null);
-  const [adminPin, setAdminPin] = useState<string>('0423');
+  const [adminPin, setAdminPin] = useState<string>('');
   const [isConfirmChecked, setIsConfirmChecked] = useState<boolean>(false);
   const [isRestoring, setIsRestoring] = useState<boolean>(false);
+
+  const getDeviceIdHeader = () => {
+    try {
+      return typeof localStorage !== 'undefined' ? (localStorage.getItem('juwei_wms_device_id') || '') : '';
+    } catch {
+      return '';
+    }
+  };
 
   const fetchBackups = async () => {
     setIsLoading(true);
     setStatusMessage(null);
     try {
       const baseUrl = getApiBaseUrl();
+      const deviceId = getDeviceIdHeader();
       const res = await fetch(`${baseUrl}/api/admin/backups`, {
         cache: 'no-store',
-        headers: { 'Accept': 'application/json' }
+        headers: getAuthHeaders({
+          'Accept': 'application/json',
+          ...(deviceId ? { 'x-device-id': deviceId } : {})
+        })
       });
       if (res.ok) {
         const data = await res.json();
@@ -76,7 +88,10 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
         setAuditLogs(data.auditLogs || []);
         if (data.backupsDir) setBackupsDir(data.backupsDir);
       } else {
-        const err = await res.json();
+        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        if (res.status === 403 && err?.error === 'DEVICE_REVOKED' && typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('juwei_device_revoked', { detail: { deviceId } }));
+        }
         setStatusMessage({ text: err.error || 'Failed to fetch backups', type: 'error' });
       }
     } catch (e: any) {
@@ -97,16 +112,23 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
     setStatusMessage(null);
     try {
       const baseUrl = getApiBaseUrl();
+      const deviceId = getDeviceIdHeader();
       const res = await fetch(`${baseUrl}/api/admin/backups/create`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json',
+          ...(deviceId ? { 'x-device-id': deviceId } : {})
+        }),
         body: JSON.stringify({
           author: currentUser || 'SUPER_ADMIN',
           employeeId: currentEmployeeId || 'JPMP-002',
-          pin: adminPin || '0423'
+          ...(adminPin.trim() ? { pin: adminPin.trim() } : {})
         })
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({ success: false, error: `HTTP ${res.status}` }));
+      if (res.status === 403 && data?.error === 'DEVICE_REVOKED' && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('juwei_device_revoked', { detail: { deviceId } }));
+      }
       if (res.ok && data.success) {
         setStatusMessage({ text: `Backup successfully created: ${data.filename}`, type: 'success' });
         await fetchBackups();
@@ -131,18 +153,25 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
     setStatusMessage(null);
     try {
       const baseUrl = getApiBaseUrl();
+      const deviceId = getDeviceIdHeader();
       const res = await fetch(`${baseUrl}/api/admin/backups/restore`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json',
+          ...(deviceId ? { 'x-device-id': deviceId } : {})
+        }),
         body: JSON.stringify({
           filename: backupToRestore.filename,
           confirmed: true,
           author: `${currentUser} (${currentEmployeeId})`,
           employeeId: currentEmployeeId || 'JPMP-002',
-          pin: adminPin || '0423'
+          ...(adminPin.trim() ? { pin: adminPin.trim() } : {})
         })
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({ success: false, error: `HTTP ${res.status}` }));
+      if (res.status === 403 && data?.error === 'DEVICE_REVOKED' && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('juwei_device_revoked', { detail: { deviceId } }));
+      }
       if (res.ok && data.success) {
         setStatusMessage({ 
           text: `DATABASE RESTORED! Live central database replaced with '${backupToRestore.filename}'. All workstations updated.`, 

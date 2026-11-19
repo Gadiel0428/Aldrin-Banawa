@@ -98,6 +98,11 @@ async function startServer() {
     status: 'AUTHORIZED' | 'PENDING' | 'REVOKED';
     authorizedBy?: string;
     authorizedAt?: string;
+    employeeId?: string;
+    username?: string;
+    role?: string;
+    permission?: string;
+    boundAt?: string;
   }
 
   interface ServerUser {
@@ -106,7 +111,11 @@ async function startServer() {
     role: string;
     phoneNumber?: string;
     permission: string;
-    pin: string;
+    pin?: string;
+    pinHash?: string;
+    pinSalt?: string;
+    mustChangePin?: boolean;
+    hasPin?: boolean;
     status: string;
     lastActive?: string;
     registeredBy?: string;
@@ -149,7 +158,6 @@ async function startServer() {
     role: 'SUPER ADMINISTRATOR', 
     phoneNumber: '+639669858846',
     permission: 'FULL_ACCESS', 
-    pin: '0423',
     status: 'ACTIVE',
     registeredBy: 'INITIAL_INSTALLATION_SUPER_ADMIN',
     registeredBySuperAdmin: true,
@@ -200,6 +208,274 @@ async function startServer() {
     if (!clean) return false;
     const record = authorizedDevicesMap.get(clean);
     return Boolean(record && (record.status === "REVOKED" || record.status === "PENDING"));
+  }
+
+  // Server-side Session Token Registry (crypto-random bearer tokens bound to verified employeeId)
+  const sessionTokensMap = new Map<string, { employeeId: string; deviceId?: string; createdAt: number }>();
+  let oneTimeSetupPin: string | null = null;
+
+  function hashPinScrypt(pin: string, existingSalt?: string): { pinHash: string; pinSalt: string } {
+    const salt = existingSalt || crypto.randomBytes(16).toString("hex");
+    const derived = crypto.scryptSync(String(pin).trim(), salt, 64).toString("hex");
+    return { pinHash: derived, pinSalt: salt };
+  }
+
+  function verifyPinScrypt(pin: string, pinHash: string, pinSalt: string): boolean {
+    try {
+      const cleanPin = String(pin || "").trim();
+      if (!cleanPin || !pinHash || !pinSalt) return false;
+      const derivedBuf = crypto.scryptSync(cleanPin, pinSalt, 64);
+      const expectedBuf = Buffer.from(pinHash, "hex");
+      if (derivedBuf.length !== expectedBuf.length) return false;
+      return crypto.timingSafeEqual(derivedBuf, expectedBuf);
+    } catch {
+      return false;
+    }
+  }
+
+  function verifyUserPin(user: ServerUser | undefined, enteredPin: string): { matched: boolean; upgradedFromPlaintext: boolean } {
+    if (!user) return { matched: false, upgradedFromPlaintext: false };
+    const cleanEntered = String(enteredPin || "").trim();
+    if (!cleanEntered) return { matched: false, upgradedFromPlaintext: false };
+
+    if (user.pinHash && user.pinSalt) {
+      return { matched: verifyPinScrypt(cleanEntered, user.pinHash, user.pinSalt), upgradedFromPlaintext: false };
+    }
+
+    const legacyPlain = String(user.pin || "").trim();
+    if (legacyPlain && legacyPlain.length === cleanEntered.length) {
+      const match = crypto.timingSafeEqual(Buffer.from(legacyPlain, "utf-8"), Buffer.from(cleanEntered, "utf-8"));
+      if (match) {
+        const { pinHash, pinSalt } = hashPinScrypt(cleanEntered);
+        user.pinHash = pinHash;
+        user.pinSalt = pinSalt;
+        delete user.pin;
+        return { matched: true, upgradedFromPlaintext: true };
+      }
+    }
+    return { matched: false, upgradedFromPlaintext: false };
+  }
+
+  function generateSecureRandom4DigitPin(): string {
+    for (;;) {
+      const candidate = String(crypto.randomInt(1000, 10000));
+      if (candidate !== "1234" && candidate !== "0423" && !/^(\d)\1+$/.test(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  function sanitizeUserForClient(u: any): any {
+    if (!u || typeof u !== "object") return u;
+    const hasConfiguredPin = Boolean(u.pinHash || u.hasPin || (u.pin && String(u.pin).trim() !== ""));
+    const { pin, pinHash, pinSalt, pin_hash, ...safe } = u;
+    return {
+      ...safe,
+      hasPin: hasConfiguredPin,
+      mustChangePin: Boolean(u.mustChangePin)
+    };
+  }
+
+  function extractDeviceIdFromHttp(req: express.Request, explicitDeviceId?: string): string {
+    return String(
+      explicitDeviceId ||
+      req.body?.device_id ||
+      req.body?.deviceId ||
+      req.headers["x-device-id"] ||
+      req.query?.deviceId ||
+      req.query?.device_id ||
+      ""
+    ).trim();
+  }
+
+  function extractBearerToken(req: express.Request): string {
+    const authHeader = String(req.headers["authorization"] || "").trim();
+    if (/^Bearer\s+/i.test(authHeader)) {
+      return authHeader.replace(/^Bearer\s+/i, "").trim();
+    }
+    return "";
+  }
+
+  function resolveRequestAuthContext(req: express.Request, explicitDeviceId?: string): {
+    deviceId: string;
+    deviceRecord?: AuthorizedDeviceRecord;
+    account?: ServerUser;
+    permission: string;
+    employeeId: string;
+    authenticated: boolean;
+  } {
+    const deviceId = extractDeviceIdFromHttp(req, explicitDeviceId);
+    const deviceRecord = deviceId ? authorizedDevicesMap.get(deviceId) : undefined;
+    const token = extractBearerToken(req);
+    const tokenSess = token ? sessionTokensMap.get(token) : undefined;
+
+    if (deviceRecord && (deviceRecord.status === "REVOKED" || deviceRecord.status === "PENDING")) {
+      return {
+        deviceId,
+        deviceRecord,
+        account: undefined,
+        permission: "",
+        employeeId: "",
+        authenticated: false
+      };
+    }
+
+    let boundEmpId = "";
+    if (deviceRecord && deviceRecord.status === "AUTHORIZED") {
+      boundEmpId = String(
+        deviceRecord.employeeId ||
+        (deviceRecord.isPrimaryAdminDevice ? "JPMP-002" : "") ||
+        tokenSess?.employeeId ||
+        ""
+      ).trim().toUpperCase();
+    } else if (tokenSess) {
+      boundEmpId = String(tokenSess.employeeId || "").trim().toUpperCase();
+    }
+
+    const account = boundEmpId
+      ? state.registeredUsers.find(u => (u.employeeId || "").toUpperCase().trim() === boundEmpId)
+      : undefined;
+
+    let permission = "";
+    let authenticated = false;
+    if (account) {
+      authenticated = true;
+      permission = account.status === "INACTIVE"
+        ? "VIEW_ONLY"
+        : String(account.permission || "LIMITED_ACCESS").trim().toUpperCase();
+    } else if (deviceRecord && deviceRecord.status === "AUTHORIZED") {
+      authenticated = true;
+      permission = deviceRecord.isPrimaryAdminDevice
+        ? "FULL_ACCESS"
+        : String(deviceRecord.permission || "LIMITED_ACCESS").trim().toUpperCase();
+    } else if (tokenSess) {
+      authenticated = true;
+      permission = "LIMITED_ACCESS";
+    }
+
+    return {
+      deviceId,
+      deviceRecord,
+      account,
+      permission,
+      employeeId: account?.employeeId || boundEmpId,
+      authenticated
+    };
+  }
+
+  function rejectIfDeviceRevokedHttp(req: express.Request, res: express.Response, explicitDeviceId?: string): boolean {
+    const devId = extractDeviceIdFromHttp(req, explicitDeviceId);
+    if (isDeviceRevoked(devId)) {
+      closeDeviceSockets(devId, "DEVICE_REVOKED");
+      res.status(403).json({ error: "DEVICE_REVOKED" });
+      return true;
+    }
+    return false;
+  }
+
+  function ensureSuperAdminSeed(isFreshInstall: boolean) {
+    const idx = state.registeredUsers.findIndex(
+      u => (u.employeeId || "").toUpperCase().trim() === "JPMP-002"
+    );
+    if (idx === -1) {
+      const seedUser: ServerUser = {
+        ...defaultSuperAdmin,
+        deviceId: primaryDeviceId,
+        authorizedDevices: [primaryDeviceId]
+      };
+      if (isFreshInstall) {
+        const initialPin = generateSecureRandom4DigitPin();
+        const { pinHash, pinSalt } = hashPinScrypt(initialPin);
+        seedUser.pinHash = pinHash;
+        seedUser.pinSalt = pinSalt;
+        seedUser.mustChangePin = true;
+        oneTimeSetupPin = initialPin;
+        console.log(`[SECURITY SETUP] Generated one-time Super Admin (JPMP-002) initial PIN for fresh install. Must be changed on first login.`);
+      }
+      state.registeredUsers.unshift(seedUser);
+    } else {
+      const existing = state.registeredUsers[idx];
+      const updated: ServerUser = {
+        ...existing,
+        deviceId: existing.deviceId || primaryDeviceId,
+        isPrimaryAdminDevice: true,
+        authorizedDevices: Array.from(new Set([...(existing.authorizedDevices || []), primaryDeviceId]))
+      };
+      if (!updated.pinHash && !updated.pin) {
+        const initialPin = generateSecureRandom4DigitPin();
+        const { pinHash, pinSalt } = hashPinScrypt(initialPin);
+        updated.pinHash = pinHash;
+        updated.pinSalt = pinSalt;
+        updated.mustChangePin = true;
+        oneTimeSetupPin = initialPin;
+        console.log(`[SECURITY SETUP] Super Admin (JPMP-002) had no credentials; generated one-time initial PIN requiring change on first login.`);
+      }
+      state.registeredUsers[idx] = updated;
+    }
+  }
+
+  function scrubPlaintextPinsInSqliteBackup(targetPath: string) {
+    try {
+      if (!fs.existsSync(targetPath)) return;
+      const bDb = openSqliteDatabase(targetPath);
+      try {
+        const rows = bDb.prepare("SELECT id, data FROM registered_users").all() as Array<{ id: string; data: string }>;
+        const updateStmt = bDb.prepare("UPDATE registered_users SET data = ? WHERE id = ?");
+        for (const row of rows) {
+          try {
+            const parsedUser = JSON.parse(row.data);
+            let changed = false;
+            if (parsedUser.pin && !parsedUser.pinHash) {
+              const { pinHash, pinSalt } = hashPinScrypt(String(parsedUser.pin));
+              parsedUser.pinHash = pinHash;
+              parsedUser.pinSalt = pinSalt;
+              changed = true;
+            }
+            if ("pin" in parsedUser || "pin_hash" in parsedUser) {
+              delete parsedUser.pin;
+              delete parsedUser.pin_hash;
+              changed = true;
+            }
+            if (changed) {
+              updateStmt.run(JSON.stringify(parsedUser), row.id);
+            }
+          } catch {}
+        }
+      } finally {
+        try { bDb.close(); } catch {}
+      }
+    } catch (err) {
+      console.warn("[BACKUP SECURITY] Failed scrubbing plain-text PINs from SQLite backup:", err);
+    }
+  }
+
+  function scrubPlaintextPinsInJsonBackup(targetPath: string) {
+    try {
+      if (!fs.existsSync(targetPath)) return;
+      const parsed = JSON.parse(fs.readFileSync(targetPath, "utf-8"));
+      const scrubArr = (arr: any[]) =>
+        arr.map((u: any) => {
+          if (!u || typeof u !== "object") return u;
+          const copy = { ...u };
+          if (copy.pin && !copy.pinHash) {
+            const { pinHash, pinSalt } = hashPinScrypt(String(copy.pin));
+            copy.pinHash = pinHash;
+            copy.pinSalt = pinSalt;
+          }
+          delete copy.pin;
+          delete copy.pin_hash;
+          return copy;
+        });
+      if (Array.isArray(parsed?.registeredUsers)) {
+        parsed.registeredUsers = scrubArr(parsed.registeredUsers);
+      }
+      if (Array.isArray(parsed?.state?.registeredUsers)) {
+        parsed.state.registeredUsers = scrubArr(parsed.state.registeredUsers);
+      }
+      fs.writeFileSync(targetPath, JSON.stringify(parsed, null, 2), "utf-8");
+    } catch (err) {
+      console.warn("[BACKUP SECURITY] Failed scrubbing plain-text PINs from JSON backup:", err);
+    }
   }
 
   interface ChatMessage {
@@ -750,8 +1026,9 @@ async function startServer() {
       const filename = getNextBackupFilename();
       const targetPath = path.join(BACKUPS_DIR, filename);
 
-      // Consistent atomic snapshot via VACUUM INTO
+      // Consistent atomic snapshot via VACUUM INTO, with plain-text PINs scrubbed
       vacuumInto(targetPath);
+      scrubPlaintextPinsInSqliteBackup(targetPath);
       const stat = await fs.promises.stat(targetPath);
 
       logBackupAudit("BACKUP_CREATED", filename, author, reason, stat.size);
@@ -851,30 +1128,17 @@ async function startServer() {
         chatMessages.push(...parsed.chatMessages.slice(-200));
       }
 
-      // Ensure Super Administrator JPMP-002 is registered in memory
-      const superAdminIndex = state.registeredUsers.findIndex(
-        u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002'
-      );
-      if (superAdminIndex === -1) {
-        state.registeredUsers.unshift({ ...defaultSuperAdmin, deviceId: primaryDeviceId });
-      } else {
-        const existing = state.registeredUsers[superAdminIndex];
-        state.registeredUsers[superAdminIndex] = {
-          ...existing,
-          deviceId: existing.deviceId || primaryDeviceId,
-          isPrimaryAdminDevice: true,
-          authorizedDevices: Array.from(new Set([...(existing.authorizedDevices || []), primaryDeviceId]))
-        };
-      }
+      // Ensure Super Administrator JPMP-002 is registered in memory (never seed static default PIN)
+      ensureSuperAdminSeed(false);
 
       // Security Audit: Flag any account currently with '1234' as compromised
       let compromisedAccountsCount = 0;
       state.registeredUsers.forEach(u => {
         const cleanPin = String(u.pin || '').trim();
-        if (cleanPin === '1234') {
+        if (cleanPin === '1234' || verifyUserPin(u, '1234').matched) {
           u.isPinCompromised = true;
           compromisedAccountsCount++;
-          console.warn(`[SECURITY ALERT] Operator ${u.employeeId} (${u.username}) currently has compromised PIN '1234'. Marked as COMPROMISED.`);
+          console.warn(`[SECURITY ALERT] Operator ${u.employeeId} (${u.username}) has compromised PIN '1234'. Marked as COMPROMISED.`);
         }
       });
       if (compromisedAccountsCount > 0) {
@@ -1027,18 +1291,12 @@ async function startServer() {
       console.error("[AUTO RECOVERY] Error scanning backups directory:", scanErr);
     }
 
-    // e) Otherwise start empty, as before.
+    // e) Otherwise start empty with generated random one-time Super Admin PIN
     if (!autoRestoredBackupFilename) {
       console.warn("WARNING: Live database is missing/corrupted and no backup files are available in backups folder. Starting with an empty database. No recovery was possible.");
       initSqliteStore(DATA_FILE_SQLITE);
+      ensureSuperAdminSeed(true);
       commitDatabase();
-      const superAdminIndex = state.registeredUsers.findIndex(
-        u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002'
-      );
-      if (superAdminIndex === -1) {
-        state.registeredUsers.unshift({ ...defaultSuperAdmin, deviceId: primaryDeviceId });
-        commitDatabase();
-      }
     }
   }
 
@@ -1076,6 +1334,7 @@ async function startServer() {
           } catch (vErr) {
             fs.copyFileSync(DATA_FILE_SQLITE, targetPath);
           }
+          scrubPlaintextPinsInSqliteBackup(targetPath);
 
           const backupStat = fs.statSync(targetPath);
           logBackupAudit(
@@ -1113,6 +1372,7 @@ async function startServer() {
           }
           const targetPath = path.join(BACKUPS_DIR, filename);
           fs.copyFileSync(DATA_FILE_JSON, targetPath);
+          scrubPlaintextPinsInJsonBackup(targetPath);
           const backupStat = fs.statSync(targetPath);
           logBackupAudit(
             "BACKUP_CREATED",
@@ -1330,6 +1590,7 @@ async function startServer() {
           const safetyName = getNextBackupFilename();
           const safetyPath = path.join(BACKUPS_DIR, safetyName);
           vacuumInto(safetyPath);
+          scrubPlaintextPinsInSqliteBackup(safetyPath);
           console.log(`[DATABASE RESTORE] Pre-restore safety snapshot created: ${safetyName}`);
           logBackupAudit("BACKUP_CREATED", safetyName, "SYSTEM_SAFETY", "Pre-restore safety snapshot before overwriting database", fs.statSync(safetyPath).size);
         }
@@ -1361,6 +1622,7 @@ async function startServer() {
         keepUsers: true,
         data: {
           ...state,
+          registeredUsers: (state.registeredUsers || []).map(sanitizeUserForClient),
           chatMessages: chatMessages.slice(-200)
         }
       });
@@ -1443,6 +1705,8 @@ async function startServer() {
   function closeDeviceSockets(deviceId?: string, reason: string = "DEVICE_REVOKED") {
     const clean = String(deviceId || "").trim();
     if (!clean) return;
+    activeDevices.delete(clean);
+    const closedSockets = new Set<WebSocket>();
     for (const [cId, conn] of Array.from(connectionRegistry.entries())) {
       if (conn.device_id === clean || conn.deviceId === clean) {
         try {
@@ -1457,8 +1721,29 @@ async function startServer() {
         } catch {}
         connectionRegistry.delete(cId);
         socketToConnectionId.delete(conn.ws);
+        removeSocketFromGroups(conn.ws);
+        closedSockets.add(conn.ws);
         try {
           conn.ws.close(4003, reason);
+        } catch {}
+      }
+    }
+    for (const client of wss.clients) {
+      if (!closedSockets.has(client) && (client as any)._deviceId === clean) {
+        try {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({
+              type: "DEVICE_REVOKED",
+              deviceId: clean,
+              error: "DEVICE_REVOKED",
+              systemResetVersion
+            }));
+          }
+        } catch {}
+        socketToConnectionId.delete(client);
+        removeSocketFromGroups(client);
+        try {
+          client.close(4003, reason);
         } catch {}
       }
     }
@@ -1860,44 +2145,45 @@ async function startServer() {
     }));
   }
 
-  // Filter sensitive fields (e.g., plain PINs) based on caller role/permission
-  function filterDataForClient(data: any, clientPermission?: string, clientEmployeeId?: string): any {
-    const isSuperAdmin = (clientEmployeeId || '').toUpperCase().trim() === 'JPMP-002' || clientPermission === 'FULL_ACCESS';
-    if (isSuperAdmin) {
-      return data;
-    }
+  // Unconditionally scrub sensitive PIN fields (plain pin, pinHash, pinSalt) from ALL client snapshots
+  function filterDataForClient(data: any, _clientPermission?: string, _clientEmployeeId?: string): any {
     const cloned = { ...data };
     if (Array.isArray(cloned.registeredUsers)) {
-      cloned.registeredUsers = cloned.registeredUsers.map((u: any) => {
-        const { pin, pin_hash, ...safeUser } = u;
-        return safeUser;
-      });
+      cloned.registeredUsers = cloned.registeredUsers.map((u: any) => sanitizeUserForClient(u));
     }
     return cloned;
   }
 
-  // Authoritative WebSocket Broadcast with Role-based Data Sanitization
+  // Authoritative WebSocket Broadcast (never leaks PIN or hash/salt fields)
   function broadcast(msg: any, excludeSocket?: WebSocket) {
-    const adminMsg = JSON.stringify(msg);
-    let safeMsg = adminMsg;
-
-    if (msg.collection === 'registeredUsers' && msg.record) {
-      const sanitized = { ...msg.record };
-      delete sanitized.pin;
-      delete sanitized.pin_hash;
-      safeMsg = JSON.stringify({ ...msg, record: sanitized });
-    } else if (msg.data && msg.data.registeredUsers) {
-      const sanitizedData = filterDataForClient(msg.data, 'LIMITED_ACCESS');
-      safeMsg = JSON.stringify({ ...msg, data: sanitizedData });
+    let payloadToBroadcast: any = msg;
+    if (msg && typeof msg === 'object') {
+      const clonedMsg: any = { ...msg };
+      if (clonedMsg.collection === 'registeredUsers' && clonedMsg.record) {
+        clonedMsg.record = sanitizeUserForClient(clonedMsg.record);
+      }
+      if (clonedMsg.user) {
+        clonedMsg.user = sanitizeUserForClient(clonedMsg.user);
+      }
+      if (clonedMsg.account) {
+        clonedMsg.account = sanitizeUserForClient(clonedMsg.account);
+      }
+      if (clonedMsg.data && typeof clonedMsg.data === 'object') {
+        if (Array.isArray(clonedMsg.data.registeredUsers)) {
+          clonedMsg.data = filterDataForClient(clonedMsg.data);
+        } else if ((clonedMsg.collection === 'registeredUsers' || clonedMsg.type === 'all_accounts_cleared') && Array.isArray(clonedMsg.data)) {
+          clonedMsg.data = clonedMsg.data.map((u: any) => sanitizeUserForClient(u));
+        }
+      }
+      payloadToBroadcast = clonedMsg;
     }
+
+    const serializedMsg = JSON.stringify(payloadToBroadcast);
 
     for (const client of wss.clients) {
       if (client.readyState === WebSocket.OPEN && client !== excludeSocket) {
         try {
-          const connId = socketToConnectionId.get(client);
-          const conn = connId ? connectionRegistry.get(connId) : null;
-          const isSuper = conn?.permission === 'FULL_ACCESS' || (conn?.employeeId || '').toUpperCase() === 'JPMP-002';
-          client.send(isSuper ? adminMsg : safeMsg);
+          client.send(serializedMsg);
         } catch (sendErr) {
           console.warn("WebSocket client send warning:", sendErr);
         }
@@ -2028,6 +2314,22 @@ async function startServer() {
       };
       currentList[existingIndex] = confirmedRecord;
     } else {
+      if (
+        deletedRecordTombstones.has(recordId) &&
+        expectedVersion !== undefined &&
+        expectedVersion !== null &&
+        !Number.isNaN(Number(expectedVersion)) &&
+        Number(expectedVersion) >= 1
+      ) {
+        return {
+          success: false,
+          status: 409,
+          error: "VERSION_CONFLICT: Record was deleted on central database.",
+          confirmedRecord: null,
+          currentRecord: null,
+          systemResetVersion
+        };
+      }
       isCreation = true;
       confirmedRecord = {
         ...record,
@@ -2361,18 +2663,21 @@ async function startServer() {
     const userAgent = req.headers['user-agent'] || '';
     const platform = userAgent.includes("Android") ? "Android" : (userAgent.includes("iPhone") || userAgent.includes("iPad") ? "iOS" : (userAgent.includes("Windows") ? "Windows" : "Desktop"));
 
-    // 1. On connection, extract the user's accountId (or warehouseId) from the connection query/auth token
+    // 1. On connection, extract accountId, warehouseId, and deviceId from connection query/headers/token
     let queryAccountId = "ACC-JUWEI";
     let queryWarehouseId = "WH-MAIN";
+    let queryDeviceId = "";
     try {
       const host = req.headers.host || "127.0.0.1:3000";
       const parsedUrl = new URL(req.url || "/ws", `http://${host}`);
       const qAcc = parsedUrl.searchParams.get("accountId") || parsedUrl.searchParams.get("account_id") || (req.headers["x-account-id"] as string);
       const qWh = parsedUrl.searchParams.get("warehouseId") || parsedUrl.searchParams.get("warehouse_id") || (req.headers["x-warehouse-id"] as string);
+      const qDev = parsedUrl.searchParams.get("deviceId") || parsedUrl.searchParams.get("device_id") || (req.headers["x-device-id"] as string);
       const authToken = parsedUrl.searchParams.get("token") || parsedUrl.searchParams.get("auth_token") || (req.headers["authorization"] ? req.headers["authorization"].replace(/^Bearer\s+/i, "") : "");
 
       if (qAcc) queryAccountId = qAcc.trim();
       if (qWh) queryWarehouseId = qWh.trim();
+      if (qDev) queryDeviceId = qDev.trim();
 
       if (authToken) {
         try {
@@ -2380,6 +2685,7 @@ async function startServer() {
             const parsedToken = JSON.parse(authToken);
             if (parsedToken.accountId || parsedToken.account_id) queryAccountId = String(parsedToken.accountId || parsedToken.account_id).trim();
             if (parsedToken.warehouseId || parsedToken.warehouse_id) queryWarehouseId = String(parsedToken.warehouseId || parsedToken.warehouse_id).trim();
+            if (parsedToken.deviceId || parsedToken.device_id) queryDeviceId = String(parsedToken.deviceId || parsedToken.device_id).trim();
           } else if (authToken.includes(".")) {
             const parts = authToken.split(".");
             if (parts.length >= 2) {
@@ -2393,6 +2699,27 @@ async function startServer() {
       }
     } catch (urlErr) {
       console.warn("Failed parsing WS connection url:", urlErr);
+    }
+
+    if (queryDeviceId && isDeviceRevoked(queryDeviceId)) {
+      (ws as any)._deviceId = queryDeviceId;
+      try {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: "DEVICE_REVOKED",
+            deviceId: queryDeviceId,
+            error: "DEVICE_REVOKED",
+            systemResetVersion
+          }));
+        }
+      } catch {}
+      closeDeviceSockets(queryDeviceId, "DEVICE_REVOKED");
+      socketToConnectionId.delete(ws);
+      try { ws.close(4003, "DEVICE_REVOKED"); } catch {}
+      return;
+    }
+    if (queryDeviceId) {
+      (ws as any)._deviceId = queryDeviceId;
     }
 
     // 3. Upon any new socket connection or reconnection, immediately query the database for the current inventory state
@@ -2420,17 +2747,30 @@ async function startServer() {
     // Assign socket to group (subscribing to room updates after sending initial sync)
     assignSocketToGroup(ws, queryAccountId, queryWarehouseId);
 
+    // Derive initial record permission strictly from server-side device record if present
+    const initialDevRecord = queryDeviceId ? authorizedDevicesMap.get(queryDeviceId) : undefined;
+    const initialBoundEmp = initialDevRecord?.status === 'AUTHORIZED'
+      ? (initialDevRecord.employeeId || (initialDevRecord.isPrimaryAdminDevice ? 'JPMP-002' : ''))
+      : '';
+    const initialBoundUser = initialBoundEmp
+      ? state.registeredUsers.find(u => (u.employeeId || '').toUpperCase().trim() === initialBoundEmp.toUpperCase())
+      : undefined;
+    const initialServerPermission = initialBoundUser
+      ? (initialBoundUser.status === 'INACTIVE' ? 'VIEW_ONLY' : initialBoundUser.permission)
+      : (initialDevRecord?.status === 'AUTHORIZED' && initialDevRecord.isPrimaryAdminDevice ? 'FULL_ACCESS' : 'LIMITED_ACCESS');
+
     // Register active terminal in central connection registry
     const initialRecord: ActiveConnectionRecord = {
       connection_id,
       user_id: "ANONYMOUS",
       session_id: `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      device_id: `dev_${Math.random().toString(36).substring(2, 9)}`,
+      device_id: queryDeviceId || `dev_${Math.random().toString(36).substring(2, 9)}`,
+      ...(queryDeviceId ? { deviceId: queryDeviceId } : {}),
       stationId: "",
-      employeeId: "",
-      username: "CONNECTING TERMINAL",
-      role: "OPERATOR",
-      permission: "LIMITED_ACCESS",
+      employeeId: initialBoundUser?.employeeId || initialBoundEmp || "",
+      username: initialBoundUser?.username || "CONNECTING TERMINAL",
+      role: initialBoundUser?.role || "OPERATOR",
+      permission: initialServerPermission,
       platform,
       deviceName: `${platform} Terminal`,
       activeView: "dashboard",
@@ -2444,6 +2784,28 @@ async function startServer() {
       warehouseId: queryWarehouseId
     };
     connectionRegistry.set(connection_id, initialRecord);
+
+    const rejectIfDeviceRevokedWs = (payload: any, conn?: ActiveConnectionRecord | null, extra?: { collection?: string; recordId?: string; clientMutationId?: any }): { revoked: boolean; reqDevId: string } => {
+      const reqDevId = String(payload?.device_id || payload?.deviceId || conn?.device_id || conn?.deviceId || (ws as any)._deviceId || payload?.record?.device_id || payload?.record?.deviceId || "").trim();
+      if (isDeviceRevoked(reqDevId)) {
+        (ws as any)._deviceId = reqDevId;
+        try {
+          ws.send(JSON.stringify({
+            type: "ERROR",
+            error: "DEVICE_REVOKED",
+            status: 403,
+            deviceId: reqDevId,
+            ...(extra?.collection ? { collection: extra.collection } : {}),
+            ...(extra?.recordId ? { recordId: extra.recordId } : {}),
+            ...(extra?.clientMutationId ? { clientMutationId: extra.clientMutationId } : {}),
+            systemResetVersion
+          }));
+        } catch {}
+        closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+        return { revoked: true, reqDevId };
+      }
+      return { revoked: false, reqDevId };
+    };
 
     ws.on("pong", () => {
       ws.isAlive = true;
@@ -2517,20 +2879,9 @@ async function startServer() {
             const conn = connectionRegistry.get(connId);
             if (!conn) break;
 
-            const employeeId = String(payload.employeeId || "").trim().toUpperCase();
-            const username = String(payload.username || (employeeId === 'JPMP-002' ? 'ALDRIN BANAWA' : 'OPERATOR')).trim().toUpperCase();
-            const role = String(payload.role || (employeeId === 'JPMP-002' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR')).trim().toUpperCase();
-            const permission = String(payload.permission || (employeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS')).trim();
-            const activeView = String(payload.activeView || "dashboard").trim();
-            const stationId = String(payload.stationId || "").trim();
             const deviceId = String(payload.device_id || payload.deviceId || conn.device_id).trim();
-            const sessionId = String(payload.session_id || payload.sessionId || conn.session_id).trim();
-            const userId = String(payload.user_id || payload.userId || (employeeId ? `USR-${employeeId}` : conn.user_id)).trim();
-            const devPlatform = String(payload.platform || conn.platform || "Web").trim();
-            const devName = String(payload.deviceName || `${devPlatform} Terminal`).trim();
-            const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || systemResetVersion;
-
             if (isDeviceRevoked(deviceId)) {
+              (ws as any)._deviceId = deviceId;
               try {
                 ws.send(JSON.stringify({
                   type: "DEVICE_REVOKED",
@@ -2539,12 +2890,69 @@ async function startServer() {
                   systemResetVersion
                 }));
               } catch {}
-              connectionRegistry.delete(connId);
-              socketToConnectionId.delete(ws);
-              removeSocketFromGroups(ws);
-              try { ws.close(4003, "DEVICE_REVOKED"); } catch {}
+              closeDeviceSockets(deviceId, "DEVICE_REVOKED");
               break;
             }
+            (ws as any)._deviceId = deviceId;
+
+            // Derive account, role, and permission strictly from server-side device binding, session token, or user table.
+            // Ignore payload.permission for authorization.
+            const wsSessionToken = String(payload.sessionToken || payload.token || "").trim();
+            const tokenSession = wsSessionToken ? sessionTokensMap.get(wsSessionToken) : undefined;
+            const deviceRecord = deviceId ? authorizedDevicesMap.get(deviceId) : undefined;
+
+            const requestedEmpId = String(payload.employeeId || "").trim().toUpperCase();
+            let authoritativeEmpId = "";
+            if (deviceRecord && deviceRecord.status === "AUTHORIZED") {
+              authoritativeEmpId = String(
+                deviceRecord.employeeId ||
+                (deviceRecord.isPrimaryAdminDevice ? "JPMP-002" : "") ||
+                tokenSession?.employeeId ||
+                requestedEmpId
+              ).trim().toUpperCase();
+            } else if (tokenSession) {
+              authoritativeEmpId = String(tokenSession.employeeId || "").trim().toUpperCase();
+            } else {
+              authoritativeEmpId = requestedEmpId;
+            }
+
+            const serverAccount = authoritativeEmpId
+              ? state.registeredUsers.find(u => (u.employeeId || "").toUpperCase().trim() === authoritativeEmpId)
+              : undefined;
+
+            const employeeId = serverAccount?.employeeId || authoritativeEmpId;
+            const username = serverAccount?.username || String(payload.username || (employeeId === 'JPMP-002' ? 'ALDRIN BANAWA' : 'OPERATOR')).trim().toUpperCase();
+            const role = serverAccount?.role || String(payload.role || 'WAREHOUSE OPERATOR').trim().toUpperCase();
+
+            let permission = "LIMITED_ACCESS";
+            if (deviceRecord && deviceRecord.status === "AUTHORIZED") {
+              if (serverAccount) {
+                permission = serverAccount.status === "INACTIVE"
+                  ? "VIEW_ONLY"
+                  : String(serverAccount.permission || "LIMITED_ACCESS").trim().toUpperCase();
+              } else {
+                permission = deviceRecord.isPrimaryAdminDevice
+                  ? "FULL_ACCESS"
+                  : String(deviceRecord.permission || "LIMITED_ACCESS").trim().toUpperCase();
+              }
+            } else if (tokenSession && serverAccount) {
+              permission = serverAccount.status === "INACTIVE"
+                ? "VIEW_ONLY"
+                : String(serverAccount.permission || "LIMITED_ACCESS").trim().toUpperCase();
+            } else if (serverAccount) {
+              // Unverified socket without authorized device or sessionToken: never elevate to FULL_ACCESS
+              permission = (serverAccount.status === "INACTIVE" || serverAccount.permission === "VIEW_ONLY")
+                ? "VIEW_ONLY"
+                : "LIMITED_ACCESS";
+            }
+
+            const activeView = String(payload.activeView || "dashboard").trim();
+            const stationId = String(payload.stationId || "").trim();
+            const sessionId = String(payload.session_id || payload.sessionId || conn.session_id).trim();
+            const userId = String(payload.user_id || payload.userId || (employeeId ? `USR-${employeeId}` : conn.user_id)).trim();
+            const devPlatform = String(payload.platform || conn.platform || "Web").trim();
+            const devName = String(payload.deviceName || `${devPlatform} Terminal`).trim();
+            const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || systemResetVersion;
 
             // Update this specific connection record in the central registry
             conn.user_id = userId;
@@ -2614,6 +3022,7 @@ async function startServer() {
               user_id: userId,
               session_id: sessionId,
               device_id: deviceId,
+              permission,
               systemResetVersion,
               systemResetId,
               systemResetTimestamp,
@@ -2767,10 +3176,10 @@ async function startServer() {
           case "adjust_stock": {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
-            const reqDevId = String(payload.device_id || payload.deviceId || conn?.device_id || conn?.deviceId || "").trim();
-            if (isDeviceRevoked(reqDevId)) {
-              ws.send(JSON.stringify({ type: "ERROR", error: "DEVICE_REVOKED", status: 403, deviceId: reqDevId }));
-              closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+            const revCheck = rejectIfDeviceRevokedWs(payload, conn);
+            if (revCheck.revoked) break;
+            if (conn?.permission === 'VIEW_ONLY') {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
               break;
             }
             const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
@@ -2856,10 +3265,10 @@ async function startServer() {
           case "transfer_location": {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
-            const reqDevId = String(payload.device_id || payload.deviceId || conn?.device_id || conn?.deviceId || "").trim();
-            if (isDeviceRevoked(reqDevId)) {
-              ws.send(JSON.stringify({ type: "ERROR", error: "DEVICE_REVOKED", status: 403, deviceId: reqDevId }));
-              closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+            const revCheck = rejectIfDeviceRevokedWs(payload, conn);
+            if (revCheck.revoked) break;
+            if (conn?.permission === 'VIEW_ONLY') {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
               break;
             }
             const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
@@ -2918,10 +3327,10 @@ async function startServer() {
           case "pick_pack_ship": {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
-            const reqDevId = String(payload.device_id || payload.deviceId || conn?.device_id || conn?.deviceId || "").trim();
-            if (isDeviceRevoked(reqDevId)) {
-              ws.send(JSON.stringify({ type: "ERROR", error: "DEVICE_REVOKED", status: 403, deviceId: reqDevId }));
-              closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+            const revCheck = rejectIfDeviceRevokedWs(payload, conn);
+            if (revCheck.revoked) break;
+            if (conn?.permission === 'VIEW_ONLY') {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
               break;
             }
             const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
@@ -2997,6 +3406,7 @@ async function startServer() {
             const clientMutationId = payload.clientMutationId || payload.id;
 
             if (isDeviceRevoked(reqDevId)) {
+              (ws as any)._deviceId = reqDevId;
               ws.send(JSON.stringify({
                 type: "ERROR",
                 error: "DEVICE_REVOKED",
@@ -3070,6 +3480,7 @@ async function startServer() {
             const clientMutationId = payload.clientMutationId;
 
             if (isDeviceRevoked(reqDevId)) {
+              (ws as any)._deviceId = reqDevId;
               ws.send(JSON.stringify({
                 type: "ERROR",
                 error: "DEVICE_REVOKED",
@@ -3132,6 +3543,7 @@ async function startServer() {
             const reqDevId = String(payload.device_id || payload.deviceId || conn?.device_id || conn?.deviceId || "").trim();
 
             if (isDeviceRevoked(reqDevId)) {
+              (ws as any)._deviceId = reqDevId;
               ws.send(JSON.stringify({ type: "ERROR", error: "DEVICE_REVOKED", status: 403, deviceId: reqDevId, collection: col }));
               closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
               break;
@@ -3261,10 +3673,13 @@ async function startServer() {
                 };
 
                 if (col === 'registeredUsers') {
-                  // CRITICAL SECURITY FIX: Batch sync MUST NEVER overwrite operator PINs!
+                  // CRITICAL SECURITY FIX: Batch sync MUST NEVER overwrite operator PINs or hashes!
                   // Operator PINs can only be modified via explicit Super Admin /api/accounts/update-pin.
-                  updatedRec.pin = existing.pin;
+                  if (existing.pinHash) updatedRec.pinHash = existing.pinHash;
+                  if (existing.pinSalt) updatedRec.pinSalt = existing.pinSalt;
+                  if (existing.pin) updatedRec.pin = existing.pin;
                   if (existing.pin_hash) updatedRec.pin_hash = existing.pin_hash;
+                  if (existing.mustChangePin !== undefined) updatedRec.mustChangePin = existing.mustChangePin;
                   if (existing.isPinCompromised !== undefined) updatedRec.isPinCompromised = existing.isPinCompromised;
                   if (existing.pinChangedAt) updatedRec.pinChangedAt = existing.pinChangedAt;
                   if (existing.pinChangedBy) updatedRec.pinChangedBy = existing.pinChangedBy;
@@ -3339,6 +3754,7 @@ async function startServer() {
             const reqDevId = String(payload.device_id || payload.deviceId || conn?.device_id || conn?.deviceId || "").trim();
 
             if (isDeviceRevoked(reqDevId)) {
+              (ws as any)._deviceId = reqDevId;
               ws.send(JSON.stringify({ type: "ERROR", error: "DEVICE_REVOKED", status: 403, deviceId: reqDevId }));
               closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
               break;
@@ -3358,7 +3774,16 @@ async function startServer() {
             const mutations = Array.isArray(payload.mutations) ? payload.mutations : [];
             let processed = 0;
             const results: any[] = [];
+            let batchAbortedRevoked = false;
             for (const m of mutations) {
+              const mutDevId = String(m.device_id || m.deviceId || reqDevId).trim();
+              if (isDeviceRevoked(mutDevId)) {
+                (ws as any)._deviceId = mutDevId;
+                ws.send(JSON.stringify({ type: "ERROR", error: "DEVICE_REVOKED", status: 403, deviceId: mutDevId }));
+                closeDeviceSockets(mutDevId, "DEVICE_REVOKED");
+                batchAbortedRevoked = true;
+                break;
+              }
               if (m.type === 'upsert' && m.collection && m.record) {
                 const res = executeRecordUpsert({
                   collection: m.collection,
@@ -3416,6 +3841,8 @@ async function startServer() {
               }
             }
 
+            if (batchAbortedRevoked) break;
+
             console.log(`[CENTRAL-DB] [WS-BATCH-MUTATIONS] Processed ${processed}/${mutations.length} mutations | User: ${conn?.username || 'Operator'} | Device: ${reqDevId || 'Terminal'}`);
 
             ws.send(JSON.stringify({
@@ -3467,13 +3894,12 @@ async function startServer() {
           case "presence_update": {
             const connId = socketToConnectionId.get(ws) || connection_id;
             const conn = connectionRegistry.get(connId);
+            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
             if (conn) {
               if (payload.activeView) conn.activeView = payload.activeView;
               if (payload.stationId) conn.stationId = payload.stationId;
-              if (payload.username) conn.username = payload.username.toUpperCase();
-              if (payload.employeeId) conn.employeeId = payload.employeeId.toUpperCase();
-              if (payload.role) conn.role = payload.role.toUpperCase();
-              if (payload.permission) conn.permission = payload.permission;
+              // Never allow presence_update to elevate or alter server-derived role/permission
+              if (payload.username && !conn.employeeId) conn.username = payload.username.toUpperCase();
               conn.lastPing = Date.now();
               broadcastPresenceSync();
             }
@@ -3482,7 +3908,10 @@ async function startServer() {
 
           case "force_sync_all":
           case "sync_all_workstations": {
-            const author = payload.author || "SUPER ADMINISTRATOR";
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
+            const author = payload.author || conn?.username || "SUPER ADMINISTRATOR";
             broadcast({
               type: "SYNC_REQUIRED",
               author,
@@ -3513,6 +3942,13 @@ async function startServer() {
           }
 
           case "chat": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
+            if (conn?.permission === 'VIEW_ONLY') {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
+              break;
+            }
             const newMsg: ChatMessage = {
               id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
               sender: payload.username || payload.sender || "Staff",
@@ -3532,6 +3968,13 @@ async function startServer() {
           }
 
           case "register_account": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
+            if (conn?.permission === 'VIEW_ONLY') {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
+              break;
+            }
             const newUser = payload.user;
             if (!newUser || !newUser.employeeId) break;
             const cleanEmpId = String(newUser.employeeId).trim().toUpperCase();
@@ -3541,12 +3984,12 @@ async function startServer() {
 
             const existingIdx = state.registeredUsers.findIndex(u => u.employeeId.toUpperCase() === cleanEmpId);
             
-            // Generate unpredictable 4-digit PIN if none supplied. Never default to '1234'.
-            let cleanPin = String(newUser.pin || '').trim().replace(/\D/g, '').slice(0, 4);
-            if (!cleanPin || cleanPin.length < 4) {
-              cleanPin = String(Math.floor(2000 + Math.random() * 7900));
+            // Generate unpredictable 4-digit PIN if none supplied and hash with scrypt
+            let cleanPin = String(newUser.pin || '').trim().replace(/\D/g, '').slice(0, 6);
+            if (!cleanPin || cleanPin.length < 4 || cleanPin === '1234') {
+              cleanPin = generateSecureRandom4DigitPin();
             }
-            const isCompromised = cleanPin === '1234';
+            const { pinHash, pinSalt } = hashPinScrypt(cleanPin);
 
             const userToStore: ServerUser = {
               id: newUser.id || `USR-${cleanEmpId}`,
@@ -3555,8 +3998,9 @@ async function startServer() {
               role: String(newUser.role || 'WAREHOUSE CLERK').trim().toUpperCase(),
               phoneNumber: newUser.phoneNumber ? String(newUser.phoneNumber).trim() : '',
               permission: String(newUser.permission || 'LIMITED_ACCESS').trim(),
-              pin: cleanPin,
-              isPinCompromised: isCompromised,
+              pinHash,
+              pinSalt,
+              isPinCompromised: false,
               status: 'ACTIVE',
               registeredBy: payload.author || newUser.registeredBy || 'JPMP-002 (ALDRIN BANAWA)',
               registeredBySuperAdmin: true,
@@ -3577,14 +4021,14 @@ async function startServer() {
             const authorName = payload.author || "Super Administrator";
             broadcast({
               type: "account_registered",
-              user: userToStore,
+              user: sanitizeUserForClient(userToStore),
               author: authorName,
               systemResetVersion
             });
             broadcast({
               type: "account_created",
-              account: userToStore,
-              user: userToStore,
+              account: sanitizeUserForClient(userToStore),
+              user: sanitizeUserForClient(userToStore),
               systemResetVersion
             });
             broadcast({
@@ -3597,6 +4041,13 @@ async function startServer() {
           }
 
           case "update_account": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
+            if (conn?.permission === 'VIEW_ONLY') {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
+              break;
+            }
             const updated = payload.user;
             if (!updated || !updated.employeeId) break;
             const cleanEmpId = String(updated.employeeId).trim().toUpperCase();
@@ -3613,7 +4064,10 @@ async function startServer() {
               role: isSuper ? 'SUPER ADMINISTRATOR' : String(updated.role || existing.role).trim().toUpperCase(),
               permission: isSuper ? 'FULL_ACCESS' : String(updated.permission || existing.permission).trim(),
               // CRITICAL SECURITY FIX: General profile update cannot change PIN! PIN changes require /api/accounts/update-pin.
-              pin: existing.pin,
+              pinHash: existing.pinHash,
+              pinSalt: existing.pinSalt,
+              ...(existing.pin && !existing.pinHash ? { pin: existing.pin } : {}),
+              mustChangePin: existing.mustChangePin,
               isPinCompromised: existing.isPinCompromised,
               pinChangedAt: existing.pinChangedAt,
               pinChangedBy: existing.pinChangedBy,
@@ -3621,6 +4075,7 @@ async function startServer() {
               updated_at: new Date().toISOString(),
               reset_version: systemResetVersion
             };
+            if (mergedUser.pinHash) delete mergedUser.pin;
 
             state.registeredUsers[existingIdx] = mergedUser;
             stateRevision++;
@@ -3629,8 +4084,8 @@ async function startServer() {
             const authorName = payload.author || "Admin";
             broadcast({
               type: "account_updated",
-              user: mergedUser,
-              account: mergedUser,
+              user: sanitizeUserForClient(mergedUser),
+              account: sanitizeUserForClient(mergedUser),
               author: authorName,
               systemResetVersion
             });
@@ -3644,6 +4099,13 @@ async function startServer() {
           }
 
           case "delete_account": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
+            if (conn?.permission === 'VIEW_ONLY') {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
+              break;
+            }
             const cleanId = String(payload.employeeId || '').trim().toUpperCase();
             if (!cleanId || cleanId === 'JPMP-002') break;
 
@@ -3667,14 +4129,26 @@ async function startServer() {
           }
 
           case "all_accounts_cleared": {
-            const superAdmin = state.registeredUsers.find(u => u.employeeId.toUpperCase().trim() === 'JPMP-002') || defaultSuperAdmin;
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
+            if (conn?.permission !== 'FULL_ACCESS') {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: Only Super Administrator can clear accounts.", status: 403 }));
+              break;
+            }
+            const superAdmin = state.registeredUsers.find(u => u.employeeId.toUpperCase().trim() === 'JPMP-002');
             state.registeredUsers.forEach(u => {
               if (u.employeeId.toUpperCase().trim() !== 'JPMP-002') {
                 markUserTombstone(u.employeeId);
               }
             });
 
-            state.registeredUsers = [{ ...superAdmin }];
+            if (superAdmin) {
+              state.registeredUsers = [{ ...superAdmin }];
+            } else {
+              state.registeredUsers = [];
+              ensureSuperAdminSeed(true);
+            }
             stateRevision++;
             commitDatabase();
 
@@ -3698,6 +4172,13 @@ async function startServer() {
 
           case "update_roles":
           case "manage_roles": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
+            if (conn?.permission === 'VIEW_ONLY') {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
+              break;
+            }
             if (Array.isArray(payload.roles)) {
               const cleaned = Array.from(new Set<string>(payload.roles.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
               if (cleaned.length > 0) {
@@ -3722,6 +4203,13 @@ async function startServer() {
 
           case "update_categories":
           case "manage_categories": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
+            if (conn?.permission === 'VIEW_ONLY') {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
+              break;
+            }
             let recModified = false;
             let retModified = false;
             let stocksModified = false;
@@ -3823,6 +4311,13 @@ async function startServer() {
 
           case "update_fifo_colors":
           case "manage_fifo_colors": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
+            if (conn?.permission === 'VIEW_ONLY') {
+              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
+              break;
+            }
             if (payload.fifoColorsByMonth && typeof payload.fifoColorsByMonth === 'object') {
               state.fifoColorsByMonth = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...payload.fifoColorsByMonth };
               stateRevision++;
@@ -3866,6 +4361,9 @@ async function startServer() {
           }
 
           case "client_installed": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
             const { stationId, installId, username, employeeId, platform, timestamp } = payload;
             console.log(`[CENTRAL-DB] Client installed: Station ${stationId} by ${username} (${employeeId}) on ${platform}`);
             broadcast({
@@ -3882,6 +4380,9 @@ async function startServer() {
           }
 
           case "system_activity": {
+            const connId = socketToConnectionId.get(ws) || connection_id;
+            const conn = connectionRegistry.get(connId);
+            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
             const actText = String(payload.text || payload.action || '').trim();
             if (actText) {
               const newMsg: ChatMessage = {
@@ -4293,6 +4794,7 @@ async function startServer() {
 
   // REST API: Synchronize All Workstations (Windows, Android, iOS, Desktop)
   app.post(["/api/sync/all-workstations", "/api/sync-all-workstations"], (req, res) => {
+    if (rejectIfDeviceRevokedHttp(req, res)) return;
     const author = req.body?.author || "SUPER ADMINISTRATOR";
     broadcast({
       type: "SYNC_REQUIRED",
@@ -4321,8 +4823,8 @@ async function startServer() {
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
 
-    const clientEmpId = (req.headers['x-employee-id'] as string) || '';
-    const clientPermission = (req.headers['x-permission'] as string) || '';
+    if (rejectIfDeviceRevokedHttp(req, res)) return;
+    const auth = resolveRequestAuthContext(req);
 
     res.json({
       status: "ok",
@@ -4334,7 +4836,7 @@ async function startServer() {
       data: filterDataForClient({
         ...state,
         chatMessages
-      }, clientPermission, clientEmpId),
+      }, auth.permission, auth.employeeId),
       connectedOperators: getActiveOperatorsCount(),
       liveActiveTerminals: connectionRegistry.size
     });
@@ -4363,8 +4865,9 @@ async function startServer() {
         return res.status(400).json({ error: `Unknown or invalid collection: ${collection}` });
       }
 
-      const clientPermission = (req.headers['x-user-permission'] || req.body.permission || '').toString().toUpperCase();
-      if (clientPermission === 'VIEW_ONLY') {
+      // Derive permission strictly from server-side device/session record; ignore x-user-permission and body.permission
+      const auth = resolveRequestAuthContext(req, reqDevId);
+      if (auth.permission === 'VIEW_ONLY') {
         return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
       }
 
@@ -4470,9 +4973,12 @@ async function startServer() {
           };
 
           if (collection === 'registeredUsers') {
-            // CRITICAL SECURITY FIX: Batch sync MUST NEVER overwrite operator PINs!
-            updatedRec.pin = existing.pin;
+            // CRITICAL SECURITY FIX: Batch sync MUST NEVER overwrite operator PINs or hashes!
+            if (existing.pinHash) updatedRec.pinHash = existing.pinHash;
+            if (existing.pinSalt) updatedRec.pinSalt = existing.pinSalt;
+            if (existing.pin) updatedRec.pin = existing.pin;
             if (existing.pin_hash) updatedRec.pin_hash = existing.pin_hash;
+            if (existing.mustChangePin !== undefined) updatedRec.mustChangePin = existing.mustChangePin;
             if (existing.isPinCompromised !== undefined) updatedRec.isPinCompromised = existing.isPinCompromised;
             if (existing.pinChangedAt) updatedRec.pinChangedAt = existing.pinChangedAt;
             if (existing.pinChangedBy) updatedRec.pinChangedBy = existing.pinChangedBy;
@@ -4556,7 +5062,9 @@ async function startServer() {
       const effectiveDevId = reqDevId || 'DEV-OFFLINE';
       const effectiveAuthor = author || employeeId || "Operator";
       const effectiveUserId = String(req.body.user_id || (employeeId ? `USR-${employeeId}` : `USR-${effectiveAuthor}`)).trim();
-      const userPermission = (req.headers['x-user-permission'] || req.body.permission || '').toString().toUpperCase();
+      // Derive permission strictly from server-side device/session record; ignore x-user-permission and body.permission
+      const auth = resolveRequestAuthContext(req, reqDevId);
+      const userPermission = auth.permission;
 
       for (const m of mutList) {
         const mutDevId = String(m.device_id || m.deviceId || effectiveDevId).trim();
@@ -4707,6 +5215,7 @@ async function startServer() {
   });
 
   app.post("/api/devices/authorize", (req, res) => {
+    if (rejectIfDeviceRevokedHttp(req, res)) return;
     const { deviceId, deviceName, authorId } = req.body;
     if (!deviceId) return res.status(400).json({ error: "deviceId required" });
 
@@ -4718,11 +5227,26 @@ async function startServer() {
     const cleanDeviceName = String(deviceName || `Workstation (${cleanDeviceId})`).trim();
     const nowIso = new Date().toISOString();
 
+    const existing = authorizedDevicesMap.get(cleanDeviceId);
+    const reqEmpId = String(req.body?.employeeId || existing?.employeeId || (cleanDeviceId === primaryDeviceId ? "JPMP-002" : "")).trim().toUpperCase();
+    const boundAccount = reqEmpId
+      ? state.registeredUsers.find(u => (u.employeeId || "").toUpperCase().trim() === reqEmpId)
+      : undefined;
+    const requestedStatus = String(req.body?.status || "").trim().toUpperCase();
+    const finalStatus: "AUTHORIZED" | "PENDING" = requestedStatus === "PENDING" ? "PENDING" : "AUTHORIZED";
     const deviceRecord: AuthorizedDeviceRecord = {
+      ...(existing || {}),
       deviceId: cleanDeviceId,
       deviceName: cleanDeviceName,
       isPrimaryAdminDevice: cleanDeviceId === primaryDeviceId,
-      status: 'AUTHORIZED',
+      status: finalStatus,
+      ...(boundAccount ? {
+        employeeId: boundAccount.employeeId,
+        username: boundAccount.username,
+        role: boundAccount.role,
+        permission: boundAccount.permission,
+        boundAt: nowIso
+      } : {}),
       authorizedBy: authorId || 'ALDRIN BANAWA (JPMP-002)',
       authorizedAt: nowIso
     };
@@ -4740,6 +5264,7 @@ async function startServer() {
   });
 
   app.post("/api/devices/revoke", (req, res) => {
+    if (rejectIfDeviceRevokedHttp(req, res)) return;
     const { deviceId } = req.body;
     if (!deviceId) return res.status(400).json({ error: "deviceId required" });
 
@@ -4776,11 +5301,40 @@ async function startServer() {
     return res.json({ success: true, message: `Device ${cleanDeviceId} revoked` });
   });
 
+  // REST API: One-time initial random PIN display on fresh install
+  app.get("/api/setup/initial-pin", (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    if (rejectIfDeviceRevokedHttp(req, res)) return;
+    const superAdmin = state.registeredUsers.find(
+      u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002'
+    );
+    if (oneTimeSetupPin) {
+      const revealedPin = oneTimeSetupPin;
+      oneTimeSetupPin = null;
+      return res.json({
+        hasInitialPin: true,
+        employeeId: 'JPMP-002',
+        initialPin: revealedPin,
+        mustChangePin: true
+      });
+    }
+    return res.json({
+      hasInitialPin: false,
+      initialPin: null,
+      mustChangePin: Boolean(superAdmin?.mustChangePin)
+    });
+  });
+
   // REST API: Terminal Fresh Install & Primary Administrator Device Binding
   app.post("/api/terminal/fresh-install", (req, res) => {
     try {
       const { deviceId, deviceName } = req.body;
-      const targetDeviceId = deviceId || primaryDeviceId;
+      const targetDeviceId = String(deviceId || primaryDeviceId || "").trim();
+
+      if (isDeviceRevoked(targetDeviceId)) {
+        closeDeviceSockets(targetDeviceId, "DEVICE_REVOKED");
+        return res.status(403).json({ error: "DEVICE_REVOKED" });
+      }
 
       // Ensure target device is authorized
       if (!authorizedDevicesMap.has(targetDeviceId)) {
@@ -4812,21 +5366,27 @@ async function startServer() {
 
       commitDatabase();
 
+      const sa = state.registeredUsers.find(u => u.employeeId === 'JPMP-002');
       return res.json({
         success: true,
         installationId,
         primaryDeviceId,
         systemResetVersion,
         systemResetId,
-        superAdmin: state.registeredUsers.find(u => u.employeeId === 'JPMP-002')
+        superAdmin: sa ? sanitizeUserForClient(sa) : null
       });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
   });
 
-  // Helper to authenticate Super Admin
+  // Helper to authenticate Super Admin strictly via server-side context or scrypt-verified Super Admin PIN
   function isAuthorizedSuperAdmin(req: express.Request): boolean {
+    const auth = resolveRequestAuthContext(req);
+    if (auth.authenticated && auth.permission === 'FULL_ACCESS') {
+      return true;
+    }
+
     const bodyPin = (
       req.body?.adminPin || 
       req.body?.pin || 
@@ -4835,23 +5395,16 @@ async function startServer() {
       ''
     ).toString().trim();
 
-    const bodyEmpId = (
-      req.body?.requesterEmployeeId || 
-      req.body?.employeeId || 
-      req.body?.authorId || 
-      req.headers['x-user-employee-id'] || 
-      ''
-    ).toString().trim().toUpperCase();
+    if (!bodyPin) return false;
 
-    // Check in-memory central database for Super Admin PIN
     const superAdmin = state.registeredUsers.find(
       u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002'
     );
-
-    const validPin = superAdmin?.pin?.trim() || '0423';
-    const isIdMatch = bodyEmpId === 'JPMP-002' || bodyEmpId === '' || bodyEmpId.includes('002');
-    const isPinMatch = bodyPin === validPin || bodyPin === '0423';
-    return isIdMatch && isPinMatch;
+    const pinCheck = verifyUserPin(superAdmin, bodyPin);
+    if (pinCheck.upgradedFromPlaintext) {
+      commitDatabase();
+    }
+    return pinCheck.matched;
   }
 
   /**
@@ -4862,6 +5415,8 @@ async function startServer() {
    */
   app.post(["/api/reset-everything", "/api/reset-database"], async (req, res) => {
     try {
+      if (rejectIfDeviceRevokedHttp(req, res)) return;
+
       if (!req.body?.confirmed) {
         return res.status(400).json({ 
           error: "CONFIRMATION_REQUIRED: Global reset requires explicit 'confirmed: true'." 
@@ -4898,16 +5453,15 @@ async function startServer() {
 
       // 3. Handle accounts reset
       if (!keepUsers) {
-        state.registeredUsers = [{ 
-          ...defaultSuperAdmin, 
-          deviceId: primaryDeviceId,
-          isPrimaryAdminDevice: true,
-          authorizedDevices: [primaryDeviceId],
-          reset_version: systemResetVersion,
-          version: 1,
-          updated_at: systemResetTimestamp
-        }];
+        state.registeredUsers = [];
         deletedUserTombstones.clear();
+        ensureSuperAdminSeed(true);
+        const sa = state.registeredUsers[0];
+        if (sa) {
+          sa.reset_version = systemResetVersion;
+          sa.version = 1;
+          sa.updated_at = systemResetTimestamp;
+        }
       } else {
         // Retain users but stamp new reset_version
         state.registeredUsers = state.registeredUsers.map(u => ({
@@ -4948,6 +5502,7 @@ async function startServer() {
         keepUsers,
         data: {
           ...state,
+          registeredUsers: (state.registeredUsers || []).map(sanitizeUserForClient),
           chatMessages
         }
       });
@@ -5007,6 +5562,7 @@ async function startServer() {
   // 2. Trigger on-demand backup
   app.post("/api/admin/backups/create", async (req, res) => {
     try {
+      if (rejectIfDeviceRevokedHttp(req, res)) return;
       if (!isAuthorizedSuperAdmin(req)) {
         return res.status(403).json({ 
           error: "PERMISSION_DENIED: Only Super Administrator (JPMP-002) is authorized to trigger manual backups." 
@@ -5031,6 +5587,7 @@ async function startServer() {
   // 3. Restore database snapshot (overwrite live database with selected backup)
   app.post("/api/admin/backups/restore", (req, res) => {
     try {
+      if (rejectIfDeviceRevokedHttp(req, res)) return;
       if (!isAuthorizedSuperAdmin(req)) {
         return res.status(403).json({ 
           error: "PERMISSION_DENIED: Only Super Administrator (JPMP-002) is authorized to restore database snapshots." 
@@ -5085,20 +5642,18 @@ async function startServer() {
     }
   });
 
-  // REST API: Operator Accounts List
-  app.get("/api/accounts", async (_req, res) => {
+  // REST API: Operator Accounts List (always stripped of plain-text PINs, hashes, and salts)
+  app.get("/api/accounts", async (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     try {
-      // Ensure Super Administrator JPMP-002 is always first and present
-      if (!state.registeredUsers.some(u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002')) {
-        state.registeredUsers.unshift({ ...defaultSuperAdmin });
-        commitDatabase();
-      }
+      if (rejectIfDeviceRevokedHttp(req, res)) return;
+      ensureSuperAdminSeed(false);
 
+      const safeAccounts = state.registeredUsers.map(sanitizeUserForClient);
       return res.json({
         success: true,
-        count: state.registeredUsers.length,
-        accounts: state.registeredUsers,
+        count: safeAccounts.length,
+        accounts: safeAccounts,
         revision: stateRevision,
         systemResetVersion
       });
@@ -5108,13 +5663,16 @@ async function startServer() {
   });
 
   // REST API: Verify Operator Credentials & PIN
-  // Single Source of Truth: Central database verification
+  // Single Source of Truth: Central database scrypt verification + legacy plaintext upgrade
   app.post("/api/accounts/verify", async (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     try {
+      if (rejectIfDeviceRevokedHttp(req, res)) return;
+
       const { identifier, pin } = req.body;
       const rawInput = String(identifier || '').trim();
       const enteredPin = String(pin || '').trim();
+      const reqDevId = extractDeviceIdFromHttp(req);
 
       if (!rawInput || !enteredPin) {
         return res.status(400).json({ success: false, error: "Operator Identifier and PIN code are required." });
@@ -5126,28 +5684,72 @@ async function startServer() {
       }
       const inputPhone = rawInput.replace(/\D/g, '');
 
-      // Check central in-memory database
-      const matchedUser = state.registeredUsers.find(u => {
+      // Check central in-memory database using timing-safe scrypt / legacy upgrade
+      let matchedUser: ServerUser | undefined;
+      let upgradedLegacyPin = false;
+      for (const u of state.registeredUsers) {
+        if (u.status === 'INACTIVE') continue;
         const uEmpId = (u.employeeId || '').toUpperCase().trim();
         const uUsername = (u.username || '').toUpperCase().trim();
         const uPhone = (u.phoneNumber || '').replace(/\D/g, '');
         const idMatches = uEmpId === searchId || uEmpId === rawInput.toUpperCase() || uUsername === rawInput.toUpperCase() || (inputPhone.length >= 10 && uPhone === inputPhone);
-        const uPin = (u.pin || '').toString().trim();
-        return idMatches && uPin === enteredPin;
-      });
+        if (!idMatches) continue;
+        const check = verifyUserPin(u, enteredPin);
+        if (check.matched) {
+          matchedUser = u;
+          upgradedLegacyPin = check.upgradedFromPlaintext;
+          break;
+        }
+      }
 
       if (matchedUser) {
-        // Record last active timestamp
         matchedUser.lastActive = new Date().toISOString();
-        if (matchedUser.pin === '1234') {
+        if (enteredPin === '1234') {
           matchedUser.isPinCompromised = true;
         }
-        commitDatabase();
 
+        // Bind session token on server
+        const sessionToken = crypto.randomBytes(32).toString('hex');
+        sessionTokensMap.set(sessionToken, {
+          employeeId: matchedUser.employeeId,
+          ...(reqDevId ? { deviceId: reqDevId } : {}),
+          createdAt: Date.now()
+        });
+
+        // Bind account & permission to authorized device record if present
+        if (reqDevId) {
+          const devRec = authorizedDevicesMap.get(reqDevId);
+          if (devRec && devRec.status === 'AUTHORIZED') {
+            devRec.employeeId = matchedUser.employeeId;
+            devRec.username = matchedUser.username;
+            devRec.role = matchedUser.role;
+            devRec.permission = matchedUser.permission;
+            devRec.boundAt = new Date().toISOString();
+          }
+          for (const conn of connectionRegistry.values()) {
+            if (conn.device_id === reqDevId || conn.deviceId === reqDevId) {
+              conn.employeeId = matchedUser.employeeId;
+              conn.username = matchedUser.username;
+              conn.role = matchedUser.role;
+              conn.permission = matchedUser.status === 'INACTIVE' ? 'VIEW_ONLY' : matchedUser.permission;
+            }
+          }
+        }
+
+        commitDatabase();
+        if (upgradedLegacyPin) {
+          console.log(`[SECURITY] Upgraded legacy plain-text PIN to scrypt hash for operator ${matchedUser.employeeId}.`);
+        }
+
+        const safeUser = sanitizeUserForClient(matchedUser);
         return res.json({
           success: true,
-          user: matchedUser,
-          isPinCompromised: matchedUser.pin === '1234' || !!matchedUser.isPinCompromised,
+          token: sessionToken,
+          sessionToken,
+          permission: matchedUser.permission,
+          mustChangePin: Boolean(matchedUser.mustChangePin),
+          isPinCompromised: enteredPin === '1234' || !!matchedUser.isPinCompromised,
+          user: safeUser,
           systemResetVersion
         });
       }
@@ -5165,9 +5767,11 @@ async function startServer() {
 
   // REST API: Update Account PIN
   // Strict Security Rule: PIN changes only allowed via explicit Super Admin authorization or verified operator self-change.
-  // Log every PIN change (who, which account, when).
+  // Hashes PIN using crypto.scrypt with per-account random salt and clears any plain-text PIN.
   app.post("/api/accounts/update-pin", async (req, res) => {
     try {
+      if (rejectIfDeviceRevokedHttp(req, res)) return;
+
       const { employeeId, currentPin, newPin, requesterEmployeeId, author, reason } = req.body;
       const cleanEmpId = String(employeeId || '').trim().toUpperCase();
       const cleanNewPin = String(newPin || '').trim();
@@ -5201,7 +5805,8 @@ async function startServer() {
       // Verification: must be confirmed Super Admin OR operator verifying their own current PIN
       const isSuper = isAuthorizedSuperAdmin(req);
       if (!isSuper) {
-        if (target.pin !== cleanCurrentPin) {
+        const currentCheck = verifyUserPin(target, cleanCurrentPin);
+        if (!currentCheck.matched) {
           console.warn(`[SECURITY ALERT] Unauthorized PIN change attempt for ${cleanEmpId} from IP ${req.ip}`);
           return res.status(403).json({ error: "INCORRECT_PIN: Current PIN does not match. Super Admin authorization required." });
         }
@@ -5210,7 +5815,12 @@ async function startServer() {
       const previousWasCompromised = target.pin === '1234' || !!target.isPinCompromised;
       const actionType = previousWasCompromised ? "COMPROMISED_PIN_RESOLVED" : (isSuper ? "PIN_RESET" : "PIN_CHANGED");
 
-      target.pin = cleanNewPin;
+      const { pinHash, pinSalt } = hashPinScrypt(cleanNewPin);
+      target.pinHash = pinHash;
+      target.pinSalt = pinSalt;
+      delete target.pin;
+      delete (target as any).pin_hash;
+      target.mustChangePin = false;
       target.isPinCompromised = false;
       target.pinChangedAt = new Date().toISOString();
       target.pinChangedBy = requesterId;
@@ -5236,10 +5846,12 @@ async function startServer() {
         req.ip
       );
 
+      const safeTarget = sanitizeUserForClient(target);
+
       broadcast({
         type: "account_updated",
-        account: target,
-        user: target,
+        account: safeTarget,
+        user: safeTarget,
         author: author || requesterId,
         systemResetVersion
       });
@@ -5256,7 +5868,7 @@ async function startServer() {
         message: previousWasCompromised 
           ? "Compromised PIN resolved and secure PIN activated in central database" 
           : "PIN updated successfully in central database", 
-        user: target 
+        user: safeTarget 
       });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
@@ -5264,8 +5876,9 @@ async function startServer() {
   });
 
   // REST API: Get PIN Audit Logs (Super Admin Only)
-  app.get("/api/accounts/pin-audit-log", (_req, res) => {
+  app.get("/api/accounts/pin-audit-log", (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    if (rejectIfDeviceRevokedHttp(req, res)) return;
     return res.json({
       success: true,
       count: pinAuditLogs.length,
@@ -5273,9 +5886,15 @@ async function startServer() {
     });
   });
 
-  // REST API: Register New Operator Account
+  // REST API: Register New Operator Account (stores scrypt hash + salt, never plain-text pin)
   app.post("/api/accounts/register", async (req, res) => {
     try {
+      if (rejectIfDeviceRevokedHttp(req, res)) return;
+      const auth = resolveRequestAuthContext(req);
+      if (auth.permission === 'VIEW_ONLY') {
+        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
+      }
+
       const { employeeId, username, role, phoneNumber, permission, pin, registeredBy } = req.body;
       const cleanEmpId = String(employeeId || '').trim().toUpperCase();
       const cleanUsername = String(username || '').trim().toUpperCase();
@@ -5283,6 +5902,12 @@ async function startServer() {
 
       if (!cleanEmpId || !cleanUsername || !cleanPin) {
         return res.status(400).json({ error: "Employee ID, Full Name, and PIN code are required." });
+      }
+      if (!/^\d{4,6}$/.test(cleanPin)) {
+        return res.status(400).json({ error: "PIN must be between 4 and 6 numeric digits." });
+      }
+      if (cleanPin === '1234' || /^(\d)\1+$/.test(cleanPin)) {
+        return res.status(400).json({ error: "SECURITY_REJECTED: Compromise/trivial PINs ('1234', repetitive digits) are not allowed." });
       }
 
       // Check existence
@@ -5293,6 +5918,8 @@ async function startServer() {
 
       unmarkUserTombstone(cleanEmpId);
 
+      const { pinHash, pinSalt } = hashPinScrypt(cleanPin);
+
       const newUser: ServerUser = {
         id: `USR-${cleanEmpId}`,
         employeeId: cleanEmpId,
@@ -5300,7 +5927,8 @@ async function startServer() {
         role: String(role || 'WAREHOUSE CLERK').trim().toUpperCase(),
         phoneNumber: phoneNumber ? String(phoneNumber).trim() : '',
         permission: String(permission || 'LIMITED_ACCESS').trim(),
-        pin: cleanPin,
+        pinHash,
+        pinSalt,
         status: 'ACTIVE',
         registeredBy: registeredBy || 'JPMP-002 (ALDRIN BANAWA)',
         registeredBySuperAdmin: true,
@@ -5318,17 +5946,19 @@ async function startServer() {
         return res.status(500).json({ error: "Failed to commit new account to central database" });
       }
 
+      const safeUser = sanitizeUserForClient(newUser);
+
       broadcast({
         type: "account_registered",
-        user: newUser,
+        user: safeUser,
         author: registeredBy || 'Super Administrator',
         systemResetVersion
       });
 
       broadcast({
         type: "account_created",
-        account: newUser,
-        user: newUser,
+        account: safeUser,
+        user: safeUser,
         systemResetVersion
       });
 
@@ -5339,7 +5969,7 @@ async function startServer() {
         systemResetVersion
       });
 
-      return res.json({ success: true, user: newUser, systemResetVersion });
+      return res.json({ success: true, user: safeUser, systemResetVersion });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
@@ -5348,6 +5978,12 @@ async function startServer() {
   // REST API: Update Operator Account
   app.post("/api/accounts/update", async (req, res) => {
     try {
+      if (rejectIfDeviceRevokedHttp(req, res)) return;
+      const auth = resolveRequestAuthContext(req);
+      if (auth.permission === 'VIEW_ONLY') {
+        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
+      }
+
       const { oldEmployeeId, updatedUser } = req.body;
       const cleanOldId = String(oldEmployeeId || updatedUser?.employeeId || '').trim().toUpperCase();
 
@@ -5383,8 +6019,11 @@ async function startServer() {
         username: String(updatedUser.username || existing.username).trim().toUpperCase(),
         role: isSuper ? 'SUPER ADMINISTRATOR' : String(updatedUser.role || existing.role).trim().toUpperCase(),
         permission: isSuper ? 'FULL_ACCESS' : String(updatedUser.permission || existing.permission).trim(),
-        // CRITICAL SECURITY FIX: General profile edit CANNOT alter PIN! Must use /api/accounts/update-pin.
-        pin: existing.pin,
+        // CRITICAL SECURITY FIX: General profile edit CANNOT alter PIN or hash! Must use /api/accounts/update-pin.
+        pinHash: existing.pinHash,
+        pinSalt: existing.pinSalt,
+        ...(existing.pin && !existing.pinHash ? { pin: existing.pin } : {}),
+        mustChangePin: existing.mustChangePin,
         isPinCompromised: existing.isPinCompromised,
         pinChangedAt: existing.pinChangedAt,
         pinChangedBy: existing.pinChangedBy,
@@ -5392,6 +6031,7 @@ async function startServer() {
         updated_at: new Date().toISOString(),
         reset_version: systemResetVersion
       };
+      if (mergedUser.pinHash) delete mergedUser.pin;
 
       state.registeredUsers[index] = mergedUser;
       stateRevision++;
@@ -5401,10 +6041,12 @@ async function startServer() {
         return res.status(500).json({ error: "Failed to persist account update to central database" });
       }
 
+      const safeUser = sanitizeUserForClient(mergedUser);
+
       broadcast({
         type: "account_updated",
-        account: mergedUser,
-        user: mergedUser,
+        account: safeUser,
+        user: safeUser,
         author: req.body.author || 'Admin',
         systemResetVersion
       });
@@ -5416,7 +6058,7 @@ async function startServer() {
         systemResetVersion
       });
 
-      return res.json({ success: true, user: mergedUser, systemResetVersion });
+      return res.json({ success: true, user: safeUser, systemResetVersion });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
@@ -5425,6 +6067,12 @@ async function startServer() {
   // REST API: Delete Operator Account
   app.post("/api/accounts/delete", async (req, res) => {
     try {
+      if (rejectIfDeviceRevokedHttp(req, res)) return;
+      const auth = resolveRequestAuthContext(req);
+      if (auth.permission === 'VIEW_ONLY') {
+        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
+      }
+
       const { employeeId } = req.body;
       const cleanId = String(employeeId || '').trim().toUpperCase();
 
@@ -5464,24 +6112,33 @@ async function startServer() {
   // REST API: Clear All Accounts Except Super Admin
   app.post("/api/accounts/clear-all-except-super-admin", async (req, res) => {
     try {
+      if (rejectIfDeviceRevokedHttp(req, res)) return;
+
       if (!isAuthorizedSuperAdmin(req)) {
         return res.status(403).json({ error: "PERMISSION_DENIED: Only Super Administrator is authorized to clear accounts." });
       }
 
-      const superAdmin = state.registeredUsers.find(u => u.employeeId.toUpperCase().trim() === 'JPMP-002') || defaultSuperAdmin;
+      const superAdmin = state.registeredUsers.find(u => u.employeeId.toUpperCase().trim() === 'JPMP-002');
       state.registeredUsers.forEach(u => {
         if (u.employeeId.toUpperCase().trim() !== 'JPMP-002') {
           markUserTombstone(u.employeeId);
         }
       });
 
-      state.registeredUsers = [{ ...superAdmin }];
+      if (superAdmin) {
+        state.registeredUsers = [{ ...superAdmin }];
+      } else {
+        state.registeredUsers = [];
+        ensureSuperAdminSeed(true);
+      }
       stateRevision++;
 
       const commitOk = commitDatabase();
       if (!commitOk) {
         return res.status(500).json({ error: "Failed to commit accounts purge to central database" });
       }
+
+      const safeAccounts = state.registeredUsers.map(sanitizeUserForClient);
 
       broadcast({
         type: "all_accounts_cleared",
@@ -5501,7 +6158,7 @@ async function startServer() {
         systemResetVersion
       });
 
-      return res.json({ success: true, count: 1, accounts: state.registeredUsers });
+      return res.json({ success: true, count: safeAccounts.length, accounts: safeAccounts });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
@@ -5519,6 +6176,11 @@ async function startServer() {
   // REST API: Manage / Update Operational Roles (Super Admin)
   app.post("/api/roles", async (req, res) => {
     try {
+      if (rejectIfDeviceRevokedHttp(req, res)) return;
+      const auth = resolveRequestAuthContext(req);
+      if (auth.permission === 'VIEW_ONLY') {
+        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
+      }
       const { action, role, oldRole, newRole, roles, updateExistingAccounts } = req.body;
       let modified = false;
       let usersModified = false;
@@ -5620,6 +6282,11 @@ async function startServer() {
   // REST API: Manage / Update Receiving Categories (Super Admin)
   app.post("/api/categories", async (req, res) => {
     try {
+      if (rejectIfDeviceRevokedHttp(req, res)) return;
+      const auth = resolveRequestAuthContext(req);
+      if (auth.permission === 'VIEW_ONLY') {
+        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
+      }
       const { action, category, oldCategory, newCategory, oldCat, newCat, categories, updateExistingRecords } = req.body;
       let modified = false;
       let recModified = false;
@@ -5785,10 +6452,11 @@ async function startServer() {
 
   app.post("/api/fifo-colors", async (req, res) => {
     try {
+      if (rejectIfDeviceRevokedHttp(req, res)) return;
       const { action, month, color, fifoColorsByMonth } = req.body;
-      const clientPermission = (req.headers['x-user-permission'] || req.body.permission || '').toString().toUpperCase();
-      const clientEmpId = (req.headers['x-employee-id'] || req.body.employeeId || '').toString().toUpperCase();
-      const isSuperAdmin = clientEmpId === 'JPMP-002' || clientPermission === 'FULL_ACCESS';
+      // Derive account and permission strictly from server-side device/session context; ignore x-user-permission and body.permission
+      const auth = resolveRequestAuthContext(req);
+      const isSuperAdmin = auth.employeeId === 'JPMP-002' || auth.permission === 'FULL_ACCESS';
 
       if (!isSuperAdmin) {
         return res.status(403).json({ error: "PERMISSION DENIED: Only Super Administrator (JPMP-002) can edit the FIFO color calendar." });
@@ -5872,14 +6540,16 @@ async function startServer() {
         return res.status(403).json({ error: "DEVICE_REVOKED" });
       }
 
-      const userPermission = (req.body.permission || req.headers['x-user-permission'] || '').toString().toUpperCase();
+      // Derive permission strictly from server-side device/session record; ignore x-user-permission and body.permission
+      const auth = resolveRequestAuthContext(req, reqDevId);
+      const userPermission = auth.permission;
       const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version'] || record?.reset_version) || systemResetVersion;
 
       const result = executeRecordUpsert({
         collection,
         record,
-        author,
-        employeeId,
+        author: auth.account?.username || author,
+        employeeId: auth.employeeId || employeeId,
         user_id: req.body.user_id || record?.user_id,
         device_id: reqDevId,
         actionDesc,
@@ -5922,14 +6592,16 @@ async function startServer() {
         return res.status(403).json({ error: "DEVICE_REVOKED" });
       }
 
-      const userPermission = (req.body.permission || req.headers['x-user-permission'] || '').toString().toUpperCase();
+      // Derive permission strictly from server-side device/session record; ignore x-user-permission and body.permission
+      const auth = resolveRequestAuthContext(req, reqDevId);
+      const userPermission = auth.permission;
       const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version']) || systemResetVersion;
 
       const result = executeRecordDelete({
         collection,
         id,
-        author,
-        employeeId,
+        author: auth.account?.username || author,
+        employeeId: auth.employeeId || employeeId,
         user_id: req.body.user_id,
         device_id: reqDevId,
         actionDesc,
@@ -5969,6 +6641,11 @@ async function startServer() {
       if (isDeviceRevoked(reqDevId)) {
         closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
         return res.status(403).json({ error: "DEVICE_REVOKED" });
+      }
+
+      const auth = resolveRequestAuthContext(req, reqDevId);
+      if (auth.permission === 'VIEW_ONLY') {
+        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
       }
 
       const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version']);
@@ -6148,6 +6825,11 @@ async function startServer() {
   // REST API: Chat message
   app.post("/api/chat", (req, res) => {
     try {
+      if (rejectIfDeviceRevokedHttp(req, res)) return;
+      const auth = resolveRequestAuthContext(req);
+      if (auth.permission === 'VIEW_ONLY') {
+        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
+      }
       const { sender, text } = req.body;
       const cleanText = String(text || '').trim();
       if (!cleanText) return res.status(400).json({ error: "Text required" });

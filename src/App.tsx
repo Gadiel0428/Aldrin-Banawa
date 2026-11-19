@@ -71,7 +71,8 @@ import {
 } from './sync/syncManager';
 
 import { 
-  verifyCentralCredentials
+  verifyCentralCredentials,
+  updateCentralPin
 } from './lib/centralApi';
 
 import { 
@@ -118,6 +119,7 @@ import {
   getApiBaseUrl,
   getCentralWebSocketUrl,
   getAuthHeaders,
+  getStoredSessionToken,
   sanitizeServerHost,
   isSecureHost as isSecureServerHost
 } from './config/serverConfig';
@@ -233,6 +235,7 @@ export default function App() {
   };
   const lastKnownVersionsRef = useRef<Map<string, number>>(new Map());
   const inFlightWsMutationsRef = useRef<Map<string, { mutation: QueuedMutation; timer: any }>>(new Map());
+  const isFlushingMutationsRef = useRef<boolean>(false);
 
   const recordKnownVersions = (colName: string, items: any[]) => {
     if (!colName || !Array.isArray(items)) return;
@@ -525,9 +528,7 @@ export default function App() {
     const existingIdx = safePrev.findIndex(u => (u.employeeId || '').toUpperCase() === empId);
     const existing = existingIdx >= 0 ? safePrev[existingIdx] : null;
     
-    // CRITICAL: Preserve existing PIN if incoming user payload omits PIN (e.g. from session broadcast or public sync). Never fall back to '1234'.
-    const effectivePin = (user?.pin && String(user.pin).trim()) || (existing?.pin && String(existing.pin).trim()) || (empId === 'JPMP-002' ? '0423' : '');
-    const isCompromised = effectivePin === '1234' || !!user?.isPinCompromised || !!existing?.isPinCompromised;
+    const isCompromised = !!user?.isPinCompromised || !!existing?.isPinCompromised;
 
     const formattedUser: RegisteredAccount = {
       username: (user.username || existing?.username || (empId === 'JPMP-002' ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
@@ -535,7 +536,8 @@ export default function App() {
       employeeId: empId,
       phoneNumber: user.phoneNumber || user.phone_number || existing?.phoneNumber || (empId === 'JPMP-002' ? '+639669858846' : ''),
       permission: user.permission || existing?.permission || (empId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
-      pin: effectivePin,
+      hasPin: Boolean(user?.hasPin ?? existing?.hasPin ?? true),
+      mustChangePin: Boolean(user?.mustChangePin ?? existing?.mustChangePin),
       isPinCompromised: isCompromised,
       status: user.status || existing?.status || 'ACTIVE',
       lastActive: user.lastActive || user.last_active || existing?.lastActive || undefined
@@ -548,7 +550,9 @@ export default function App() {
         existing.username === formattedUser.username &&
         existing.role === formattedUser.role &&
         existing.permission === formattedUser.permission &&
-        existing.pin === formattedUser.pin &&
+        Boolean(existing.hasPin) === Boolean(formattedUser.hasPin) &&
+        Boolean(existing.mustChangePin) === Boolean(formattedUser.mustChangePin) &&
+        Boolean(existing.isPinCompromised) === Boolean(formattedUser.isPinCompromised) &&
         existing.status === formattedUser.status &&
         existing.phoneNumber === formattedUser.phoneNumber
       ) {
@@ -727,6 +731,7 @@ export default function App() {
             const { collection, record, author, actionDesc } = payload;
             if (record && record.id && collection) {
               unmarkRecordAsDeletedLocally(record.id);
+              recordKnownVersions(collection, [record]);
               setLastSyncedTime(new Date());
               if (author && author !== (currentUser || '')) {
                 setLiveSyncToast({
@@ -1123,6 +1128,12 @@ export default function App() {
   const [newlyRegisteredUser, setNewlyRegisteredUser] = useState<RegisteredAccount | null>(null);
   const [showNewlyRegisteredPin, setShowNewlyRegisteredPin] = useState<boolean>(false);
   const [confirmActionApp, setConfirmActionApp] = useState<ConfirmActionConfig | null>(null);
+  const [oneTimeSetupPinNotice, setOneTimeSetupPinNotice] = useState<{ employeeId: string; initialPin: string } | null>(null);
+  const [pendingFirstLoginPinChange, setPendingFirstLoginPinChange] = useState<{ user: any; currentPin: string } | null>(null);
+  const [firstLoginNewPin, setFirstLoginNewPin] = useState<string>('');
+  const [firstLoginConfirmPin, setFirstLoginConfirmPin] = useState<string>('');
+  const [firstLoginPinError, setFirstLoginPinError] = useState<string>('');
+  const [isSavingFirstLoginPin, setIsSavingFirstLoginPin] = useState<boolean>(false);
   
   const superAdminAccount: RegisteredAccount = { 
     username: 'ALDRIN BANAWA', 
@@ -1130,7 +1141,7 @@ export default function App() {
     employeeId: 'JPMP-002', 
     phoneNumber: '+639669858846',
     permission: 'FULL_ACCESS', 
-    pin: '0423',
+    hasPin: true,
     status: 'ACTIVE'
   };
 
@@ -1224,18 +1235,26 @@ export default function App() {
     // REST API persistence fallback
     try {
       const baseUrl = getApiBaseUrl();
-      await fetch(`${baseUrl}/api/roles`, {
+      const persistentDevId = getPersistentDeviceId();
+      const res = await fetch(`${baseUrl}/api/roles`, {
         method: 'POST',
-        headers: {
+        headers: getAuthHeaders({
           'Content-Type': 'application/json',
-          'x-user-permission': currentPermission || '',
+          'x-device-id': persistentDevId,
           'x-employee-id': currentEmployeeId || ''
-        },
+        }),
         body: JSON.stringify({
           roles: cleaned,
+          device_id: persistentDevId,
           author: currentUser
         })
       });
+      if (res.status === 403) {
+        const errJson = await res.json().catch(() => ({}));
+        if (errJson?.error === 'DEVICE_REVOKED') {
+          handleDeviceRevoked(persistentDevId);
+        }
+      }
     } catch (e) {
       console.warn('Failed to sync roles via REST fallback:', e);
     }
@@ -1324,21 +1343,29 @@ export default function App() {
     // REST API persistence fallback
     try {
       const baseUrl = getApiBaseUrl();
-      await fetch(`${baseUrl}/api/categories`, {
+      const persistentDevId = getPersistentDeviceId();
+      const res = await fetch(`${baseUrl}/api/categories`, {
         method: 'POST',
-        headers: {
+        headers: getAuthHeaders({
           'Content-Type': 'application/json',
-          'x-user-permission': currentPermission || '',
+          'x-device-id': persistentDevId,
           'x-employee-id': currentEmployeeId || ''
-        },
+        }),
         body: JSON.stringify({
           action: renameData ? 'rename' : 'set',
           categories: cleaned,
           oldCat: renameData?.oldCat,
           newCat: renameData?.newCat,
+          device_id: persistentDevId,
           author: currentUser
         })
       });
+      if (res.status === 403) {
+        const errJson = await res.json().catch(() => ({}));
+        if (errJson?.error === 'DEVICE_REVOKED') {
+          handleDeviceRevoked(persistentDevId);
+        }
+      }
     } catch (e) {
       console.warn('Failed to sync categories via REST fallback:', e);
     }
@@ -1404,20 +1431,27 @@ export default function App() {
     // REST API persistence fallback
     try {
       const baseUrl = getApiBaseUrl();
-      await fetch(`${baseUrl}/api/fifo-colors`, {
+      const persistentDevId = getPersistentDeviceId();
+      const res = await fetch(`${baseUrl}/api/fifo-colors`, {
         method: 'POST',
-        headers: {
+        headers: getAuthHeaders({
           'Content-Type': 'application/json',
-          'x-user-permission': currentPermission || '',
+          'x-device-id': persistentDevId,
           'x-employee-id': currentEmployeeId || ''
-        },
+        }),
         body: JSON.stringify({
           fifoColorsByMonth: nextMap,
+          device_id: persistentDevId,
           author: currentUser,
-          permission: currentPermission,
           employeeId: currentEmployeeId
         })
       });
+      if (res.status === 403) {
+        const errJson = await res.json().catch(() => ({}));
+        if (errJson?.error === 'DEVICE_REVOKED') {
+          handleDeviceRevoked(persistentDevId);
+        }
+      }
     } catch (e) {
       console.warn('Failed to sync FIFO colors via REST fallback:', e);
     }
@@ -1475,24 +1509,30 @@ export default function App() {
     } catch (e) {}
     syncCollection('registeredUsers', defaultAccounts);
     const baseUrl = getApiBaseUrl();
+    const persistentDevId = getPersistentDeviceId();
     fetch(`${baseUrl}/api/reset-database`, {
       method: 'POST',
-      headers: { 
+      headers: getAuthHeaders({
         'Content-Type': 'application/json',
+        'x-device-id': persistentDevId,
         'x-user-employee-id': currentEmployeeId || 'JPMP-002',
-        'x-user-role': currentRole || 'SUPER ADMINISTRATOR',
-        'x-user-permission': currentPermission || 'FULL_ACCESS',
-        'x-user-pin': '0423'
-      },
+        'x-user-role': currentRole || 'SUPER ADMINISTRATOR'
+      }),
       body: JSON.stringify({
         employeeId: currentEmployeeId || 'JPMP-002',
         role: currentRole || 'SUPER ADMINISTRATOR',
-        permission: currentPermission || 'FULL_ACCESS',
-        pin: '0423',
+        device_id: persistentDevId,
         confirmed: true,
         author: `${currentUser || 'ALDRIN BANAWA'} (${currentEmployeeId || 'JPMP-002'})`,
         wipeUsers: true
       })
+    }).then(async (res) => {
+      if (res.status === 403) {
+        const errJson = await res.json().catch(() => ({}));
+        if (errJson?.error === 'DEVICE_REVOKED') {
+          handleDeviceRevoked(persistentDevId);
+        }
+      }
     }).catch(() => {});
     // Also log out any active session if we reset the accounts
     handleLogout();
@@ -1891,19 +1931,13 @@ export default function App() {
   };
 
   const flushPendingMutationsQueue = async (forceRetry = false) => {
-    if (isDeviceRevokedRef.current) return;
+    if (isDeviceRevokedRef.current || isFlushingMutationsRef.current) return;
     if (typeof navigator !== 'undefined' && !navigator.onLine) return;
 
     const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
     const allMutations = getPendingMutations();
-    // Drop only mutations created under an older reset version
-    const validResetMutations = allMutations.filter(m => !m.reset_version || m.reset_version >= currentResetVer);
-    if (validResetMutations.length !== allMutations.length) {
-      savePendingMutations(validResetMutations);
-    }
-
     const now = Date.now();
-    const mutationsToSend = validResetMutations.filter(
+    const mutationsToSend = allMutations.filter(
       (m) =>
         (m.type === 'upsert' || m.type === 'delete') &&
         m.status !== 'CONFLICT' &&
@@ -1911,6 +1945,7 @@ export default function App() {
     );
     if (mutationsToSend.length === 0) return;
 
+    isFlushingMutationsRef.current = true;
     const baseUrl = getApiBaseUrl();
     const persistentDevId = getPersistentDeviceId();
     const effectiveAuthor = currentUser || 'OPERATOR';
@@ -1930,8 +1965,7 @@ export default function App() {
         headers: getAuthHeaders({
           'Content-Type': 'application/json',
           'x-device-id': persistentDevId,
-          'x-employee-id': currentEmployeeId || '',
-          'x-user-permission': currentPermission || ''
+          'x-employee-id': currentEmployeeId || ''
         }),
         body: JSON.stringify(batchPayload)
       });
@@ -1946,12 +1980,18 @@ export default function App() {
 
       if (res.status === 409) {
         const errJson = await res.json().catch(() => ({}));
-        if (typeof errJson.error === 'string' && errJson.error.includes('STALE_RESET_VERSION')) {
-          const newVer = Number(errJson.systemResetVersion) || Date.now();
-          console.warn(`[JUWEI WMS] Batch sync rejected with 409 STALE_RESET_VERSION. Purging stale offline queues.`);
-          purgeAllLocalOfflineCachesAndQueues(newVer);
-          handleManualSync();
-        }
+        const nextQueue = getPendingMutations().map((q) => {
+          if (!mutationsToSend.some((m) => m.id === q.id)) return q;
+          const nextRetry = (q.retryCount || 0) + 1;
+          return {
+            ...q,
+            status: 'FAILED' as const,
+            retryCount: nextRetry,
+            nextRetryAt: Date.now() + calculateRetryBackoffMs(nextRetry),
+            lastError: errJson.error || 'Batch sync rejected with 409'
+          };
+        });
+        savePendingMutations(nextQueue);
         return;
       }
 
@@ -1976,6 +2016,9 @@ export default function App() {
               confirmedIds.push(mut.id);
               if (r.record && r.collection) {
                 applyConfirmedRecordToState(r.collection, r.record);
+              } else if (mut.type === 'delete' && mut.collection) {
+                const delId = String(mut.recordId || r.recordId || '');
+                if (delId) lastKnownVersionsRef.current.delete(`${mut.collection}:${delId}`);
               }
             } else if (r.status === 403 && r.error === 'DEVICE_REVOKED') {
               handleDeviceRevoked(persistentDevId);
@@ -2021,7 +2064,7 @@ export default function App() {
         return;
       }
 
-      // Non-OK 5xx response: mark retry backoff instead of removing
+      // Non-OK response: keep in queue and apply exponential backoff retry
       const nextQueue = getPendingMutations().map((q) => {
         if (!mutationsToSend.some((m) => m.id === q.id)) return q;
         const nextRetry = (q.retryCount || 0) + 1;
@@ -2047,10 +2090,12 @@ export default function App() {
         };
       });
       savePendingMutations(nextQueue);
+    } finally {
+      isFlushingMutationsRef.current = false;
     }
   };
 
-  // Completely wipes all cached tables, pending queues, tombstones, and synchronizes reset version
+  // Clears stale local read caches on reset without silently wiping unconfirmed offline mutations
   const purgeAllLocalOfflineCachesAndQueues = (newResetVersion: number) => {
     try {
       if (newResetVersion > 0) {
@@ -2064,14 +2109,12 @@ export default function App() {
         localStorage.removeItem(`juwei_wms_cache_${col}`);
       });
       localStorage.removeItem('juwei_wms_master_registries');
-      savePendingMutations([]);
       localStorage.removeItem('juwei_wms_deleted_records_v1');
       localStorage.removeItem('juwei_wms_draft_receiving');
       localStorage.removeItem('juwei_wms_draft_receiving_return');
       localStorage.removeItem('juwei_wms_draft_issuance');
     } catch (e) {}
 
-    setSyncConflicts([]);
     deletedRecordIds.current.clear();
     recentlyMutatedRecords.current.clear();
     lastKnownVersionsRef.current.clear();
@@ -2096,15 +2139,15 @@ export default function App() {
       chatMessages: msgs 
     } = dataPayload;
 
-    setStocks(normalizeRecords('stocks', Array.isArray(s) ? s : []));
-    setReceiving(normalizeRecords('receiving', Array.isArray(rc) ? rc : []));
-    setReturns(normalizeRecords('returns', Array.isArray(rt) ? rt : []));
-    setRecycling(normalizeRecords('recycling', Array.isArray(cy) ? cy : []));
-    setIssuances(normalizeRecords('issuances', Array.isArray(is) ? is : []));
-    setDeliveries(normalizeRecords('deliveries', Array.isArray(d) ? d : []));
-    setEnvLogs(normalizeRecords('envLogs', Array.isArray(e) ? e : []));
-    setForkliftChecks(normalizeRecords('forkliftChecks', Array.isArray(f) ? f : []));
-    setRegistries(normalizeRecords('registries', Array.isArray(reg) ? reg : []));
+    setStocks(prev => reconcileCollection('stocks', prev, normalizeRecords('stocks', Array.isArray(s) ? s : [])));
+    setReceiving(prev => reconcileCollection('receiving', prev, normalizeRecords('receiving', Array.isArray(rc) ? rc : [])));
+    setReturns(prev => reconcileCollection('returns', prev, normalizeRecords('returns', Array.isArray(rt) ? rt : [])));
+    setRecycling(prev => reconcileCollection('recycling', prev, normalizeRecords('recycling', Array.isArray(cy) ? cy : [])));
+    setIssuances(prev => reconcileCollection('issuances', prev, normalizeRecords('issuances', Array.isArray(is) ? is : [])));
+    setDeliveries(prev => reconcileCollection('deliveries', prev, normalizeRecords('deliveries', Array.isArray(d) ? d : [])));
+    setEnvLogs(prev => reconcileCollection('envLogs', prev, normalizeRecords('envLogs', Array.isArray(e) ? e : [])));
+    setForkliftChecks(prev => reconcileCollection('forkliftChecks', prev, normalizeRecords('forkliftChecks', Array.isArray(f) ? f : [])));
+    setRegistries(prev => reconcileCollection('registries', prev, normalizeRecords('registries', Array.isArray(reg) ? reg : [])));
 
     if (Array.isArray(serverUsers) && serverUsers.length > 0) {
       setRegisteredUsers(reconcileUsers([], serverUsers));
@@ -2151,25 +2194,31 @@ export default function App() {
 
     let resetVer = Date.now();
     try {
+      const persistentDevId = getPersistentDeviceId();
       const res = await fetch(`${baseUrl}/api/reset-database`, {
         method: 'POST',
-        headers: {
+        headers: getAuthHeaders({
           'Content-Type': 'application/json',
+          'x-device-id': persistentDevId,
           'x-user-employee-id': currentEmployeeId || 'JPMP-002',
-          'x-user-role': currentRole || 'SUPER ADMINISTRATOR',
-          'x-user-permission': currentPermission || 'FULL_ACCESS',
-          'x-user-pin': '0423'
-        },
+          'x-user-role': currentRole || 'SUPER ADMINISTRATOR'
+        }),
         body: JSON.stringify({
           employeeId: currentEmployeeId || 'JPMP-002',
           role: currentRole || 'SUPER ADMINISTRATOR',
-          permission: currentPermission || 'FULL_ACCESS',
-          pin: '0423',
+          device_id: persistentDevId,
           confirmed: true,
           author: cleanAuthor,
           keepUsers: true
         })
       });
+      if (res.status === 403) {
+        const errJson = await res.json().catch(() => ({}));
+        if (errJson?.error === 'DEVICE_REVOKED') {
+          handleDeviceRevoked(persistentDevId);
+          return;
+        }
+      }
       if (res.ok) {
         const json = await res.json();
         if (json.systemResetVersion) {
@@ -2296,14 +2345,20 @@ export default function App() {
     const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
     const deletedSet = getDeletedRecordIds();
 
-    // Check for active unconfirmed local mutations (including in-flight WS writes) with valid reset version
-    const inFlightList = Array.from(inFlightWsMutationsRef.current.values())
-      .map(entry => entry.mutation)
-      .filter(mut => mut && mut.collection === colName && (!mut.reset_version || mut.reset_version >= currentResetVer));
-    const queuedList = getPendingMutations().filter(
-      mut => mut && mut.collection === colName && mut.status !== 'CONFLICT' && (!mut.reset_version || mut.reset_version >= currentResetVer)
-    );
-    const pendingMutations = [...queuedList, ...inFlightList];
+    // Check for active unconfirmed local mutations (including in-flight WS writes) deduplicated by id
+    const mutationMap = new Map<string, QueuedMutation>();
+    for (const mut of getPendingMutations()) {
+      if (mut && mut.collection === colName && mut.status !== 'CONFLICT') {
+        mutationMap.set(mut.id, mut);
+      }
+    }
+    for (const entry of inFlightWsMutationsRef.current.values()) {
+      const mut = entry.mutation;
+      if (mut && mut.collection === colName && !mutationMap.has(mut.id)) {
+        mutationMap.set(mut.id, mut);
+      }
+    }
+    const pendingMutations = Array.from(mutationMap.values());
 
     // Filter incoming records from server to exclude stale reset versions
     const filteredIncoming = incomingArr.filter(item => {
@@ -2373,7 +2428,9 @@ export default function App() {
         (uA.username || '').toUpperCase() !== (uB.username || '').toUpperCase() ||
         (uA.role || '').toUpperCase() !== (uB.role || '').toUpperCase() ||
         (uA.permission || '') !== (uB.permission || '') ||
-        (uA.pin || '') !== (uB.pin || '') ||
+        Boolean(uA.hasPin) !== Boolean(uB.hasPin) ||
+        Boolean(uA.mustChangePin) !== Boolean(uB.mustChangePin) ||
+        Boolean(uA.isPinCompromised) !== Boolean(uB.isPinCompromised) ||
         (uA.status || '') !== (uB.status || '') ||
         (uA.phoneNumber || '') !== (uB.phoneNumber || '')
       ) {
@@ -2391,7 +2448,7 @@ export default function App() {
     const incomingList = Array.isArray(incomingUsers) ? incomingUsers : [];
     const safeCurrent = Array.isArray(currentUsers) ? currentUsers : [];
 
-    // 1. Add all authoritative incoming users (enforcing Super Administrator registration origin)
+    // 1. Add all authoritative incoming users (server intentionally omits plain-text PINs)
     for (const u of incomingList) {
       if (!u || (!u.employeeId && !u.employee_id)) continue;
       const rawEmpId = String(u.employeeId || u.employee_id || '').toUpperCase().trim();
@@ -2400,11 +2457,7 @@ export default function App() {
 
       const isSuper = empId === 'JPMP-002';
       const localUser = safeCurrent.find(cu => (cu.employeeId || '').toUpperCase() === empId);
-      
-      // CRITICAL: Server intentionally strips PIN for non-superadmin connections.
-      // u may not have pin property. We MUST preserve localUser.pin! Never fall back to '1234'.
-      const cleanPin = (u?.pin && String(u.pin).trim()) || (localUser?.pin && String(localUser.pin).trim()) || (isSuper ? '0423' : '');
-      const isCompromised = cleanPin === '1234' || !!u.isPinCompromised || !!localUser?.isPinCompromised;
+      const isCompromised = !!u.isPinCompromised;
 
       userMap.set(empId, {
         username: (u.username || localUser?.username || (isSuper ? 'ALDRIN BANAWA' : 'OPERATOR')).toUpperCase(),
@@ -2412,7 +2465,8 @@ export default function App() {
         employeeId: empId,
         phoneNumber: u.phoneNumber || u.phone_number || localUser?.phoneNumber || (isSuper ? '+639669858846' : ''),
         permission: u.permission || localUser?.permission || (isSuper ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
-        pin: cleanPin,
+        hasPin: Boolean(u?.hasPin ?? localUser?.hasPin ?? true),
+        mustChangePin: Boolean(u?.mustChangePin ?? localUser?.mustChangePin),
         isPinCompromised: isCompromised,
         status: u.status || localUser?.status || 'ACTIVE',
         lastActive: u.lastActive || u.last_active || localUser?.lastActive || undefined,
@@ -2428,13 +2482,12 @@ export default function App() {
       if (!cu || !cu.employeeId) continue;
       const empId = cu.employeeId.toUpperCase().trim();
       if (!userMap.has(empId) && (!deletedSet.has(empId) || empId === 'JPMP-002')) {
-        const pin = (cu.pin && String(cu.pin).trim()) || (empId === 'JPMP-002' ? '0423' : '');
-        const isCompromised = pin === '1234' || !!cu.isPinCompromised;
         const isSuper = empId === 'JPMP-002';
+        const { pin: _strippedPin, ...restCu } = cu;
         userMap.set(empId, { 
-          ...cu, 
-          pin,
-          isPinCompromised: isCompromised,
+          ...restCu,
+          hasPin: Boolean(cu.hasPin ?? true),
+          isPinCompromised: !!cu.isPinCompromised,
           registeredBy: isSuper ? 'ROOT_SUPER_ADMIN (JPMP-002)' : (cu.registeredBy || 'JPMP-002 (ALDRIN BANAWA)'),
           registeredBySuperAdmin: true
         });
@@ -2443,16 +2496,17 @@ export default function App() {
 
     // 3. Guarantee Super Admin JPMP-002 is always active, full access, and protected
     const admin = userMap.get('JPMP-002') || superAdminAccount;
-    const adminPin = (admin.pin && String(admin.pin).trim()) || '0423';
+    const { pin: _strippedAdminPin, ...restAdmin } = admin;
     userMap.set('JPMP-002', {
       ...superAdminAccount,
-      ...admin,
+      ...restAdmin,
       employeeId: 'JPMP-002',
       username: admin.username || 'ALDRIN BANAWA',
       role: 'SUPER ADMINISTRATOR',
       permission: 'FULL_ACCESS',
-      pin: adminPin,
-      isPinCompromised: false,
+      hasPin: true,
+      isPinCompromised: Boolean(admin.isPinCompromised),
+      mustChangePin: Boolean(admin.mustChangePin),
       status: 'ACTIVE',
       registeredBy: 'ROOT_SUPER_ADMIN (JPMP-002)',
       registeredBySuperAdmin: true
@@ -2497,9 +2551,8 @@ export default function App() {
       localStorage.setItem('juwei_wms_installed_flag_v1', 'true');
       localStorage.removeItem('juwei_wms_is_fresh_install');
 
-      // Clear stale local caches
+      // Clear stale local read caches (never silently purge juwei_wms_mutation_queue_v1)
       const staleKeys = [
-        'juwei_wms_mutation_queue_v1',
         'juwei_wms_cache_stocks',
         'juwei_wms_cache_receiving',
         'juwei_wms_cache_returns',
@@ -2515,7 +2568,6 @@ export default function App() {
       staleKeys.forEach(k => {
         try { localStorage.removeItem(k); } catch (e) {}
       });
-      setSyncConflicts([]);
       lastKnownVersionsRef.current.clear();
 
       // Purge any legacy Cloud Run or dev server addresses to ensure zero Google/Gmail account login prompt
@@ -2768,8 +2820,7 @@ export default function App() {
         headers: getAuthHeaders({
           'Content-Type': 'application/json',
           'x-device-id': persistentDevId,
-          'x-employee-id': currentEmployeeId || '',
-          'x-user-permission': currentPermission || ''
+          'x-employee-id': currentEmployeeId || ''
         }),
         body: JSON.stringify({
           collection,
@@ -2791,15 +2842,11 @@ export default function App() {
             handleDeviceRevoked(persistentDevId);
             return;
           }
+          showPrintToast(errJson.error || 'Permission denied', 'error');
+          return;
         }
         if (res.status === 409) {
           const errJson = await res.json().catch(() => ({}));
-          if (typeof errJson.error === 'string' && errJson.error.includes('STALE_RESET_VERSION')) {
-            const serverVer = Number(errJson.systemResetVersion || errJson.serverResetVersion) || currentResetVer + 1;
-            purgeAllLocalOfflineCachesAndQueues(serverVer);
-            handleManualSync();
-            return;
-          }
           recordSyncConflict({
             id: clientMutationId,
             collection,
@@ -2952,8 +2999,7 @@ export default function App() {
         headers: getAuthHeaders({
           'Content-Type': 'application/json',
           'x-device-id': persistentDevId,
-          'x-employee-id': currentEmployeeId || '',
-          'x-user-permission': currentPermission || ''
+          'x-employee-id': currentEmployeeId || ''
         }),
         body: JSON.stringify({
           collection,
@@ -2973,15 +3019,11 @@ export default function App() {
             handleDeviceRevoked(persistentDevId);
             return;
           }
+          showPrintToast(errJson.error || 'Permission denied', 'error');
+          return;
         }
         if (res.status === 409) {
           const errJson = await res.json().catch(() => ({}));
-          if (typeof errJson.error === 'string' && errJson.error.includes('STALE_RESET_VERSION')) {
-            const serverVer = Number(errJson.systemResetVersion || errJson.serverResetVersion) || currentResetVer + 1;
-            purgeAllLocalOfflineCachesAndQueues(serverVer);
-            handleManualSync();
-            return;
-          }
           recordSyncConflict({
             id: clientMutationId,
             collection,
@@ -2995,6 +3037,7 @@ export default function App() {
           return;
         }
         if (res.ok) {
+          lastKnownVersionsRef.current.delete(`${collection}:${id}`);
           removeConfirmedMutations([clientMutationId]);
           return;
         }
@@ -3134,7 +3177,7 @@ export default function App() {
         }
       } catch (err) {
         try {
-          const resFallback = await fetch(`${httpProto}//${cleanHost}/api/sync`, { cache: 'no-store', headers: { 'Accept': 'application/json' } });
+          const resFallback = await fetch(`${httpProto}//${cleanHost}/api/sync`, { cache: 'no-store', headers: getAuthHeaders({ 'Accept': 'application/json', 'x-device-id': persistentDevId }) });
           if (resFallback.ok) {
             const json = await resFallback.json();
             if (json.systemResetVersion) {
@@ -3541,13 +3584,13 @@ export default function App() {
               warehouseId: clientWarehouseId,
               user_id: currentEmployeeId ? `USR-${currentEmployeeId}` : 'ANONYMOUS',
               session_id: clientSessionId.current,
+              sessionToken: getStoredSessionToken() || undefined,
               device_id: getPersistentDeviceId(),
               connection_id: clientConnectionId.current || undefined,
               stationId: getStationId(),
               username: currentUser || 'JUWEI OPERATOR',
               employeeId: currentEmployeeId || '',
               role: currentRole || (currentPermission === 'FULL_ACCESS' ? 'SUPER ADMINISTRATOR' : 'WAREHOUSE OPERATOR'),
-              permission: currentPermission || (currentEmployeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS'),
               activeView: view,
               platform: getPlatformType(),
               deviceName: `${getPlatformType()} Terminal - ${getStationId()}`,
@@ -3641,23 +3684,120 @@ export default function App() {
                 setStocks(norm);
               } else if (record && record.id) {
                 const targetCol = collection || 'stocks';
-                const updateFn = (prev: any[]) => {
-                  if (isRecordDeletedLocally(record.id)) return prev;
-                  const idx = prev.findIndex(it => it.id === record.id);
-                  if (idx >= 0) {
-                    const next = [...prev];
-                    next[idx] = record;
-                    return next;
-                  }
-                  return [record, ...prev];
-                };
-                if (targetCol === 'stocks') setStocks(updateFn);
-                else if (targetCol === 'receiving') setReceiving(updateFn);
-                else if (targetCol === 'returns') setReturns(updateFn);
-                else if (targetCol === 'recycling') setRecycling(updateFn);
-                else if (targetCol === 'issuances') setIssuances(updateFn);
-                else if (targetCol === 'deliveries') setDeliveries(updateFn);
+                recordKnownVersions(targetCol, [record]);
+                const incomingVer = record.version !== undefined && record.version !== null ? Number(record.version) : undefined;
+                const hasQueuedOverride = getPendingMutations().some((m) => {
+                  if (m.collection !== targetCol || m.status === 'CONFLICT') return false;
+                  if (String(m.recordId || m.record?.id) !== String(record.id)) return false;
+                  const mutVer = m.expectedVersion !== undefined && m.expectedVersion !== null
+                    ? Number(m.expectedVersion)
+                    : (m.record?.version !== undefined && m.record?.version !== null ? Number(m.record.version) : undefined);
+                  if (incomingVer !== undefined && mutVer !== undefined && mutVer < incomingVer) return false;
+                  return true;
+                });
+                const hasInFlightOverride = Array.from(inFlightWsMutationsRef.current.values()).some((entry) => {
+                  const m = entry.mutation;
+                  if (m.collection !== targetCol || String(m.recordId || m.record?.id) !== String(record.id)) return false;
+                  const mutVer = m.expectedVersion !== undefined && m.expectedVersion !== null ? Number(m.expectedVersion) : undefined;
+                  if (incomingVer !== undefined && mutVer !== undefined && mutVer < incomingVer) return false;
+                  return true;
+                });
+                if (!hasQueuedOverride && !hasInFlightOverride) {
+                  applyConfirmedRecordToState(targetCol, record);
+                }
               }
+              break;
+            }
+            case 'UPSERT_CONFIRMED': {
+              const clientMutationId = payload.clientMutationId;
+              if (clientMutationId) {
+                const entry = inFlightWsMutationsRef.current.get(clientMutationId);
+                if (entry) {
+                  clearTimeout(entry.timer);
+                  inFlightWsMutationsRef.current.delete(clientMutationId);
+                }
+                removeConfirmedMutations([clientMutationId]);
+              }
+              if (payload.record && payload.collection) {
+                applyConfirmedRecordToState(payload.collection, payload.record);
+              }
+              setLastSyncedTime(new Date());
+              break;
+            }
+            case 'DELETE_CONFIRMED': {
+              const clientMutationId = payload.clientMutationId;
+              if (clientMutationId) {
+                const entry = inFlightWsMutationsRef.current.get(clientMutationId);
+                if (entry) {
+                  clearTimeout(entry.timer);
+                  inFlightWsMutationsRef.current.delete(clientMutationId);
+                }
+                removeConfirmedMutations([clientMutationId]);
+              }
+              if (payload.collection && payload.id) {
+                lastKnownVersionsRef.current.delete(`${payload.collection}:${payload.id}`);
+              }
+              setLastSyncedTime(new Date());
+              break;
+            }
+            case 'BATCH_SYNC_CONFIRMED': {
+              const results: any[] = Array.isArray(payload.results) ? payload.results : [];
+              const confirmedIds: string[] = [];
+              let currentQueue = getPendingMutations();
+              let queueModified = false;
+              for (const r of results) {
+                const mutId = String(r.mutationId || r.id || '');
+                if (!mutId) continue;
+                const entry = inFlightWsMutationsRef.current.get(mutId);
+                if (entry) {
+                  clearTimeout(entry.timer);
+                  inFlightWsMutationsRef.current.delete(mutId);
+                }
+                if (r.success) {
+                  confirmedIds.push(mutId);
+                  if (r.record && r.collection) {
+                    applyConfirmedRecordToState(r.collection, r.record);
+                  } else if (r.type === 'delete' && r.collection && r.recordId) {
+                    lastKnownVersionsRef.current.delete(`${r.collection}:${r.recordId}`);
+                  }
+                } else if (r.status === 409) {
+                  const qMut = currentQueue.find((q) => q.id === mutId) || entry?.mutation;
+                  recordSyncConflict({
+                    id: mutId,
+                    collection: r.collection || qMut?.collection || 'stocks',
+                    recordId: String(r.recordId || qMut?.recordId || qMut?.record?.id || ''),
+                    type: qMut?.type === 'delete' ? 'delete' : 'upsert',
+                    localRecord: qMut?.record,
+                    currentServerRecord: r.currentRecord,
+                    expectedVersion: qMut?.expectedVersion,
+                    author: qMut?.author,
+                    actionDesc: qMut?.actionDesc,
+                    error: r.error || 'VERSION_CONFLICT: Newer revision exists on server.'
+                  });
+                  currentQueue = getPendingMutations();
+                } else {
+                  const prevMut = currentQueue.find((q) => q.id === mutId) || entry?.mutation;
+                  if (prevMut) {
+                    const nextRetry = (prevMut.retryCount || 0) + 1;
+                    const updatedMut: QueuedMutation = {
+                      ...prevMut,
+                      status: 'FAILED',
+                      retryCount: nextRetry,
+                      nextRetryAt: Date.now() + calculateRetryBackoffMs(nextRetry),
+                      lastError: r.error || `Server status ${r.status}`
+                    };
+                    if (currentQueue.some((q) => q.id === mutId)) {
+                      currentQueue = currentQueue.map((q) => (q.id === mutId ? updatedMut : q));
+                    } else {
+                      currentQueue.push(updatedMut);
+                    }
+                    queueModified = true;
+                  }
+                }
+              }
+              if (queueModified) savePendingMutations(currentQueue);
+              if (confirmedIds.length > 0) removeConfirmedMutations(confirmedIds);
+              setLastSyncedTime(new Date());
               break;
             }
             case 'init': {
@@ -3762,12 +3902,6 @@ export default function App() {
               break;
             }
             case 'SYNC_REQUIRED': {
-              const resetVerNum = Number(payload.systemResetVersion) || Date.now();
-              const localResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
-              if (payload.reason === 'STALE_RESET_VERSION' && resetVerNum > localResetVer) {
-                console.warn(`[JUWEI WMS] Received SYNC_REQUIRED (STALE_RESET_VERSION). Purging local caches and refetching.`);
-                purgeAllLocalOfflineCachesAndQueues(resetVerNum);
-              }
               handleManualSync();
               break;
             }
@@ -3776,21 +3910,34 @@ export default function App() {
             case 'RECORD_CREATED':
             case 'RECORD_UPDATED':
             case 'record_upserted': {
-              const currentResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
-              if (payload.systemResetVersion && Number(payload.systemResetVersion) < currentResetVer) {
-                console.warn(`[JUWEI WMS] Discarding stale upsert from reset_version ${payload.systemResetVersion}`);
-                break;
-              }
               const { collection, record, author, actionDesc } = payload;
               if (record && record.id && collection) {
                 setLastSyncedTime(new Date());
                 recordKnownVersions(collection, [record]);
 
-                // Do not overwrite local unsaved changes if this record has a pending conflict or newer queued edit
-                const hasLocalOverride = getPendingMutations().some(
-                  (m) => m.collection === collection && String(m.recordId || m.record?.id) === String(record.id)
-                );
-                if (!hasLocalOverride) {
+                // Do not overwrite active non-stale local edits; never let an older queued mutation block newer server state
+                const incomingVer = record.version !== undefined && record.version !== null ? Number(record.version) : undefined;
+                const hasQueuedOverride = getPendingMutations().some((m) => {
+                  if (m.collection !== collection || m.status === 'CONFLICT') return false;
+                  if (String(m.recordId || m.record?.id) !== String(record.id)) return false;
+                  const mutVer = m.expectedVersion !== undefined && m.expectedVersion !== null
+                    ? Number(m.expectedVersion)
+                    : (m.record?.version !== undefined && m.record?.version !== null ? Number(m.record.version) : undefined);
+                  if (incomingVer !== undefined && mutVer !== undefined && mutVer < incomingVer) {
+                    return false;
+                  }
+                  return true;
+                });
+                const hasInFlightOverride = Array.from(inFlightWsMutationsRef.current.values()).some((entry) => {
+                  const m = entry.mutation;
+                  if (m.collection !== collection || String(m.recordId || m.record?.id) !== String(record.id)) return false;
+                  const mutVer = m.expectedVersion !== undefined && m.expectedVersion !== null ? Number(m.expectedVersion) : undefined;
+                  if (incomingVer !== undefined && mutVer !== undefined && mutVer < incomingVer) {
+                    return false;
+                  }
+                  return true;
+                });
+                if (!hasQueuedOverride && !hasInFlightOverride) {
                   applyConfirmedRecordToState(collection, record);
                 }
 
@@ -3829,6 +3976,7 @@ export default function App() {
               const { collection, id, author, actionDesc } = payload;
               if (id && collection) {
                 markRecordAsDeletedLocally(id);
+                lastKnownVersionsRef.current.delete(`${collection}:${id}`);
                 setLastSyncedTime(new Date());
                 const filterFn = (prev: any[]) => prev.filter(it => it.id !== id);
                 
@@ -4030,6 +4178,61 @@ export default function App() {
               }
               break;
             }
+            case 'DEVICE_REVOKED': {
+              handleDeviceRevoked(payload.deviceId);
+              if (httpPollInterval) clearInterval(httpPollInterval);
+              break;
+            }
+            case 'ERROR': {
+              const clientMutationId = payload.clientMutationId;
+              const inFlightEntry = clientMutationId
+                ? inFlightWsMutationsRef.current.get(clientMutationId)
+                : undefined;
+              if (inFlightEntry && clientMutationId) {
+                clearTimeout(inFlightEntry.timer);
+                inFlightWsMutationsRef.current.delete(clientMutationId);
+              }
+
+              if (payload.error === 'DEVICE_REVOKED') {
+                handleDeviceRevoked(payload.deviceId);
+                if (httpPollInterval) clearInterval(httpPollInterval);
+                break;
+              }
+
+              if (payload.status === 409) {
+                const mut = inFlightEntry?.mutation;
+                recordSyncConflict({
+                  id: clientMutationId,
+                  collection: payload.collection || mut?.collection || 'stocks',
+                  recordId: String(payload.recordId || mut?.recordId || mut?.record?.id || ''),
+                  type: mut?.type === 'delete' ? 'delete' : 'upsert',
+                  localRecord: mut?.record,
+                  currentServerRecord: payload.currentRecord || payload.confirmedRecord,
+                  expectedVersion: mut?.expectedVersion,
+                  author: mut?.author,
+                  actionDesc: mut?.actionDesc,
+                  error: payload.error || 'VERSION_CONFLICT: Newer revision exists on server.'
+                });
+                break;
+              }
+
+              if (payload.status === 403) {
+                showPrintToast(payload.error || 'Permission denied', 'error');
+                break;
+              }
+
+              if (inFlightEntry) {
+                const nextRetry = (inFlightEntry.mutation.retryCount || 0) + 1;
+                enqueueMutation({
+                  ...inFlightEntry.mutation,
+                  status: 'FAILED',
+                  retryCount: nextRetry,
+                  nextRetryAt: Date.now() + calculateRetryBackoffMs(nextRetry),
+                  lastError: payload.error || `Server error (${payload.status || 500})`
+                });
+              }
+              break;
+            }
           }
         } catch (err) {
           console.error('Error parsing WS message', err);
@@ -4143,6 +4346,38 @@ export default function App() {
     };
   }, []);
 
+  // Fetch one-time initial Super Admin setup PIN on fresh install (before first login)
+  useEffect(() => {
+    if (isLoggedIn) {
+      setOneTimeSetupPinNotice(null);
+      return;
+    }
+    let cancelled = false;
+    const baseUrl = getApiBaseUrl();
+    const persistentDevId = getPersistentDeviceId();
+    fetch(`${baseUrl}/api/setup/initial-pin`, {
+      cache: 'no-store',
+      headers: {
+        'Accept': 'application/json',
+        ...(persistentDevId ? { 'x-device-id': persistentDevId } : {})
+      }
+    })
+      .then(async (res) => {
+        if (!res.ok || cancelled) return;
+        const json = await res.json().catch(() => null);
+        if (!cancelled && json?.hasInitialPin && json?.initialPin) {
+          setOneTimeSetupPinNotice({
+            employeeId: json.employeeId || 'JPMP-002',
+            initialPin: String(json.initialPin)
+          });
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoggedIn]);
+
   // Keep WebSocket presence and active view module in sync dynamically across all connected operators
   useEffect(() => {
     const stationId = getStationId();
@@ -4234,8 +4469,7 @@ export default function App() {
       headers: getAuthHeaders({
         'Content-Type': 'application/json',
         'x-device-id': persistentDevId,
-        'x-employee-id': currentEmployeeId || '',
-        'x-user-permission': currentPermission || ''
+        'x-employee-id': currentEmployeeId || ''
       }),
       body: JSON.stringify(syncPayload)
     })
@@ -4248,12 +4482,6 @@ export default function App() {
         }
       }
       if (res.status === 409) {
-        const errJson = await res.json().catch(() => ({}));
-        if (typeof errJson.error === 'string' && errJson.error.includes('STALE_RESET_VERSION')) {
-          const serverVer = Number(errJson.systemResetVersion || errJson.serverResetVersion) || currentResetVer + 1;
-          purgeAllLocalOfflineCachesAndQueues(serverVer);
-          handleManualSync();
-        }
         return;
       }
     })
@@ -4301,46 +4529,54 @@ export default function App() {
       return null;
     }
 
-    // Determine 4-digit PIN (custom or unique generated) - NEVER default to 1234
+    // Determine 4-digit PIN (custom or CSPRNG generated) - NEVER use predictable fallbacks
     let finalPin = '';
     const cleanProvidedPin = customPin ? customPin.replace(/\D/g, '').slice(0, 4) : '';
     if (cleanProvidedPin.length === 4 && cleanProvidedPin !== '1234' && !/^(\d)\1+$/.test(cleanProvidedPin)) {
       finalPin = cleanProvidedPin;
     } else {
       let attempts = 0;
-      while (attempts < 100) {
-        const pinCandidate = Math.floor(1000 + Math.random() * 9000).toString();
-        if (pinCandidate !== '1234' && !/^(\d)\1+$/.test(pinCandidate) && !registeredUsers.some(u => u.pin === pinCandidate)) {
+      while (attempts < 200) {
+        let num = 1000 + Math.floor(Math.random() * 9000);
+        if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+          const arr = new Uint32Array(1);
+          crypto.getRandomValues(arr);
+          num = 1000 + (arr[0] % 9000);
+        }
+        const pinCandidate = String(num);
+        if (pinCandidate !== '1234' && !/^(\d)\1+$/.test(pinCandidate)) {
           finalPin = pinCandidate;
           break;
         }
         attempts++;
       }
-      if (!finalPin || finalPin === '1234') {
-        finalPin = '5829';
+      if (!finalPin) {
+        finalPin = '4917';
       }
     }
 
     const cleanPermission = permission || (cleanEmployeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS');
-    const newUser: RegisteredAccount = { 
+    const newUserWithOneTimePin: RegisteredAccount = { 
       username: cleanUsername, 
       role: cleanRole, 
       employeeId: cleanEmployeeId, 
       phoneNumber: phoneNumber ? phoneNumber.trim() : '',
       permission: cleanPermission, 
       pin: finalPin,
+      hasPin: true,
       status: status || 'ACTIVE',
       registeredBy: 'JPMP-002 (ALDRIN BANAWA)',
       registeredBySuperAdmin: true,
       registeredAt: new Date().toISOString(),
       stationId: getStationId()
     };
+    const { pin: _omittedPin, ...sanitizedNewUser } = newUserWithOneTimePin;
 
     // Remove from deleted tracking if re-registered
     unmarkUserAsDeleted(cleanEmployeeId);
     markRecordMutatedLocally(cleanEmployeeId);
 
-    const nextUsers = [...registeredUsers.filter(u => (u.employeeId || '').toUpperCase() !== cleanEmployeeId), newUser];
+    const nextUsers = [...registeredUsers.filter(u => (u.employeeId || '').toUpperCase() !== cleanEmployeeId), sanitizedNewUser];
     setRegisteredUsers(nextUsers);
     
     // Cross-tab BroadcastChannel
@@ -4348,18 +4584,19 @@ export default function App() {
       try {
         syncChannelRef.current.postMessage({
           type: 'account_registered',
-          user: newUser,
+          user: sanitizedNewUser,
           author: currentUser || 'Super Administrator'
         });
       } catch (e) {}
     }
 
-    // WebSocket real-time cluster broadcast
+    // WebSocket real-time cluster broadcast (server hashes pin into pinHash/pinSalt)
     if (socket && socket.readyState === WebSocket.OPEN) {
       try {
         socket.send(JSON.stringify({
           type: 'register_account',
-          user: newUser,
+          user: newUserWithOneTimePin,
+          device_id: getPersistentDeviceId(),
           author: currentUser || 'Super Administrator (Aldrin Banawa)',
           requesterEmployeeId: currentEmployeeId || 'JPMP-002'
         }));
@@ -4371,21 +4608,33 @@ export default function App() {
     // Explicit direct registration call to server
     try {
       const baseUrl = getApiBaseUrl();
+      const persistentDevId = getPersistentDeviceId();
       fetch(`${baseUrl}/api/accounts/register`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json',
+          'x-device-id': persistentDevId
+        }),
         body: JSON.stringify({
-          ...newUser,
+          ...newUserWithOneTimePin,
+          device_id: persistentDevId,
           requesterEmployeeId: currentEmployeeId || 'JPMP-002',
           requesterUsername: currentUser || 'ALDRIN BANAWA',
           author: currentUser || 'ALDRIN BANAWA'
         })
+      }).then(async (res) => {
+        if (res.status === 403) {
+          const errJson = await res.json().catch(() => ({}));
+          if (errJson?.error === 'DEVICE_REVOKED') {
+            handleDeviceRevoked(persistentDevId);
+          }
+        }
       }).catch(() => {});
     } catch (e) {}
 
-    // Set state to trigger the secure PIN confirmation overlay
-    setNewlyRegisteredUser(newUser);
-    return newUser;
+    // Set state to trigger the one-time secure PIN discovery overlay
+    setNewlyRegisteredUser(newUserWithOneTimePin);
+    return newUserWithOneTimePin;
   };
 
   const handleRemoveUser = (employeeId: string) => {
@@ -4421,10 +4670,21 @@ export default function App() {
 
     // 3. Send deletion request to server endpoint to commit to central database and broadcast
     const baseUrl = getApiBaseUrl();
+    const persistentDevId = getPersistentDeviceId();
     fetch(`${baseUrl}/api/accounts/delete`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ employeeId: cleanId })
+      headers: getAuthHeaders({
+        'Content-Type': 'application/json',
+        'x-device-id': persistentDevId
+      }),
+      body: JSON.stringify({ employeeId: cleanId, device_id: persistentDevId })
+    }).then(async (res) => {
+      if (res.status === 403) {
+        const errJson = await res.json().catch(() => ({}));
+        if (errJson?.error === 'DEVICE_REVOKED') {
+          handleDeviceRevoked(persistentDevId);
+        }
+      }
     }).catch(() => {});
 
     // 4. Broadcast deletion over WebSocket
@@ -4432,7 +4692,8 @@ export default function App() {
       try {
         socket.send(JSON.stringify({
           type: 'delete_account',
-          employeeId: cleanId
+          employeeId: cleanId,
+          device_id: persistentDevId
         }));
       } catch (e) {
         console.warn('WS send delete error:', e);
@@ -4455,9 +4716,21 @@ export default function App() {
 
     // Server reset
     const baseUrl = getApiBaseUrl();
+    const persistentDevId = getPersistentDeviceId();
     fetch(`${baseUrl}/api/accounts/clear-all-except-super-admin`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      headers: getAuthHeaders({
+        'Content-Type': 'application/json',
+        'x-device-id': persistentDevId
+      }),
+      body: JSON.stringify({ device_id: persistentDevId })
+    }).then(async (res) => {
+      if (res.status === 403) {
+        const errJson = await res.json().catch(() => ({}));
+        if (errJson?.error === 'DEVICE_REVOKED') {
+          handleDeviceRevoked(persistentDevId);
+        }
+      }
     }).catch(() => {});
 
     // WebSocket broadcast
@@ -4465,6 +4738,7 @@ export default function App() {
       try {
         socket.send(JSON.stringify({
           type: 'all_accounts_cleared',
+          device_id: persistentDevId,
           data: onlySuperAdmin
         }));
       } catch (e) {}
@@ -4490,18 +4764,19 @@ export default function App() {
 
     const nextUsers = registeredUsers.map(u => {
       if ((u.employeeId || '').toUpperCase() === cleanOldId) {
-        const effectivePin = (updated.pin && String(updated.pin).trim()) || (u.pin && String(u.pin).trim()) || (cleanNewId === 'JPMP-002' ? '0423' : '');
-        const isCompromised = effectivePin === '1234' || !!updated.isPinCompromised || !!u.isPinCompromised;
+        const { pin: _dropIncomingPin, ...restUpdated } = updated;
+        const { pin: _dropExistingPin, ...restExisting } = u;
         return {
-          ...u,
-          ...updated,
+          ...restExisting,
+          ...restUpdated,
           employeeId: cleanNewId,
           username: (updated.username || '').toUpperCase(),
           role: (updated.role || '').toUpperCase(),
           phoneNumber: updated.phoneNumber !== undefined ? updated.phoneNumber : (u.phoneNumber || ''),
           permission: updated.permission || u.permission || 'LIMITED_ACCESS',
-          pin: effectivePin,
-          isPinCompromised: isCompromised,
+          hasPin: Boolean(updated.hasPin ?? u.hasPin ?? true),
+          mustChangePin: updated.mustChangePin !== undefined ? updated.mustChangePin : u.mustChangePin,
+          isPinCompromised: updated.isPinCompromised !== undefined ? updated.isPinCompromised : u.isPinCompromised,
           status: updated.status || u.status || 'ACTIVE',
           lastActive: updated.lastActive !== undefined ? updated.lastActive : u.lastActive
         };
@@ -4510,14 +4785,18 @@ export default function App() {
     });
 
     const targetUpdatedUser = nextUsers.find(u => (u.employeeId || '').toUpperCase() === cleanNewId);
+    const persistentDevId = getPersistentDeviceId();
 
     if (cleanNewId !== cleanOldId) {
       unmarkUserAsDeleted(cleanNewId);
       const baseUrl = getApiBaseUrl();
       fetch(`${baseUrl}/api/accounts/delete`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ employeeId: cleanOldId })
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json',
+          'x-device-id': persistentDevId
+        }),
+        body: JSON.stringify({ employeeId: cleanOldId, device_id: persistentDevId })
       }).catch(() => {});
     }
 
@@ -4540,7 +4819,9 @@ export default function App() {
       try {
         socket.send(JSON.stringify({
           type: 'update_account',
+          oldEmployeeId: cleanOldId,
           user: targetUpdatedUser,
+          device_id: persistentDevId,
           author: currentUser || 'Admin'
         }));
       } catch (e) {
@@ -4554,8 +4835,22 @@ export default function App() {
         const baseUrl = getApiBaseUrl();
         fetch(`${baseUrl}/api/accounts/update`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(targetUpdatedUser)
+          headers: getAuthHeaders({
+            'Content-Type': 'application/json',
+            'x-device-id': persistentDevId
+          }),
+          body: JSON.stringify({
+            oldEmployeeId: cleanOldId,
+            updatedUser: targetUpdatedUser,
+            device_id: persistentDevId
+          })
+        }).then(async (res) => {
+          if (res.status === 403) {
+            const errJson = await res.json().catch(() => ({}));
+            if (errJson?.error === 'DEVICE_REVOKED') {
+              handleDeviceRevoked(persistentDevId);
+            }
+          }
         }).catch(() => {});
       } catch (e) {}
     }
@@ -4563,74 +4858,139 @@ export default function App() {
     syncCollection('registeredUsers', nextUsers);
   };
 
-  const handleDirectLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoginError('');
-
-    const rawInput = (loginEmployeeId || '').trim();
-    let searchId = rawInput.toUpperCase();
-    if (searchId && !searchId.startsWith('JPMP-')) {
-      searchId = 'JPMP-' + searchId.replace(/^EMP-/, '');
-    }
-
-    const enteredPin = (loginPin || '').trim();
-
-    // Match by employeeId, raw employeeId, username, or phone number in local state
-    let foundUser = registeredUsers.find(
-      (u) => {
-        const uEmpId = (u.employeeId || '').toUpperCase();
-        const uUsername = (u.username || '').toUpperCase();
-        const uPhone = (u.phoneNumber || '').replace(/\D/g, '');
-        const inputPhone = rawInput.replace(/\D/g, '');
-
-        const idMatches = uEmpId === searchId || uEmpId === rawInput.toUpperCase() || uUsername === rawInput.toUpperCase() || (inputPhone.length >= 10 && uPhone === inputPhone);
-        const pinMatches = Boolean(u.pin && u.pin.trim() === enteredPin);
-
-        return idMatches && pinMatches;
-      }
-    );
-
-    // If not found in local memory or PIN was updated on another machine, verify live against central database
-    if (!foundUser && enteredPin) {
-      setIsLoggingIn(true);
+  const completeAuthenticatedLogin = (verifiedUser: any, enteredPin?: string) => {
+    const empIdToRemember = (verifiedUser.employeeId || loginEmployeeId).trim().toUpperCase();
+    if (rememberLogin && empIdToRemember) {
       try {
-        const authoritativeUser = await verifyCentralCredentials(rawInput, enteredPin);
-        if (authoritativeUser) {
-          foundUser = authoritativeUser;
-          setRegisteredUsers(prev => upsertUserInState(prev, authoritativeUser));
-        }
-      } catch (authErr) {
-        console.warn("Authoritative login verification error:", authErr);
-      }
+        localStorage.setItem('juwei_wms_rememberedEmployeeId', empIdToRemember);
+      } catch (e) {}
+    } else {
+      try {
+        localStorage.removeItem('juwei_wms_rememberedEmployeeId');
+      } catch (e) {}
     }
 
-    if (foundUser) {
-      setIsLoggingIn(true);
-      const empIdToRemember = (foundUser.employeeId || loginEmployeeId).trim().toUpperCase();
-      if (rememberLogin) {
-        try {
-          localStorage.setItem('juwei_wms_rememberedEmployeeId', empIdToRemember);
-        } catch (e) {}
-      } else {
-        try {
-          localStorage.removeItem('juwei_wms_rememberedEmployeeId');
-        } catch (e) {}
-      }
-      setTimeout(() => {
-        handleLogin(foundUser!);
-        const remembered = localStorage.getItem('juwei_wms_rememberedEmployeeId');
-        setLoginEmployeeId(remembered || '');
-        setLoginPin('');
-        setLoginError('');
-        setIsLoggingIn(false);
-      }, 300);
-    } else {
+    if (verifiedUser.mustChangePin) {
       setIsLoggingIn(false);
-      setLoginError('INVALID OPERATIONAL ID NUMBER OR INCORRECT PIN CODE.');
+      setFirstLoginNewPin('');
+      setFirstLoginConfirmPin('');
+      setFirstLoginPinError('');
+      setPendingFirstLoginPinChange({
+        user: verifiedUser,
+        currentPin: enteredPin || ''
+      });
+      return;
+    }
+
+    setOneTimeSetupPinNotice(null);
+    setTimeout(() => {
+      handleLogin(verifiedUser);
+      const remembered = localStorage.getItem('juwei_wms_rememberedEmployeeId');
+      setLoginEmployeeId(remembered || '');
+      setLoginPin('');
+      setLoginError('');
+      setIsLoggingIn(false);
+    }, 300);
+  };
+
+  const handleSubmitFirstLoginPinChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pendingFirstLoginPinChange) return;
+    setFirstLoginPinError('');
+
+    const cleanNew = firstLoginNewPin.replace(/\D/g, '').slice(0, 4);
+    const cleanConfirm = firstLoginConfirmPin.replace(/\D/g, '').slice(0, 4);
+    if (cleanNew.length !== 4) {
+      setFirstLoginPinError('New PIN must be exactly 4 numeric digits.');
+      return;
+    }
+    if (cleanNew !== cleanConfirm) {
+      setFirstLoginPinError('Confirmation PIN does not match new PIN.');
+      return;
+    }
+    if (cleanNew === pendingFirstLoginPinChange.currentPin) {
+      setFirstLoginPinError('New PIN must be different from the initial setup PIN.');
+      return;
+    }
+    if (cleanNew === '1234' || /^(\d)\1+$/.test(cleanNew)) {
+      setFirstLoginPinError('SECURITY REJECTED: Weak or repetitive PINs are not allowed.');
+      return;
+    }
+
+    setIsSavingFirstLoginPin(true);
+    try {
+      const targetUser = pendingFirstLoginPinChange.user;
+      const res = await updateCentralPin(
+        targetUser.employeeId,
+        pendingFirstLoginPinChange.currentPin,
+        cleanNew,
+        targetUser.employeeId,
+        {
+          author: `${targetUser.username} (${targetUser.employeeId})`,
+          reason: 'Mandatory first-login PIN change'
+        }
+      );
+      if (!res.success) {
+        setFirstLoginPinError(res.error || 'Failed to update PIN. Please try again.');
+        setIsSavingFirstLoginPin(false);
+        return;
+      }
+      const updatedUser = res.user ? { ...targetUser, ...res.user, mustChangePin: false } : { ...targetUser, mustChangePin: false };
+      setRegisteredUsers(prev => upsertUserInState(prev, updatedUser));
+      setPendingFirstLoginPinChange(null);
+      setOneTimeSetupPinNotice(null);
+      setIsSavingFirstLoginPin(false);
+      setIsLoggingIn(true);
+      completeAuthenticatedLogin(updatedUser);
+    } catch (err: any) {
+      setFirstLoginPinError(err?.message || 'Network error updating PIN.');
+      setIsSavingFirstLoginPin(false);
     }
   };
 
-  const handleQrLoginScan = (scannedText: string) => {
+  const handleDirectLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError('');
+    if (isDeviceRevokedRef.current) {
+      setLoginError('This computer was removed from the system');
+      return;
+    }
+
+    const rawInput = (loginEmployeeId || '').trim();
+    const enteredPin = (loginPin || '').trim();
+    if (!rawInput || !enteredPin) {
+      setLoginError('PLEASE ENTER YOUR EMPLOYEE ID AND 4-DIGIT PIN CODE.');
+      return;
+    }
+
+    setIsLoggingIn(true);
+    try {
+      const authoritativeUser = await verifyCentralCredentials(rawInput, enteredPin);
+      if (authoritativeUser) {
+        setRegisteredUsers(prev => upsertUserInState(prev, authoritativeUser));
+        completeAuthenticatedLogin(authoritativeUser, enteredPin);
+        return;
+      }
+    } catch (authErr: any) {
+      if (authErr?.message === 'DEVICE_REVOKED') {
+        handleDeviceRevoked(getPersistentDeviceId());
+        setIsLoggingIn(false);
+        setLoginError('This computer was removed from the system');
+        return;
+      }
+      console.warn("Authoritative login verification error:", authErr);
+    }
+
+    setIsLoggingIn(false);
+    setLoginError('INVALID OPERATIONAL ID NUMBER OR INCORRECT PIN CODE.');
+  };
+
+  const handleQrLoginScan = async (scannedText: string) => {
+    if (isDeviceRevokedRef.current) {
+      setLoginError('This computer was removed from the system');
+      return;
+    }
+
     let searchEmpId = '';
     let searchPin = '';
 
@@ -4655,74 +5015,34 @@ export default function App() {
       return;
     }
 
-    // Match operator account in registeredUsers
-    const foundUser = registeredUsers.find(
-      (u) => (u.employeeId || '').toUpperCase() === searchEmpId || 
-             (u.username || '').toUpperCase() === searchEmpId ||
-             (u.employeeId || '').toUpperCase() === searchEmpId.replace(/^JPMP-/, '')
-    );
-
-    if (foundUser) {
-      if (!searchPin || (foundUser.pin && foundUser.pin.trim() !== searchPin)) {
-        // Check central database in case PIN was updated from another terminal
-        if (searchPin) {
-          verifyCentralCredentials(searchEmpId, searchPin).then(verified => {
-            if (verified) {
-              setRegisteredUsers(prev => upsertUserInState(prev, verified));
-              setShowLoginQrScanner(false);
-              setLoginEmployeeId('');
-              setLoginPin('');
-              setLoginError('');
-              setIsLoggingIn(true);
-              setTimeout(() => {
-                handleLogin(verified);
-                setIsLoggingIn(false);
-              }, 300);
-              return;
-            }
-            setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR ${foundUser.username || ''} (${foundUser.employeeId || ''}). ONLY REGISTERED PIN IS AUTHORIZED.`);
-          }).catch(() => {
-            setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR ${foundUser.username || ''} (${foundUser.employeeId || ''}). ONLY REGISTERED PIN IS AUTHORIZED.`);
-          });
-          return;
-        }
-        setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR ${foundUser.username || ''} (${foundUser.employeeId || ''}). ONLY REGISTERED PIN IS AUTHORIZED.`);
-        return;
-      }
-      setShowLoginQrScanner(false);
-      setLoginEmployeeId('');
-      setLoginPin('');
-      setLoginError('');
-      setIsLoggingIn(true);
-      setTimeout(() => {
-        handleLogin(foundUser);
-        setIsLoggingIn(false);
-      }, 300);
-    } else {
-      // Not yet in local memory, check central database
-      if (searchPin) {
-        verifyCentralCredentials(searchEmpId, searchPin).then(verified => {
-          if (verified) {
-            setRegisteredUsers(prev => upsertUserInState(prev, verified));
-            setShowLoginQrScanner(false);
-            setLoginEmployeeId('');
-            setLoginPin('');
-            setLoginError('');
-            setIsLoggingIn(true);
-            setTimeout(() => {
-              handleLogin(verified);
-              setIsLoggingIn(false);
-            }, 300);
-            return;
-          }
-          setLoginError(`OPERATOR ID "${searchEmpId}" IS NOT REGISTERED IN JPMP DIRECTORY.`);
-        }).catch(() => {
-          setLoginError(`OPERATOR ID "${searchEmpId}" IS NOT REGISTERED IN JPMP DIRECTORY.`);
-        });
-        return;
-      }
-      setLoginError(`OPERATOR ID "${searchEmpId}" IS NOT REGISTERED IN JPMP DIRECTORY.`);
+    if (!searchPin) {
+      setLoginError(`MISSING PIN IN QR CODE FOR OPERATOR ${searchEmpId}. ENTER PIN MANUALLY TO SIGN IN.`);
+      return;
     }
+
+    setIsLoggingIn(true);
+    try {
+      const verified = await verifyCentralCredentials(searchEmpId, searchPin);
+      if (verified) {
+        setRegisteredUsers(prev => upsertUserInState(prev, verified));
+        setShowLoginQrScanner(false);
+        setLoginEmployeeId('');
+        setLoginPin('');
+        setLoginError('');
+        completeAuthenticatedLogin(verified, searchPin);
+        return;
+      }
+    } catch (err: any) {
+      if (err?.message === 'DEVICE_REVOKED') {
+        handleDeviceRevoked(getPersistentDeviceId());
+        setShowLoginQrScanner(false);
+        setIsLoggingIn(false);
+        setLoginError('This computer was removed from the system');
+        return;
+      }
+    }
+    setIsLoggingIn(false);
+    setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR "${searchEmpId}". ONLY REGISTERED PIN IS AUTHORIZED.`);
   };
 
   const handleLogin = (user: {username: string; role: string; employeeId: string; permission?: string; status?: string; lastActive?: string}) => {
@@ -4757,13 +5077,13 @@ export default function App() {
           type: 'authenticate',
           user_id: `USR-${cleanEmployeeId}`,
           session_id: clientSessionId.current,
+          sessionToken: getStoredSessionToken() || undefined,
           device_id: getPersistentDeviceId(),
           connection_id: clientConnectionId.current || undefined,
           stationId: getStationId(),
           username: cleanUsername,
           employeeId: cleanEmployeeId,
           role: cleanRole,
-          permission: cleanPermission,
           activeView: view,
           platform: getPlatformType(),
           deviceName: `${getPlatformType()} Terminal - ${getStationId()}`,
@@ -4832,6 +5152,7 @@ export default function App() {
       localStorage.removeItem('juwei_wms_userRole');
       localStorage.removeItem('juwei_wms_employeeId');
       localStorage.removeItem('juwei_wms_userPermission');
+      localStorage.removeItem('juwei_wms_sessionToken');
     } catch (e) {}
 
     // Pre-fill remembered Employee ID on login form if user previously enabled Remember Login
@@ -5442,7 +5763,7 @@ export default function App() {
       envLogs,
       forkliftChecks,
       registries,
-      registeredUsers
+      registeredUsers: registeredUsers.map(({ pin: _p, ...safeUser }) => safeUser)
     };
 
     try {
@@ -5741,6 +6062,34 @@ export default function App() {
               <span>This computer was removed from the system</span>
             </div>
           )}
+          {oneTimeSetupPinNotice && (
+            <div className="bg-amber-950/85 border border-amber-500/60 text-amber-100 px-3.5 py-3 rounded-xl text-xs space-y-1.5" id="one-time-initial-pin-banner">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-mono font-bold uppercase text-amber-300 text-[10px] tracking-wider">
+                  Fresh Install • One-Time Super Admin PIN
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginEmployeeId(oneTimeSetupPinNotice.employeeId);
+                    setLoginPin(oneTimeSetupPinNotice.initialPin);
+                  }}
+                  className="text-[10px] font-mono font-bold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-200 px-2 py-0.5 rounded cursor-pointer"
+                >
+                  Use PIN
+                </button>
+              </div>
+              <div className="flex items-center justify-between font-mono">
+                <span className="text-[11px] text-amber-200">ID: <strong>{oneTimeSetupPinNotice.employeeId}</strong></span>
+                <span className="text-base font-extrabold tracking-[0.25em] text-white bg-amber-900/80 border border-amber-500/40 px-2.5 py-0.5 rounded select-all">
+                  {oneTimeSetupPinNotice.initialPin}
+                </span>
+              </div>
+              <p className="text-[10px] text-amber-200/90">
+                Shown once on first setup. You will be required to set a new 4-digit PIN immediately upon first login.
+              </p>
+            </div>
+          )}
           {/* Central Database Status Quick Settings */}
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-2">
@@ -5940,6 +6289,85 @@ export default function App() {
               }, 500);
             }}
           />
+        )}
+
+        {/* Mandatory First-Login PIN Change Modal */}
+        {pendingFirstLoginPinChange && (
+          <div className="fixed inset-0 z-[135] flex items-center justify-center bg-slate-950/85 backdrop-blur-md p-4 overflow-y-auto">
+            <div className="bg-white border border-slate-300 rounded-2xl p-6 max-w-sm w-full shadow-2xl text-slate-900 space-y-4 my-auto">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-700 shrink-0">
+                  <Lock className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 uppercase font-mono">PIN Change Required</h3>
+                  <p className="text-[11px] text-slate-500">
+                    Set a new 4-digit PIN for {pendingFirstLoginPinChange.user.username} ({pendingFirstLoginPinChange.user.employeeId}) before continuing.
+                  </p>
+                </div>
+              </div>
+
+              {firstLoginPinError && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold px-3 py-2 rounded-lg">
+                  {firstLoginPinError}
+                </div>
+              )}
+
+              <form onSubmit={handleSubmitFirstLoginPinChange} className="space-y-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase font-mono mb-1">
+                    New 4-Digit PIN
+                  </label>
+                  <input
+                    type="password"
+                    maxLength={4}
+                    required
+                    autoFocus
+                    inputMode="numeric"
+                    placeholder="••••"
+                    value={firstLoginNewPin}
+                    onChange={(e) => setFirstLoginNewPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono font-bold tracking-widest text-center focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase font-mono mb-1">
+                    Confirm New 4-Digit PIN
+                  </label>
+                  <input
+                    type="password"
+                    maxLength={4}
+                    required
+                    inputMode="numeric"
+                    placeholder="••••"
+                    value={firstLoginConfirmPin}
+                    onChange={(e) => setFirstLoginConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono font-bold tracking-widest text-center focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+                </div>
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    disabled={isSavingFirstLoginPin}
+                    onClick={() => {
+                      setPendingFirstLoginPinChange(null);
+                      setFirstLoginPinError('');
+                    }}
+                    className="px-3.5 py-2 border border-slate-200 text-slate-600 rounded-lg text-xs font-bold hover:bg-slate-50 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSavingFirstLoginPin}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold uppercase cursor-pointer disabled:opacity-50"
+                  >
+                    {isSavingFirstLoginPin ? 'Saving...' : 'Save PIN & Sign In'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
         )}
 
         {/* Logging In Circle Loading Screen */}

@@ -49,7 +49,7 @@ export default function AccountQRBadgeModal({
   const badgeRef = useRef<HTMLDivElement>(null);
 
   const hasPin = Boolean(account?.pin && String(account.pin).trim() !== '');
-  const isCompromised = account?.pin === '1234' || !!account?.isPinCompromised;
+  const isCompromised = !!account?.isPinCompromised;
 
   // Structured QR Payload containing Username and PIN Code
   const qrPayload = JSON.stringify({
@@ -133,7 +133,7 @@ export default function AccountQRBadgeModal({
         if (isCompromised) {
           ctx.fillStyle = '#ef4444';
           ctx.font = 'bold 12px monospace';
-          ctx.fillText(`PIN: ⚠️ COMPROMISED (1234)`, 200, 415);
+          ctx.fillText(`PIN: COMPROMISED — RESET REQUIRED`, 200, 415);
         } else {
           ctx.fillStyle = '#fde047';
           ctx.font = 'bold 13px monospace';
@@ -340,7 +340,7 @@ export default function AccountQRBadgeModal({
                     {isCompromised && (
                       <div className="text-[9px] font-bold text-rose-300 bg-rose-950/80 border border-rose-500/60 rounded px-1.5 py-0.5 text-center flex items-center justify-center gap-1">
                         <AlertTriangle className="h-2.5 w-2.5 shrink-0 text-rose-400" />
-                        <span>⚠️ COMPROMISED DEFAULT PIN (1234) — RESET REQUIRED</span>
+                        <span>COMPROMISED PIN — RESET REQUIRED</span>
                       </div>
                     )}
                   </div>

@@ -161,8 +161,6 @@ async function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: false,
-      allowRunningInsecureContent: true,
     },
     autoHideMenuBar: false,
     backgroundColor: '#0f172a',
