@@ -8,16 +8,8 @@ import http from "http";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
-import { WebSocketServer, WebSocket } from "ws";
-import {
-  initSqliteStore,
-  commitToSqlite,
-  readDatabaseFromSqlite,
-  validateDatabaseFile,
-  vacuumInto,
-  checkpointAndClose,
-  openSqliteDatabase
-} from "./server/sqliteStore.ts";
+import { WebSocketServer } from "ws";
+import { checkpointAndClose } from "./server/sqliteStore.ts";
 import {
   loadAndValidateServerConfig,
   printServerStartupSummary,
@@ -29,40 +21,68 @@ import {
 import logger from "./src/lib/logger.ts";
 import type {
   AuthorizedDevice,
-  RegisteredAccount,
   ChatMessage,
-  BackupAuditEntry,
-  BackupItemRecord,
-  PinAuditEntry,
-  AuditTrailEntry,
-  FifoRepairAuditEntry,
-  CentralDatabaseState,
-  FifoColorsMap,
-  MasterRegistryItem,
-  MaterialStockItem,
-  ReceivingRecord,
-  ReturnRecord,
-  RecyclingRecord,
-  IssuanceRecord,
-  DeliveryRecord,
-  EnvironmentalLog,
-  ForkliftChecklist,
-  StockMovement,
+  RegisteredAccount,
 } from "./shared/types.ts";
+import {
+  DEFAULT_FIFO_COLORS_BY_MONTH,
+  DEFAULT_OPERATIONAL_ROLES,
+  DEFAULT_RECEIVING_CATEGORIES,
+  MAX_AUDIT_TRAIL_ENTRIES,
+  createServerContext,
+} from "./server/services/context.ts";
+import {
+  describeRecordDiff,
+  ensureInitialAuditTrailSeed,
+  logPinAudit,
+  recordAuditTrail,
+} from "./server/services/auditService.ts";
+import { repairFifoTagColorsOnStartup } from "./server/services/fifoService.ts";
+import {
+  broadcast,
+  closeDeviceSockets,
+  filterDataForClient,
+  getActiveOperatorsCount,
+  getActivePresenceList,
+  getActiveUsersList,
+  sanitizeUserForClient,
+} from "./server/services/realtimeService.ts";
+import {
+  ensureSuperAdminSeed,
+  extractDeviceIdFromHttp,
+  hashPinScrypt,
+  isAuthorizedSuperAdmin,
+  isDeviceRevoked,
+  markRecordTombstone,
+  markUserTombstone,
+  rejectIfDeviceRevokedHttp,
+  resolveRequestAuthContext,
+  unmarkUserTombstone,
+  verifyUserPin,
+} from "./server/services/authService.ts";
+import {
+  commitDatabase,
+  createDatabaseBackup,
+  createPreStartupBackup,
+  getAllBackupRecords,
+  loadDatabaseFromDisk,
+  restoreDatabaseFromBackup,
+} from "./server/services/backupService.ts";
+import {
+  executeRecordDelete,
+  executeRecordUpsert,
+} from "./server/services/recordService.ts";
+import {
+  getLatestGitHubReleaseVersion,
+  loadPersistedGitHubReleaseFallback,
+} from "./server/services/releaseService.ts";
+import { setupWebSocketServer } from "./server/services/websocketService.ts";
+import { registerReceivingRoutes } from "./server/routes/receiving.ts";
+import { registerStockRoutes } from "./server/routes/stock.ts";
 
 // Ephemeral per-process instance identifiers (fresh every boot, never persisted)
 const SERVER_INSTANCE_ID = crypto.randomUUID();
 const SERVER_BOOT_TIME = new Date().toISOString();
-
-// Initial seed structures for empty database bootstrapping
-const INITIAL_STOCK: MaterialStockItem[] = [];
-const INITIAL_RECEIVING: ReceivingRecord[] = [];
-const INITIAL_RETURNS: ReturnRecord[] = [];
-const INITIAL_RECYCLING: RecyclingRecord[] = [];
-const INITIAL_ISSUANCE: IssuanceRecord[] = [];
-const INITIAL_DELIVERIES: DeliveryRecord[] = [];
-const INITIAL_ENV_LOGS: EnvironmentalLog[] = [];
-const INITIAL_FORKLIFT_CHECKS: ForkliftChecklist[] = [];
 
 async function startServer() {
   const serverConfig = loadAndValidateServerConfig();
@@ -76,30 +96,8 @@ async function startServer() {
   const wss = new WebSocketServer({ noServer: true });
   const PORT = serverConfig.port;
 
-  server.on("upgrade", (request, socket, head) => {
-    const pathname = request.url?.split("?")[0] || "";
-    if (pathname === "/ws" || pathname === "/" || pathname === "") {
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit("connection", ws, request);
-      });
-    } else {
-      socket.destroy();
-    }
-  });
-
-  // Safe Disk Storage Path Resolution (AppData on Windows Desktop, Current Working Dir in Container)
-  const getStorageFilePath = serverConfig.getStorageFilePath;
-
-  // Authoritative Central Database File
-  const DATA_FILE_SQLITE = serverConfig.dataFileSqlite;
-  const DATA_FILE_JSON = serverConfig.dataFileJson;
+  // Storage Configuration Guard Rail
   const DATA_FILE = serverConfig.dataFile;
-
-  // =========================================================================
-  // STORAGE CONFIGURATION GUARD RAIL:
-  // Verifies that JUWEI_DATA_DIR is set to an external safe location,
-  // preventing database files from residing in the ephemeral project source folder.
-  // =========================================================================
   const resolvedDataFile = path.resolve(DATA_FILE);
   const configuredDataDir = serverConfig.configuredDataDir;
   const isInsideProjectSource = serverConfig.isInsideProjectSource;
@@ -118,4566 +116,43 @@ async function startServer() {
     logger.info(`[STORAGE CONFIG] Persistent safe storage verified at: ${configuredDataDir} (Database: ${resolvedDataFile})`);
   }
 
-  // Installation & Primary Device Identification
-  let installationId = "INS-2026-JUWEI-PRIM01";
-  let primaryDeviceId = "dev_primary_admin_pc";
-  const authorizedDevicesMap = new Map<string, AuthorizedDevice>([
-    [
-      "dev_primary_admin_pc",
-      {
-        deviceId: "dev_primary_admin_pc",
-        deviceName: "Primary Administrator PC (Workstation)",
-        isPrimaryAdminDevice: true,
-        status: "AUTHORIZED",
-        authorizedBy: "INITIAL_SUPER_ADMIN_BINDING",
-        authorizedAt: "2026-09-09T08:00:00.000Z"
-      }
-    ]
-  ]);
-
-  const defaultSuperAdmin: RegisteredAccount = { 
-    id: 'USR-JPMP-002',
-    employeeId: 'JPMP-002', 
-    username: 'ALDRIN BANAWA', 
-    role: 'SUPER ADMINISTRATOR', 
-    phoneNumber: '+639669858846',
-    permission: 'FULL_ACCESS', 
-    status: 'ACTIVE',
-    registeredBy: 'INITIAL_INSTALLATION_SUPER_ADMIN',
-    registeredBySuperAdmin: true,
-    registeredAt: '2026-09-09T08:00:00.000Z',
-    stationId: 'WS-MASTER-01',
-    deviceId: 'dev_primary_admin_pc',
-    isPrimaryAdminDevice: true,
-    authorizedDevices: ['dev_primary_admin_pc'],
-    version: 1,
-    updated_at: '2026-09-09T08:00:00.000Z',
-    reset_version: 1788945000000
-  };
-
-  // Authoritative Central Database Reset & Versioning Metadata
-  let systemResetVersion = 1;
-  let systemResetTimestamp = new Date().toISOString();
-  let systemResetId = "RESET-INIT";
-  let systemResetBy = "SUPER ADMINISTRATOR";
-  let stateRevision = 1;
-
-  // Persistent Tombstones to prevent zombie records and accounts from resurrecting
-  const deletedRecordTombstones = new Set<string>();
-  const deletedUserTombstones = new Set<string>();
-
-  function markRecordTombstone(id: string) {
-    if (!id) return;
-    deletedRecordTombstones.add(id);
-    if (deletedRecordTombstones.size > 10000) {
-      const first = deletedRecordTombstones.values().next().value;
-      if (first) deletedRecordTombstones.delete(first);
-    }
-  }
-
-  function markUserTombstone(employeeId: string) {
-    if (!employeeId) return;
-    const clean = employeeId.trim().toUpperCase();
-    if (clean === 'JPMP-002') return;
-    deletedUserTombstones.add(clean);
-  }
-
-  function unmarkUserTombstone(employeeId: string) {
-    if (!employeeId) return;
-    deletedUserTombstones.delete(employeeId.trim().toUpperCase());
-  }
-
-  function isDeviceRevoked(deviceId?: string): boolean {
-    const clean = String(deviceId || "").trim();
-    if (!clean) return false;
-    const record = authorizedDevicesMap.get(clean);
-    return Boolean(record && (record.status === "REVOKED" || record.status === "PENDING"));
-  }
-
-  // Server-side Session Token Registry (crypto-random bearer tokens bound to verified employeeId)
-  const sessionTokensMap = new Map<string, { employeeId: string; deviceId?: string; createdAt: number }>();
-  let oneTimeSetupPin: string | null = null;
-
-  function hashPinScrypt(pin: string, existingSalt?: string): { pinHash: string; pinSalt: string } {
-    const salt = existingSalt || crypto.randomBytes(16).toString("hex");
-    const derived = crypto.scryptSync(String(pin).trim(), salt, 64).toString("hex");
-    return { pinHash: derived, pinSalt: salt };
-  }
-
-  function verifyPinScrypt(pin: string, pinHash: string, pinSalt: string): boolean {
-    try {
-      const cleanPin = String(pin || "").trim();
-      if (!cleanPin || !pinHash || !pinSalt) return false;
-      const derivedBuf = crypto.scryptSync(cleanPin, pinSalt, 64);
-      const expectedBuf = Buffer.from(pinHash, "hex");
-      if (derivedBuf.length !== expectedBuf.length) return false;
-      return crypto.timingSafeEqual(derivedBuf, expectedBuf);
-    } catch {
-      return false;
-    }
-  }
-
-  function verifyUserPin(user: RegisteredAccount | undefined, enteredPin: string): { matched: boolean; upgradedFromPlaintext: boolean } {
-    if (!user) return { matched: false, upgradedFromPlaintext: false };
-    const cleanEntered = String(enteredPin || "").trim();
-    if (!cleanEntered) return { matched: false, upgradedFromPlaintext: false };
-
-    if (user.pinHash && user.pinSalt) {
-      return { matched: verifyPinScrypt(cleanEntered, user.pinHash, user.pinSalt), upgradedFromPlaintext: false };
-    }
-
-    const legacyPlain = String(user.pin || "").trim();
-    if (legacyPlain && legacyPlain.length === cleanEntered.length) {
-      const match = crypto.timingSafeEqual(Buffer.from(legacyPlain, "utf-8"), Buffer.from(cleanEntered, "utf-8"));
-      if (match) {
-        const { pinHash, pinSalt } = hashPinScrypt(cleanEntered);
-        user.pinHash = pinHash;
-        user.pinSalt = pinSalt;
-        delete user.pin;
-        return { matched: true, upgradedFromPlaintext: true };
-      }
-    }
-    return { matched: false, upgradedFromPlaintext: false };
-  }
-
-  function generateSecureRandom4DigitPin(): string {
-    for (;;) {
-      const candidate = String(crypto.randomInt(1000, 10000));
-      if (candidate !== "1234" && candidate !== "0423" && !/^(\d)\1+$/.test(candidate)) {
-        return candidate;
-      }
-    }
-  }
-
-  function sanitizeUserForClient(u: any): any {
-    if (!u || typeof u !== "object") return u;
-    const hasConfiguredPin = Boolean(u.pinHash || u.hasPin || (u.pin && String(u.pin).trim() !== ""));
-    const { pin, pinHash, pinSalt, pin_hash, ...safe } = u;
-    return {
-      ...safe,
-      hasPin: hasConfiguredPin,
-      mustChangePin: Boolean(u.mustChangePin)
-    };
-  }
-
-  function extractDeviceIdFromHttp(req: express.Request, explicitDeviceId?: string): string {
-    return String(
-      explicitDeviceId ||
-      req.body?.device_id ||
-      req.body?.deviceId ||
-      req.headers["x-device-id"] ||
-      req.query?.deviceId ||
-      req.query?.device_id ||
-      ""
-    ).trim();
-  }
-
-  function extractBearerToken(req: express.Request): string {
-    const authHeader = String(req.headers["authorization"] || "").trim();
-    if (/^Bearer\s+/i.test(authHeader)) {
-      return authHeader.replace(/^Bearer\s+/i, "").trim();
-    }
-    return "";
-  }
-
-  function resolveRequestAuthContext(req: express.Request, explicitDeviceId?: string): {
-    deviceId: string;
-    deviceRecord?: AuthorizedDevice;
-    account?: RegisteredAccount;
-    permission: string;
-    employeeId: string;
-    authenticated: boolean;
-  } {
-    const deviceId = extractDeviceIdFromHttp(req, explicitDeviceId);
-    const deviceRecord = deviceId ? authorizedDevicesMap.get(deviceId) : undefined;
-    const token = extractBearerToken(req);
-    const tokenSess = token ? sessionTokensMap.get(token) : undefined;
-
-    if (deviceRecord && (deviceRecord.status === "REVOKED" || deviceRecord.status === "PENDING")) {
-      return {
-        deviceId,
-        deviceRecord,
-        account: undefined,
-        permission: "",
-        employeeId: "",
-        authenticated: false
-      };
-    }
-
-    let boundEmpId = "";
-    if (deviceRecord && deviceRecord.status === "AUTHORIZED") {
-      boundEmpId = String(
-        deviceRecord.employeeId ||
-        (deviceRecord.isPrimaryAdminDevice ? "JPMP-002" : "") ||
-        tokenSess?.employeeId ||
-        ""
-      ).trim().toUpperCase();
-    } else if (tokenSess) {
-      boundEmpId = String(tokenSess.employeeId || "").trim().toUpperCase();
-    }
-
-    const account = boundEmpId
-      ? state.registeredUsers.find(u => (u.employeeId || "").toUpperCase().trim() === boundEmpId)
-      : undefined;
-
-    let permission = "";
-    let authenticated = false;
-    if (account) {
-      authenticated = true;
-      permission = account.status === "INACTIVE"
-        ? "VIEW_ONLY"
-        : String(account.permission || "LIMITED_ACCESS").trim().toUpperCase();
-    } else if (deviceRecord && deviceRecord.status === "AUTHORIZED") {
-      authenticated = true;
-      permission = deviceRecord.isPrimaryAdminDevice
-        ? "FULL_ACCESS"
-        : String(deviceRecord.permission || "LIMITED_ACCESS").trim().toUpperCase();
-    } else if (tokenSess) {
-      authenticated = true;
-      permission = "LIMITED_ACCESS";
-    }
-
-    return {
-      deviceId,
-      deviceRecord,
-      account,
-      permission,
-      employeeId: account?.employeeId || boundEmpId,
-      authenticated
-    };
-  }
-
-  function rejectIfDeviceRevokedHttp(req: express.Request, res: express.Response, explicitDeviceId?: string): boolean {
-    const devId = extractDeviceIdFromHttp(req, explicitDeviceId);
-    if (isDeviceRevoked(devId)) {
-      closeDeviceSockets(devId, "DEVICE_REVOKED");
-      res.status(403).json({ error: "DEVICE_REVOKED" });
-      return true;
-    }
-    return false;
-  }
-
-  function ensureSuperAdminSeed(isFreshInstall: boolean) {
-    const idx = state.registeredUsers.findIndex(
-      u => (u.employeeId || "").toUpperCase().trim() === "JPMP-002"
-    );
-    if (idx === -1) {
-      const seedUser: RegisteredAccount = {
-        ...defaultSuperAdmin,
-        deviceId: primaryDeviceId,
-        authorizedDevices: [primaryDeviceId]
-      };
-      if (isFreshInstall) {
-        const initialPin = generateSecureRandom4DigitPin();
-        const { pinHash, pinSalt } = hashPinScrypt(initialPin);
-        seedUser.pinHash = pinHash;
-        seedUser.pinSalt = pinSalt;
-        seedUser.mustChangePin = true;
-        oneTimeSetupPin = initialPin;
-        logger.info(`[SECURITY SETUP] Generated one-time Super Admin (JPMP-002) initial PIN for fresh install. Must be changed on first login.`);
-      }
-      state.registeredUsers.unshift(seedUser);
-    } else {
-      const existing = state.registeredUsers[idx];
-      const updated: RegisteredAccount = {
-        ...existing,
-        deviceId: existing.deviceId || primaryDeviceId,
-        isPrimaryAdminDevice: true,
-        authorizedDevices: Array.from(new Set([...(existing.authorizedDevices || []), primaryDeviceId]))
-      };
-      const needsInitialPin = (!updated.pinHash && !updated.pin) || (Boolean(updated.mustChangePin) && !updated.pinChangedAt && !oneTimeSetupPin);
-      if (needsInitialPin) {
-        const initialPin = generateSecureRandom4DigitPin();
-        const { pinHash, pinSalt } = hashPinScrypt(initialPin);
-        updated.pinHash = pinHash;
-        updated.pinSalt = pinSalt;
-        delete updated.pin;
-        updated.mustChangePin = true;
-        oneTimeSetupPin = initialPin;
-        logger.info(`[SECURITY SETUP] Generated one-time Super Admin (JPMP-002) initial PIN requiring change on first login.`);
-      }
-      state.registeredUsers[idx] = updated;
-    }
-  }
-
-  function scrubPlaintextPinsInSqliteBackup(targetPath: string) {
-    try {
-      if (!fs.existsSync(targetPath)) return;
-      const bDb = openSqliteDatabase(targetPath);
-      try {
-        const rows = bDb.prepare("SELECT id, data FROM registered_users").all() as Array<{ id: string; data: string }>;
-        const updateStmt = bDb.prepare("UPDATE registered_users SET data = ? WHERE id = ?");
-        for (const row of rows) {
-          try {
-            const parsedUser = JSON.parse(row.data);
-            let changed = false;
-            if (parsedUser.pin && !parsedUser.pinHash) {
-              const { pinHash, pinSalt } = hashPinScrypt(String(parsedUser.pin));
-              parsedUser.pinHash = pinHash;
-              parsedUser.pinSalt = pinSalt;
-              changed = true;
-            }
-            if ("pin" in parsedUser || "pin_hash" in parsedUser) {
-              delete parsedUser.pin;
-              delete parsedUser.pin_hash;
-              changed = true;
-            }
-            if (changed) {
-              updateStmt.run(JSON.stringify(parsedUser), row.id);
-            }
-          } catch {}
-        }
-      } finally {
-        try { bDb.close(); } catch {}
-      }
-    } catch (err) {
-      console.warn("[BACKUP SECURITY] Failed scrubbing plain-text PINs from SQLite backup:", err);
-    }
-  }
-
-  function scrubPlaintextPinsInJsonBackup(targetPath: string) {
-    try {
-      if (!fs.existsSync(targetPath)) return;
-      const parsed = JSON.parse(fs.readFileSync(targetPath, "utf-8"));
-      const scrubArr = (arr: any[]) =>
-        arr.map((u: any) => {
-          if (!u || typeof u !== "object") return u;
-          const copy = { ...u };
-          if (copy.pin && !copy.pinHash) {
-            const { pinHash, pinSalt } = hashPinScrypt(String(copy.pin));
-            copy.pinHash = pinHash;
-            copy.pinSalt = pinSalt;
-          }
-          delete copy.pin;
-          delete copy.pin_hash;
-          return copy;
-        });
-      if (Array.isArray(parsed?.registeredUsers)) {
-        parsed.registeredUsers = scrubArr(parsed.registeredUsers);
-      }
-      if (Array.isArray(parsed?.state?.registeredUsers)) {
-        parsed.state.registeredUsers = scrubArr(parsed.state.registeredUsers);
-      }
-      fs.writeFileSync(targetPath, JSON.stringify(parsed, null, 2), "utf-8");
-    } catch (err) {
-      console.warn("[BACKUP SECURITY] Failed scrubbing plain-text PINs from JSON backup:", err);
-    }
-  }
-
-  const chatMessages: ChatMessage[] = [
-    {
-      id: "sys-init",
-      sender: "System",
-      text: "JUWEI WAREHOUSE MANAGEMENT SYSTEM Central Database & WebSocket Real-time Engine Initialized.",
-      timestamp: new Date().toISOString(),
-      isSystem: true,
-    }
-  ];
-
-  // Helper to normalize every record to conform to mandatory structure:
-  // EVERY RECORD MUST HAVE A UNIQUE ID, VERSION, UPDATED_AT, AND RESET_VERSION.
-  function normalizeRecord(item: any, existingItem?: any): any {
-    const id = String(item.id || existingItem?.id || `REC-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`);
-    const version = existingItem ? (Number(existingItem.version) || 1) + 1 : (Number(item.version) || 1);
-    const updated_at = item.updated_at || new Date().toISOString();
-    const reset_version = Number(item.reset_version) || Number(existingItem?.reset_version) || systemResetVersion;
-
-    return {
-      ...item,
-      id,
-      record_id: item.record_id || id,
-      version,
-      updated_at,
-      reset_version
-    };
-  }
-
-  // Default Operational Roles for warehouse account assignments
-  const DEFAULT_OPERATIONAL_ROLES: string[] = [
-    "SYSTEM ADMINISTRATOR",
-    "WAREHOUSE TEAM LEADER",
-    "WAREHOUSE SUPERVISOR",
-    "WAREHOUSE MANAGER",
-    "WAREHOUSE CLERK",
-    "WAREHOUSE INVENTORY SPECIALIST",
-    "WAREHOUSE PERSONNEL",
-    "INJECTION MATERIAL HANDLER",
-    "PRINTING MATERIAL HANDLER",
-    "HR/ADMIN",
-    "INJECTION (PRODUCTION)",
-    "QUALITY INSPECTOR",
-    "SALES",
-    "PURCHASING",
-    "IMPEX",
-    "LOGISTIC",
-    "PRINTING AND ASSEMBLY (PRODUCTION)",
-    "FINANCE/ACCOUNTING",
-    "INTERNAL AUDITOR"
-  ];
-
-  // Default Receiving and Return Categories
-  const DEFAULT_RECEIVING_CATEGORIES: string[] = [
-    "RESIN/RAW MATERIALS",
-    "INDIRECT BOM",
-    "DIRECT BOM",
-    "CONSUMABLES",
-    "PACKAGING MATERIALS",
-    "WIP (WORK IN PROGRESS)",
-    "FG (FINISHED GOOD)",
-    "OFFICE SUPPLIES"
-  ];
-
-  // Default FIFO Color Coding by Month (12 Months Calendar)
-  const DEFAULT_FIFO_COLORS_BY_MONTH: FifoColorsMap = {
-    1: { name: 'Magenta', colorClass: 'bg-fuchsia-600', textClass: 'text-fuchsia-600', hex: '#c026d3' },
-    2: { name: 'Orange', colorClass: 'bg-orange-500', textClass: 'text-orange-500', hex: '#f97316' },
-    3: { name: 'Dark Green', colorClass: 'bg-emerald-800', textClass: 'text-emerald-800', hex: '#065f46' },
-    4: { name: 'Yellow', colorClass: 'bg-yellow-400', textClass: 'text-yellow-600', hex: '#facc15' },
-    5: { name: 'Navy Blue', colorClass: 'bg-blue-900', textClass: 'text-blue-900', hex: '#1e3a8a' },
-    6: { name: 'Brown', colorClass: 'bg-amber-800', textClass: 'text-amber-800', hex: '#92400e' },
-    7: { name: 'Pink', colorClass: 'bg-pink-400', textClass: 'text-pink-400', hex: '#f472b6' },
-    8: { name: 'Violet', colorClass: 'bg-violet-600', textClass: 'text-violet-600', hex: '#7c3aed' },
-    9: { name: 'Black', colorClass: 'bg-stone-900', textClass: 'text-stone-900', hex: '#1c1917' },
-    10: { name: 'Light Orange', colorClass: 'bg-orange-300', textClass: 'text-orange-400', hex: '#fdba74' },
-    11: { name: 'Grey', colorClass: 'bg-slate-500', textClass: 'text-slate-500', hex: '#64748b' },
-    12: { name: 'Silver', colorClass: 'bg-slate-300', textClass: 'text-slate-400', hex: '#cbd5e1' }
-  };
-
-  const FIFO_KNOWN_COLOR_NAMES = new Set([
-    'Magenta', 'Orange', 'Dark Green', 'Yellow', 'Navy Blue', 'Brown', 'Pink',
-    'Violet', 'Black', 'Light Orange', 'Grey', 'Silver',
-    'Red', 'Crimson', 'Blue', 'Sky Blue', 'Green', 'Lime', 'Teal', 'Cyan',
-    'Purple', 'Indigo', 'Amber', 'Gold', 'White'
-  ].map(s => s.toLowerCase()));
-
-  function getMonthFromDate(dateStr?: string | null): number | null {
-    if (!dateStr) return null;
-    const str = String(dateStr).trim();
-    if (!str) return null;
-    const ymdMatch = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-    if (ymdMatch) {
-      const month = parseInt(ymdMatch[2], 10);
-      if (month >= 1 && month <= 12) return month;
-    }
-    const d = new Date(str.includes('T') ? str : `${str}T00:00:00`);
-    if (!isNaN(d.getTime())) {
-      return d.getMonth() + 1;
-    }
-    return null;
-  }
-
-  function getFifoColorForDate(receivedDate?: string | null, calendar?: Record<number, any>): string {
-    const monthNum = getMonthFromDate(receivedDate);
-    if (!monthNum) return 'Silver';
-    const activeMap = calendar || state?.fifoColorsByMonth || DEFAULT_FIFO_COLORS_BY_MONTH;
-    return activeMap[monthNum]?.name || DEFAULT_FIFO_COLORS_BY_MONTH[monthNum]?.name || 'Silver';
-  }
-
-  function isValidFifoColorName(color: any, calendar?: Record<number, any>): boolean {
-    if (color === undefined || color === null) return false;
-    const s = String(color).trim();
-    if (!s || /^\d+$/.test(s) || s.toLowerCase() === 'n/a' || s.toLowerCase() === 'undefined' || s.toLowerCase() === 'null') {
-      return false;
-    }
-    if (FIFO_KNOWN_COLOR_NAMES.has(s.toLowerCase())) return true;
-    const activeMap = calendar || state?.fifoColorsByMonth || DEFAULT_FIFO_COLORS_BY_MONTH;
-    return Object.values(activeMap).some((m: any) => m?.name?.toLowerCase() === s.toLowerCase());
-  }
-
-  const STARTER_BARCODE_PRESETS: MasterRegistryItem[] = [
-    {
-      id: 'REG-BCP-RESIN-001',
-      type: 'BARCODE_PRESET',
-      code: 'SAMPLE-RESIN-001',
-      name: 'PC/ABS CYCOLOY RESIN PELLETS',
-      description: 'High-impact flame retardant engineering plastic resin pellets for injection molding',
-      category: 'RESIN/RAW MATERIALS',
-      unit: 'KGS',
-      vendorSupplier: 'SABIC INNOVATIVE PLASTICS',
-      location: 'RAW-ZONE-A1',
-      presetSource: 'EXTERNAL',
-      status: 'ACTIVE',
-      dateRegistered: '2026-10-02'
-    },
-    {
-      id: 'REG-BCP-IND-001',
-      type: 'BARCODE_PRESET',
-      code: 'SAMPLE-IND-001',
-      name: 'THERMAL CONDUCTIVE SILICONE GREASE',
-      description: 'High-efficiency thermal interface compound for heatsink and PCB assembly',
-      category: 'INDIRECT BOM',
-      unit: 'TUBES',
-      vendorSupplier: 'SHIN-ETSU CHEMICAL CO.',
-      location: 'CHEM-SHELF-B2',
-      presetSource: 'EXTERNAL',
-      status: 'ACTIVE',
-      dateRegistered: '2026-10-02'
-    },
-    {
-      id: 'REG-BCP-DIR-001',
-      type: 'BARCODE_PRESET',
-      code: 'SAMPLE-DIR-001',
-      name: 'M3X8MM STAINLESS STEEL MACHINE SCREW',
-      description: 'Phillips pan-head SUS304 precision fastener for chassis sub-assembly',
-      category: 'DIRECT BOM',
-      unit: 'PCS',
-      vendorSupplier: 'FASTENAL INDUSTRIAL SUPPLIES',
-      location: 'FAST-BIN-C3',
-      presetSource: 'EXTERNAL',
-      status: 'ACTIVE',
-      dateRegistered: '2026-10-02'
-    },
-    {
-      id: 'REG-BCP-CON-001',
-      type: 'BARCODE_PRESET',
-      code: 'SAMPLE-CON-001',
-      name: 'ESD ANTISTATIC CLEANROOM WIPES',
-      description: '9x9 inch lint-free polyester microfiber wipes for optical and SMT cleaning',
-      category: 'CONSUMABLES',
-      unit: 'PACKS',
-      vendorSupplier: 'CLEANROOM PRO DYNAMICS',
-      location: 'CONS-RACK-D1',
-      presetSource: 'EXTERNAL',
-      status: 'ACTIVE',
-      dateRegistered: '2026-10-02'
-    },
-    {
-      id: 'REG-BCP-PKG-001',
-      type: 'BARCODE_PRESET',
-      code: 'SAMPLE-PKG-001',
-      name: 'CORRUGATED SHIPPER CARTON 400X300X250',
-      description: 'Double-wall heavy duty B/C flute export shipping carton with preprinted handling symbols',
-      category: 'PACKAGING MATERIALS',
-      unit: 'PCS',
-      vendorSupplier: 'INTERNATIONAL PACKAGING CORP',
-      location: 'PKG-MEZZ-E4',
-      presetSource: 'EXTERNAL',
-      status: 'ACTIVE',
-      dateRegistered: '2026-10-02'
-    },
-    {
-      id: 'REG-BCP-WIP-001',
-      type: 'BARCODE_PRESET',
-      code: 'SAMPLE-WIP-001',
-      name: 'MOLDED FRONT HOUSING SUB-ASSEMBLY',
-      description: 'Precision injection molded bezel frame awaiting ultrasonic brass insert staking',
-      category: 'WIP (WORK IN PROGRESS)',
-      unit: 'PCS',
-      vendorSupplier: 'PLASTICS INJECTION LINE 2',
-      location: 'WIP-STAGE-F1',
-      presetSource: 'INTERNAL',
-      status: 'ACTIVE',
-      dateRegistered: '2026-10-02'
-    },
-    {
-      id: 'REG-BCP-FG-001',
-      type: 'BARCODE_PRESET',
-      code: 'SAMPLE-FG-001',
-      name: 'SMART IOT SENSOR NODE CONTROLLER',
-      description: 'Fully assembled, calibrated and QC approved wireless industrial sensor unit',
-      category: 'FG (FINISHED GOOD)',
-      unit: 'PCS',
-      vendorSupplier: 'FINAL ASSEMBLY DEPT 1',
-      location: 'FG-AISLE-G2',
-      presetSource: 'INTERNAL',
-      status: 'ACTIVE',
-      dateRegistered: '2026-10-02'
-    },
-    {
-      id: 'REG-BCP-OFF-001',
-      type: 'BARCODE_PRESET',
-      code: 'SAMPLE-OFF-001',
-      name: 'DIRECT THERMAL BARCODE LABELS 4X6',
-      description: 'Standard perforated warehouse shipping label rolls for Zebra industrial printers',
-      category: 'OFFICE SUPPLIES',
-      unit: 'ROLLS',
-      vendorSupplier: 'OFFICE SUPPLY DEPOT PH',
-      location: 'ADMIN-CAB-H1',
-      presetSource: 'EXTERNAL',
-      status: 'ACTIVE',
-      dateRegistered: '2026-10-02'
-    }
-  ];
-
-  // Central Database In-Memory Collections (Single Source of Truth)
-  const state: CentralDatabaseState = {
-    stocks: INITIAL_STOCK.map((item: any) => normalizeRecord(item)),
-    receiving: INITIAL_RECEIVING.map((item: any) => normalizeRecord(item)),
-    returns: INITIAL_RETURNS.map((item: any) => normalizeRecord(item)),
-    recycling: INITIAL_RECYCLING.map((item: any) => normalizeRecord(item)),
-    issuances: INITIAL_ISSUANCE.map((item: any) => normalizeRecord(item)),
-    deliveries: INITIAL_DELIVERIES.map((item: any) => normalizeRecord(item)),
-    envLogs: INITIAL_ENV_LOGS.map((item: any) => normalizeRecord(item)),
-    forkliftChecks: INITIAL_FORKLIFT_CHECKS.map((item: any) => normalizeRecord(item)),
-    registries: [...STARTER_BARCODE_PRESETS],
-    registeredUsers: [{ ...defaultSuperAdmin }],
-    stockMovements: [],
-    operationalRoles: [...DEFAULT_OPERATIONAL_ROLES],
-    receivingCategories: [...DEFAULT_RECEIVING_CATEGORIES],
-    fifoColorsByMonth: { ...DEFAULT_FIFO_COLORS_BY_MONTH },
-  };
-
-  /**
-   * Helper to build complete database payload from authoritative in-memory state
-   */
-  function getDbPayload(): any {
-    return {
-      installationId,
-      primaryDeviceId,
-      systemResetVersion,
-      systemResetTimestamp,
-      systemResetId,
-      systemResetBy,
-      stateRevision,
-      state,
-      stocks: state.stocks || [],
-      receiving: state.receiving || [],
-      returns: state.returns || [],
-      recycling: state.recycling || [],
-      issuances: state.issuances || [],
-      deliveries: state.deliveries || [],
-      envLogs: state.envLogs || [],
-      forkliftChecks: state.forkliftChecks || [],
-      registries: state.registries || [],
-      registeredUsers: state.registeredUsers || [],
-      stockMovements: state.stockMovements || [],
-      operationalRoles: state.operationalRoles || [...DEFAULT_OPERATIONAL_ROLES],
-      receivingCategories: state.receivingCategories || [...DEFAULT_RECEIVING_CATEGORIES],
-      fifoColorsByMonth: state.fifoColorsByMonth || { ...DEFAULT_FIFO_COLORS_BY_MONTH },
-      authorizedDevices: Array.from(authorizedDevicesMap.values()),
-      deletedRecordTombstones: Array.from(deletedRecordTombstones),
-      deletedUserTombstones: Array.from(deletedUserTombstones),
-      chatMessages: chatMessages.slice(-200)
-    };
-  }
-
-  /**
-   * Authoritative Disk Persistence: Synchronous Commit to SQLite
-   * DATABASE COMMIT MUST ALWAYS HAPPEN BEFORE A WEBSOCKET EVENT IS BROADCAST.
-   */
-  function commitDatabase(): boolean {
-    try {
-      const payload = getDbPayload();
-      return commitToSqlite(payload);
-    } catch (err) {
-      console.error("CRITICAL: Failed SQLite database commit to disk:", err);
-      return false;
-    }
-  }
-
-  // =========================================================================
-  // AUTOMATED DATABASE BACKUPS & RECOVERY SUBSYSTEM (JUWEI_DATA_DIR / backups)
-  // 1. Backs up database to backups folder every 1 hour & once on server startup.
-  // 2. Format: central-database-YYYY-MM-DD-HHmm.json (e.g. central-database-2026-09-30-1400.json).
-  // 3. Permanent retention: keeps EVERY backup, with NO cap on count and NO age limit.
-  // 4. Non-blocking async file copying ensuring zero disruption to normal app operations.
-  // 5. Automatic recovery on server startup from most recent backup if live file is missing/corrupted.
-  // 6. Logs every backup created, restore performed, and startup load/recovery action.
-  // =========================================================================
-
-  const BACKUPS_DIR = serverConfig.backupsDir;
-
-  const BACKUP_AUDIT_LOG_FILE = getStorageFilePath("backup-audit-log.json");
-
-  let backupAuditLogs: BackupAuditEntry[] = [];
-  try {
-    if (fs.existsSync(BACKUP_AUDIT_LOG_FILE)) {
-      const raw = fs.readFileSync(BACKUP_AUDIT_LOG_FILE, "utf-8");
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) backupAuditLogs = parsed;
-    }
-  } catch (e) {
-    backupAuditLogs = [];
-  }
-
-  function logBackupAudit(
-    action: "BACKUP_CREATED" | "DATABASE_RESTORED" | "PRUNE",
-    filename: string,
-    author: string,
-    details?: string,
-    fileSizeBytes?: number
-  ) {
-    const entry: BackupAuditEntry = {
-      id: `BA-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      action,
-      filename,
-      author,
-      timestamp: new Date().toISOString(),
-      details,
-      fileSizeBytes
-    };
-    backupAuditLogs.unshift(entry);
-    if (backupAuditLogs.length > 100) {
-      backupAuditLogs = backupAuditLogs.slice(0, 100);
-    }
-    try {
-      fs.writeFileSync(BACKUP_AUDIT_LOG_FILE, JSON.stringify(backupAuditLogs, null, 2), "utf-8");
-    } catch (e) {}
-
-    if (action === "BACKUP_CREATED") {
-      logger.info(`[DATABASE BACKUP] Created backup '${filename}' (${fileSizeBytes || 0} bytes) by ${author}. Reason: ${details || 'N/A'}`);
-    } else if (action === "DATABASE_RESTORED") {
-      logger.info(`[DATABASE RESTORE] OVERWROTE live database with backup '${filename}' by ${author}. Reason: ${details || 'N/A'}`);
-    }
-  }
-
-  // =========================================================================
-  // PIN CHANGE AUDIT LOGGING:
-  // Tracks every single operator PIN modification, reset, and compromised
-  // status resolution. Never silently resets or falls back.
-  // =========================================================================
-  const PIN_AUDIT_LOG_FILE = getStorageFilePath("pin-audit-log.json");
-
-  let pinAuditLogs: PinAuditEntry[] = [];
-  try {
-    if (fs.existsSync(PIN_AUDIT_LOG_FILE)) {
-      const raw = fs.readFileSync(PIN_AUDIT_LOG_FILE, "utf-8");
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) pinAuditLogs = parsed;
-    }
-  } catch (e) {
-    pinAuditLogs = [];
-  }
-
-  function logPinAudit(
-    action: "PIN_CHANGED" | "PIN_RESET" | "COMPROMISED_PIN_RESOLVED",
-    targetEmployeeId: string,
-    targetUsername: string,
-    changedBy: string,
-    changedByEmployeeId: string,
-    reason?: string,
-    previousPinWasCompromised: boolean = false,
-    ip?: string
-  ) {
-    const entry: PinAuditEntry = {
-      id: `PIN-LOG-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      action,
-      targetEmployeeId,
-      targetUsername,
-      changedBy,
-      changedByEmployeeId,
-      timestamp: new Date().toISOString(),
-      reason: reason || 'Explicit Super Admin PIN Update',
-      previousPinWasCompromised,
-      ip: ip || '127.0.0.1'
-    };
-    pinAuditLogs.unshift(entry);
-    if (pinAuditLogs.length > 500) {
-      pinAuditLogs = pinAuditLogs.slice(0, 500);
-    }
-    try {
-      fs.writeFileSync(PIN_AUDIT_LOG_FILE, JSON.stringify(pinAuditLogs, null, 2), "utf-8");
-    } catch (err) {
-      console.error("[PIN-AUDIT-LOG] Failed to persist pin audit log to disk:", err);
-    }
-    logger.info(`[PIN-AUDIT-LOG] ${action} | Target: ${targetEmployeeId} (${targetUsername}) | By: ${changedByEmployeeId} (${changedBy}) | Reason: ${entry.reason} | Time: ${entry.timestamp}`);
-  }
-
-  // =========================================================================
-  // UNIFIED SUPER ADMIN AUDIT TRAIL (who changed what and when)
-  // Persisted to audit-trail.json in JUWEI_DATA_DIR (capped at 5,000 entries).
-  // =========================================================================
-  const AUDIT_TRAIL_FILE = getStorageFilePath("audit-trail.json");
-  const MAX_AUDIT_TRAIL_ENTRIES = 5000;
-
-  let auditTrailLogs: AuditTrailEntry[] = [];
-  let auditTrailFileExistsOnBoot = false;
-  try {
-    if (fs.existsSync(AUDIT_TRAIL_FILE)) {
-      auditTrailFileExistsOnBoot = true;
-      const raw = fs.readFileSync(AUDIT_TRAIL_FILE, "utf-8");
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) auditTrailLogs = parsed;
-    }
-  } catch (e) {
-    auditTrailLogs = [];
-  }
-
-  function persistAuditTrailLogs() {
-    try {
-      fs.writeFileSync(AUDIT_TRAIL_FILE, JSON.stringify(auditTrailLogs, null, 2), "utf-8");
-    } catch (err) {
-      console.error("[AUDIT-TRAIL] Failed to persist audit trail to disk:", err);
-    }
-  }
-
-  const AUDIT_IGNORED_FIELDS = new Set<string>([
-    'updated_at',
-    'updated_by',
-    'created_at',
-    'created_by',
-    'version',
-    'reset_version',
-    'user_id',
-    'device_id',
-    'record_id',
-    'pin',
-    'pinHash',
-    'pinSalt',
-    'pin_hash'
-  ]);
-
-  function formatAuditValue(val: unknown): string {
-    if (val === undefined) return 'unset';
-    if (val === null) return 'null';
-    if (typeof val === 'string') {
-      const s = val.trim();
-      return s.length > 40 ? `${s.slice(0, 37)}...` : s;
-    }
-    if (typeof val === 'number' || typeof val === 'boolean') return String(val);
-    try {
-      const json = JSON.stringify(val);
-      return json.length > 50 ? `${json.slice(0, 47)}...` : json;
-    } catch {
-      return '[object]';
-    }
-  }
-
-  function getAuditRecordLabel(recordType: string, record: any): string {
-    if (!record || typeof record !== 'object') return '';
-    const parts: string[] = [];
-    if (record.partCode) parts.push(String(record.partCode));
-    if (record.lotNumber) parts.push(`Lot ${record.lotNumber}`);
-    if (record.gatePassNumber) parts.push(`GP ${record.gatePassNumber}`);
-    if (record.requisitionNumber) parts.push(`Req ${record.requisitionNumber}`);
-    if (record.employeeId) parts.push(String(record.employeeId));
-    if (record.username) parts.push(String(record.username));
-    if (record.code && !record.partCode) parts.push(String(record.code));
-    if (record.name && !record.username) parts.push(String(record.name));
-    if (record.zone) parts.push(String(record.zone));
-    if (record.forkliftId) parts.push(String(record.forkliftId));
-    if (record.description && parts.length < 2) {
-      const desc = String(record.description).trim();
-      if (desc) parts.push(desc.length > 35 ? `${desc.slice(0, 32)}...` : desc);
-    }
-    return parts.join(' · ') || String(record.id || record.record_id || recordType);
-  }
-
-  function describeRecordDiff(before: any, after: any): string {
-    if (!before || !after || typeof before !== 'object' || typeof after !== 'object') return '';
-    const keys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]));
-    const diffs: string[] = [];
-    for (const k of keys) {
-      if (AUDIT_IGNORED_FIELDS.has(k)) continue;
-      const oldVal = before[k];
-      const newVal = after[k];
-      let same = oldVal === newVal;
-      if (!same && typeof oldVal === 'object' && typeof newVal === 'object' && oldVal !== null && newVal !== null) {
-        try {
-          same = JSON.stringify(oldVal) === JSON.stringify(newVal);
-        } catch {
-          same = false;
-        }
-      }
-      if (!same) {
-        diffs.push(`${k}: ${formatAuditValue(oldVal)} -> ${formatAuditValue(newVal)}`);
-      }
-      if (diffs.length >= 6) break;
-    }
-    return diffs.join(', ');
-  }
-
-  function recordAuditTrail(entry: {
-    timestamp?: string;
-    actor?: string;
-    actorId?: string;
-    action: string;
-    recordType: string;
-    recordId: string;
-    summary: string;
-    details?: string;
-    deviceId?: string;
-  }) {
-    const cleanActor = String(entry.actor || entry.actorId || 'SYSTEM').trim() || 'SYSTEM';
-    const cleanActorId = String(entry.actorId || cleanActor).trim() || 'SYSTEM';
-    const cleanType = String(entry.recordType || 'system').trim();
-    const cleanId = String(entry.recordId || 'N/A').trim();
-
-    const item: AuditTrailEntry = {
-      id: `AUD-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      timestamp: entry.timestamp || new Date().toISOString(),
-      actor: cleanActor,
-      actorId: cleanActorId,
-      action: String(entry.action || 'UPDATE').trim().toUpperCase(),
-      recordType: cleanType,
-      recordId: cleanId,
-      summary: String(entry.summary || `${entry.action} ${cleanType} ${cleanId}`).trim(),
-      ...(entry.details ? { details: String(entry.details).trim() } : {}),
-      ...(entry.deviceId ? { deviceId: String(entry.deviceId).trim() } : {})
-    };
-
-    auditTrailLogs.unshift(item);
-    if (auditTrailLogs.length > MAX_AUDIT_TRAIL_ENTRIES) {
-      auditTrailLogs = auditTrailLogs.slice(0, MAX_AUDIT_TRAIL_ENTRIES);
-    }
-    persistAuditTrailLogs();
-  }
-
-  function ensureInitialAuditTrailSeed() {
-    if (auditTrailFileExistsOnBoot && auditTrailLogs.length > 0) return;
-
-    const seeded: AuditTrailEntry[] = [];
-    for (const p of pinAuditLogs) {
-      seeded.push({
-        id: p.id || `AUD-PIN-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        timestamp: p.timestamp || new Date().toISOString(),
-        actor: p.changedBy || p.changedByEmployeeId || 'Super Administrator',
-        actorId: p.changedByEmployeeId || 'JPMP-002',
-        action: p.action || 'PIN_CHANGE',
-        recordType: 'registeredUsers',
-        recordId: p.targetEmployeeId,
-        summary: `${p.action} for ${p.targetUsername} (${p.targetEmployeeId})`,
-        details: p.reason || 'PIN audit entry'
-      });
-    }
-
-    for (const b of backupAuditLogs) {
-      seeded.push({
-        id: b.id || `AUD-BAK-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        timestamp: b.timestamp || new Date().toISOString(),
-        actor: b.author || 'SYSTEM',
-        actorId: b.author || 'SYSTEM',
-        action: b.action || 'BACKUP_CREATED',
-        recordType: 'system',
-        recordId: b.filename || 'database',
-        summary: `${b.action}: ${b.filename}`,
-        details: b.details
-      });
-    }
-
-    const recordCollections = [
-      'stocks',
-      'receiving',
-      'returns',
-      'recycling',
-      'issuances',
-      'deliveries',
-      'envLogs',
-      'forkliftChecks',
-      'registries',
-      'registeredUsers'
-    ];
-    for (const col of recordCollections) {
-      const list: any[] = Array.isArray((state as any)[col]) ? (state as any)[col] : [];
-      for (const rec of list) {
-        if (!rec || typeof rec !== 'object') continue;
-        const ts = rec.updated_at || rec.created_at || rec.registeredAt || rec.date;
-        if (!ts) continue;
-        const isoTs = /^\d{4}-\d{2}-\d{2}$/.test(String(ts)) ? `${ts}T00:00:00.000Z` : String(ts);
-        const actorName = rec.updated_by || rec.created_by || rec.registeredBy || 'System';
-        const recId = String(rec.id || rec.record_id || rec.employeeId || 'N/A');
-        const label = getAuditRecordLabel(col, rec);
-        seeded.push({
-          id: `AUD-INIT-${col}-${recId}`,
-          timestamp: isoTs,
-          actor: String(actorName),
-          actorId: String(rec.user_id || actorName),
-          action: Number(rec.version) > 1 ? 'UPDATE' : 'CREATE',
-          recordType: col,
-          recordId: recId,
-          summary: `${Number(rec.version) > 1 ? 'Updated' : 'Created'} ${col}${label ? ` [${label}]` : ''}`,
-          deviceId: rec.device_id
-        });
-      }
-    }
-
-    if (Array.isArray(state.stockMovements)) {
-      for (const m of state.stockMovements.slice(0, 200) as any[]) {
-        seeded.push({
-          id: `AUD-MOV-${m.id || Math.random().toString(36).substring(2, 7)}`,
-          timestamp: m.created_at || m.timestamp || new Date().toISOString(),
-          actor: m.user_name || m.userName || 'Operator',
-          actorId: m.user_id || m.user_name || 'OPERATOR',
-          action: 'STOCK_MOVEMENT',
-          recordType: 'stockMovements',
-          recordId: String(m.id || m.product_id || 'N/A'),
-          summary: `${m.type || 'MOVEMENT'} ${m.product_sku || m.product_id || ''} (${Number(m.quantity) > 0 ? `+${m.quantity}` : m.quantity})`,
-          details: m.notes || undefined,
-          deviceId: m.device_id
-        });
-      }
-    }
-
-    seeded.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
-    auditTrailLogs = seeded.slice(0, MAX_AUDIT_TRAIL_ENTRIES);
-    persistAuditTrailLogs();
-  }
-
-  function formatBackupTimestamp(date: Date = new Date()): string {
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const yyyy = date.getFullYear();
-    const mm = pad(date.getMonth() + 1);
-    const dd = pad(date.getDate());
-    const hh = pad(date.getHours());
-    const min = pad(date.getMinutes());
-    return `${yyyy}-${mm}-${dd}-${hh}${min}`;
-  }
-
-  function getNextBackupFilename(date: Date = new Date()): string {
-    const base = `central-database-${formatBackupTimestamp(date)}`;
-    let filename = `${base}.sqlite`;
-    let counter = 1;
-    while (fs.existsSync(path.join(BACKUPS_DIR, filename))) {
-      filename = `${base}-${counter}.sqlite`;
-      counter++;
-    }
-    return filename;
-  }
-
-  // Lists all existing backups sorted newest first. Accepts both .sqlite and legacy .json backups.
-  function getAllBackupRecords(): BackupItemRecord[] {
-    try {
-      if (!fs.existsSync(BACKUPS_DIR)) return [];
-      const entries = fs.readdirSync(BACKUPS_DIR, { withFileTypes: true });
-      const backups: BackupItemRecord[] = entries
-        .filter(e => e.isFile() && e.name.startsWith("central-database-") && (e.name.endsWith(".sqlite") || e.name.endsWith(".json")))
-        .map(e => {
-          const filePath = path.join(BACKUPS_DIR, e.name);
-          let mtime = 0;
-          let birthtime = 0;
-          let size = 0;
-          try {
-            const stat = fs.statSync(filePath);
-            mtime = stat.mtimeMs;
-            birthtime = stat.birthtimeMs || stat.mtimeMs;
-            size = stat.size;
-          } catch (stErr) {}
-          return {
-            filename: e.name,
-            filePath,
-            sizeBytes: size,
-            sizeFormatted: size > 1024 * 1024 ? `${(size / (1024 * 1024)).toFixed(2)} MB` : `${(size / 1024).toFixed(1)} KB`,
-            createdAt: new Date(birthtime || mtime).toISOString(),
-            mtime
-          };
-        });
-
-      // Sort newest first
-      backups.sort((a, b) => b.mtime - a.mtime || b.filename.localeCompare(a.filename));
-      return backups;
-    } catch (err: any) {
-      console.error("[DATABASE BACKUP] Error reading backups list:", err);
-      return [];
-    }
-  }
-
-  // Non-blocking asynchronous backup creator using SQLite VACUUM INTO
-  let isBackupInProgress = false;
-  async function createDatabaseBackup(reason: string = "SCHEDULED", author: string = "SYSTEM"): Promise<{ success: boolean; filename?: string; error?: string }> {
-    if (isBackupInProgress) {
-      logger.info(`[DATABASE BACKUP] Backup already in progress, skipping concurrent trigger (${reason})`);
-      return { success: false, error: "A backup is already in progress" };
-    }
-    isBackupInProgress = true;
-    try {
-      if (!fs.existsSync(BACKUPS_DIR)) {
-        await fs.promises.mkdir(BACKUPS_DIR, { recursive: true });
-      }
-
-      // Ensure disk database is current with memory state
-      commitDatabase();
-
-      if (!fs.existsSync(DATA_FILE_SQLITE)) {
-        console.warn("[DATABASE BACKUP] Cannot create backup: SQLite database file does not exist on disk.");
-        return { success: false, error: "Database file does not exist on disk" };
-      }
-
-      const filename = getNextBackupFilename();
-      const targetPath = path.join(BACKUPS_DIR, filename);
-
-      // Consistent atomic snapshot via VACUUM INTO, with plain-text PINs scrubbed
-      vacuumInto(targetPath);
-      scrubPlaintextPinsInSqliteBackup(targetPath);
-      const stat = await fs.promises.stat(targetPath);
-
-      logBackupAudit("BACKUP_CREATED", filename, author, reason, stat.size);
-      return { success: true, filename };
-    } catch (err: any) {
-      console.error("[DATABASE BACKUP] Failed to create database backup:", err);
-      return { success: false, error: err?.message || String(err) };
-    } finally {
-      isBackupInProgress = false;
-    }
-  }
-
-  // Apply database object payload into in-memory state
-  function applyDatabaseObject(parsed: any): boolean {
-    try {
-      if (!parsed || typeof parsed !== 'object') return false;
-
-      if (parsed.installationId) installationId = String(parsed.installationId);
-      if (parsed.primaryDeviceId) primaryDeviceId = String(parsed.primaryDeviceId);
-      if (parsed.systemResetVersion) systemResetVersion = Number(parsed.systemResetVersion) || 1;
-      if (parsed.systemResetTimestamp) systemResetTimestamp = String(parsed.systemResetTimestamp);
-      if (parsed.systemResetId) systemResetId = String(parsed.systemResetId);
-      if (parsed.systemResetBy) systemResetBy = String(parsed.systemResetBy);
-      if (parsed.stateRevision) stateRevision = Number(parsed.stateRevision) || 1;
-
-      if (Array.isArray(parsed.authorizedDevices)) {
-        authorizedDevicesMap.clear();
-        parsed.authorizedDevices.forEach((dev: AuthorizedDevice) => {
-          if (dev && dev.deviceId) authorizedDevicesMap.set(dev.deviceId, dev);
-        });
-      }
-
-      if (parsed.state && typeof parsed.state === "object") {
-        Object.keys(parsed.state).forEach((key) => {
-          if (key in state && Array.isArray(parsed.state[key])) {
-            if (key === 'operationalRoles') {
-              state.operationalRoles = Array.from(new Set<string>(parsed.state[key].map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
-            } else if (key === 'receivingCategories') {
-              state.receivingCategories = Array.from(new Set<string>(parsed.state[key].map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
-            } else if (key === 'fifoColorsByMonth') {
-              if (parsed.state[key] && typeof parsed.state[key] === 'object') {
-                state.fifoColorsByMonth = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...parsed.state[key] };
-              }
-            } else {
-              // Ensure all loaded records have mandatory fields
-              (state as any)[key] = parsed.state[key].map((rec: any) => normalizeRecord(rec));
-            }
-          } else if (key === 'fifoColorsByMonth' && parsed.state && parsed.state[key] && typeof parsed.state[key] === 'object') {
-            state.fifoColorsByMonth = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...parsed.state[key] };
-          }
-        });
-      }
-      for (const key of Object.keys(state)) {
-        if (key === 'operationalRoles') {
-          if (Array.isArray(parsed.operationalRoles) && parsed.operationalRoles.length > 0) {
-            state.operationalRoles = Array.from(new Set<string>(parsed.operationalRoles.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
-          }
-        } else if (key === 'receivingCategories') {
-          if (Array.isArray(parsed.receivingCategories) && parsed.receivingCategories.length > 0) {
-            state.receivingCategories = Array.from(new Set<string>(parsed.receivingCategories.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
-          }
-        } else if (key === 'fifoColorsByMonth') {
-          if (parsed.fifoColorsByMonth && typeof parsed.fifoColorsByMonth === 'object') {
-            state.fifoColorsByMonth = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...parsed.fifoColorsByMonth };
-          }
-        } else if (Array.isArray(parsed[key]) && (!(parsed.state && key in parsed.state))) {
-          (state as any)[key] = parsed[key].map((rec: any) => normalizeRecord(rec));
-        }
-      }
-      if (!Array.isArray(state.operationalRoles) || state.operationalRoles.length === 0) {
-        state.operationalRoles = [...DEFAULT_OPERATIONAL_ROLES];
-      }
-      if (!Array.isArray(state.receivingCategories) || state.receivingCategories.length === 0) {
-        state.receivingCategories = [...DEFAULT_RECEIVING_CATEGORIES];
-      }
-      if (!state.fifoColorsByMonth || typeof state.fifoColorsByMonth !== 'object' || Object.keys(state.fifoColorsByMonth).length === 0) {
-        state.fifoColorsByMonth = { ...DEFAULT_FIFO_COLORS_BY_MONTH };
-      }
-      if (!Array.isArray(state.registries) || state.registries.length === 0) {
-        state.registries = [...STARTER_BARCODE_PRESETS];
-      } else {
-        for (const preset of STARTER_BARCODE_PRESETS) {
-          if (!state.registries.some((r: any) => (r.code || '').toUpperCase() === preset.code.toUpperCase())) {
-            state.registries.push(preset);
-          }
-        }
-      }
-
-      if (Array.isArray(parsed.deletedRecordTombstones)) {
-        parsed.deletedRecordTombstones.forEach((id: string) => markRecordTombstone(id));
-      }
-      if (Array.isArray(parsed.deletedUserTombstones)) {
-        parsed.deletedUserTombstones.forEach((empId: string) => markUserTombstone(empId));
-      }
-      if (Array.isArray(parsed.chatMessages)) {
-        chatMessages.length = 0;
-        chatMessages.push(...parsed.chatMessages.slice(-200));
-      }
-
-      // Ensure Super Administrator JPMP-002 is registered in memory (never seed static default PIN)
-      ensureSuperAdminSeed(false);
-
-      // Security Audit: Flag any account currently with '1234' as compromised
-      let compromisedAccountsCount = 0;
-      state.registeredUsers.forEach(u => {
-        const cleanPin = String(u.pin || '').trim();
-        if (cleanPin === '1234' || verifyUserPin(u, '1234').matched) {
-          u.isPinCompromised = true;
-          compromisedAccountsCount++;
-          console.warn(`[SECURITY ALERT] Operator ${u.employeeId} (${u.username}) has compromised PIN '1234'. Marked as COMPROMISED.`);
-        }
-      });
-      if (compromisedAccountsCount > 0) {
-        console.warn(`[SECURITY AUDIT] ${compromisedAccountsCount} operator account(s) have compromised default PIN '1234'. Super Admin PIN reset required.`);
-      }
-
-      return true;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  // Load persisted state from disk on server initialization with automatic backup recovery
-  function loadDatabaseFromDisk() {
-    const timestampStr = formatBackupTimestamp(new Date());
-
-    // a) Load the live SQLite DB if it is valid.
-    if (fs.existsSync(DATA_FILE_SQLITE)) {
-      const validation = validateDatabaseFile(DATA_FILE_SQLITE);
-      if (validation.valid && validation.data) {
-        initSqliteStore(DATA_FILE_SQLITE);
-        applyDatabaseObject(validation.data);
-        if (oneTimeSetupPin) {
-          commitDatabase();
-        }
-        logger.info("Live database loaded normally");
-        return;
-      }
-
-      // b) If it is corrupt, move it aside as central-database.sqlite.corrupt-<timestamp> (never delete it).
-      console.warn(`WARNING: Live SQLite database '${DATA_FILE_SQLITE}' is corrupt or unreadable (${validation.error || 'validation failed'}). Moving aside as corrupt...`);
-      try {
-        const corruptTarget = `${DATA_FILE_SQLITE}.corrupt-${timestampStr}`;
-        fs.renameSync(DATA_FILE_SQLITE, corruptTarget);
-        logger.info(`[CORRUPT DB] Moved corrupt database aside to: ${corruptTarget}`);
-        if (fs.existsSync(`${DATA_FILE_SQLITE}-wal`)) {
-          try { fs.renameSync(`${DATA_FILE_SQLITE}-wal`, `${DATA_FILE_SQLITE}-wal.corrupt-${timestampStr}`); } catch (e) {}
-        }
-        if (fs.existsSync(`${DATA_FILE_SQLITE}-shm`)) {
-          try { fs.renameSync(`${DATA_FILE_SQLITE}-shm`, `${DATA_FILE_SQLITE}-shm.corrupt-${timestampStr}`); } catch (e) {}
-        }
-      } catch (moveErr) {
-        console.error("Failed to move corrupt SQLite file aside:", moveErr);
-      }
-    }
-
-    // c) If no valid SQLite DB exists but central-database.json exists, import it into SQLite and verify the copy matches.
-    // Only then rename the original to central-database.json.migrated-<timestamp> (never delete it).
-    if (fs.existsSync(DATA_FILE_JSON)) {
-      try {
-        const rawJson = fs.readFileSync(DATA_FILE_JSON, "utf-8");
-        if (rawJson && rawJson.trim().length > 0) {
-          const parsed = JSON.parse(rawJson);
-          if (applyDatabaseObject(parsed)) {
-            // Initialize fresh SQLite store
-            initSqliteStore(DATA_FILE_SQLITE);
-            // Save in-memory state to SQLite
-            commitDatabase();
-
-            // Verify the copy matches
-            const loadedFromSqlite = readDatabaseFromSqlite();
-            const stocksMatch = (loadedFromSqlite.state?.stocks?.length || 0) === (state.stocks?.length || 0);
-            const receivingMatch = (loadedFromSqlite.state?.receiving?.length || 0) === (state.receiving?.length || 0);
-            const usersMatch = (loadedFromSqlite.state?.registeredUsers?.length || 0) === (state.registeredUsers?.length || 0);
-
-            if (stocksMatch && receivingMatch && usersMatch) {
-              const migratedTarget = `${DATA_FILE_JSON}.migrated-${timestampStr}`;
-              fs.renameSync(DATA_FILE_JSON, migratedTarget);
-              logger.info(`[MIGRATION SUCCESS] Legacy JSON database successfully migrated to SQLite (${DATA_FILE_SQLITE}). Original renamed to: ${migratedTarget}`);
-              return;
-            } else {
-              console.error("[MIGRATION WARNING] SQLite verification did not match in-memory state after importing legacy JSON!");
-            }
-          }
-        }
-      } catch (jsonErr) {
-        console.error("[MIGRATION ERROR] Failed to import legacy central-database.json:", jsonErr);
-      }
-    }
-
-    // d) Otherwise recover from the newest VALID backup, skipping empty or corrupt files. Backups can be .sqlite or legacy .json.
-    let autoRestoredBackupFilename: string | null = null;
-    try {
-      if (fs.existsSync(BACKUPS_DIR)) {
-        const entries = fs.readdirSync(BACKUPS_DIR, { withFileTypes: true });
-        const backupCandidates = entries
-          .filter(e => e.isFile() && e.name.startsWith("central-database-") && (e.name.endsWith(".sqlite") || e.name.endsWith(".json")))
-          .map(e => {
-            const filePath = path.join(BACKUPS_DIR, e.name);
-            let mtime = 0;
-            try {
-              mtime = fs.statSync(filePath).mtimeMs;
-            } catch (stErr) {}
-            return { filename: e.name, filePath, mtime, isSqlite: e.name.endsWith(".sqlite") };
-          });
-
-        // Sort newest first
-        backupCandidates.sort((a, b) => b.mtime - a.mtime || b.filename.localeCompare(a.filename));
-
-        for (const candidate of backupCandidates) {
-          try {
-            if (candidate.isSqlite) {
-              const validation = validateDatabaseFile(candidate.filePath);
-              if (validation.valid && validation.data) {
-                // Valid SQLite backup
-                if (fs.existsSync(DATA_FILE_SQLITE)) {
-                  try { checkpointAndClose(); } catch (e) {}
-                  try { fs.unlinkSync(DATA_FILE_SQLITE); } catch (e) {}
-                }
-                fs.copyFileSync(candidate.filePath, DATA_FILE_SQLITE);
-                initSqliteStore(DATA_FILE_SQLITE);
-                applyDatabaseObject(validation.data);
-
-                autoRestoredBackupFilename = candidate.filename;
-                logger.info(`Live database missing/corrupted — auto-restored from backup '${candidate.filename}'`);
-                logBackupAudit(
-                  "DATABASE_RESTORED",
-                  candidate.filename,
-                  "SYSTEM_AUTO_RECOVERY",
-                  "Live database missing or corrupted on startup — automatically recovered from latest SQLite backup",
-                  fs.statSync(candidate.filePath).size
-                );
-                return;
-              }
-            } else {
-              // Legacy .json backup
-              const rawBackup = fs.readFileSync(candidate.filePath, "utf-8");
-              if (rawBackup && rawBackup.trim().length > 0) {
-                const parsed = JSON.parse(rawBackup);
-                if (applyDatabaseObject(parsed)) {
-                  initSqliteStore(DATA_FILE_SQLITE);
-                  commitDatabase();
-
-                  autoRestoredBackupFilename = candidate.filename;
-                  logger.info(`Live database missing/corrupted — auto-restored from backup '${candidate.filename}'`);
-                  logBackupAudit(
-                    "DATABASE_RESTORED",
-                    candidate.filename,
-                    "SYSTEM_AUTO_RECOVERY",
-                    "Live database missing or corrupted on startup — automatically recovered from latest JSON backup",
-                    fs.statSync(candidate.filePath).size
-                  );
-                  return;
-                }
-              }
-            }
-          } catch (candErr) {
-            // Move to next candidate
-          }
-        }
-      }
-    } catch (scanErr) {
-      console.error("[AUTO RECOVERY] Error scanning backups directory:", scanErr);
-    }
-
-    // e) Otherwise start empty with generated random one-time Super Admin PIN
-    if (!autoRestoredBackupFilename) {
-      console.warn("WARNING: Live database is missing/corrupted and no backup files are available in backups folder. Starting with an empty database. No recovery was possible.");
-      initSqliteStore(DATA_FILE_SQLITE);
-      ensureSuperAdminSeed(true);
-      commitDatabase();
-    }
-  }
-
-  // =========================================================================
-  // MANDATORY PRE-STARTUP DATABASE SAFETY BACKUP:
-  // Before loading the database or executing any new code that touches data,
-  // create a dedicated safety backup copy of the current live database file.
-  // =========================================================================
-  function createPreStartupBackup(): { success: boolean; filename?: string } {
-    try {
-      if (!fs.existsSync(BACKUPS_DIR)) {
-        fs.mkdirSync(BACKUPS_DIR, { recursive: true });
-      }
-
-      const timestampStr = formatBackupTimestamp(new Date());
-
-      // If SQLite DB exists
-      if (fs.existsSync(DATA_FILE_SQLITE)) {
-        const validation = validateDatabaseFile(DATA_FILE_SQLITE);
-        if (validation.valid) {
-          const base = `central-database-PRE-STARTUP-${timestampStr}`;
-          let filename = `${base}.sqlite`;
-          let counter = 1;
-          while (fs.existsSync(path.join(BACKUPS_DIR, filename))) {
-            filename = `${base}-${counter}.sqlite`;
-            counter++;
-          }
-          const targetPath = path.join(BACKUPS_DIR, filename);
-
-          try {
-            const tempDb = openSqliteDatabase(DATA_FILE_SQLITE, { readonly: true });
-            if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
-            tempDb.prepare("VACUUM INTO ?;").run(targetPath);
-            tempDb.close();
-          } catch (vErr) {
-            fs.copyFileSync(DATA_FILE_SQLITE, targetPath);
-          }
-          scrubPlaintextPinsInSqliteBackup(targetPath);
-
-          const backupStat = fs.statSync(targetPath);
-          logBackupAudit(
-            "BACKUP_CREATED",
-            filename,
-            "SYSTEM_PRE_STARTUP",
-            "Mandatory pre-startup safety copy taken before server code loads or touches data",
-            backupStat.size
-          );
-          logger.info(`[DATABASE PRE-STARTUP BACKUP] Safety backup created: '${filename}' (${backupStat.size} bytes). Taken before server code touches data.`);
-          return { success: true, filename };
-        } else {
-          // If the live DB is unreadable at startup, keep a raw copy named *.sqlite.unreadable
-          const unreadablePath = `${DATA_FILE_SQLITE}.unreadable`;
-          try {
-            fs.copyFileSync(DATA_FILE_SQLITE, unreadablePath);
-            console.warn(`[DATABASE PRE-STARTUP BACKUP] Live SQLite DB is unreadable. Raw copy kept at: '${unreadablePath}'`);
-          } catch (copyErr) {
-            console.error("Failed to copy unreadable SQLite DB:", copyErr);
-          }
-          return { success: false };
-        }
-      }
-
-      // If only legacy JSON exists, copy it as a PRE-STARTUP .json backup
-      if (fs.existsSync(DATA_FILE_JSON)) {
-        const stat = fs.statSync(DATA_FILE_JSON);
-        if (stat.size > 0) {
-          const base = `central-database-PRE-STARTUP-${timestampStr}`;
-          let filename = `${base}.json`;
-          let counter = 1;
-          while (fs.existsSync(path.join(BACKUPS_DIR, filename))) {
-            filename = `${base}-${counter}.json`;
-            counter++;
-          }
-          const targetPath = path.join(BACKUPS_DIR, filename);
-          fs.copyFileSync(DATA_FILE_JSON, targetPath);
-          scrubPlaintextPinsInJsonBackup(targetPath);
-          const backupStat = fs.statSync(targetPath);
-          logBackupAudit(
-            "BACKUP_CREATED",
-            filename,
-            "SYSTEM_PRE_STARTUP",
-            "Mandatory pre-startup safety copy of legacy JSON taken before server code loads or touches data",
-            backupStat.size
-          );
-          logger.info(`[DATABASE PRE-STARTUP BACKUP] Safety legacy JSON backup created: '${filename}' (${backupStat.size} bytes).`);
-          return { success: true, filename };
-        }
-      }
-
-      logger.info("[DATABASE PRE-STARTUP BACKUP] No existing live database file found on disk (fresh install) — skipping pre-startup backup.");
-      return { success: false };
-    } catch (err: any) {
-      console.error("[DATABASE PRE-STARTUP BACKUP] Failed to create pre-startup safety backup:", err);
-      return { success: false };
-    }
-  }
-
-  // 1. Mandatory safety backup created BEFORE loading the database normally
-  createPreStartupBackup();
-
-  // 2. Load database state (or auto-recover from backups if needed) on server initialization
-  loadDatabaseFromDisk();
+  // Construct shared server context
+  const ctx = createServerContext({
+    serverInstanceId: SERVER_INSTANCE_ID,
+    serverBootTime: SERVER_BOOT_TIME,
+    config: serverConfig,
+    wss,
+  });
+
+  // 1. Mandatory pre-startup safety backup before touching database
+  createPreStartupBackup(ctx);
+
+  // 2. Load database state (or auto-recover from backups) on server initialization
+  loadDatabaseFromDisk(ctx);
 
   // 2b. Seed unified audit trail from existing database history on first initialization
-  ensureInitialAuditTrailSeed();
+  ensureInitialAuditTrailSeed(ctx);
 
-  // =========================================================================
-  // ONE-TIME FIFO TAG COLOR DATA REPAIR ON SERVER STARTUP:
-  // Scans all stock and receiving records right after pre-startup backup & load.
-  // If fifoColor / fifoColorCode is numeric (1-12) or not a valid color name,
-  // recomputes it from the received date using the synced calendar and persists.
-  // Valid color names are NEVER modified (maintaining the locked-in rule).
-  // Each change is logged to console and the dedicated FIFO repair audit log.
-  // =========================================================================
-  const FIFO_REPAIR_AUDIT_LOG_FILE = getStorageFilePath("fifo-repair-audit-log.json");
+  // 3. Run startup FIFO tag color repair right after database load
+  ctx.initialFifoRepairReport = repairFifoTagColorsOnStartup(ctx, commitDatabase);
 
-  let fifoRepairAuditLogs: FifoRepairAuditEntry[] = [];
-  try {
-    if (fs.existsSync(FIFO_REPAIR_AUDIT_LOG_FILE)) {
-      const raw = fs.readFileSync(FIFO_REPAIR_AUDIT_LOG_FILE, "utf-8");
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) fifoRepairAuditLogs = parsed;
-    }
-  } catch (e) {
-    fifoRepairAuditLogs = [];
-  }
-
-  function repairFifoTagColorsOnStartup(): {
-    stocksScanned: number;
-    stocksRepaired: number;
-    receivingScanned: number;
-    receivingRepaired: number;
-    repairs: FifoRepairAuditEntry[];
-  } {
-    logger.info("[FIFO STARTUP AUDIT] Beginning inspection of FIFO tag colors across stock and receiving records...");
-    let stocksRepaired = 0;
-    let receivingRepaired = 0;
-    const newRepairs: FifoRepairAuditEntry[] = [];
-    const nowIso = new Date().toISOString();
-
-    // 1. Scan Stock Records
-    if (Array.isArray(state.stocks)) {
-      state.stocks.forEach((stock: any) => {
-        const currentColor = stock.fifoColor ?? stock.fifo_color;
-        if (!isValidFifoColorName(currentColor, state.fifoColorsByMonth)) {
-          const recDate = stock.receivedDate || stock.received_date || stock.date || stock.updated_at || nowIso.split('T')[0];
-          const newColor = getFifoColorForDate(recDate, state.fifoColorsByMonth);
-          const auditEntry: FifoRepairAuditEntry = {
-            id: `FIFO-AUDIT-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-            collection: "stocks",
-            recordId: String(stock.id || stock.record_id),
-            partCode: stock.partCode || stock.part_code,
-            receivedDate: recDate,
-            oldFifoColor: currentColor,
-            newFifoColor: newColor,
-            timestamp: nowIso,
-            reason: currentColor === undefined || currentColor === null || currentColor === '' 
-              ? "Missing FIFO color tag; recomputed from receivedDate" 
-              : /^\d+$/.test(String(currentColor).trim()) 
-                ? `Numeric FIFO month code ('${currentColor}') normalized to canonical color name` 
-                : `Unrecognized color value ('${currentColor}') normalized to canonical color name`
-          };
-
-          stock.fifoColor = newColor;
-          stock.version = (Number(stock.version) || 1) + 1;
-          stock.updated_at = nowIso;
-
-          newRepairs.push(auditEntry);
-          fifoRepairAuditLogs.unshift(auditEntry);
-          stocksRepaired++;
-
-          logger.debug(`[FIFO REPAIR AUDIT] Repaired Stock [ID: ${stock.id}] (${stock.partCode || 'N/A'}): Old '${currentColor}' -> New '${newColor}' (Date: ${recDate})`);
-        }
-      });
-    }
-
-    // 2. Scan Receiving Records
-    if (Array.isArray(state.receiving)) {
-      state.receiving.forEach((rcv: any) => {
-        const currentColor = rcv.fifoColorCode ?? rcv.fifo_color_code ?? rcv.fifoColor;
-        if (!isValidFifoColorName(currentColor, state.fifoColorsByMonth)) {
-          const recDate = rcv.receivedDate || rcv.received_date || rcv.date || rcv.updated_at || nowIso.split('T')[0];
-          const newColor = getFifoColorForDate(recDate, state.fifoColorsByMonth);
-          const auditEntry: FifoRepairAuditEntry = {
-            id: `FIFO-AUDIT-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-            collection: "receiving",
-            recordId: String(rcv.id || rcv.record_id),
-            partCode: rcv.partCode || rcv.part_code,
-            receivedDate: recDate,
-            oldFifoColor: currentColor,
-            newFifoColor: newColor,
-            timestamp: nowIso,
-            reason: currentColor === undefined || currentColor === null || currentColor === '' 
-              ? "Missing FIFO color code; recomputed from receivedDate" 
-              : /^\d+$/.test(String(currentColor).trim()) 
-                ? `Numeric FIFO month code ('${currentColor}') normalized to canonical color name` 
-                : `Unrecognized color value ('${currentColor}') normalized to canonical color name`
-          };
-
-          rcv.fifoColorCode = newColor;
-          rcv.fifoColor = newColor;
-          rcv.version = (Number(rcv.version) || 1) + 1;
-          rcv.updated_at = nowIso;
-
-          newRepairs.push(auditEntry);
-          fifoRepairAuditLogs.unshift(auditEntry);
-          receivingRepaired++;
-
-          logger.debug(`[FIFO REPAIR AUDIT] Repaired Receiving [ID: ${rcv.id}] (${rcv.partCode || 'N/A'}): Old '${currentColor}' -> New '${newColor}' (Date: ${recDate})`);
-        }
-      });
-    }
-
-    // 3. Persist changes if any repairs were made
-    if (newRepairs.length > 0) {
-      if (fifoRepairAuditLogs.length > 1000) {
-        fifoRepairAuditLogs = fifoRepairAuditLogs.slice(0, 1000);
-      }
-      try {
-        fs.writeFileSync(FIFO_REPAIR_AUDIT_LOG_FILE, JSON.stringify(fifoRepairAuditLogs, null, 2), "utf-8");
-      } catch (err) {
-        console.error("[FIFO REPAIR AUDIT] Failed to save audit log file to disk:", err);
-      }
-
-      commitDatabase();
-      logger.info(`[FIFO DATA REPAIR SUMMARY] REPAIRED ${stocksRepaired} stock record(s) and ${receivingRepaired} receiving record(s). Database persisted to SQLite.`);
-
-      chatMessages.push({
-        id: `fifo-repair-${Date.now()}`,
-        sender: "System",
-        text: `[FIFO TAG AUDIT] Completed startup data repair: ${stocksRepaired} stock record(s) and ${receivingRepaired} receiving record(s) updated to canonical monthly FIFO colors based on received dates.`,
-        timestamp: nowIso,
-        isSystem: true
-      });
-    } else {
-      logger.info(`[FIFO DATA REPAIR SUMMARY] Clean check completed: all ${state.stocks?.length || 0} stock records and ${state.receiving?.length || 0} receiving records already possess valid FIFO tag colors. No repairs required.`);
-    }
-
-    return {
-      stocksScanned: state.stocks?.length || 0,
-      stocksRepaired,
-      receivingScanned: state.receiving?.length || 0,
-      receivingRepaired,
-      repairs: newRepairs
-    };
-  }
-
-  // 3. Run the startup repair right after database load
-  const initialFifoRepairReport = repairFifoTagColorsOnStartup();
-
-  function restoreDatabaseFromBackup(filename: string, author: string): { success: boolean; error?: string; recordCounts?: any } {
-    try {
-      const cleanName = path.basename(filename);
-      const backupPath = path.join(BACKUPS_DIR, cleanName);
-
-      if (!fs.existsSync(backupPath)) {
-        return { success: false, error: `Backup file '${cleanName}' not found in backups directory.` };
-      }
-
-      // 1. Validate the backup completely BEFORE touching live data
-      let parsedData: any = null;
-      if (cleanName.endsWith(".sqlite")) {
-        const validation = validateDatabaseFile(backupPath);
-        if (!validation.valid || !validation.data) {
-          return { success: false, error: `Invalid or corrupt SQLite backup: ${validation.error || 'validation failed'}` };
-        }
-        parsedData = validation.data;
-      } else if (cleanName.endsWith(".json")) {
-        const raw = fs.readFileSync(backupPath, "utf-8");
-        parsedData = JSON.parse(raw);
-        if (!parsedData || typeof parsedData !== "object") {
-          return { success: false, error: "Invalid backup JSON structure" };
-        }
-      } else {
-        return { success: false, error: "Unsupported backup file format. Expected .sqlite or .json" };
-      }
-
-      // 2. Create pre-restore safety snapshot of live database before overwriting
-      try {
-        if (fs.existsSync(DATA_FILE_SQLITE)) {
-          commitDatabase();
-          const safetyName = getNextBackupFilename();
-          const safetyPath = path.join(BACKUPS_DIR, safetyName);
-          vacuumInto(safetyPath);
-          scrubPlaintextPinsInSqliteBackup(safetyPath);
-          logger.info(`[DATABASE RESTORE] Pre-restore safety snapshot created: ${safetyName}`);
-          logBackupAudit("BACKUP_CREATED", safetyName, "SYSTEM_SAFETY", "Pre-restore safety snapshot before overwriting database", fs.statSync(safetyPath).size);
-        }
-      } catch (e) {
-        console.warn("[DATABASE RESTORE] Could not create safety snapshot before restore:", e);
-      }
-
-      // 3. Load backup into memory
-      if (!applyDatabaseObject(parsedData)) {
-        return { success: false, error: "Failed to apply backup data structure to memory." };
-      }
-      stateRevision += 1;
-
-      // 4. Commit memory state to SQLite
-      commitDatabase();
-
-      // Log audit
-      const stat = fs.statSync(backupPath);
-      logBackupAudit("DATABASE_RESTORED", cleanName, author, `Overwrote live database with backup ${cleanName}`, stat.size);
-
-      // 5. Broadcast sync to all active terminals
-      broadcast({
-        type: "GLOBAL_RESET",
-        systemResetVersion,
-        systemResetTimestamp: new Date().toISOString(),
-        systemResetId: `RESTORE-${Date.now()}`,
-        systemResetBy: author,
-        author,
-        keepUsers: true,
-        data: {
-          ...state,
-          registeredUsers: (state.registeredUsers || []).map(sanitizeUserForClient),
-          chatMessages: chatMessages.slice(-200)
-        }
-      });
-
-      return {
-        success: true,
-        recordCounts: {
-          stocks: state.stocks?.length || 0,
-          receiving: state.receiving?.length || 0,
-          issuances: state.issuances?.length || 0,
-          deliveries: state.deliveries?.length || 0,
-          users: state.registeredUsers?.length || 0
-        }
-      };
-    } catch (err: any) {
-      console.error("[DATABASE RESTORE] Failed to restore database backup:", err);
-      return { success: false, error: err?.message || String(err) };
-    }
-  }
-
-  // 1. Initial backup right after server starts
-  createDatabaseBackup("SERVER_STARTUP", "SYSTEM_BOOT").catch(bErr => {
+  // 4. Initial backup + recurring automated non-blocking backup every 1 hour
+  createDatabaseBackup(ctx, "SERVER_STARTUP", "SYSTEM_BOOT").catch((bErr: any) => {
     console.error("[SERVER STARTUP] Initial backup error:", bErr);
   });
 
-  // 2. Schedule recurring automated non-blocking backup every 1 hour
   const ONE_HOUR_MS = 60 * 60 * 1000;
   setInterval(() => {
-    createDatabaseBackup("AUTOMATIC_1H_SCHEDULE", "SYSTEM_SCHEDULER").catch(bErr => {
+    createDatabaseBackup(ctx, "AUTOMATIC_1H_SCHEDULE", "SYSTEM_SCHEDULER").catch((bErr: any) => {
       console.error("[SCHEDULED BACKUP] Error executing 1h backup:", bErr);
     });
   }, ONE_HOUR_MS);
 
-  // Active Device Registry
-  interface ConnectedDevice {
-    deviceId: string;
-    deviceName?: string;
-    employeeId?: string;
-    username?: string;
-    role?: string;
-    ip?: string;
-    userAgent?: string;
-    appVersion?: string;
-    platform?: string;
-    connectedAt: string;
-    lastSeen: number;
-    currentView?: string;
-  }
-  const activeDevices = new Map<string, ConnectedDevice>();
-
-  // Authoritative Central Active Connection Registry
-  interface ActiveConnectionRecord {
-    connection_id: string;
-    user_id: string;
-    session_id: string;
-    device_id: string;
-    deviceId?: string;
-    stationId: string;
-    employeeId: string;
-    username: string;
-    role: string;
-    permission: string;
-    platform: string;
-    deviceName: string;
-    activeView: string;
-    connectedAt: string;
-    lastPing: number;
-    resetVersion: number;
-    ws: WebSocket;
-    ip: string;
-    userAgent?: string;
-    accountId: string;
-    warehouseId: string;
-  }
-
-  // Keyed strictly by unique connection_id
-  const connectionRegistry = new Map<string, ActiveConnectionRecord>();
-  const socketToConnectionId = new WeakMap<WebSocket, string>();
-
-  function closeDeviceSockets(deviceId?: string, reason: string = "DEVICE_REVOKED") {
-    const clean = String(deviceId || "").trim();
-    if (!clean) return;
-    activeDevices.delete(clean);
-    const closedSockets = new Set<WebSocket>();
-    for (const [cId, conn] of Array.from(connectionRegistry.entries())) {
-      if (conn.device_id === clean || conn.deviceId === clean) {
-        try {
-          if (conn.ws.readyState === WebSocket.OPEN) {
-            conn.ws.send(JSON.stringify({
-              type: "DEVICE_REVOKED",
-              deviceId: clean,
-              error: "DEVICE_REVOKED",
-              systemResetVersion
-            }));
-          }
-        } catch {}
-        connectionRegistry.delete(cId);
-        socketToConnectionId.delete(conn.ws);
-        removeSocketFromGroups(conn.ws);
-        closedSockets.add(conn.ws);
-        try {
-          conn.ws.close(4003, reason);
-        } catch {}
-      }
-    }
-    for (const client of wss.clients) {
-      if (!closedSockets.has(client) && (client as any)._deviceId === clean) {
-        try {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({
-              type: "DEVICE_REVOKED",
-              deviceId: clean,
-              error: "DEVICE_REVOKED",
-              systemResetVersion
-            }));
-          }
-        } catch {}
-        socketToConnectionId.delete(client);
-        removeSocketFromGroups(client);
-        try {
-          client.close(4003, reason);
-        } catch {}
-      }
-    }
-  }
-
-  // Room-based broadcasting mapping for Warehouse and Account groups
-  const accountRooms = new Map<string, Set<WebSocket>>();
-  const warehouseRooms = new Map<string, Set<WebSocket>>();
-  const socketToRoomMeta = new WeakMap<WebSocket, { accountId: string; warehouseId: string }>();
-
-  function normalizeGroupId(id?: any, defaultVal: string = "WH-MAIN"): string {
-    if (!id || typeof id !== "string") return defaultVal;
-    const clean = id.trim();
-    return clean.length > 0 ? clean : defaultVal;
-  }
-
-  function assignSocketToGroup(ws: WebSocket, accountIdInput?: string, warehouseIdInput?: string) {
-    const accountId = normalizeGroupId(accountIdInput, "ACC-JUWEI");
-    const warehouseId = normalizeGroupId(warehouseIdInput, "WH-MAIN");
-
-    // Remove socket from previous rooms if it was already assigned
-    removeSocketFromGroups(ws);
-
-    if (!accountRooms.has(accountId)) {
-      accountRooms.set(accountId, new Set());
-    }
-    accountRooms.get(accountId)!.add(ws);
-
-    if (!warehouseRooms.has(warehouseId)) {
-      warehouseRooms.set(warehouseId, new Set());
-    }
-    warehouseRooms.get(warehouseId)!.add(ws);
-
-    socketToRoomMeta.set(ws, { accountId, warehouseId });
-
-    const connId = socketToConnectionId.get(ws);
-    if (connId) {
-      const conn = connectionRegistry.get(connId);
-      if (conn) {
-        conn.accountId = accountId;
-        conn.warehouseId = warehouseId;
-      }
-    }
-    logger.debug(`[WS ROOM] Assigned socket to Group -> Account: [${accountId}], Warehouse: [${warehouseId}]`);
-  }
-
-  function removeSocketFromGroups(ws: WebSocket) {
-    const meta = socketToRoomMeta.get(ws);
-    if (meta) {
-      const accSet = accountRooms.get(meta.accountId);
-      if (accSet) {
-        accSet.delete(ws);
-        if (accSet.size === 0) accountRooms.delete(meta.accountId);
-      }
-      const whSet = warehouseRooms.get(meta.warehouseId);
-      if (whSet) {
-        whSet.delete(ws);
-        if (whSet.size === 0) warehouseRooms.delete(meta.warehouseId);
-      }
-    }
-    socketToRoomMeta.delete(ws);
-  }
-
-  function getSocketsInGroup(params: { accountId?: string; warehouseId?: string }): Set<WebSocket> {
-    const matchingSockets = new Set<WebSocket>();
-    const targetAcc = normalizeGroupId(params.accountId, "");
-    const targetWh = normalizeGroupId(params.warehouseId, "");
-
-    // If specific warehouseId specified (and not ALL/GLOBAL)
-    if (targetWh && targetWh !== "ALL" && targetWh !== "GLOBAL" && targetWh.toLowerCase() !== "all") {
-      const whSet = warehouseRooms.get(targetWh);
-      if (whSet) {
-        for (const s of whSet) {
-          if (s && s.readyState === WebSocket.OPEN) {
-            const meta = socketToRoomMeta.get(s);
-            if (!targetAcc || targetAcc === "ALL" || targetAcc === "GLOBAL" || (meta && meta.accountId === targetAcc)) {
-              matchingSockets.add(s);
-            }
-          }
-        }
-      }
-    } else if (targetAcc && targetAcc !== "ALL" && targetAcc !== "GLOBAL" && targetAcc.toLowerCase() !== "all") {
-      const accSet = accountRooms.get(targetAcc);
-      if (accSet) {
-        for (const s of accSet) {
-          if (s && s.readyState === WebSocket.OPEN) {
-            matchingSockets.add(s);
-          }
-        }
-      }
-    } else {
-      for (const client of wss.clients) {
-        if (client && client.readyState === WebSocket.OPEN) {
-          matchingSockets.add(client);
-        }
-      }
-    }
-
-    // Always include sockets assigned to ALL / GLOBAL or with administrative authority
-    for (const globalWh of ["ALL", "GLOBAL"]) {
-      const gSet = warehouseRooms.get(globalWh);
-      if (gSet) {
-        for (const s of gSet) {
-          if (s && s.readyState === WebSocket.OPEN) {
-            matchingSockets.add(s);
-          }
-        }
-      }
-    }
-    for (const globalAcc of ["ALL", "GLOBAL"]) {
-      const gSet = accountRooms.get(globalAcc);
-      if (gSet) {
-        for (const s of gSet) {
-          if (s && s.readyState === WebSocket.OPEN) {
-            matchingSockets.add(s);
-          }
-        }
-      }
-    }
-    for (const client of wss.clients) {
-      if (client && client.readyState === WebSocket.OPEN) {
-        const connId = socketToConnectionId.get(client);
-        if (connId) {
-          const conn = connectionRegistry.get(connId);
-          if (conn && (conn.permission === 'FULL_ACCESS' || (conn.employeeId || '').toUpperCase() === 'JPMP-002' || conn.role === 'SUPER ADMINISTRATOR')) {
-            matchingSockets.add(client);
-          }
-        }
-      }
-    }
-
-    return matchingSockets;
-  }
-
-  function queryDatabaseInventory(accountId?: string, warehouseId?: string) {
-    const allStocks = Array.isArray(state.stocks) ? state.stocks : [];
-    const cleanWh = (warehouseId || "").trim().toUpperCase();
-    const cleanAcc = (accountId || "").trim().toUpperCase();
-
-    const isAllWh = !cleanWh || cleanWh === "ALL" || cleanWh === "GLOBAL";
-    const isAllAcc = !cleanAcc || cleanAcc === "ALL" || cleanAcc === "GLOBAL";
-
-    if (isAllWh && isAllAcc) {
-      return allStocks;
-    }
-
-    return allStocks.filter((item: any) => {
-      if (!item) return false;
-      const itemWh = String(item.warehouseId || item.warehouse_id || item.warehouse || "WH-MAIN").trim().toUpperCase();
-      const itemAcc = String(item.accountId || item.account_id || item.account || "ACC-JUWEI").trim().toUpperCase();
-
-      const whMatch = isAllWh || itemWh === cleanWh;
-      const accMatch = isAllAcc || itemAcc === cleanAcc;
-
-      return whMatch && accMatch;
-    });
-  }
-
-  // Room-based inventory broadcast strictly targeting active connections matching accountId/warehouseId
-  function broadcastInventoryEvent(event: {
-    type: string; // 'STOCK_ADJUSTMENT' | 'PICK_PACK_SHIP' | 'LOCATION_TRANSFER' | 'INVENTORY_UPDATE' | 'stock_movement_created'
-    accountId?: string;
-    warehouseId?: string;
-    collection?: string;
-    record?: any;
-    movement?: any;
-    actionDesc?: string;
-    author?: string;
-    user_id?: string;
-    device_id?: string;
-    timestamp?: string;
-    isCreation?: boolean;
-    isDelete?: boolean;
-    excludeSocket?: WebSocket;
-  }) {
-    const targetAccountId = normalizeGroupId(event.accountId || event.record?.accountId || event.record?.account_id, "ACC-JUWEI");
-    const targetWarehouseId = normalizeGroupId(event.warehouseId || event.record?.warehouseId || event.record?.warehouse_id || event.movement?.warehouse_id, "WH-MAIN");
-
-    // Query updated inventory from central database
-    const updatedInventory = queryDatabaseInventory(targetAccountId, targetWarehouseId);
-    const eventTime = event.timestamp || new Date().toISOString();
-    const recordId = event.record?.id || event.record?.record_id;
-
-    const payloadObj = {
-      type: event.type,
-      accountId: targetAccountId,
-      warehouseId: targetWarehouseId,
-      inventory: updatedInventory,
-      stocks: updatedInventory,
-      collection: event.collection || 'stocks',
-      record: event.record,
-      id: recordId,
-      record_id: recordId,
-      movement: event.movement,
-      actionDesc: event.actionDesc || `Inventory event: ${event.type}`,
-      author: event.author || 'Operator',
-      user_id: event.user_id,
-      device_id: event.device_id,
-      timestamp: eventTime,
-      systemResetVersion,
-      systemResetId
-    };
-
-    const payloadString = JSON.stringify(payloadObj);
-
-    const legacyCollectionMsg = JSON.stringify({
-      type: "collection_updated",
-      collection: event.collection || "stocks",
-      data: (state as any)[event.collection || 'stocks'],
-      systemResetVersion
-    });
-
-    const messagesToSend: string[] = [payloadString, legacyCollectionMsg];
-
-    if (event.isDelete) {
-      messagesToSend.push(JSON.stringify({
-        type: "DATA_DELETE",
-        collection: event.collection || "stocks",
-        id: recordId,
-        record_id: recordId,
-        author: event.author || "Operator",
-        user_id: event.user_id,
-        device_id: event.device_id,
-        actionDesc: event.actionDesc || `Deleted ${event.collection || 'stocks'} record`,
-        timestamp: eventTime,
-        systemResetVersion,
-        systemResetId
-      }));
-      messagesToSend.push(JSON.stringify({
-        type: "RECORD_DELETED",
-        collection: event.collection || "stocks",
-        id: recordId,
-        record_id: recordId,
-        author: event.author || "Operator",
-        user_id: event.user_id,
-        device_id: event.device_id,
-        timestamp: eventTime,
-        systemResetVersion,
-        systemResetId
-      }));
-      messagesToSend.push(JSON.stringify({
-        type: "record_deleted",
-        collection: event.collection || "stocks",
-        id: recordId,
-        systemResetVersion
-      }));
-    } else if (event.isCreation || event.record?._isNew) {
-      messagesToSend.push(JSON.stringify({
-        type: "DATA_CREATE",
-        collection: event.collection || "stocks",
-        record: event.record,
-        id: recordId,
-        record_id: recordId,
-        author: event.author || "Operator",
-        user_id: event.user_id,
-        device_id: event.device_id,
-        actionDesc: event.actionDesc || `Created ${event.collection || 'stocks'} record`,
-        timestamp: eventTime,
-        systemResetVersion,
-        systemResetId
-      }));
-      messagesToSend.push(JSON.stringify({
-        type: "RECORD_CREATED",
-        collection: event.collection || "stocks",
-        record: event.record,
-        id: recordId,
-        record_id: recordId,
-        author: event.author || "Operator",
-        user_id: event.user_id,
-        device_id: event.device_id,
-        timestamp: eventTime,
-        systemResetVersion,
-        systemResetId
-      }));
-      messagesToSend.push(JSON.stringify({
-        type: "record_upserted",
-        collection: event.collection || "stocks",
-        record: event.record,
-        id: recordId,
-        systemResetVersion
-      }));
-    } else if (event.record) {
-      messagesToSend.push(JSON.stringify({
-        type: "DATA_UPDATE",
-        collection: event.collection || "stocks",
-        record: event.record,
-        id: recordId,
-        record_id: recordId,
-        author: event.author || "Operator",
-        user_id: event.user_id,
-        device_id: event.device_id,
-        actionDesc: event.actionDesc || `Updated ${event.collection || 'stocks'} record`,
-        timestamp: eventTime,
-        systemResetVersion,
-        systemResetId
-      }));
-      messagesToSend.push(JSON.stringify({
-        type: "RECORD_UPDATED",
-        collection: event.collection || "stocks",
-        record: event.record,
-        id: recordId,
-        record_id: recordId,
-        author: event.author || "Operator",
-        user_id: event.user_id,
-        device_id: event.device_id,
-        timestamp: eventTime,
-        systemResetVersion,
-        systemResetId
-      }));
-      messagesToSend.push(JSON.stringify({
-        type: "record_upserted",
-        collection: event.collection || "stocks",
-        record: event.record,
-        id: recordId,
-        systemResetVersion
-      }));
-    }
-
-    if (event.movement) {
-      messagesToSend.push(JSON.stringify({
-        type: "stock_movement_created",
-        movement: event.movement,
-        stock: event.record,
-        stocks: updatedInventory,
-        warehouseId: targetWarehouseId,
-        accountId: targetAccountId,
-        systemResetVersion
-      }));
-    }
-
-    // STRICTLY find all active connections matching that same accountId and warehouseId
-    const targetSockets = getSocketsInGroup({ accountId: targetAccountId, warehouseId: targetWarehouseId });
-
-    // Requirement 4: Ensure all broadcast iterations check that readyState === OPEN
-    for (const client of targetSockets) {
-      if (client && client.readyState === WebSocket.OPEN && client !== event.excludeSocket) {
-        try {
-          for (const msg of messagesToSend) {
-            client.send(msg);
-          }
-        } catch (sendErr) {
-          console.warn("WebSocket client send warning in inventory room:", sendErr);
-        }
-      }
-    }
-
-    logger.debug(`[INVENTORY-BROADCAST] [${event.type}] Dispatched ${messagesToSend.length} messages to ${targetSockets.size} active sockets in Room [${targetAccountId}:${targetWarehouseId}]`);
-  }
-
-  // Helper metrics calculated directly from the server-side registry
-  function getActiveOperatorsCount(): number {
-    const operatorIds = new Set<string>();
-    for (const conn of connectionRegistry.values()) {
-      const id = (conn.employeeId || conn.user_id || conn.username || '').trim().toUpperCase();
-      if (id && id !== 'ANONYMOUS' && id !== 'CONNECTING TERMINAL') {
-        operatorIds.add(id);
-      }
-    }
-    return Math.max(operatorIds.size, connectionRegistry.size > 0 ? 1 : 0);
-  }
-
-  function getActiveTerminalsCount(): number {
-    return connectionRegistry.size;
-  }
-
-  function getActiveUsersList(): string[] {
-    const names = new Set<string>();
-    for (const conn of connectionRegistry.values()) {
-      if (conn.username && conn.username !== 'CONNECTING TERMINAL') {
-        names.add(conn.username);
-      }
-    }
-    return Array.from(names);
-  }
-
-  function getActivePresenceList() {
-    return Array.from(connectionRegistry.values()).map(c => ({
-      connection_id: c.connection_id,
-      connectionId: c.connection_id,
-      user_id: c.user_id,
-      userId: c.user_id,
-      session_id: c.session_id,
-      sessionId: c.session_id,
-      device_id: c.device_id,
-      deviceId: c.device_id,
-      stationId: c.stationId || '',
-      employeeId: c.employeeId || '',
-      username: c.username,
-      role: c.role || 'OPERATOR',
-      permission: c.permission || 'LIMITED_ACCESS',
-      platform: c.platform || 'Web',
-      deviceName: c.deviceName || 'Terminal',
-      activeView: c.activeView || 'dashboard',
-      connectedAt: c.connectedAt,
-      lastPing: c.lastPing,
-      accountId: c.accountId || 'ACC-JUWEI',
-      warehouseId: c.warehouseId || 'WH-MAIN',
-      source: 'central_websocket' as const
-    }));
-  }
-
-  // Unconditionally scrub sensitive PIN fields (plain pin, pinHash, pinSalt) from ALL client snapshots
-  function filterDataForClient(data: any, _clientPermission?: string, _clientEmployeeId?: string): any {
-    const cloned = { ...data };
-    if (Array.isArray(cloned.registeredUsers)) {
-      cloned.registeredUsers = cloned.registeredUsers.map((u: any) => sanitizeUserForClient(u));
-    }
-    return cloned;
-  }
-
-  // Authoritative WebSocket Broadcast (never leaks PIN or hash/salt fields)
-  function broadcast(msg: any, excludeSocket?: WebSocket) {
-    let payloadToBroadcast: any = msg;
-    if (msg && typeof msg === 'object') {
-      const clonedMsg: any = { ...msg };
-      if (clonedMsg.collection === 'registeredUsers' && clonedMsg.record) {
-        clonedMsg.record = sanitizeUserForClient(clonedMsg.record);
-      }
-      if (clonedMsg.user) {
-        clonedMsg.user = sanitizeUserForClient(clonedMsg.user);
-      }
-      if (clonedMsg.account) {
-        clonedMsg.account = sanitizeUserForClient(clonedMsg.account);
-      }
-      if (clonedMsg.data && typeof clonedMsg.data === 'object') {
-        if (Array.isArray(clonedMsg.data.registeredUsers)) {
-          clonedMsg.data = filterDataForClient(clonedMsg.data);
-        } else if ((clonedMsg.collection === 'registeredUsers' || clonedMsg.type === 'all_accounts_cleared') && Array.isArray(clonedMsg.data)) {
-          clonedMsg.data = clonedMsg.data.map((u: any) => sanitizeUserForClient(u));
-        }
-      }
-      payloadToBroadcast = clonedMsg;
-    }
-
-    const serializedMsg = JSON.stringify(payloadToBroadcast);
-
-    for (const client of wss.clients) {
-      if (client.readyState === WebSocket.OPEN && client !== excludeSocket) {
-        try {
-          client.send(serializedMsg);
-        } catch (sendErr) {
-          console.warn("WebSocket client send warning:", sendErr);
-        }
-      }
-    }
-  }
-
-  function broadcastPresenceSync() {
-    const presenceList = getActivePresenceList();
-    const payload = {
-      type: "PRESENCE_SYNC",
-      presenceList,
-      activePresence: presenceList,
-      activeUsers: getActiveUsersList(),
-      connectedOperators: getActiveOperatorsCount(),
-      liveActiveTerminals: getActiveTerminalsCount(),
-      systemResetVersion,
-      timestamp: new Date().toISOString()
-    };
-    broadcast(payload);
-    // Backward compatibility for existing listeners
-    broadcast({
-      type: "presence_updated",
-      activeUsers: getActiveUsersList(),
-      activePresence: presenceList
-    });
-  }
-
-  interface UpsertExecutionResult {
-    success: boolean;
-    status: number;
-    error?: string;
-    confirmedRecord?: any;
-    currentRecord?: any;
-    isCreation?: boolean;
-    systemResetVersion?: number;
-    systemResetId?: string;
-  }
-
-  function executeRecordUpsert(params: {
-    collection: string;
-    record: any;
-    author?: string;
-    employeeId?: string;
-    user_id?: string;
-    device_id?: string;
-    actionDesc?: string;
-    expectedVersion?: number;
-    reset_version?: number;
-    userPermission?: string;
-    excludeSocket?: WebSocket;
-  }): UpsertExecutionResult {
-    const { collection, record, author, employeeId, user_id, device_id, actionDesc, expectedVersion, reset_version, userPermission, excludeSocket } = params;
-
-    const rawDeviceId = String(device_id || record?.device_id || record?.deviceId || "").trim();
-    if (isDeviceRevoked(rawDeviceId)) {
-      closeDeviceSockets(rawDeviceId, "DEVICE_REVOKED");
-      return {
-        success: false,
-        status: 403,
-        error: "DEVICE_REVOKED"
-      };
-    }
-
-    const clientResetVersion = Number(reset_version) || Number(record?.reset_version) || systemResetVersion;
-    if (clientResetVersion < systemResetVersion) {
-      return {
-        success: false,
-        status: 409,
-        error: "STALE_RESET_VERSION: Central database was reset. Data from previous reset versions cannot be restored.",
-        systemResetVersion,
-        systemResetId
-      };
-    }
-
-    if (!collection || !record) {
-      return { success: false, status: 400, error: "Collection and record required" };
-    }
-
-    if (!(collection in state)) {
-      return { success: false, status: 400, error: `Unknown collection: ${collection}` };
-    }
-
-    if (userPermission === 'VIEW_ONLY') {
-      return { success: false, status: 403, error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." };
-    }
-
-    const serverTime = new Date().toISOString();
-    const currentList: any[] = (state as any)[collection] || [];
-    const recordId = String(record.id || record.record_id || `REC-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`);
-
-    const existingIndex = currentList.findIndex((item: any) => item && (String(item.id) === recordId || String(item.record_id) === recordId));
-    const existingRecord = existingIndex >= 0 ? currentList[existingIndex] : null;
-
-    let confirmedRecord: any;
-    let isCreation = false;
-    const effectiveUserId = String(user_id || record.user_id || (employeeId ? `USR-${employeeId}` : (author ? `USR-${author}` : 'OPERATOR'))).trim();
-    const effectiveDeviceId = String(device_id || record.device_id || 'DEV-CENTRAL').trim();
-
-    if (existingRecord) {
-      // Optimistic concurrency check
-      const serverVer = Number(existingRecord.version) || 1;
-      if (expectedVersion !== undefined && expectedVersion !== null && !Number.isNaN(Number(expectedVersion)) && serverVer > Number(expectedVersion)) {
-        return {
-          success: false,
-          status: 409,
-          error: "VERSION_CONFLICT: Newer revision exists in central database.",
-          confirmedRecord: existingRecord,
-          currentRecord: existingRecord,
-          systemResetVersion
-        };
-      }
-
-      const nextVersion = (Number(existingRecord.version) || 1) + 1;
-      confirmedRecord = {
-        ...existingRecord,
-        ...record,
-        id: recordId,
-        record_id: record.record_id || recordId,
-        reset_version: systemResetVersion,
-        created_at: existingRecord.created_at || record.created_at || serverTime,
-        created_by: existingRecord.created_by || record.created_by || author || 'Operator',
-        updated_at: serverTime,
-        updated_by: author || employeeId || 'Operator',
-        user_id: effectiveUserId,
-        device_id: effectiveDeviceId,
-        version: nextVersion
-      };
-      currentList[existingIndex] = confirmedRecord;
-    } else {
-      if (
-        deletedRecordTombstones.has(recordId) &&
-        expectedVersion !== undefined &&
-        expectedVersion !== null &&
-        !Number.isNaN(Number(expectedVersion)) &&
-        Number(expectedVersion) >= 1
-      ) {
-        return {
-          success: false,
-          status: 409,
-          error: "VERSION_CONFLICT: Record was deleted on central database.",
-          confirmedRecord: null,
-          currentRecord: null,
-          systemResetVersion
-        };
-      }
-      isCreation = true;
-      confirmedRecord = {
-        ...record,
-        id: recordId,
-        record_id: record.record_id || recordId,
-        reset_version: systemResetVersion,
-        created_at: record.created_at || serverTime,
-        created_by: record.created_by || author || employeeId || 'Operator',
-        updated_at: serverTime,
-        updated_by: author || employeeId || 'Operator',
-        user_id: effectiveUserId,
-        device_id: effectiveDeviceId,
-        version: Number(record.version) || 1
-      };
-      currentList.unshift(confirmedRecord);
-    }
-
-    deletedRecordTombstones.delete(recordId);
-    (state as any)[collection] = currentList;
-    stateRevision++;
-
-    // COMMIT DATABASE SYNCHRONOUSLY BEFORE BROADCAST
-    const commitOk = commitDatabase();
-    if (!commitOk) {
-      return { success: false, status: 500, error: "Failed to commit record to central disk database" };
-    }
-
-    const auditLabel = getAuditRecordLabel(collection, confirmedRecord);
-    const auditDiff = isCreation ? '' : describeRecordDiff(existingRecord, confirmedRecord);
-    recordAuditTrail({
-      timestamp: serverTime,
-      actor: author || employeeId || confirmedRecord.updated_by || 'Operator',
-      actorId: employeeId || effectiveUserId,
-      action: isCreation ? 'CREATE' : 'UPDATE',
-      recordType: collection,
-      recordId,
-      summary: isCreation
-        ? `Created ${collection}${auditLabel ? ` [${auditLabel}]` : ''}`
-        : `Updated ${collection}${auditLabel ? ` [${auditLabel}]` : ''}${auditDiff ? ` — ${auditDiff}` : ''}`,
-      details: actionDesc || (auditDiff ? `Changed: ${auditDiff}` : undefined),
-      deviceId: effectiveDeviceId
-    });
-
-    logger.debug(`[CENTRAL-DB] [${isCreation ? 'CREATE' : 'UPDATE'}] [${collection}] ID: ${recordId} | Rev: v${confirmedRecord.version} | User: ${effectiveUserId} | Device: ${effectiveDeviceId} | Time: ${serverTime}`);
-
-    const isInventoryCollection = ['stocks', 'issuances', 'deliveries', 'receiving', 'returns', 'recycling'].includes(collection);
-    if (isInventoryCollection) {
-      let invEventType = "INVENTORY_UPDATE";
-      if (collection === 'stocks') {
-        invEventType = isCreation ? "STOCK_CREATED" : "STOCK_ADJUSTMENT";
-      } else if (collection === 'issuances' || collection === 'deliveries') {
-        invEventType = "PICK_PACK_SHIP";
-      }
-
-      broadcastInventoryEvent({
-        type: invEventType,
-        collection,
-        record: confirmedRecord,
-        accountId: confirmedRecord.accountId || confirmedRecord.account_id,
-        warehouseId: confirmedRecord.warehouseId || confirmedRecord.warehouse_id || confirmedRecord.locationWarehouse,
-        author: author || employeeId || "Operator",
-        user_id: effectiveUserId,
-        device_id: effectiveDeviceId,
-        actionDesc: actionDesc || `${isCreation ? 'Created' : 'Updated'} ${collection} record`,
-        timestamp: serverTime,
-        isCreation,
-        excludeSocket
-      });
-    } else {
-      // Non-inventory collections use global broadcast
-      const eventType = isCreation ? "DATA_CREATE" : "DATA_UPDATE";
-      broadcast({
-        type: eventType,
-        collection,
-        record: confirmedRecord,
-        id: recordId,
-        record_id: recordId,
-        author: author || employeeId || "Operator",
-        user_id: effectiveUserId,
-        device_id: effectiveDeviceId,
-        actionDesc: actionDesc || `${isCreation ? 'Created' : 'Updated'} ${collection} record`,
-        timestamp: serverTime,
-        version: confirmedRecord.version,
-        systemResetVersion,
-        systemResetId
-      }, excludeSocket);
-
-      broadcast({
-        type: isCreation ? "RECORD_CREATED" : "RECORD_UPDATED",
-        collection,
-        record: confirmedRecord,
-        id: recordId,
-        record_id: recordId,
-        author: author || employeeId || "Operator",
-        user_id: effectiveUserId,
-        device_id: effectiveDeviceId,
-        actionDesc: actionDesc || `${isCreation ? 'Created' : 'Updated'} ${collection} record`,
-        timestamp: serverTime,
-        version: confirmedRecord.version,
-        systemResetVersion,
-        systemResetId
-      }, excludeSocket);
-
-      broadcast({
-        type: "collection_updated",
-        collection,
-        data: currentList,
-        systemResetVersion
-      }, excludeSocket);
-    }
-
-    return {
-      success: true,
-      status: 200,
-      confirmedRecord,
-      isCreation,
-      systemResetVersion,
-      systemResetId
-    };
-  }
-
-  interface DeleteExecutionResult {
-    success: boolean;
-    status: number;
-    error?: string;
-    id?: string;
-    collection?: string;
-    currentRecord?: any;
-    confirmedRecord?: any;
-    systemResetVersion?: number;
-    systemResetId?: string;
-  }
-
-  function executeRecordDelete(params: {
-    collection: string;
-    id: string;
-    author?: string;
-    employeeId?: string;
-    user_id?: string;
-    device_id?: string;
-    actionDesc?: string;
-    expectedVersion?: number;
-    reset_version?: number;
-    userPermission?: string;
-    excludeSocket?: WebSocket;
-  }): DeleteExecutionResult {
-    const { collection, id, author, employeeId, user_id, device_id, actionDesc, expectedVersion, reset_version, userPermission, excludeSocket } = params;
-
-    const rawDeviceId = String(device_id || "").trim();
-    if (isDeviceRevoked(rawDeviceId)) {
-      closeDeviceSockets(rawDeviceId, "DEVICE_REVOKED");
-      return {
-        success: false,
-        status: 403,
-        error: "DEVICE_REVOKED"
-      };
-    }
-
-    const clientResetVersion = Number(reset_version) || systemResetVersion;
-    if (clientResetVersion < systemResetVersion) {
-      return {
-        success: false,
-        status: 409,
-        error: "STALE_RESET_VERSION: Central database was reset. Stale delete operation rejected.",
-        systemResetVersion,
-        systemResetId
-      };
-    }
-
-    if (!collection || !id) {
-      return { success: false, status: 400, error: "Collection and ID required" };
-    }
-
-    if (!(collection in state)) {
-      return { success: false, status: 400, error: "Invalid collection" };
-    }
-
-    if (userPermission === 'VIEW_ONLY') {
-      return { success: false, status: 403, error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." };
-    }
-
-    const recordId = String(id);
-    const currentList: any[] = (state as any)[collection] || [];
-    const existingRecord = currentList.find((item: any) => item && (String(item.id) === recordId || String(item.record_id) === recordId)) || null;
-    if (existingRecord && expectedVersion !== undefined && expectedVersion !== null && !Number.isNaN(Number(expectedVersion))) {
-      const serverVer = Number(existingRecord.version) || 1;
-      if (serverVer > Number(expectedVersion)) {
-        return {
-          success: false,
-          status: 409,
-          error: "VERSION_CONFLICT: Newer revision exists in central database.",
-          currentRecord: existingRecord,
-          confirmedRecord: existingRecord,
-          systemResetVersion
-        };
-      }
-    }
-
-    markRecordTombstone(recordId);
-    (state as any)[collection] = currentList.filter((item: any) => String(item.id) !== recordId && String(item.record_id) !== recordId);
-    stateRevision++;
-
-    // COMMIT DATABASE SYNCHRONOUSLY BEFORE BROADCAST
-    const commitOk = commitDatabase();
-    if (!commitOk) {
-      return { success: false, status: 500, error: "Failed to commit record deletion to central database" };
-    }
-
-    const serverTime = new Date().toISOString();
-    const effectiveUserId = String(user_id || (employeeId ? `USR-${employeeId}` : (author ? `USR-${author}` : 'OPERATOR'))).trim();
-    const effectiveDeviceId = String(device_id || 'DEV-CENTRAL').trim();
-
-    const deletedLabel = existingRecord ? getAuditRecordLabel(collection, existingRecord) : recordId;
-    recordAuditTrail({
-      timestamp: serverTime,
-      actor: author || employeeId || 'Operator',
-      actorId: employeeId || effectiveUserId,
-      action: 'DELETE',
-      recordType: collection,
-      recordId,
-      summary: `Deleted ${collection}${deletedLabel ? ` [${deletedLabel}]` : ''}`,
-      details: actionDesc || undefined,
-      deviceId: effectiveDeviceId
-    });
-
-    logger.debug(`[CENTRAL-DB] [DELETE] [${collection}] ID: ${recordId} | User: ${effectiveUserId} | Device: ${effectiveDeviceId} | Time: ${serverTime}`);
-
-    const isInventoryCollection = ['stocks', 'issuances', 'deliveries', 'receiving', 'returns', 'recycling'].includes(collection);
-    if (isInventoryCollection) {
-      let invEventType = "INVENTORY_UPDATE";
-      if (collection === 'stocks') {
-        invEventType = "STOCK_ADJUSTMENT";
-      } else if (collection === 'issuances' || collection === 'deliveries') {
-        invEventType = "PICK_PACK_SHIP";
-      }
-
-      broadcastInventoryEvent({
-        type: invEventType,
-        collection,
-        record: { id: recordId, record_id: recordId, quantity: 0, status: 'DELETED' },
-        author: author || employeeId || "Operator",
-        user_id: effectiveUserId,
-        device_id: effectiveDeviceId,
-        actionDesc: actionDesc || `Deleted ${collection} record`,
-        timestamp: serverTime,
-        isDelete: true,
-        excludeSocket
-      });
-    }
-
-    // Always broadcast DATA_DELETE, RECORD_DELETED, and collection_updated globally
-    broadcast({
-      type: "DATA_DELETE",
-      collection,
-      id: recordId,
-      record_id: recordId,
-      author: author || employeeId || "Operator",
-      user_id: effectiveUserId,
-      device_id: effectiveDeviceId,
-      actionDesc: actionDesc || `Deleted ${collection} record`,
-      timestamp: serverTime,
-      systemResetVersion,
-      systemResetId
-    }, excludeSocket);
-
-    broadcast({
-      type: "RECORD_DELETED",
-      collection,
-      id: recordId,
-      record_id: recordId,
-      author: author || employeeId || "Operator",
-      user_id: effectiveUserId,
-      device_id: effectiveDeviceId,
-      timestamp: serverTime,
-      systemResetVersion,
-      systemResetId
-    }, excludeSocket);
-
-    broadcast({
-      type: "record_deleted",
-      collection,
-      id: recordId,
-      systemResetVersion
-    }, excludeSocket);
-
-    broadcast({
-      type: "collection_updated",
-      collection,
-      data: (state as any)[collection],
-      systemResetVersion
-    }, excludeSocket);
-
-    return {
-      success: true,
-      status: 200,
-      id: recordId,
-      collection,
-      systemResetVersion,
-      systemResetId
-    };
-  }
-
-  // Periodic Heartbeat to maintain live connection registry
-  const heartbeatInterval = setInterval(() => {
-    let changed = false;
-    const now = Date.now();
-    for (const [connId, conn] of connectionRegistry.entries()) {
-      if (!conn.ws || conn.ws.readyState !== WebSocket.OPEN) {
-        if (conn.ws) {
-          removeSocketFromGroups(conn.ws);
-        }
-        connectionRegistry.delete(connId);
-        changed = true;
-        broadcast({
-          type: "USER_OFFLINE",
-          connection_id: connId,
-          user_id: conn.user_id,
-          session_id: conn.session_id,
-          device_id: conn.device_id,
-          employeeId: conn.employeeId,
-          username: conn.username,
-          systemResetVersion
-        });
-      } else if (now - conn.lastPing > 45000) {
-        try { conn.ws.terminate(); } catch (e) {}
-        removeSocketFromGroups(conn.ws);
-        connectionRegistry.delete(connId);
-        changed = true;
-        broadcast({
-          type: "USER_OFFLINE",
-          connection_id: connId,
-          user_id: conn.user_id,
-          session_id: conn.session_id,
-          device_id: conn.device_id,
-          employeeId: conn.employeeId,
-          username: conn.username,
-          systemResetVersion
-        });
-      }
-    }
-    if (changed) {
-      broadcastPresenceSync();
-    }
-  }, 15000);
-
-  wss.on("close", () => {
-    clearInterval(heartbeatInterval);
-  });
-
-  // Client Connection Lifecycle Management
-  wss.on("connection", (ws: any, req: http.IncomingMessage) => {
-    ws.isAlive = true;
-
-    // Generate unique connection_id for this socket
-    const connection_id = `conn_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-    socketToConnectionId.set(ws, connection_id);
-    logger.debug(`[WS Connection] New client connected (${connection_id}) on server instance: ${SERVER_INSTANCE_ID}`);
-
-    const ip = (req.headers['x-forwarded-for'] as string) || req.socket?.remoteAddress || '127.0.0.1';
-    const userAgent = req.headers['user-agent'] || '';
-    const platform = userAgent.includes("Android") ? "Android" : (userAgent.includes("iPhone") || userAgent.includes("iPad") ? "iOS" : (userAgent.includes("Windows") ? "Windows" : "Desktop"));
-
-    // 1. On connection, extract accountId, warehouseId, and deviceId from connection query/headers/token
-    let queryAccountId = "ACC-JUWEI";
-    let queryWarehouseId = "WH-MAIN";
-    let queryDeviceId = "";
-    try {
-      const host = req.headers.host || "127.0.0.1:3000";
-      const parsedUrl = new URL(req.url || "/ws", `http://${host}`);
-      const qAcc = parsedUrl.searchParams.get("accountId") || parsedUrl.searchParams.get("account_id") || (req.headers["x-account-id"] as string);
-      const qWh = parsedUrl.searchParams.get("warehouseId") || parsedUrl.searchParams.get("warehouse_id") || (req.headers["x-warehouse-id"] as string);
-      const qDev = parsedUrl.searchParams.get("deviceId") || parsedUrl.searchParams.get("device_id") || (req.headers["x-device-id"] as string);
-      const authToken = parsedUrl.searchParams.get("token") || parsedUrl.searchParams.get("auth_token") || (req.headers["authorization"] ? req.headers["authorization"].replace(/^Bearer\s+/i, "") : "");
-
-      if (qAcc) queryAccountId = qAcc.trim();
-      if (qWh) queryWarehouseId = qWh.trim();
-      if (qDev) queryDeviceId = qDev.trim();
-
-      if (authToken) {
-        try {
-          if (authToken.startsWith("{") && authToken.endsWith("}")) {
-            const parsedToken = JSON.parse(authToken);
-            if (parsedToken.accountId || parsedToken.account_id) queryAccountId = String(parsedToken.accountId || parsedToken.account_id).trim();
-            if (parsedToken.warehouseId || parsedToken.warehouse_id) queryWarehouseId = String(parsedToken.warehouseId || parsedToken.warehouse_id).trim();
-            if (parsedToken.deviceId || parsedToken.device_id) queryDeviceId = String(parsedToken.deviceId || parsedToken.device_id).trim();
-          } else if (authToken.includes(".")) {
-            const parts = authToken.split(".");
-            if (parts.length >= 2) {
-              const payloadJson = Buffer.from(parts[1], "base64").toString("utf-8");
-              const parsedJwt = JSON.parse(payloadJson);
-              if (parsedJwt.accountId || parsedJwt.account_id) queryAccountId = String(parsedJwt.accountId || parsedJwt.account_id).trim();
-              if (parsedJwt.warehouseId || parsedJwt.warehouse_id) queryWarehouseId = String(parsedJwt.warehouseId || parsedJwt.warehouse_id).trim();
-            }
-          }
-        } catch (e) {}
-      }
-    } catch (urlErr) {
-      console.warn("Failed parsing WS connection url:", urlErr);
-    }
-
-    if (queryDeviceId && isDeviceRevoked(queryDeviceId)) {
-      (ws as any)._deviceId = queryDeviceId;
-      try {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({
-            type: "DEVICE_REVOKED",
-            deviceId: queryDeviceId,
-            error: "DEVICE_REVOKED",
-            systemResetVersion
-          }));
-        }
-      } catch {}
-      closeDeviceSockets(queryDeviceId, "DEVICE_REVOKED");
-      socketToConnectionId.delete(ws);
-      try { ws.close(4003, "DEVICE_REVOKED"); } catch {}
-      return;
-    }
-    if (queryDeviceId) {
-      (ws as any)._deviceId = queryDeviceId;
-    }
-
-    // 3. Upon any new socket connection or reconnection, immediately query the database for the current inventory state
-    // and send a FULL_INVENTORY_SYNC event directly to that socket before subscribing it to incremental updates.
-    const initialInventory = queryDatabaseInventory(queryAccountId, queryWarehouseId);
-    if (ws.readyState === WebSocket.OPEN) {
-      try {
-        ws.send(JSON.stringify({
-          type: "FULL_INVENTORY_SYNC",
-          serverInstanceId: SERVER_INSTANCE_ID,
-          accountId: queryAccountId,
-          warehouseId: queryWarehouseId,
-          inventory: initialInventory,
-          stocks: initialInventory,
-          count: initialInventory.length,
-          timestamp: new Date().toISOString(),
-          systemResetVersion,
-          systemResetId
-        }));
-      } catch (err) {
-        console.warn("Error sending FULL_INVENTORY_SYNC to connecting socket:", err);
-      }
-    }
-
-    // Assign socket to group (subscribing to room updates after sending initial sync)
-    assignSocketToGroup(ws, queryAccountId, queryWarehouseId);
-
-    // Derive initial record permission strictly from server-side device record if present
-    const initialDevRecord = queryDeviceId ? authorizedDevicesMap.get(queryDeviceId) : undefined;
-    const initialBoundEmp = initialDevRecord?.status === 'AUTHORIZED'
-      ? (initialDevRecord.employeeId || (initialDevRecord.isPrimaryAdminDevice ? 'JPMP-002' : ''))
-      : '';
-    const initialBoundUser = initialBoundEmp
-      ? state.registeredUsers.find(u => (u.employeeId || '').toUpperCase().trim() === initialBoundEmp.toUpperCase())
-      : undefined;
-    const initialServerPermission = initialBoundUser
-      ? (initialBoundUser.status === 'INACTIVE' ? 'VIEW_ONLY' : initialBoundUser.permission)
-      : (initialDevRecord?.status === 'AUTHORIZED' && initialDevRecord.isPrimaryAdminDevice ? 'FULL_ACCESS' : 'LIMITED_ACCESS');
-
-    // Register active terminal in central connection registry
-    const initialRecord: ActiveConnectionRecord = {
-      connection_id,
-      user_id: "ANONYMOUS",
-      session_id: `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      device_id: queryDeviceId || `dev_${Math.random().toString(36).substring(2, 9)}`,
-      ...(queryDeviceId ? { deviceId: queryDeviceId } : {}),
-      stationId: "",
-      employeeId: initialBoundUser?.employeeId || initialBoundEmp || "",
-      username: initialBoundUser?.username || "CONNECTING TERMINAL",
-      role: initialBoundUser?.role || "OPERATOR",
-      permission: initialServerPermission,
-      platform,
-      deviceName: `${platform} Terminal`,
-      activeView: "dashboard",
-      connectedAt: new Date().toISOString(),
-      lastPing: Date.now(),
-      resetVersion: systemResetVersion,
-      ws,
-      ip,
-      userAgent,
-      accountId: queryAccountId,
-      warehouseId: queryWarehouseId
-    };
-    connectionRegistry.set(connection_id, initialRecord);
-
-    const rejectIfDeviceRevokedWs = (payload: any, conn?: ActiveConnectionRecord | null, extra?: { collection?: string; recordId?: string; clientMutationId?: any }): { revoked: boolean; reqDevId: string } => {
-      const reqDevId = String(payload?.device_id || payload?.deviceId || conn?.device_id || conn?.deviceId || (ws as any)._deviceId || payload?.record?.device_id || payload?.record?.deviceId || "").trim();
-      if (isDeviceRevoked(reqDevId)) {
-        (ws as any)._deviceId = reqDevId;
-        try {
-          ws.send(JSON.stringify({
-            type: "ERROR",
-            error: "DEVICE_REVOKED",
-            status: 403,
-            deviceId: reqDevId,
-            ...(extra?.collection ? { collection: extra.collection } : {}),
-            ...(extra?.recordId ? { recordId: extra.recordId } : {}),
-            ...(extra?.clientMutationId ? { clientMutationId: extra.clientMutationId } : {}),
-            systemResetVersion
-          }));
-        } catch {}
-        closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
-        return { revoked: true, reqDevId };
-      }
-      return { revoked: false, reqDevId };
-    };
-
-    ws.on("pong", () => {
-      ws.isAlive = true;
-      const cId = socketToConnectionId.get(ws);
-      if (cId) {
-        const c = connectionRegistry.get(cId);
-        if (c) c.lastPing = Date.now();
-      }
-    });
-
-    // Send complete initial snapshot and current presence list immediately
-    try {
-      const presenceList = getActivePresenceList();
-      ws.send(JSON.stringify({
-        type: "init",
-        serverInstanceId: SERVER_INSTANCE_ID,
-        connection_id,
-        connectionId: connection_id,
-        systemResetVersion,
-        systemResetTimestamp,
-        systemResetId,
-        systemResetBy,
-        data: filterDataForClient({ ...state, chatMessages }, initialRecord.permission, initialRecord.employeeId),
-        activeUsers: getActiveUsersList(),
-        activePresence: presenceList,
-        presenceList,
-        connectedOperators: getActiveOperatorsCount(),
-        liveActiveTerminals: getActiveTerminalsCount()
-      }));
-
-      ws.send(JSON.stringify({
-        type: "PRESENCE_SYNC",
-        connection_id,
-        presenceList,
-        activePresence: presenceList,
-        activeUsers: getActiveUsersList(),
-        connectedOperators: getActiveOperatorsCount(),
-        liveActiveTerminals: getActiveTerminalsCount(),
-        systemResetVersion,
-        timestamp: new Date().toISOString()
-      }));
-    } catch (err) {
-      console.warn("Error sending initial WS state:", err);
-    }
-
-    ws.on("error", (err: any) => {
-      console.warn("WebSocket client error:", err?.message || err);
-    });
-
-    ws.on("message", async (messageData: any) => {
-      ws.isAlive = true;
-      try {
-        const payload = JSON.parse(messageData.toString());
-
-        switch (payload.type) {
-          case "ping": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const info = connectionRegistry.get(connId);
-            if (info) info.lastPing = Date.now();
-            ws.send(JSON.stringify({ 
-              type: "pong", 
-              clientPingTime: payload.clientPingTime, 
-              serverTime: Date.now() 
-            }));
-            break;
-          }
-
-          case "authenticate":
-          case "join": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (!conn) break;
-
-            const deviceId = String(payload.device_id || payload.deviceId || conn.device_id).trim();
-            if (isDeviceRevoked(deviceId)) {
-              (ws as any)._deviceId = deviceId;
-              try {
-                ws.send(JSON.stringify({
-                  type: "DEVICE_REVOKED",
-                  deviceId,
-                  error: "DEVICE_REVOKED",
-                  systemResetVersion
-                }));
-              } catch {}
-              closeDeviceSockets(deviceId, "DEVICE_REVOKED");
-              break;
-            }
-            (ws as any)._deviceId = deviceId;
-
-            // Derive account, role, and permission strictly from server-side device binding, session token, or user table.
-            // Ignore payload.permission for authorization.
-            const wsSessionToken = String(payload.sessionToken || payload.token || "").trim();
-            const tokenSession = wsSessionToken ? sessionTokensMap.get(wsSessionToken) : undefined;
-            const deviceRecord = deviceId ? authorizedDevicesMap.get(deviceId) : undefined;
-
-            const requestedEmpId = String(payload.employeeId || "").trim().toUpperCase();
-            let authoritativeEmpId = "";
-            if (deviceRecord && deviceRecord.status === "AUTHORIZED") {
-              authoritativeEmpId = String(
-                deviceRecord.employeeId ||
-                (deviceRecord.isPrimaryAdminDevice ? "JPMP-002" : "") ||
-                tokenSession?.employeeId ||
-                requestedEmpId
-              ).trim().toUpperCase();
-            } else if (tokenSession) {
-              authoritativeEmpId = String(tokenSession.employeeId || "").trim().toUpperCase();
-            } else {
-              authoritativeEmpId = requestedEmpId;
-            }
-
-            const serverAccount = authoritativeEmpId
-              ? state.registeredUsers.find(u => (u.employeeId || "").toUpperCase().trim() === authoritativeEmpId)
-              : undefined;
-
-            const employeeId = serverAccount?.employeeId || authoritativeEmpId;
-            const username = serverAccount?.username || String(payload.username || (employeeId === 'JPMP-002' ? 'ALDRIN BANAWA' : 'OPERATOR')).trim().toUpperCase();
-            const role = serverAccount?.role || String(payload.role || 'WAREHOUSE OPERATOR').trim().toUpperCase();
-
-            let permission = "LIMITED_ACCESS";
-            if (deviceRecord && deviceRecord.status === "AUTHORIZED") {
-              if (serverAccount) {
-                permission = serverAccount.status === "INACTIVE"
-                  ? "VIEW_ONLY"
-                  : String(serverAccount.permission || "LIMITED_ACCESS").trim().toUpperCase();
-              } else {
-                permission = deviceRecord.isPrimaryAdminDevice
-                  ? "FULL_ACCESS"
-                  : String(deviceRecord.permission || "LIMITED_ACCESS").trim().toUpperCase();
-              }
-            } else if (tokenSession && serverAccount) {
-              permission = serverAccount.status === "INACTIVE"
-                ? "VIEW_ONLY"
-                : String(serverAccount.permission || "LIMITED_ACCESS").trim().toUpperCase();
-            } else if (serverAccount) {
-              // Unverified socket without authorized device or sessionToken: never elevate to FULL_ACCESS
-              permission = (serverAccount.status === "INACTIVE" || serverAccount.permission === "VIEW_ONLY")
-                ? "VIEW_ONLY"
-                : "LIMITED_ACCESS";
-            }
-
-            const activeView = String(payload.activeView || "dashboard").trim();
-            const stationId = String(payload.stationId || "").trim();
-            const sessionId = String(payload.session_id || payload.sessionId || conn.session_id).trim();
-            const userId = String(payload.user_id || payload.userId || (employeeId ? `USR-${employeeId}` : conn.user_id)).trim();
-            const devPlatform = String(payload.platform || conn.platform || "Web").trim();
-            const devName = String(payload.deviceName || `${devPlatform} Terminal`).trim();
-            const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || systemResetVersion;
-
-            // Update this specific connection record in the central registry
-            conn.user_id = userId;
-            conn.session_id = sessionId;
-            conn.device_id = deviceId;
-            conn.deviceId = deviceId;
-            conn.stationId = stationId;
-            conn.employeeId = employeeId;
-            conn.username = username;
-            conn.role = role;
-            conn.permission = permission;
-            conn.platform = devPlatform;
-            conn.deviceName = devName;
-            conn.activeView = activeView;
-            conn.resetVersion = clientResetVersion;
-            conn.lastPing = Date.now();
-
-            if (payload.accountId) {
-              conn.accountId = String(payload.accountId).trim();
-            }
-            if (payload.warehouseId) {
-              conn.warehouseId = String(payload.warehouseId).trim();
-            }
-
-            // Immediately query database for current inventory state for authenticated account/warehouse
-            const authenticatedInventory = queryDatabaseInventory(conn.accountId, conn.warehouseId);
-            if (ws.readyState === WebSocket.OPEN) {
-              try {
-                ws.send(JSON.stringify({
-                  type: "FULL_INVENTORY_SYNC",
-                  serverInstanceId: SERVER_INSTANCE_ID,
-                  accountId: conn.accountId,
-                  warehouseId: conn.warehouseId,
-                  inventory: authenticatedInventory,
-                  stocks: authenticatedInventory,
-                  count: authenticatedInventory.length,
-                  timestamp: new Date().toISOString(),
-                  systemResetVersion,
-                  systemResetId
-                }));
-              } catch (e) {}
-            }
-
-            // Assign socket to account/warehouse room
-            assignSocketToGroup(ws, conn.accountId, conn.warehouseId);
-
-            // Track in activeDevices map as well
-            activeDevices.set(deviceId, {
-              deviceId,
-              deviceName: devName,
-              employeeId,
-              username,
-              role,
-              ip: conn.ip,
-              userAgent: conn.userAgent,
-              appVersion: payload.appVersion || cachedGitHubVersion || 'Live',
-              platform: devPlatform,
-              connectedAt: conn.connectedAt,
-              lastSeen: Date.now(),
-              currentView: activeView
-            });
-
-            const requiresResync = clientResetVersion < systemResetVersion;
-            ws.send(JSON.stringify({
-              type: "auth_confirmed",
-              connection_id: connId,
-              user_id: userId,
-              session_id: sessionId,
-              device_id: deviceId,
-              permission,
-              systemResetVersion,
-              systemResetId,
-              systemResetTimestamp,
-              requiresResync,
-              connectedOperators: getActiveOperatorsCount(),
-              liveActiveTerminals: getActiveTerminalsCount()
-            }));
-
-            // Force resync if client reset_version is behind server
-            if (requiresResync) {
-              ws.send(JSON.stringify({
-                type: "SYNC_REQUIRED",
-                reason: "STALE_RESET_VERSION",
-                systemResetVersion,
-                systemResetId
-              }));
-            }
-
-            // Immediately send the authoritative snapshot matching client permission
-            ws.send(JSON.stringify({
-              type: "init",
-              serverInstanceId: SERVER_INSTANCE_ID,
-              connection_id: connId,
-              connectionId: connId,
-              systemResetVersion,
-              systemResetTimestamp,
-              systemResetId,
-              systemResetBy,
-              data: filterDataForClient({ ...state, chatMessages }, conn.permission, conn.employeeId),
-              activeUsers: getActiveUsersList(),
-              activePresence: getActivePresenceList(),
-              presenceList: getActivePresenceList(),
-              connectedOperators: getActiveOperatorsCount(),
-              liveActiveTerminals: getActiveTerminalsCount()
-            }));
-
-            // Broadcast USER_ONLINE to all clients
-            broadcast({
-              type: "USER_ONLINE",
-              connection_id: connId,
-              user_id: userId,
-              session_id: sessionId,
-              device_id: deviceId,
-              employeeId,
-              username,
-              role,
-              permission,
-              platform: devPlatform,
-              deviceName: devName,
-              activeView,
-              stationId,
-              connectedAt: conn.connectedAt,
-              systemResetVersion
-            });
-
-            // Broadcast updated PRESENCE_SYNC to all clients
-            broadcastPresenceSync();
-
-            const joinMsg: ChatMessage = {
-              id: `sys-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-              sender: "System",
-              text: `${username} (${employeeId || stationId || devName}) connected.`,
-              timestamp: new Date().toISOString(),
-              isSystem: true
-            };
-            chatMessages.push(joinMsg);
-            if (chatMessages.length > 200) chatMessages.shift();
-            broadcast({ type: "chat_broadcast", message: joinMsg });
-            break;
-          }
-
-          case "SUBSCRIBE_WAREHOUSE":
-          case "JOIN_ROOM":
-          case "subscribe_room":
-          case "set_warehouse": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
-            const targetWh = normalizeGroupId(payload.warehouseId || payload.room || conn?.warehouseId, "WH-MAIN");
-
-            if (conn) {
-              conn.accountId = targetAcc;
-              conn.warehouseId = targetWh;
-            }
-
-            // 1. Immediately query database for current inventory state
-            const roomInventory = queryDatabaseInventory(targetAcc, targetWh);
-
-            // 2. Send FULL_INVENTORY_SYNC directly to that socket before subscribing
-            if (ws.readyState === WebSocket.OPEN) {
-              try {
-                ws.send(JSON.stringify({
-                  type: "FULL_INVENTORY_SYNC",
-                  serverInstanceId: SERVER_INSTANCE_ID,
-                  accountId: targetAcc,
-                  warehouseId: targetWh,
-                  inventory: roomInventory,
-                  stocks: roomInventory,
-                  count: roomInventory.length,
-                  timestamp: new Date().toISOString(),
-                  systemResetVersion,
-                  systemResetId
-                }));
-              } catch (e) {}
-            }
-
-            // 3. Assign socket to that room group
-            assignSocketToGroup(ws, targetAcc, targetWh);
-
-            if (ws.readyState === WebSocket.OPEN) {
-              try {
-                ws.send(JSON.stringify({
-                  type: "ROOM_SUBSCRIBED",
-                  accountId: targetAcc,
-                  warehouseId: targetWh,
-                  systemResetVersion
-                }));
-              } catch (e) {}
-            }
-            break;
-          }
-
-          case "GET_INVENTORY":
-          case "REQUEST_INVENTORY_SYNC": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
-            const targetWh = normalizeGroupId(payload.warehouseId || conn?.warehouseId, "WH-MAIN");
-
-            const currentInv = queryDatabaseInventory(targetAcc, targetWh);
-            if (ws.readyState === WebSocket.OPEN) {
-              try {
-                ws.send(JSON.stringify({
-                  type: "FULL_INVENTORY_SYNC",
-                  serverInstanceId: SERVER_INSTANCE_ID,
-                  accountId: targetAcc,
-                  warehouseId: targetWh,
-                  inventory: currentInv,
-                  stocks: currentInv,
-                  count: currentInv.length,
-                  timestamp: new Date().toISOString(),
-                  systemResetVersion,
-                  systemResetId
-                }));
-              } catch (e) {}
-            }
-            break;
-          }
-
-          case "STOCK_ADJUSTMENT":
-          case "adjust_stock": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            const revCheck = rejectIfDeviceRevokedWs(payload, conn);
-            if (revCheck.revoked) break;
-            if (conn?.permission === 'VIEW_ONLY') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
-              break;
-            }
-            const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
-            const targetWh = normalizeGroupId(payload.warehouseId || conn?.warehouseId, "WH-MAIN");
-            const { productId, delta, location, lotNumber, notes } = payload;
-
-            let stockItem = state.stocks.find((s: any) => String(s.id) === String(productId) || s.partCode === productId);
-            const prevQty = stockItem ? Number(stockItem.quantity) || 0 : 0;
-            const appliedDelta = Number(delta !== undefined ? delta : (payload.quantity !== undefined ? payload.quantity : 0)) || 0;
-            const calculatedQty = prevQty + appliedDelta;
-
-            const serverTime = new Date().toISOString();
-            if (stockItem) {
-              stockItem.quantity = Math.max(0, calculatedQty);
-              stockItem.version = (stockItem.version || 1) + 1;
-              stockItem.updated_at = serverTime;
-              stockItem.reset_version = systemResetVersion;
-              if (location) stockItem.location = location;
-              if (lotNumber) stockItem.lotNumber = lotNumber;
-              stockItem.warehouseId = targetWh;
-              stockItem.accountId = targetAcc;
-            } else if (productId) {
-              stockItem = normalizeRecord({
-                id: productId,
-                partCode: productId,
-                description: notes || 'Adjusted Stock Item',
-                type: 'RAW',
-                location: location || 'Zone A',
-                quantity: Math.max(0, calculatedQty),
-                unit: 'PCS',
-                lotNumber: lotNumber || '',
-                receivedDate: serverTime.split('T')[0],
-                fifoColor: getFifoColorForDate(serverTime.split('T')[0], state.fifoColorsByMonth),
-                status: 'APPROVED',
-                warehouseId: targetWh,
-                accountId: targetAcc
-              });
-              state.stocks.push(stockItem);
-            }
-
-            const movementId = `mov-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-            const movementRecord = {
-              id: movementId,
-              product_id: productId,
-              warehouse_id: targetWh,
-              account_id: targetAcc,
-              type: payload.type || 'STOCK_ADJUSTMENT',
-              quantity: appliedDelta,
-              previous_quantity: prevQty,
-              new_quantity: stockItem ? stockItem.quantity : calculatedQty,
-              notes: notes || 'Stock adjustment via WebSocket',
-              user_id: conn?.user_id || 'OPERATOR',
-              user_name: conn?.username || 'Operator',
-              device_id: conn?.device_id || 'TERMINAL',
-              created_at: serverTime,
-              reset_version: systemResetVersion
-            } as StockMovement;
-
-            if (!state.stockMovements) state.stockMovements = [];
-            state.stockMovements.unshift(movementRecord);
-            stateRevision++;
-
-            // COMMIT DATABASE SYNCHRONOUSLY FIRST
-            commitDatabase();
-
-            // BROADCAST TO ALL ACTIVE CONNECTIONS IN SAME ACCOUNT / WAREHOUSE ROOM
-            broadcastInventoryEvent({
-              type: "STOCK_ADJUSTMENT",
-              accountId: targetAcc,
-              warehouseId: targetWh,
-              collection: "stocks",
-              record: stockItem,
-              movement: movementRecord,
-              actionDesc: notes || `Adjusted stock for ${productId} (${prevQty} -> ${stockItem?.quantity})`,
-              author: conn?.username || "Operator",
-              user_id: conn?.user_id,
-              device_id: conn?.device_id
-            });
-            break;
-          }
-
-          case "LOCATION_TRANSFER":
-          case "transfer_location": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            const revCheck = rejectIfDeviceRevokedWs(payload, conn);
-            if (revCheck.revoked) break;
-            if (conn?.permission === 'VIEW_ONLY') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
-              break;
-            }
-            const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
-            const sourceWh = normalizeGroupId(payload.fromWarehouseId || payload.warehouseId || conn?.warehouseId, "WH-MAIN");
-            const targetWh = normalizeGroupId(payload.toWarehouseId || payload.warehouseId || conn?.warehouseId, "WH-MAIN");
-            const { productId, fromLocation, toLocation, quantity, notes } = payload;
-
-            let stockItem = state.stocks.find((s: any) => String(s.id) === String(productId) || s.partCode === productId);
-            const serverTime = new Date().toISOString();
-            if (stockItem) {
-              if (toLocation) stockItem.location = toLocation;
-              stockItem.warehouseId = targetWh;
-              stockItem.version = (stockItem.version || 1) + 1;
-              stockItem.updated_at = serverTime;
-              stockItem.reset_version = systemResetVersion;
-            }
-
-            const movementId = `mov-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-            const movementRecord = {
-              id: movementId,
-              product_id: productId,
-              warehouse_id: targetWh,
-              account_id: targetAcc,
-              type: 'LOCATION_TRANSFER',
-              quantity: Number(quantity) || 0,
-              notes: notes || `Transferred from ${fromLocation || sourceWh} to ${toLocation || targetWh}`,
-              user_id: conn?.user_id || 'OPERATOR',
-              user_name: conn?.username || 'Operator',
-              device_id: conn?.device_id || 'TERMINAL',
-              created_at: serverTime,
-              reset_version: systemResetVersion
-            } as unknown as StockMovement;
-
-            if (!state.stockMovements) state.stockMovements = [];
-            state.stockMovements.unshift(movementRecord);
-            stateRevision++;
-
-            commitDatabase();
-
-            broadcastInventoryEvent({
-              type: "LOCATION_TRANSFER",
-              accountId: targetAcc,
-              warehouseId: targetWh,
-              collection: "stocks",
-              record: stockItem,
-              movement: movementRecord,
-              actionDesc: notes || `Location transfer for ${productId} to ${toLocation || targetWh}`,
-              author: conn?.username || "Operator",
-              user_id: conn?.user_id,
-              device_id: conn?.device_id
-            });
-            break;
-          }
-
-          case "PICK_PACK_SHIP":
-          case "pick_pack_ship": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            const revCheck = rejectIfDeviceRevokedWs(payload, conn);
-            if (revCheck.revoked) break;
-            if (conn?.permission === 'VIEW_ONLY') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
-              break;
-            }
-            const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
-            const targetWh = normalizeGroupId(payload.warehouseId || conn?.warehouseId, "WH-MAIN");
-            const { orderId, operationType, items, notes } = payload;
-
-            const serverTime = new Date().toISOString();
-            let affectedStockItem: any = null;
-
-            if (Array.isArray(items)) {
-              for (const item of items) {
-                const pId = item.productId || item.id || item.partCode;
-                const qty = Number(item.quantity) || 0;
-                let stockItem = state.stocks.find((s: any) => String(s.id) === String(pId) || s.partCode === pId);
-                if (stockItem) {
-                  if (operationType === 'SHIP' || operationType === 'PICK') {
-                    stockItem.quantity = Math.max(0, (Number(stockItem.quantity) || 0) - qty);
-                  }
-                  stockItem.version = (stockItem.version || 1) + 1;
-                  stockItem.updated_at = serverTime;
-                  stockItem.reset_version = systemResetVersion;
-                  affectedStockItem = stockItem;
-                }
-              }
-            }
-
-            const movementId = `mov-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-            const movementRecord = {
-              id: movementId,
-              warehouse_id: targetWh,
-              account_id: targetAcc,
-              type: operationType || 'PICK_PACK_SHIP',
-              reference_number: orderId,
-              notes: notes || `${operationType || 'Pick/Pack/Ship'} operation for order ${orderId}`,
-              user_id: conn?.user_id || 'OPERATOR',
-              user_name: conn?.username || 'Operator',
-              device_id: conn?.device_id || 'TERMINAL',
-              created_at: serverTime,
-              reset_version: systemResetVersion
-            } as unknown as StockMovement;
-
-            if (!state.stockMovements) state.stockMovements = [];
-            state.stockMovements.unshift(movementRecord);
-            stateRevision++;
-
-            commitDatabase();
-
-            recordAuditTrail({
-              timestamp: serverTime,
-              actor: conn?.username || 'Operator',
-              actorId: conn?.employeeId || conn?.user_id || 'OPERATOR',
-              action: 'STOCK_MOVEMENT',
-              recordType: 'stockMovements',
-              recordId: movementId,
-              summary: `${operationType || 'PICK_PACK_SHIP'} for order ${orderId}`,
-              details: notes || undefined,
-              deviceId: conn?.device_id || conn?.deviceId
-            });
-
-            broadcastInventoryEvent({
-              type: "PICK_PACK_SHIP",
-              accountId: targetAcc,
-              warehouseId: targetWh,
-              collection: "stocks",
-              record: affectedStockItem,
-              movement: movementRecord,
-              actionDesc: notes || `${operationType || 'Pick/Pack/Ship'} completed for order ${orderId}`,
-              author: conn?.username || "Operator",
-              user_id: conn?.user_id,
-              device_id: conn?.device_id
-            });
-            break;
-          }
-
-          case "record_upsert":
-          case "upsert_record":
-          case "DATA_CREATE":
-          case "DATA_UPDATE":
-          case "create_record":
-          case "update_record": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || conn?.resetVersion || systemResetVersion;
-            const reqDevId = String(payload.device_id || payload.deviceId || conn?.device_id || conn?.deviceId || payload.record?.device_id || payload.record?.deviceId || "").trim();
-            const clientMutationId = payload.clientMutationId || payload.id;
-
-            if (isDeviceRevoked(reqDevId)) {
-              (ws as any)._deviceId = reqDevId;
-              ws.send(JSON.stringify({
-                type: "ERROR",
-                error: "DEVICE_REVOKED",
-                status: 403,
-                deviceId: reqDevId,
-                collection: payload.collection,
-                recordId: payload.record?.id || payload.record_id,
-                clientMutationId,
-                systemResetVersion
-              }));
-              closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
-              break;
-            }
-
-            const upsertRes = executeRecordUpsert({
-              collection: payload.collection,
-              record: payload.record,
-              author: payload.author || conn?.username || "Operator",
-              employeeId: payload.employeeId || conn?.employeeId,
-              user_id: payload.user_id || conn?.user_id,
-              device_id: reqDevId,
-              actionDesc: payload.actionDesc,
-              expectedVersion: payload.expectedVersion,
-              reset_version: clientResetVersion,
-              userPermission: conn?.permission,
-              excludeSocket: ws
-            });
-
-            if (!upsertRes.success) {
-              ws.send(JSON.stringify({
-                type: "ERROR",
-                error: upsertRes.error,
-                status: upsertRes.status,
-                collection: payload.collection,
-                recordId: payload.record?.id || payload.record_id,
-                clientMutationId,
-                currentRecord: upsertRes.currentRecord || upsertRes.confirmedRecord,
-                confirmedRecord: upsertRes.confirmedRecord || upsertRes.currentRecord,
-                systemResetVersion,
-                systemResetId
-              }));
-              if (upsertRes.status === 409 && typeof upsertRes.error === "string" && upsertRes.error.includes("STALE_RESET_VERSION")) {
-                ws.send(JSON.stringify({
-                  type: "SYNC_REQUIRED",
-                  reason: "STALE_RESET_VERSION",
-                  systemResetVersion,
-                  systemResetId
-                }));
-              }
-            } else {
-              ws.send(JSON.stringify({
-                type: "UPSERT_CONFIRMED",
-                clientMutationId,
-                collection: payload.collection,
-                record: upsertRes.confirmedRecord,
-                isCreation: upsertRes.isCreation,
-                systemResetVersion
-              }));
-            }
-            break;
-          }
-
-          case "record_delete":
-          case "delete_record":
-          case "DATA_DELETE": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || conn?.resetVersion || systemResetVersion;
-            const targetId = String(payload.id || payload.record_id || payload.recordId || "");
-            const reqDevId = String(payload.device_id || payload.deviceId || conn?.device_id || conn?.deviceId || "").trim();
-            const clientMutationId = payload.clientMutationId;
-
-            if (isDeviceRevoked(reqDevId)) {
-              (ws as any)._deviceId = reqDevId;
-              ws.send(JSON.stringify({
-                type: "ERROR",
-                error: "DEVICE_REVOKED",
-                status: 403,
-                deviceId: reqDevId,
-                collection: payload.collection,
-                recordId: targetId,
-                clientMutationId,
-                systemResetVersion
-              }));
-              closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
-              break;
-            }
-
-            const deleteRes = executeRecordDelete({
-              collection: payload.collection,
-              id: targetId,
-              author: payload.author || conn?.username || "Operator",
-              employeeId: payload.employeeId || conn?.employeeId,
-              user_id: payload.user_id || conn?.user_id,
-              device_id: reqDevId,
-              actionDesc: payload.actionDesc,
-              expectedVersion: payload.expectedVersion,
-              reset_version: clientResetVersion,
-              userPermission: conn?.permission,
-              excludeSocket: ws
-            });
-
-            if (!deleteRes.success) {
-              ws.send(JSON.stringify({
-                type: "ERROR",
-                error: deleteRes.error,
-                status: deleteRes.status,
-                collection: payload.collection,
-                recordId: targetId,
-                clientMutationId,
-                currentRecord: deleteRes.currentRecord || deleteRes.confirmedRecord,
-                confirmedRecord: deleteRes.confirmedRecord || deleteRes.currentRecord,
-                systemResetVersion,
-                systemResetId
-              }));
-            } else {
-              ws.send(JSON.stringify({
-                type: "DELETE_CONFIRMED",
-                clientMutationId,
-                collection: payload.collection,
-                id: targetId,
-                systemResetVersion
-              }));
-            }
-            break;
-          }
-
-          case "update_collection":
-          case "sync_collection": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || conn?.resetVersion || systemResetVersion;
-            const col = payload.collection;
-            const reqDevId = String(payload.device_id || payload.deviceId || conn?.device_id || conn?.deviceId || "").trim();
-
-            if (isDeviceRevoked(reqDevId)) {
-              (ws as any)._deviceId = reqDevId;
-              ws.send(JSON.stringify({ type: "ERROR", error: "DEVICE_REVOKED", status: 403, deviceId: reqDevId, collection: col }));
-              closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
-              break;
-            }
-
-            if (clientResetVersion < systemResetVersion) {
-              ws.send(JSON.stringify({
-                type: "ERROR",
-                error: "STALE_RESET_VERSION: Central database was reset. Stale sync rejected.",
-                status: 409,
-                systemResetVersion,
-                systemResetId
-              }));
-              break;
-            }
-
-            if (!col || !(col in state)) {
-              ws.send(JSON.stringify({ type: "ERROR", error: `Unknown collection: ${col}`, status: 400 }));
-              break;
-            }
-
-            if (conn?.permission === 'VIEW_ONLY') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
-              break;
-            }
-
-            if (col === 'operationalRoles') {
-              if (Array.isArray(payload.data)) {
-                const cleaned = Array.from(new Set<string>(payload.data.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
-                if (cleaned.length > 0) {
-                  state.operationalRoles = cleaned;
-                  stateRevision++;
-                  commitDatabase();
-                  recordAuditTrail({
-                    actor: conn?.username || payload.author || 'Admin',
-                    actorId: conn?.employeeId || payload.employeeId || 'ADMIN',
-                    action: 'UPDATE',
-                    recordType: 'operationalRoles',
-                    recordId: 'operationalRoles',
-                    summary: `Updated operational roles (${cleaned.length} roles)`,
-                    deviceId: reqDevId
-                  });
-                  broadcast({
-                    type: "roles_updated",
-                    roles: state.operationalRoles,
-                    systemResetVersion
-                  });
-                  broadcast({
-                    type: "collection_updated",
-                    collection: "operationalRoles",
-                    data: state.operationalRoles,
-                    systemResetVersion
-                  });
-                }
-              }
-              break;
-            }
-
-            if (col === 'receivingCategories') {
-              if (Array.isArray(payload.data)) {
-                const cleaned = Array.from(new Set<string>(payload.data.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
-                if (cleaned.length > 0) {
-                  state.receivingCategories = cleaned;
-                  stateRevision++;
-                  commitDatabase();
-                  recordAuditTrail({
-                    actor: conn?.username || payload.author || 'Admin',
-                    actorId: conn?.employeeId || payload.employeeId || 'ADMIN',
-                    action: 'UPDATE',
-                    recordType: 'receivingCategories',
-                    recordId: 'receivingCategories',
-                    summary: `Updated receiving categories (${cleaned.length} categories)`,
-                    deviceId: reqDevId
-                  });
-                  broadcast({
-                    type: "categories_updated",
-                    categories: state.receivingCategories,
-                    systemResetVersion
-                  });
-                  broadcast({
-                    type: "collection_updated",
-                    collection: "receivingCategories",
-                    data: state.receivingCategories,
-                    systemResetVersion
-                  });
-                }
-              }
-              break;
-            }
-
-            if (col === 'fifoColorsByMonth') {
-              if (payload.data && typeof payload.data === 'object') {
-                state.fifoColorsByMonth = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...payload.data };
-                stateRevision++;
-                commitDatabase();
-                recordAuditTrail({
-                  actor: conn?.username || payload.author || 'Admin',
-                  actorId: conn?.employeeId || payload.employeeId || 'ADMIN',
-                  action: 'UPDATE',
-                  recordType: 'fifoColorsByMonth',
-                  recordId: 'fifoColorsByMonth',
-                  summary: 'Updated monthly FIFO color calendar',
-                  deviceId: reqDevId
-                });
-                broadcast({
-                  type: "fifo_colors_updated",
-                  fifoColorsByMonth: state.fifoColorsByMonth,
-                  systemResetVersion
-                });
-                broadcast({
-                  type: "collection_updated",
-                  collection: "fifoColorsByMonth",
-                  data: state.fifoColorsByMonth,
-                  systemResetVersion
-                });
-              }
-              break;
-            }
-
-            const items: any[] = Array.isArray(payload.data) ? payload.data : [];
-            const currentList: any[] = (state as any)[col] || [];
-            const listMap = new Map<string, any>(currentList.map(item => [String(item.id || item.record_id), item]));
-
-            let modifiedCount = 0;
-            const serverTime = new Date().toISOString();
-            const effectiveAuthor = payload.author || conn?.username || "Operator";
-            const effectiveEmpId = payload.employeeId || conn?.employeeId;
-            const effectiveDevId = payload.device_id || conn?.deviceId || 'DEV-CENTRAL';
-            const effectiveUserId = payload.user_id || conn?.user_id || (effectiveEmpId ? `USR-${effectiveEmpId}` : `USR-${effectiveAuthor}`);
-
-            for (const item of items) {
-              if (!item) continue;
-              const recId = String(item.id || item.record_id || `REC-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`);
-              if (deletedRecordTombstones.has(recId)) continue; // Never resurrect deleted items
-
-              const existing = listMap.get(recId);
-              if (existing) {
-                const clientVer = Number(item.version) || 1;
-                const existingVer = Number(existing.version) || 1;
-                if (existingVer > clientVer) continue;
-
-                const nextVersion = existingVer + 1;
-                const updatedRec = {
-                  ...existing,
-                  ...item,
-                  id: recId,
-                  record_id: recId,
-                  version: nextVersion,
-                  updated_at: serverTime,
-                  updated_by: effectiveAuthor,
-                  user_id: effectiveUserId,
-                  device_id: effectiveDevId,
-                  reset_version: systemResetVersion
-                };
-
-                if (col === 'registeredUsers') {
-                  // CRITICAL SECURITY FIX: Batch sync MUST NEVER overwrite operator PINs or hashes!
-                  // Operator PINs can only be modified via explicit Super Admin /api/accounts/update-pin.
-                  if (existing.pinHash) updatedRec.pinHash = existing.pinHash;
-                  if (existing.pinSalt) updatedRec.pinSalt = existing.pinSalt;
-                  if (existing.pin) updatedRec.pin = existing.pin;
-                  if (existing.pin_hash) updatedRec.pin_hash = existing.pin_hash;
-                  if (existing.mustChangePin !== undefined) updatedRec.mustChangePin = existing.mustChangePin;
-                  if (existing.isPinCompromised !== undefined) updatedRec.isPinCompromised = existing.isPinCompromised;
-                  if (existing.pinChangedAt) updatedRec.pinChangedAt = existing.pinChangedAt;
-                  if (existing.pinChangedBy) updatedRec.pinChangedBy = existing.pinChangedBy;
-                }
-
-                listMap.set(recId, updatedRec);
-                modifiedCount++;
-              } else {
-                if (col === 'registeredUsers') {
-                  // Security Guard: New operator accounts cannot be inserted via blind collection sync.
-                  // Must use dedicated /api/accounts/register with full credentials.
-                  continue;
-                }
-                const newRec = {
-                  ...item,
-                  id: recId,
-                  record_id: recId,
-                  version: Number(item.version) || 1,
-                  created_at: item.created_at || serverTime,
-                  created_by: item.created_by || effectiveAuthor,
-                  updated_at: serverTime,
-                  updated_by: effectiveAuthor,
-                  user_id: effectiveUserId,
-                  device_id: effectiveDevId,
-                  reset_version: systemResetVersion
-                };
-                listMap.set(recId, newRec);
-                modifiedCount++;
-              }
-            }
-
-            if (modifiedCount > 0) {
-              (state as any)[col] = Array.from(listMap.values());
-              stateRevision++;
-              commitDatabase();
-
-              recordAuditTrail({
-                timestamp: serverTime,
-                actor: effectiveAuthor,
-                actorId: effectiveEmpId || effectiveUserId,
-                action: 'SYNC',
-                recordType: col,
-                recordId: `${modifiedCount} records`,
-                summary: `Synced ${col} (${modifiedCount} item(s) modified)`,
-                deviceId: effectiveDevId
-              });
-
-              logger.debug(`[CENTRAL-DB] [WS-SYNC-COLLECTION] Collection: ${col} | Items: ${items.length} | Modified: ${modifiedCount} | User: ${effectiveUserId} | Device: ${effectiveDevId}`);
-
-              if (['stocks', 'issuances', 'deliveries', 'receiving', 'returns', 'recycling'].includes(col)) {
-                broadcastInventoryEvent({
-                  type: "INVENTORY_UPDATE",
-                  collection: col,
-                  actionDesc: `Synchronized ${col} collection (${modifiedCount} items modified)`,
-                  author: effectiveAuthor,
-                  user_id: effectiveUserId,
-                  device_id: effectiveDevId
-                });
-              } else {
-                broadcast({
-                  type: "collection_updated",
-                  collection: col,
-                  data: (state as any)[col],
-                  systemResetVersion
-                });
-              }
-            }
-
-            ws.send(JSON.stringify({
-              type: "COLLECTION_SYNC_CONFIRMED",
-              collection: col,
-              count: (state as any)[col]?.length || 0,
-              systemResetVersion
-            }));
-            break;
-          }
-
-          case "batch_mutations":
-          case "sync_batch": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            const clientResetVersion = Number(payload.reset_version || payload.currentResetVersion) || conn?.resetVersion || systemResetVersion;
-            const reqDevId = String(payload.device_id || payload.deviceId || conn?.device_id || conn?.deviceId || "").trim();
-
-            if (isDeviceRevoked(reqDevId)) {
-              (ws as any)._deviceId = reqDevId;
-              ws.send(JSON.stringify({ type: "ERROR", error: "DEVICE_REVOKED", status: 403, deviceId: reqDevId }));
-              closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
-              break;
-            }
-
-            if (clientResetVersion < systemResetVersion) {
-              ws.send(JSON.stringify({
-                type: "ERROR",
-                error: "STALE_RESET_VERSION: Central database was reset.",
-                status: 409,
-                systemResetVersion,
-                systemResetId
-              }));
-              break;
-            }
-
-            const mutations = Array.isArray(payload.mutations) ? payload.mutations : [];
-            let processed = 0;
-            const results: any[] = [];
-            let batchAbortedRevoked = false;
-            for (const m of mutations) {
-              const mutDevId = String(m.device_id || m.deviceId || reqDevId).trim();
-              if (isDeviceRevoked(mutDevId)) {
-                (ws as any)._deviceId = mutDevId;
-                ws.send(JSON.stringify({ type: "ERROR", error: "DEVICE_REVOKED", status: 403, deviceId: mutDevId }));
-                closeDeviceSockets(mutDevId, "DEVICE_REVOKED");
-                batchAbortedRevoked = true;
-                break;
-              }
-              if (m.type === 'upsert' && m.collection && m.record) {
-                const res = executeRecordUpsert({
-                  collection: m.collection,
-                  record: m.record,
-                  author: m.author || conn?.username || "Operator",
-                  employeeId: m.employeeId || conn?.employeeId,
-                  user_id: m.user_id || conn?.user_id,
-                  device_id: m.device_id || m.deviceId || reqDevId,
-                  actionDesc: m.actionDesc,
-                  expectedVersion: m.expectedVersion,
-                  reset_version: clientResetVersion,
-                  userPermission: conn?.permission,
-                  excludeSocket: ws
-                });
-                if (res.success) processed++;
-                results.push({
-                  id: m.id,
-                  mutationId: m.id,
-                  type: m.type,
-                  collection: m.collection,
-                  recordId: String(m.record?.id || m.record?.record_id || ""),
-                  success: res.success,
-                  status: res.status,
-                  error: res.error,
-                  record: res.confirmedRecord,
-                  currentRecord: res.currentRecord || res.confirmedRecord
-                });
-              } else if (m.type === 'delete' && m.collection && (m.id || m.recordId)) {
-                const targetId = String(m.id || m.recordId);
-                const res = executeRecordDelete({
-                  collection: m.collection,
-                  id: targetId,
-                  author: m.author || conn?.username || "Operator",
-                  employeeId: m.employeeId || conn?.employeeId,
-                  user_id: m.user_id || conn?.user_id,
-                  device_id: m.device_id || m.deviceId || reqDevId,
-                  actionDesc: m.actionDesc,
-                  expectedVersion: m.expectedVersion,
-                  reset_version: clientResetVersion,
-                  userPermission: conn?.permission,
-                  excludeSocket: ws
-                });
-                if (res.success) processed++;
-                results.push({
-                  id: m.id,
-                  mutationId: m.id,
-                  type: m.type,
-                  collection: m.collection,
-                  recordId: targetId,
-                  success: res.success,
-                  status: res.status,
-                  error: res.error,
-                  currentRecord: res.currentRecord || res.confirmedRecord
-                });
-              }
-            }
-
-            if (batchAbortedRevoked) break;
-
-            logger.debug(`[CENTRAL-DB] [WS-BATCH-MUTATIONS] Processed ${processed}/${mutations.length} mutations | User: ${conn?.username || 'Operator'} | Device: ${reqDevId || 'Terminal'}`);
-
-            ws.send(JSON.stringify({
-              type: "BATCH_SYNC_CONFIRMED",
-              processed,
-              total: mutations.length,
-              results,
-              systemResetVersion
-            }));
-            break;
-          }
-
-          case "request_sync":
-          case "resync":
-          case "get_state": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            const presenceList = getActivePresenceList();
-            ws.send(JSON.stringify({
-              type: "init",
-              serverInstanceId: SERVER_INSTANCE_ID,
-              connection_id: connId,
-              connectionId: connId,
-              systemResetVersion,
-              systemResetTimestamp,
-              systemResetId,
-              systemResetBy,
-              data: filterDataForClient({ ...state, chatMessages }, conn?.permission || "LIMITED_ACCESS", conn?.employeeId),
-              activeUsers: getActiveUsersList(),
-              activePresence: presenceList,
-              presenceList,
-              connectedOperators: getActiveOperatorsCount(),
-              liveActiveTerminals: getActiveTerminalsCount()
-            }));
-            ws.send(JSON.stringify({
-              type: "PRESENCE_SYNC",
-              connection_id: connId,
-              presenceList,
-              activePresence: presenceList,
-              activeUsers: getActiveUsersList(),
-              connectedOperators: getActiveOperatorsCount(),
-              liveActiveTerminals: getActiveTerminalsCount(),
-              systemResetVersion,
-              timestamp: new Date().toISOString()
-            }));
-            break;
-          }
-
-          case "presence_update": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
-            if (conn) {
-              if (payload.activeView) conn.activeView = payload.activeView;
-              if (payload.stationId) conn.stationId = payload.stationId;
-              // Never allow presence_update to elevate or alter server-derived role/permission
-              if (payload.username && !conn.employeeId) conn.username = payload.username.toUpperCase();
-              conn.lastPing = Date.now();
-              broadcastPresenceSync();
-            }
-            break;
-          }
-
-          case "force_sync_all":
-          case "sync_all_workstations": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
-            const author = payload.author || conn?.username || "SUPER ADMINISTRATOR";
-            broadcast({
-              type: "SYNC_REQUIRED",
-              author,
-              reason: "CLUSTER_SYNC_REQUESTED",
-              systemResetVersion,
-              timestamp: new Date().toISOString()
-            });
-            broadcast({
-              type: "force_sync",
-              triggeredBy: author
-            });
-            break;
-          }
-
-          case "get_presence": {
-            const presenceList = getActivePresenceList();
-            ws.send(JSON.stringify({
-              type: "PRESENCE_SYNC",
-              presenceList,
-              activePresence: presenceList,
-              activeUsers: getActiveUsersList(),
-              connectedOperators: getActiveOperatorsCount(),
-              liveActiveTerminals: getActiveTerminalsCount(),
-              systemResetVersion,
-              timestamp: new Date().toISOString()
-            }));
-            break;
-          }
-
-          case "chat": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
-            if (conn?.permission === 'VIEW_ONLY') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
-              break;
-            }
-            const newMsg: ChatMessage = {
-              id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-              sender: payload.username || payload.sender || "Staff",
-              text: String(payload.text || '').trim(),
-              timestamp: new Date().toISOString(),
-              isSystem: false
-            };
-            chatMessages.push(newMsg);
-            if (chatMessages.length > 200) chatMessages.shift();
-            commitDatabase();
-
-            broadcast({
-              type: "chat_broadcast",
-              message: newMsg
-            });
-            break;
-          }
-
-          case "register_account": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
-            if (conn?.permission === 'VIEW_ONLY') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
-              break;
-            }
-            const newUser = payload.user;
-            if (!newUser || !newUser.employeeId) break;
-            const cleanEmpId = String(newUser.employeeId).trim().toUpperCase();
-            const cleanUsername = String(newUser.username || '').trim().toUpperCase();
-
-            unmarkUserTombstone(cleanEmpId);
-
-            const existingIdx = state.registeredUsers.findIndex(u => u.employeeId.toUpperCase() === cleanEmpId);
-            
-            // Generate unpredictable 4-digit PIN if none supplied and hash with scrypt
-            let cleanPin = String(newUser.pin || '').trim().replace(/\D/g, '').slice(0, 6);
-            if (!cleanPin || cleanPin.length < 4 || cleanPin === '1234') {
-              cleanPin = generateSecureRandom4DigitPin();
-            }
-            const { pinHash, pinSalt } = hashPinScrypt(cleanPin);
-
-            const userToStore: RegisteredAccount = {
-              id: newUser.id || `USR-${cleanEmpId}`,
-              employeeId: cleanEmpId,
-              username: cleanUsername,
-              role: String(newUser.role || 'WAREHOUSE CLERK').trim().toUpperCase(),
-              phoneNumber: newUser.phoneNumber ? String(newUser.phoneNumber).trim() : '',
-              permission: String(newUser.permission || 'LIMITED_ACCESS').trim(),
-              pinHash,
-              pinSalt,
-              isPinCompromised: false,
-              status: 'ACTIVE',
-              registeredBy: payload.author || newUser.registeredBy || 'JPMP-002 (ALDRIN BANAWA)',
-              registeredBySuperAdmin: true,
-              registeredAt: newUser.registeredAt || new Date().toISOString(),
-              version: 1,
-              updated_at: new Date().toISOString(),
-              reset_version: systemResetVersion
-            };
-
-            if (existingIdx !== -1) {
-              state.registeredUsers[existingIdx] = userToStore;
-            } else {
-              state.registeredUsers.push(userToStore);
-            }
-            stateRevision++;
-            commitDatabase();
-
-            const authorName = payload.author || "Super Administrator";
-            broadcast({
-              type: "account_registered",
-              user: sanitizeUserForClient(userToStore),
-              author: authorName,
-              systemResetVersion
-            });
-            broadcast({
-              type: "account_created",
-              account: sanitizeUserForClient(userToStore),
-              user: sanitizeUserForClient(userToStore),
-              systemResetVersion
-            });
-            broadcast({
-              type: "collection_updated",
-              collection: "registeredUsers",
-              data: state.registeredUsers,
-              systemResetVersion
-            });
-            break;
-          }
-
-          case "update_account": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
-            if (conn?.permission === 'VIEW_ONLY') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
-              break;
-            }
-            const updated = payload.user;
-            if (!updated || !updated.employeeId) break;
-            const cleanEmpId = String(updated.employeeId).trim().toUpperCase();
-            const existingIdx = state.registeredUsers.findIndex(u => u.employeeId.toUpperCase() === cleanEmpId);
-            if (existingIdx === -1) break;
-
-            const existing = state.registeredUsers[existingIdx];
-            const isSuper = cleanEmpId === 'JPMP-002';
-            const mergedUser: RegisteredAccount = {
-              ...existing,
-              ...updated,
-              employeeId: isSuper ? 'JPMP-002' : cleanEmpId,
-              username: String(updated.username || existing.username).trim().toUpperCase(),
-              role: isSuper ? 'SUPER ADMINISTRATOR' : String(updated.role || existing.role).trim().toUpperCase(),
-              permission: isSuper ? 'FULL_ACCESS' : String(updated.permission || existing.permission).trim(),
-              // CRITICAL SECURITY FIX: General profile update cannot change PIN! PIN changes require /api/accounts/update-pin.
-              pinHash: existing.pinHash,
-              pinSalt: existing.pinSalt,
-              ...(existing.pin && !existing.pinHash ? { pin: existing.pin } : {}),
-              mustChangePin: existing.mustChangePin,
-              isPinCompromised: existing.isPinCompromised,
-              pinChangedAt: existing.pinChangedAt,
-              pinChangedBy: existing.pinChangedBy,
-              version: (existing.version || 1) + 1,
-              updated_at: new Date().toISOString(),
-              reset_version: systemResetVersion
-            };
-            if (mergedUser.pinHash) delete mergedUser.pin;
-
-            state.registeredUsers[existingIdx] = mergedUser;
-            stateRevision++;
-            commitDatabase();
-
-            const authorName = payload.author || "Admin";
-            broadcast({
-              type: "account_updated",
-              user: sanitizeUserForClient(mergedUser),
-              account: sanitizeUserForClient(mergedUser),
-              author: authorName,
-              systemResetVersion
-            });
-            broadcast({
-              type: "collection_updated",
-              collection: "registeredUsers",
-              data: state.registeredUsers,
-              systemResetVersion
-            });
-            break;
-          }
-
-          case "delete_account": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
-            if (conn?.permission === 'VIEW_ONLY') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
-              break;
-            }
-            const cleanId = String(payload.employeeId || '').trim().toUpperCase();
-            if (!cleanId || cleanId === 'JPMP-002') break;
-
-            markUserTombstone(cleanId);
-            state.registeredUsers = state.registeredUsers.filter(u => u.employeeId.toUpperCase().trim() !== cleanId);
-            stateRevision++;
-            commitDatabase();
-
-            broadcast({
-              type: "account_deleted",
-              employeeId: cleanId,
-              systemResetVersion
-            });
-            broadcast({
-              type: "collection_updated",
-              collection: "registeredUsers",
-              data: state.registeredUsers,
-              systemResetVersion
-            });
-            break;
-          }
-
-          case "all_accounts_cleared": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
-            if (conn?.permission !== 'FULL_ACCESS') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: Only Super Administrator can clear accounts.", status: 403 }));
-              break;
-            }
-            const superAdmin = state.registeredUsers.find(u => u.employeeId.toUpperCase().trim() === 'JPMP-002');
-            state.registeredUsers.forEach(u => {
-              if (u.employeeId.toUpperCase().trim() !== 'JPMP-002') {
-                markUserTombstone(u.employeeId);
-              }
-            });
-
-            if (superAdmin) {
-              state.registeredUsers = [{ ...superAdmin }];
-            } else {
-              state.registeredUsers = [];
-              ensureSuperAdminSeed(true);
-            }
-            stateRevision++;
-            commitDatabase();
-
-            broadcast({
-              type: "all_accounts_cleared",
-              data: state.registeredUsers,
-              systemResetVersion
-            });
-            broadcast({
-              type: "accounts_cleared",
-              systemResetVersion
-            });
-            broadcast({
-              type: "collection_updated",
-              collection: "registeredUsers",
-              data: state.registeredUsers,
-              systemResetVersion
-            });
-            break;
-          }
-
-          case "update_roles":
-          case "manage_roles": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
-            if (conn?.permission === 'VIEW_ONLY') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
-              break;
-            }
-            if (Array.isArray(payload.roles)) {
-              const cleaned = Array.from(new Set<string>(payload.roles.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
-              if (cleaned.length > 0) {
-                state.operationalRoles = cleaned;
-                stateRevision++;
-                commitDatabase();
-                broadcast({
-                  type: "roles_updated",
-                  roles: state.operationalRoles,
-                  systemResetVersion
-                });
-                broadcast({
-                  type: "collection_updated",
-                  collection: "operationalRoles",
-                  data: state.operationalRoles,
-                  systemResetVersion
-                });
-              }
-            }
-            break;
-          }
-
-          case "update_categories":
-          case "manage_categories": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
-            if (conn?.permission === 'VIEW_ONLY') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
-              break;
-            }
-            let recModified = false;
-            let retModified = false;
-            let stocksModified = false;
-            let categoriesModified = false;
-
-            if (payload.renameData && payload.renameData.oldCat && payload.renameData.newCat) {
-              const cleanOld = String(payload.renameData.oldCat).trim().toUpperCase();
-              const cleanNew = String(payload.renameData.newCat).trim().toUpperCase();
-              if (cleanOld && cleanNew && cleanOld !== cleanNew) {
-                // Update receiving records
-                state.receiving = state.receiving.map(r => {
-                  let ch = false;
-                  const up = { ...r };
-                  if ((r.supplierOrDept || '').trim().toUpperCase() === cleanOld) {
-                    up.supplierOrDept = cleanNew;
-                    ch = true;
-                  }
-                  if (((r as any).category || '').trim().toUpperCase() === cleanOld) {
-                    (up as any).category = cleanNew;
-                    ch = true;
-                  }
-                  if (ch) {
-                    recModified = true;
-                    return { ...up, version: (r.version || 1) + 1, updated_at: new Date().toISOString() };
-                  }
-                  return r;
-                });
-
-                // Update return records
-                state.returns = state.returns.map(ret => {
-                  if ((ret.category || '').trim().toUpperCase() === cleanOld) {
-                    retModified = true;
-                    return { ...ret, category: cleanNew, version: (ret.version || 1) + 1, updated_at: new Date().toISOString() };
-                  }
-                  return ret;
-                });
-
-                // Update stocks
-                state.stocks = state.stocks.map(s => {
-                  if (((s as any).category || '').trim().toUpperCase() === cleanOld) {
-                    stocksModified = true;
-                    return { ...s, category: cleanNew, version: (s.version || 1) + 1, updated_at: new Date().toISOString() };
-                  }
-                  return s;
-                });
-              }
-            }
-
-            if (Array.isArray(payload.categories)) {
-              const cleaned = Array.from(new Set<string>(payload.categories.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
-              if (cleaned.length > 0) {
-                state.receivingCategories = cleaned;
-                categoriesModified = true;
-              }
-            }
-
-            if (categoriesModified || recModified || retModified || stocksModified) {
-              stateRevision++;
-              commitDatabase();
-              broadcast({
-                type: "categories_updated",
-                categories: state.receivingCategories,
-                systemResetVersion
-              });
-              broadcast({
-                type: "collection_updated",
-                collection: "receivingCategories",
-                data: state.receivingCategories,
-                systemResetVersion
-              });
-
-              if (recModified) {
-                broadcast({
-                  type: "collection_updated",
-                  collection: "receiving",
-                  data: state.receiving,
-                  systemResetVersion
-                });
-              }
-              if (retModified) {
-                broadcast({
-                  type: "collection_updated",
-                  collection: "returns",
-                  data: state.returns,
-                  systemResetVersion
-                });
-              }
-              if (stocksModified) {
-                broadcast({
-                  type: "collection_updated",
-                  collection: "stocks",
-                  data: state.stocks,
-                  systemResetVersion
-                });
-              }
-            }
-            break;
-          }
-
-          case "update_fifo_colors":
-          case "manage_fifo_colors": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
-            if (conn?.permission === 'VIEW_ONLY') {
-              ws.send(JSON.stringify({ type: "ERROR", error: "PERMISSION DENIED: VIEW_ONLY", status: 403 }));
-              break;
-            }
-            if (payload.fifoColorsByMonth && typeof payload.fifoColorsByMonth === 'object') {
-              state.fifoColorsByMonth = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...payload.fifoColorsByMonth };
-              stateRevision++;
-              commitDatabase();
-              broadcast({
-                type: "fifo_colors_updated",
-                fifoColorsByMonth: state.fifoColorsByMonth,
-                systemResetVersion
-              });
-              broadcast({
-                type: "collection_updated",
-                collection: "fifoColorsByMonth",
-                data: state.fifoColorsByMonth,
-                systemResetVersion
-              });
-            } else if (payload.month && payload.color) {
-              const m = Number(payload.month);
-              if (m >= 1 && m <= 12 && payload.color.name) {
-                state.fifoColorsByMonth[m] = {
-                  name: String(payload.color.name).trim(),
-                  colorClass: payload.color.colorClass || 'bg-indigo-600',
-                  textClass: payload.color.textClass || 'text-indigo-600',
-                  hex: payload.color.hex || undefined
-                };
-                stateRevision++;
-                commitDatabase();
-                broadcast({
-                  type: "fifo_colors_updated",
-                  fifoColorsByMonth: state.fifoColorsByMonth,
-                  systemResetVersion
-                });
-                broadcast({
-                  type: "collection_updated",
-                  collection: "fifoColorsByMonth",
-                  data: state.fifoColorsByMonth,
-                  systemResetVersion
-                });
-              }
-            }
-            break;
-          }
-
-          case "client_installed": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
-            const { stationId, installId, username, employeeId, platform, timestamp } = payload;
-            logger.info(`[CENTRAL-DB] Client installed: Station ${stationId} by ${username} (${employeeId}) on ${platform}`);
-            broadcast({
-              type: "client_installed_broadcast",
-              stationId: stationId || "STATION",
-              installId,
-              username: username || "Operator",
-              employeeId,
-              platform: platform || "Terminal",
-              timestamp: timestamp || new Date().toISOString(),
-              systemResetVersion
-            }, ws);
-            break;
-          }
-
-          case "system_activity": {
-            const connId = socketToConnectionId.get(ws) || connection_id;
-            const conn = connectionRegistry.get(connId);
-            if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
-            const actText = String(payload.text || payload.action || '').trim();
-            if (actText) {
-              const newMsg: ChatMessage = {
-                id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-                sender: "SYSTEM",
-                text: actText,
-                timestamp: new Date().toISOString(),
-                isSystem: true
-              };
-              chatMessages.push(newMsg);
-              if (chatMessages.length > 200) chatMessages.shift();
-              commitDatabase();
-
-              broadcast({
-                type: "chat_broadcast",
-                message: newMsg
-              });
-            }
-            break;
-          }
-        }
-      } catch (err) {
-        console.error("Failed processing socket message:", err);
-      }
-    });
-
-    ws.on("close", () => {
-      removeSocketFromGroups(ws);
-      const connId = socketToConnectionId.get(ws);
-      if (connId) {
-        const conn = connectionRegistry.get(connId);
-        // Remove ONLY this specific connection_id!
-        connectionRegistry.delete(connId);
-        socketToConnectionId.delete(ws);
-
-        if (conn) {
-          // If no other connection has this deviceId, clean activeDevices
-          const otherUsingDevice = Array.from(connectionRegistry.values()).some(c => c.device_id === conn.device_id);
-          if (!otherUsingDevice) {
-            activeDevices.delete(conn.device_id);
-          }
-
-          // Broadcast USER_OFFLINE
-          broadcast({
-            type: "USER_OFFLINE",
-            connection_id: connId,
-            user_id: conn.user_id,
-            session_id: conn.session_id,
-            device_id: conn.device_id,
-            employeeId: conn.employeeId,
-            username: conn.username,
-            role: conn.role,
-            platform: conn.platform,
-            connection: conn,
-            systemResetVersion
-          });
-
-          // Broadcast updated PRESENCE_SYNC
-          broadcastPresenceSync();
-        }
-      }
-    });
-  });
+  // 5. Load persisted GitHub release fallback cache
+  loadPersistedGitHubReleaseFallback(ctx);
+
+  // 6. Initialize WebSocket server & room engine
+  setupWebSocketServer(server, ctx);
 
   // Express Middlewares
   app.use(express.json({ limit: "15mb" }));
@@ -4694,161 +169,32 @@ async function startServer() {
     next();
   });
 
+  // Modular API Route Registration
+  registerStockRoutes(app, ctx);
+  registerReceivingRoutes(app, ctx);
+
   // REST API: Diagnostics & Connectivity Verification
   app.get("/api/diagnostics", (_req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     res.json({
       status: "ok",
-      serverInstanceId: SERVER_INSTANCE_ID,
-      serverBootTime: SERVER_BOOT_TIME,
+      serverInstanceId: ctx.serverInstanceId,
+      serverBootTime: ctx.serverBootTime,
       serverTimestamp: new Date().toISOString(),
       uptimeSeconds: process.uptime(),
-      systemResetVersion,
-      systemResetId,
-      systemResetTimestamp,
-      totalRecords: Object.values(state).reduce((acc, curr) => acc + (Array.isArray(curr) ? curr.length : 0), 0),
-      usersCount: state.registeredUsers.length,
-      connectedTerminals: connectionRegistry.size,
-      connectedOperators: getActiveOperatorsCount(),
+      systemResetVersion: ctx.systemResetVersion,
+      systemResetId: ctx.systemResetId,
+      systemResetTimestamp: ctx.systemResetTimestamp,
+      totalRecords: Object.values(ctx.state).reduce((acc, curr) => acc + (Array.isArray(curr) ? curr.length : 0), 0),
+      usersCount: ctx.state.registeredUsers.length,
+      connectedTerminals: ctx.connectionRegistry.size,
+      connectedOperators: getActiveOperatorsCount(ctx),
       corsActive: true,
       databaseReady: true,
       websocketReady: true,
       authoritativeSource: "CENTRAL_CLOUD_DATABASE"
     });
   });
-
-  // In-memory cache for latest GitHub release version (e.g. "v1.0.117" -> "1.0.117")
-  let cachedGitHubVersion: string | null = null;
-  let lastGitHubFetchTimestamp = 0;
-  let isFetchingGitHubRelease = false;
-  const GITHUB_CACHE_TTL_MS = 60 * 1000; // 60 seconds cache so AI Studio stays synced with GitHub Releases
-  const RELEASE_PERSIST_FILE = getStorageFilePath("latest-github-release.json");
-
-  // Load persisted GitHub release as initial fallback only (do NOT mark lastGitHubFetchTimestamp so live GitHub check still runs)
-  try {
-    if (fs.existsSync(RELEASE_PERSIST_FILE)) {
-      const persisted = JSON.parse(fs.readFileSync(RELEASE_PERSIST_FILE, "utf8"));
-      if (persisted && persisted.version) {
-        cachedGitHubVersion = String(persisted.version).replace(/^v/i, "").trim();
-        logger.info(`[RELEASE SYNC] Loaded persisted GitHub release fallback: ${cachedGitHubVersion}`);
-      }
-    }
-  } catch (e) {}
-
-  async function fetchGitHubJson(url: string, token?: string): Promise<Response> {
-    const headers: Record<string, string> = {
-      'Accept': 'application/vnd.github.v3+json',
-      'User-Agent': 'JUWEI-WMS-Cloud-Server'
-    };
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-    try {
-      const resp = await fetch(url, { headers, signal: controller.signal });
-      // If a configured/injected token is invalid, expired, or lacks permission, retry unauthenticated for public repos
-      if (token && (resp.status === 401 || resp.status === 403 || resp.status === 404)) {
-        const publicHeaders: Record<string, string> = {
-          'Accept': 'application/vnd.github.v3+json',
-          'User-Agent': 'JUWEI-WMS-Cloud-Server'
-        };
-        const retryController = new AbortController();
-        const retryTimeout = setTimeout(() => retryController.abort(), 8000);
-        try {
-          return await fetch(url, { headers: publicHeaders, signal: retryController.signal });
-        } finally {
-          clearTimeout(retryTimeout);
-        }
-      }
-      return resp;
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  }
-
-  // Resolves the latest release version from GitHub Releases API or disk cache
-  async function getLatestGitHubReleaseVersion(buildTimeFallback: string, forceRefresh = false): Promise<string> {
-    if (!cachedGitHubVersion) {
-      try {
-        if (fs.existsSync(RELEASE_PERSIST_FILE)) {
-          const persisted = JSON.parse(fs.readFileSync(RELEASE_PERSIST_FILE, "utf8"));
-          if (persisted && persisted.version) {
-            cachedGitHubVersion = String(persisted.version).replace(/^v/i, "").trim();
-          }
-        }
-      } catch (e) {}
-    }
-
-    const cleanRepo = normalizeGitHubRepo(serverConfig.githubRepo);
-    const now = Date.now();
-
-    // Return cached value if still fresh within TTL (unless forceRefresh requested)
-    if (!forceRefresh && cachedGitHubVersion && lastGitHubFetchTimestamp > 0 && (now - lastGitHubFetchTimestamp < GITHUB_CACHE_TTL_MS)) {
-      return maxSemverVersion(cachedGitHubVersion, buildTimeFallback);
-    }
-
-    // Avoid stampedes if an asynchronous fetch is already in flight
-    if (isFetchingGitHubRelease) {
-      return maxSemverVersion(cachedGitHubVersion, buildTimeFallback);
-    }
-
-    isFetchingGitHubRelease = true;
-    try {
-      const token = serverConfig.githubToken;
-      const apiUrl = `https://api.github.com/repos/${cleanRepo}/releases/latest`;
-      let resolvedTag = "";
-
-      const resp = await fetchGitHubJson(apiUrl, token);
-      if (resp.ok) {
-        const releaseData: any = await resp.json();
-        if (releaseData && releaseData.tag_name) {
-          resolvedTag = String(releaseData.tag_name).trim();
-        }
-      } else {
-        console.warn(`[GITHUB RELEASE SYNC] GitHub Releases API returned HTTP ${resp.status} for ${apiUrl}, checking tags fallback...`);
-      }
-
-      // Fallback to highest semver tag from GitHub Tags API if /releases/latest didn't return a tag
-      if (!resolvedTag) {
-        const tagsUrl = `https://api.github.com/repos/${cleanRepo}/tags?per_page=20`;
-        const tagsResp = await fetchGitHubJson(tagsUrl, token);
-        if (tagsResp.ok) {
-          const tagsData: any[] = await tagsResp.json();
-          if (Array.isArray(tagsData) && tagsData.length > 0) {
-            const semverTags = tagsData
-              .map((t) => String(t?.name || "").trim())
-              .filter(Boolean)
-              .sort((a, b) => compareServerSemver(b, a));
-            if (semverTags[0]) {
-              resolvedTag = semverTags[0];
-            }
-          }
-        }
-      }
-
-      const parsed = resolvedTag.replace(/^v/i, '').trim();
-      if (parsed) {
-        cachedGitHubVersion = parsed;
-        lastGitHubFetchTimestamp = Date.now();
-        try {
-          fs.writeFileSync(RELEASE_PERSIST_FILE, JSON.stringify({
-            version: parsed,
-            tag: resolvedTag,
-            repository: cleanRepo,
-            updatedAt: new Date().toISOString()
-          }, null, 2), "utf8");
-        } catch (wErr) {}
-        logger.info(`[GITHUB RELEASE SYNC] Authoritative release tag resolved from GitHub (${cleanRepo}): ${resolvedTag} -> version ${parsed}`);
-      }
-    } catch (err: any) {
-      console.warn(`[GITHUB RELEASE SYNC] Request to GitHub Releases API failed:`, err?.message || err);
-    } finally {
-      isFetchingGitHubRelease = false;
-    }
-
-    return maxSemverVersion(cachedGitHubVersion, buildTimeFallback);
-  }
 
   // REST API: Webhook / Direct publish from GitHub Actions
   app.post(["/api/build-info/publish", "/api/release/latest"], (req, res) => {
@@ -4859,8 +205,8 @@ async function startServer() {
         return res.status(400).json({ error: "Missing version or tag" });
       }
 
-      cachedGitHubVersion = newVersion;
-      lastGitHubFetchTimestamp = Date.now();
+      ctx.cachedGitHubVersion = newVersion;
+      ctx.lastGitHubFetchTimestamp = Date.now();
       if (repository && typeof repository === "string") {
         const cleanRepoUpdate = normalizeGitHubRepo(repository);
         if (cleanRepoUpdate) {
@@ -4878,8 +224,8 @@ async function startServer() {
       };
 
       try {
-        fs.writeFileSync(RELEASE_PERSIST_FILE, JSON.stringify(releaseRecord, null, 2), "utf8");
-      } catch (err) {}
+        fs.writeFileSync(ctx.releasePersistFile, JSON.stringify(releaseRecord, null, 2), "utf8");
+      } catch (_err) {}
 
       logger.info(`[RELEASE SYNC] Received authoritative release update from GitHub Actions: version ${newVersion} (tag: ${tag || newVersion})`);
       return res.json({ success: true, activeVersion: newVersion, release: releaseRecord });
@@ -4897,8 +243,7 @@ async function startServer() {
     const forceRefresh = req.query.refresh === "1" || req.query.refresh === "true";
     const { fileContent, bundleVersion } = resolveServerBundleVersion();
 
-    // Resolve authoritative live version from latest GitHub Release (cached 5 min)
-    const latestGitHubVersion = await getLatestGitHubReleaseVersion(bundleVersion, forceRefresh);
+    const latestGitHubVersion = await getLatestGitHubReleaseVersion(ctx, bundleVersion, forceRefresh);
     const activeVersion = maxSemverVersion(latestGitHubVersion, bundleVersion);
 
     if (fileContent) {
@@ -4907,7 +252,7 @@ async function startServer() {
         version: activeVersion,
         bundleVersion,
         latestGitHubVersion,
-        versionSource: cachedGitHubVersion && compareServerSemver(cachedGitHubVersion, bundleVersion) >= 0
+        versionSource: ctx.cachedGitHubVersion && compareServerSemver(ctx.cachedGitHubVersion, bundleVersion) >= 0
           ? "github-releases-latest"
           : (fileContent.versionSource || "package.json")
       });
@@ -4918,15 +263,15 @@ async function startServer() {
       version: activeVersion,
       bundleVersion,
       latestGitHubVersion,
-      versionSource: cachedGitHubVersion ? "github-releases-latest" : "fallback",
+      versionSource: ctx.cachedGitHubVersion ? "github-releases-latest" : "fallback",
       isDevelopmentFallback: true
     });
   });
 
-  // REST API: Direct Installer Download Redirect (downloads JUWEI.WMS.Desktop.System.Setup.1.0.XX.exe directly)
+  // REST API: Direct Installer Download Redirect
   app.get("/api/download/latest-installer", async (_req, res) => {
     const { bundleVersion } = resolveServerBundleVersion();
-    const targetVer = await getLatestGitHubReleaseVersion(bundleVersion);
+    const targetVer = await getLatestGitHubReleaseVersion(ctx, bundleVersion);
     const cleanVer = targetVer || bundleVersion || "1.0.94";
     const cleanRepo = normalizeGitHubRepo(serverConfig.githubRepo);
     const assetName = `JUWEI.WMS.Desktop.System.Setup.${cleanVer}.exe`;
@@ -4938,18 +283,18 @@ async function startServer() {
   app.get("/api/health", (_req, res) => {
     res.json({
       status: "ok",
-      serverInstanceId: SERVER_INSTANCE_ID,
-      serverBootTime: SERVER_BOOT_TIME,
+      serverInstanceId: ctx.serverInstanceId,
+      serverBootTime: ctx.serverBootTime,
       uptime: process.uptime(),
-      systemResetVersion,
-      systemResetId,
-      systemResetTimestamp,
-      totalRecords: Object.values(state).reduce((acc, curr) => acc + (Array.isArray(curr) ? curr.length : 0), 0),
-      usersCount: state.registeredUsers.length,
-      connectedClients: connectionRegistry.size,
-      connectedTerminals: connectionRegistry.size,
-      connectedOperators: getActiveOperatorsCount(),
-      liveActiveTerminals: connectionRegistry.size
+      systemResetVersion: ctx.systemResetVersion,
+      systemResetId: ctx.systemResetId,
+      systemResetTimestamp: ctx.systemResetTimestamp,
+      totalRecords: Object.values(ctx.state).reduce((acc, curr) => acc + (Array.isArray(curr) ? curr.length : 0), 0),
+      usersCount: ctx.state.registeredUsers.length,
+      connectedClients: ctx.connectionRegistry.size,
+      connectedTerminals: ctx.connectionRegistry.size,
+      connectedOperators: getActiveOperatorsCount(ctx),
+      liveActiveTerminals: ctx.connectionRegistry.size
     });
   });
 
@@ -4958,200 +303,198 @@ async function startServer() {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     res.json({
       status: "ok",
-      connectedOperators: getActiveOperatorsCount(),
-      liveActiveTerminals: connectionRegistry.size,
-      systemResetVersion,
-      presence: getActivePresenceList(),
-      activeUsers: getActiveUsersList()
+      connectedOperators: getActiveOperatorsCount(ctx),
+      liveActiveTerminals: ctx.connectionRegistry.size,
+      systemResetVersion: ctx.systemResetVersion,
+      presence: getActivePresenceList(ctx),
+      activeUsers: getActiveUsersList(ctx)
     });
   });
 
-  // REST API: Synchronize All Workstations (Windows, Android, iOS, Desktop)
+  // REST API: Synchronize All Workstations
   app.post(["/api/sync/all-workstations", "/api/sync-all-workstations"], (req, res) => {
-    if (rejectIfDeviceRevokedHttp(req, res)) return;
+    if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
     const author = req.body?.author || "SUPER ADMINISTRATOR";
-    broadcast({
+    broadcast(ctx, {
       type: "SYNC_REQUIRED",
       author,
       reason: "CLUSTER_SYNC_REQUESTED",
-      systemResetVersion,
+      systemResetVersion: ctx.systemResetVersion,
       timestamp: new Date().toISOString()
     });
-    broadcast({
+    broadcast(ctx, {
       type: "force_sync",
       triggeredBy: author
     });
     return res.json({
       success: true,
       message: "SYNC_REQUIRED broadcast sent to all workstations and devices",
-      connectedTerminals: connectionRegistry.size,
-      connectedOperators: getActiveOperatorsCount(),
-      systemResetVersion
+      connectedTerminals: ctx.connectionRegistry.size,
+      connectedOperators: getActiveOperatorsCount(ctx),
+      systemResetVersion: ctx.systemResetVersion
     });
   });
 
-  // REST API: Full State Snapshot (Single Source of Truth)
-  // FIX DATA FLICKERING: Always returns valid, complete database records without null or empty arrays.
+  // REST API: Full State Snapshot
   app.get("/api/sync", (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "0");
 
-    if (rejectIfDeviceRevokedHttp(req, res)) return;
-    const auth = resolveRequestAuthContext(req);
+    if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
+    const auth = resolveRequestAuthContext(ctx, req);
 
     res.json({
       status: "ok",
-      revision: stateRevision,
-      systemResetVersion,
-      systemResetTimestamp,
-      systemResetId,
-      systemResetBy,
+      revision: ctx.stateRevision,
+      systemResetVersion: ctx.systemResetVersion,
+      systemResetTimestamp: ctx.systemResetTimestamp,
+      systemResetId: ctx.systemResetId,
+      systemResetBy: ctx.systemResetBy,
       data: filterDataForClient({
-        ...state,
-        chatMessages
+        ...ctx.state,
+        chatMessages: ctx.chatMessages
       }, auth.permission, auth.employeeId),
-      connectedOperators: getActiveOperatorsCount(),
-      liveActiveTerminals: connectionRegistry.size
+      connectedOperators: getActiveOperatorsCount(ctx),
+      liveActiveTerminals: ctx.connectionRegistry.size
     });
   });
 
-  // REST API: Sync collection (Batch upsert from client to central database)
+  // REST API: Sync collection
   app.post("/api/sync", async (req, res) => {
     try {
       const { collection, data, reset_version, author, employeeId, device_id } = req.body;
-      const reqDevId = String(device_id || req.body?.deviceId || req.headers['x-device-id'] || "").trim();
-      if (isDeviceRevoked(reqDevId)) {
-        closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+      const reqDevId = String(device_id || req.body?.deviceId || req.headers["x-device-id"] || "").trim();
+      if (isDeviceRevoked(ctx, reqDevId)) {
+        closeDeviceSockets(ctx, reqDevId, "DEVICE_REVOKED");
         return res.status(403).json({ error: "DEVICE_REVOKED" });
       }
 
-      const clientResetVersion = Number(reset_version || req.headers['x-reset-version']) || systemResetVersion;
-      if (clientResetVersion < systemResetVersion) {
+      const clientResetVersion = Number(reset_version || req.headers["x-reset-version"]) || ctx.systemResetVersion;
+      if (clientResetVersion < ctx.systemResetVersion) {
         return res.status(409).json({
           error: "STALE_RESET_VERSION: Central database was reset. Stale sync rejected.",
-          systemResetVersion,
-          systemResetId
+          systemResetVersion: ctx.systemResetVersion,
+          systemResetId: ctx.systemResetId
         });
       }
 
-      if (!collection || !(collection in state)) {
+      if (!collection || !(collection in ctx.state)) {
         return res.status(400).json({ error: `Unknown or invalid collection: ${collection}` });
       }
 
-      // Derive permission strictly from server-side device/session record; ignore x-user-permission and body.permission
-      const auth = resolveRequestAuthContext(req, reqDevId);
-      if (auth.permission === 'VIEW_ONLY') {
+      const auth = resolveRequestAuthContext(ctx, req, reqDevId);
+      if (auth.permission === "VIEW_ONLY") {
         return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
       }
 
-      if (collection === 'operationalRoles') {
+      if (collection === "operationalRoles") {
         if (Array.isArray(data)) {
-          const cleaned = Array.from(new Set<string>(data.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+          const cleaned = Array.from(new Set<string>(data.map((r: any) => String(r || "").trim().toUpperCase()).filter(Boolean)));
           if (cleaned.length > 0) {
-            state.operationalRoles = cleaned;
-            stateRevision++;
-            commitDatabase();
-            recordAuditTrail({
-              actor: auth.account?.username || author || 'Admin',
-              actorId: auth.employeeId || employeeId || 'ADMIN',
-              action: 'UPDATE',
-              recordType: 'operationalRoles',
-              recordId: 'operationalRoles',
+            ctx.state.operationalRoles = cleaned;
+            ctx.stateRevision++;
+            commitDatabase(ctx);
+            recordAuditTrail(ctx, {
+              actor: auth.account?.username || author || "Admin",
+              actorId: auth.employeeId || employeeId || "ADMIN",
+              action: "UPDATE",
+              recordType: "operationalRoles",
+              recordId: "operationalRoles",
               summary: `Updated operational roles (${cleaned.length} roles)`,
               deviceId: reqDevId
             });
-            broadcast({
+            broadcast(ctx, {
               type: "roles_updated",
-              roles: state.operationalRoles,
-              systemResetVersion
+              roles: ctx.state.operationalRoles,
+              systemResetVersion: ctx.systemResetVersion
             });
-            broadcast({
+            broadcast(ctx, {
               type: "collection_updated",
               collection: "operationalRoles",
-              data: state.operationalRoles,
-              systemResetVersion
+              data: ctx.state.operationalRoles,
+              systemResetVersion: ctx.systemResetVersion
             });
           }
         }
-        return res.json({ success: true, count: state.operationalRoles.length, systemResetVersion });
+        return res.json({ success: true, count: ctx.state.operationalRoles.length, systemResetVersion: ctx.systemResetVersion });
       }
 
-      if (collection === 'receivingCategories') {
+      if (collection === "receivingCategories") {
         if (Array.isArray(data)) {
-          const cleaned = Array.from(new Set<string>(data.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+          const cleaned = Array.from(new Set<string>(data.map((r: any) => String(r || "").trim().toUpperCase()).filter(Boolean)));
           if (cleaned.length > 0) {
-            state.receivingCategories = cleaned;
-            stateRevision++;
-            commitDatabase();
-            recordAuditTrail({
-              actor: auth.account?.username || author || 'Admin',
-              actorId: auth.employeeId || employeeId || 'ADMIN',
-              action: 'UPDATE',
-              recordType: 'receivingCategories',
-              recordId: 'receivingCategories',
+            ctx.state.receivingCategories = cleaned;
+            ctx.stateRevision++;
+            commitDatabase(ctx);
+            recordAuditTrail(ctx, {
+              actor: auth.account?.username || author || "Admin",
+              actorId: auth.employeeId || employeeId || "ADMIN",
+              action: "UPDATE",
+              recordType: "receivingCategories",
+              recordId: "receivingCategories",
               summary: `Updated receiving categories (${cleaned.length} categories)`,
               deviceId: reqDevId
             });
-            broadcast({
+            broadcast(ctx, {
               type: "categories_updated",
-              categories: state.receivingCategories,
-              systemResetVersion
+              categories: ctx.state.receivingCategories,
+              systemResetVersion: ctx.systemResetVersion
             });
-            broadcast({
+            broadcast(ctx, {
               type: "collection_updated",
               collection: "receivingCategories",
-              data: state.receivingCategories,
-              systemResetVersion
+              data: ctx.state.receivingCategories,
+              systemResetVersion: ctx.systemResetVersion
             });
           }
         }
-        return res.json({ success: true, count: state.receivingCategories.length, systemResetVersion });
+        return res.json({ success: true, count: ctx.state.receivingCategories.length, systemResetVersion: ctx.systemResetVersion });
       }
 
-      if (collection === 'fifoColorsByMonth') {
-        if (data && typeof data === 'object') {
-          state.fifoColorsByMonth = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...data };
-          stateRevision++;
-          commitDatabase();
-          recordAuditTrail({
-            actor: auth.account?.username || author || 'Admin',
-            actorId: auth.employeeId || employeeId || 'ADMIN',
-            action: 'UPDATE',
-            recordType: 'fifoColorsByMonth',
-            recordId: 'fifoColorsByMonth',
-            summary: 'Updated monthly FIFO color calendar',
+      if (collection === "fifoColorsByMonth") {
+        if (data && typeof data === "object") {
+          ctx.state.fifoColorsByMonth = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...data };
+          ctx.stateRevision++;
+          commitDatabase(ctx);
+          recordAuditTrail(ctx, {
+            actor: auth.account?.username || author || "Admin",
+            actorId: auth.employeeId || employeeId || "ADMIN",
+            action: "UPDATE",
+            recordType: "fifoColorsByMonth",
+            recordId: "fifoColorsByMonth",
+            summary: "Updated monthly FIFO color calendar",
             deviceId: reqDevId
           });
-          broadcast({
+          broadcast(ctx, {
             type: "fifo_colors_updated",
-            fifoColorsByMonth: state.fifoColorsByMonth,
-            systemResetVersion
+            fifoColorsByMonth: ctx.state.fifoColorsByMonth,
+            systemResetVersion: ctx.systemResetVersion
           });
-          broadcast({
+          broadcast(ctx, {
             type: "collection_updated",
             collection: "fifoColorsByMonth",
-            data: state.fifoColorsByMonth,
-            systemResetVersion
+            data: ctx.state.fifoColorsByMonth,
+            systemResetVersion: ctx.systemResetVersion
           });
         }
-        return res.json({ success: true, count: Object.keys(state.fifoColorsByMonth).length, systemResetVersion });
+        return res.json({ success: true, count: Object.keys(ctx.state.fifoColorsByMonth).length, systemResetVersion: ctx.systemResetVersion });
       }
 
       const items: any[] = Array.isArray(data) ? data : [];
-      const currentList: any[] = (state as any)[collection] || [];
+      const currentList: any[] = (ctx.state as any)[collection] || [];
       const listMap = new Map<string, any>(currentList.map(it => [String(it.id || it.record_id), it]));
 
       let modifiedCount = 0;
       const serverTime = new Date().toISOString();
       const effectiveAuthor = author || employeeId || "Operator";
-      const effectiveDevId = String(device_id || req.headers['x-device-id'] || 'DEV-CENTRAL').trim();
+      const effectiveDevId = String(device_id || req.headers["x-device-id"] || "DEV-CENTRAL").trim();
       const effectiveUserId = String(req.body.user_id || (employeeId ? `USR-${employeeId}` : `USR-${effectiveAuthor}`)).trim();
 
       for (const item of items) {
         if (!item) continue;
         const recId = String(item.id || item.record_id || `REC-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`);
-        if (deletedRecordTombstones.has(recId)) continue;
+        if (ctx.deletedRecordTombstones.has(recId)) continue;
 
         const existing = listMap.get(recId);
         if (existing) {
@@ -5170,11 +513,10 @@ async function startServer() {
             updated_by: effectiveAuthor,
             user_id: effectiveUserId,
             device_id: effectiveDevId,
-            reset_version: systemResetVersion
+            reset_version: ctx.systemResetVersion
           };
 
-          if (collection === 'registeredUsers') {
-            // CRITICAL SECURITY FIX: Batch sync MUST NEVER overwrite operator PINs or hashes!
+          if (collection === "registeredUsers") {
             if (existing.pinHash) updatedRec.pinHash = existing.pinHash;
             if (existing.pinSalt) updatedRec.pinSalt = existing.pinSalt;
             if (existing.pin) updatedRec.pin = existing.pin;
@@ -5188,8 +530,7 @@ async function startServer() {
           listMap.set(recId, updatedRec);
           modifiedCount++;
         } else {
-          if (collection === 'registeredUsers') {
-            // Security Guard: New accounts cannot be inserted via batch sync.
+          if (collection === "registeredUsers") {
             continue;
           }
           const newRec = {
@@ -5203,7 +544,7 @@ async function startServer() {
             updated_by: effectiveAuthor,
             user_id: effectiveUserId,
             device_id: effectiveDevId,
-            reset_version: systemResetVersion
+            reset_version: ctx.systemResetVersion
           };
           listMap.set(recId, newRec);
           modifiedCount++;
@@ -5211,15 +552,15 @@ async function startServer() {
       }
 
       if (modifiedCount > 0) {
-        (state as any)[collection] = Array.from(listMap.values());
-        stateRevision++;
-        commitDatabase();
+        (ctx.state as any)[collection] = Array.from(listMap.values());
+        ctx.stateRevision++;
+        commitDatabase(ctx);
 
-        recordAuditTrail({
+        recordAuditTrail(ctx, {
           timestamp: serverTime,
           actor: auth.account?.username || effectiveAuthor,
           actorId: auth.employeeId || employeeId || effectiveUserId,
-          action: 'SYNC',
+          action: "SYNC",
           recordType: collection,
           recordId: `${modifiedCount} records`,
           summary: `Synced ${collection} (${modifiedCount} item(s) modified)`,
@@ -5228,65 +569,64 @@ async function startServer() {
 
         logger.debug(`[CENTRAL-DB] [REST-POST-SYNC] Collection: ${collection} | Items received: ${items.length} | Modified: ${modifiedCount} | User: ${effectiveUserId} | Device: ${effectiveDevId}`);
 
-        broadcast({
+        broadcast(ctx, {
           type: "collection_updated",
           collection,
-          data: (state as any)[collection],
-          systemResetVersion
+          data: (ctx.state as any)[collection],
+          systemResetVersion: ctx.systemResetVersion
         });
       }
 
       return res.json({
         success: true,
         collection,
-        count: (state as any)[collection]?.length || 0,
+        count: (ctx.state as any)[collection]?.length || 0,
         modified: modifiedCount,
-        systemResetVersion
+        systemResetVersion: ctx.systemResetVersion
       });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
   });
 
-  // REST API: Batch Mutations (offline reconciliation for reconnecting devices)
+  // REST API: Batch Mutations
   app.post("/api/sync/batch", async (req, res) => {
     try {
       const { mutations, reset_version, author, employeeId, device_id } = req.body;
-      const reqDevId = String(device_id || req.body?.deviceId || req.headers['x-device-id'] || "").trim();
-      if (isDeviceRevoked(reqDevId)) {
-        closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+      const reqDevId = String(device_id || req.body?.deviceId || req.headers["x-device-id"] || "").trim();
+      if (isDeviceRevoked(ctx, reqDevId)) {
+        closeDeviceSockets(ctx, reqDevId, "DEVICE_REVOKED");
         return res.status(403).json({ error: "DEVICE_REVOKED" });
       }
 
-      const clientResetVersion = Number(reset_version || req.headers['x-reset-version']) || systemResetVersion;
-      
-      if (clientResetVersion < systemResetVersion) {
+      const clientResetVersion = Number(reset_version || req.headers["x-reset-version"]) || ctx.systemResetVersion;
+
+      if (clientResetVersion < ctx.systemResetVersion) {
         return res.status(409).json({
           error: "STALE_RESET_VERSION: Central database was reset. Stale offline queue rejected.",
-          systemResetVersion,
-          systemResetId
+          systemResetVersion: ctx.systemResetVersion,
+          systemResetId: ctx.systemResetId
         });
       }
 
       const mutList = Array.isArray(mutations) ? mutations : [];
       let processed = 0;
       const results: any[] = [];
-      const effectiveDevId = reqDevId || 'DEV-OFFLINE';
+      const effectiveDevId = reqDevId || "DEV-OFFLINE";
       const effectiveAuthor = author || employeeId || "Operator";
       const effectiveUserId = String(req.body.user_id || (employeeId ? `USR-${employeeId}` : `USR-${effectiveAuthor}`)).trim();
-      // Derive permission strictly from server-side device/session record; ignore x-user-permission and body.permission
-      const auth = resolveRequestAuthContext(req, reqDevId);
+      const auth = resolveRequestAuthContext(ctx, req, reqDevId);
       const userPermission = auth.permission;
 
       for (const m of mutList) {
         const mutDevId = String(m.device_id || m.deviceId || effectiveDevId).trim();
-        if (isDeviceRevoked(mutDevId)) {
-          closeDeviceSockets(mutDevId, "DEVICE_REVOKED");
+        if (isDeviceRevoked(ctx, mutDevId)) {
+          closeDeviceSockets(ctx, mutDevId, "DEVICE_REVOKED");
           return res.status(403).json({ error: "DEVICE_REVOKED" });
         }
 
-        if (m.type === 'upsert' && m.collection && m.record) {
-          const r = executeRecordUpsert({
+        if (m.type === "upsert" && m.collection && m.record) {
+          const r = executeRecordUpsert(ctx, {
             collection: m.collection,
             record: m.record,
             author: m.author || effectiveAuthor,
@@ -5311,9 +651,9 @@ async function startServer() {
             record: r.confirmedRecord,
             currentRecord: r.currentRecord || r.confirmedRecord
           });
-        } else if (m.type === 'delete' && m.collection && (m.id || m.recordId)) {
+        } else if (m.type === "delete" && m.collection && (m.id || m.recordId)) {
           const targetId = String(m.id || m.recordId);
-          const r = executeRecordDelete({
+          const r = executeRecordDelete(ctx, {
             collection: m.collection,
             id: targetId,
             author: m.author || effectiveAuthor,
@@ -5347,7 +687,7 @@ async function startServer() {
         processed,
         total: mutList.length,
         results,
-        systemResetVersion
+        systemResetVersion: ctx.systemResetVersion
       });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
@@ -5358,8 +698,8 @@ async function startServer() {
   app.get(["/api/sync/state-summary", "/api/sync/digest"], (_req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     const summary: Record<string, { count: number; lastUpdated?: string }> = {};
-    Object.keys(state).forEach((key) => {
-      const arr = (state as any)[key];
+    Object.keys(ctx.state).forEach((key) => {
+      const arr = (ctx.state as any)[key];
       summary[key] = {
         count: Array.isArray(arr) ? arr.length : 0,
       };
@@ -5367,9 +707,9 @@ async function startServer() {
 
     res.json({
       status: "ok",
-      stateRevision,
-      systemResetVersion,
-      systemResetId,
+      stateRevision: ctx.stateRevision,
+      systemResetVersion: ctx.systemResetVersion,
+      systemResetId: ctx.systemResetId,
       summary,
       timestamp: new Date().toISOString()
     });
@@ -5378,8 +718,8 @@ async function startServer() {
   // REST API: Devices & Heartbeats
   app.get("/api/devices", (_req, res) => {
     const now = Date.now();
-    const threshold = 5 * 60 * 1000; // 5 min
-    const devices = Array.from(activeDevices.values()).map(dev => ({
+    const threshold = 5 * 60 * 1000;
+    const devices = Array.from(ctx.activeDevices.values()).map(dev => ({
       ...dev,
       isOnline: (now - dev.lastSeen) < threshold
     }));
@@ -5392,46 +732,46 @@ async function startServer() {
       if (!deviceId) return res.status(400).json({ error: "deviceId required" });
 
       const now = Date.now();
-      const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
-      const existing = activeDevices.get(deviceId);
+      const ip = (req.headers["x-forwarded-for"] as string) || req.socket.remoteAddress || "127.0.0.1";
+      const existing = ctx.activeDevices.get(deviceId);
 
-      activeDevices.set(deviceId, {
+      ctx.activeDevices.set(deviceId, {
         deviceId,
-        deviceName: deviceName || existing?.deviceName || 'Terminal Device',
-        employeeId: employeeId || existing?.employeeId || '',
-        username: username || existing?.username || 'Operator',
-        role: role || existing?.role || 'OPERATOR',
+        deviceName: deviceName || existing?.deviceName || "Terminal Device",
+        employeeId: employeeId || existing?.employeeId || "",
+        username: username || existing?.username || "Operator",
+        role: role || existing?.role || "OPERATOR",
         ip,
-        userAgent: req.headers['user-agent'],
-        appVersion: appVersion || cachedGitHubVersion || 'Live',
-        platform: platform || 'Web',
+        userAgent: req.headers["user-agent"],
+        appVersion: appVersion || ctx.cachedGitHubVersion || "Live",
+        platform: platform || "Web",
         connectedAt: existing?.connectedAt || new Date().toISOString(),
         lastSeen: now,
-        currentView: currentView || existing?.currentView || 'dashboard'
+        currentView: currentView || existing?.currentView || "dashboard"
       });
 
-      return res.json({ success: true, serverTime: now, systemResetVersion });
+      return res.json({ success: true, serverTime: now, systemResetVersion: ctx.systemResetVersion });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
   });
 
-  // REST API: Authorized Devices Management (Super Administrator)
+  // REST API: Authorized Devices Management
   app.get("/api/devices/authorized", (_req, res) => {
     res.json({
       success: true,
-      installationId,
-      primaryDeviceId,
-      devices: Array.from(authorizedDevicesMap.values())
+      installationId: ctx.installationId,
+      primaryDeviceId: ctx.primaryDeviceId,
+      devices: Array.from(ctx.authorizedDevicesMap.values())
     });
   });
 
   app.post("/api/devices/authorize", (req, res) => {
-    if (rejectIfDeviceRevokedHttp(req, res)) return;
+    if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
     const { deviceId, deviceName, authorId } = req.body;
     if (!deviceId) return res.status(400).json({ error: "deviceId required" });
 
-    if (!isAuthorizedSuperAdmin(req)) {
+    if (!isAuthorizedSuperAdmin(ctx, req, commitDatabase)) {
       return res.status(403).json({ error: "PERMISSION_DENIED: Only Super Administrator can authorize devices." });
     }
 
@@ -5439,10 +779,10 @@ async function startServer() {
     const cleanDeviceName = String(deviceName || `Workstation (${cleanDeviceId})`).trim();
     const nowIso = new Date().toISOString();
 
-    const existing = authorizedDevicesMap.get(cleanDeviceId);
-    const reqEmpId = String(req.body?.employeeId || existing?.employeeId || (cleanDeviceId === primaryDeviceId ? "JPMP-002" : "")).trim().toUpperCase();
+    const existing = ctx.authorizedDevicesMap.get(cleanDeviceId);
+    const reqEmpId = String(req.body?.employeeId || existing?.employeeId || (cleanDeviceId === ctx.primaryDeviceId ? "JPMP-002" : "")).trim().toUpperCase();
     const boundAccount = reqEmpId
-      ? state.registeredUsers.find(u => (u.employeeId || "").toUpperCase().trim() === reqEmpId)
+      ? ctx.state.registeredUsers.find((u: RegisteredAccount) => (u.employeeId || "").toUpperCase().trim() === reqEmpId)
       : undefined;
     const requestedStatus = String(req.body?.status || "").trim().toUpperCase();
     const finalStatus: "AUTHORIZED" | "PENDING" = requestedStatus === "PENDING" ? "PENDING" : "AUTHORIZED";
@@ -5450,7 +790,7 @@ async function startServer() {
       ...(existing || {}),
       deviceId: cleanDeviceId,
       deviceName: cleanDeviceName,
-      isPrimaryAdminDevice: cleanDeviceId === primaryDeviceId,
+      isPrimaryAdminDevice: cleanDeviceId === ctx.primaryDeviceId,
       status: finalStatus,
       ...(boundAccount ? {
         employeeId: boundAccount.employeeId,
@@ -5459,96 +799,96 @@ async function startServer() {
         permission: boundAccount.permission,
         boundAt: nowIso
       } : {}),
-      authorizedBy: authorId || 'ALDRIN BANAWA (JPMP-002)',
+      authorizedBy: authorId || "ALDRIN BANAWA (JPMP-002)",
       authorizedAt: nowIso
     };
 
-    authorizedDevicesMap.set(cleanDeviceId, deviceRecord);
-    commitDatabase();
+    ctx.authorizedDevicesMap.set(cleanDeviceId, deviceRecord);
+    commitDatabase(ctx);
 
-    recordAuditTrail({
-      actor: authorId || 'SUPER ADMINISTRATOR',
-      actorId: 'JPMP-002',
-      action: finalStatus === 'PENDING' ? 'DEVICE_PENDING' : 'DEVICE_AUTHORIZED',
-      recordType: 'authorizedDevices',
+    recordAuditTrail(ctx, {
+      actor: authorId || "SUPER ADMINISTRATOR",
+      actorId: "JPMP-002",
+      action: finalStatus === "PENDING" ? "DEVICE_PENDING" : "DEVICE_AUTHORIZED",
+      recordType: "authorizedDevices",
       recordId: cleanDeviceId,
-      summary: `${finalStatus === 'PENDING' ? 'Marked device pending' : 'Authorized device'} ${cleanDeviceName} (${cleanDeviceId})`,
+      summary: `${finalStatus === "PENDING" ? "Marked device pending" : "Authorized device"} ${cleanDeviceName} (${cleanDeviceId})`,
       deviceId: cleanDeviceId
     });
 
-    broadcast({
+    broadcast(ctx, {
       type: "DEVICE_AUTHORIZATION_UPDATED",
       device: deviceRecord,
-      systemResetVersion
+      systemResetVersion: ctx.systemResetVersion
     });
 
     return res.json({ success: true, device: deviceRecord });
   });
 
   app.post("/api/devices/revoke", (req, res) => {
-    if (rejectIfDeviceRevokedHttp(req, res)) return;
+    if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
     const { deviceId } = req.body;
     if (!deviceId) return res.status(400).json({ error: "deviceId required" });
 
-    if (!isAuthorizedSuperAdmin(req)) {
+    if (!isAuthorizedSuperAdmin(ctx, req, commitDatabase)) {
       return res.status(403).json({ error: "PERMISSION_DENIED: Only Super Administrator can revoke devices." });
     }
 
     const cleanDeviceId = String(deviceId).trim();
-    if (cleanDeviceId === primaryDeviceId) {
+    if (cleanDeviceId === ctx.primaryDeviceId) {
       return res.status(400).json({ error: "CANNOT_REVOKE_PRIMARY: The primary administrator device cannot be revoked." });
     }
 
-    const existing = authorizedDevicesMap.get(cleanDeviceId);
+    const existing = ctx.authorizedDevicesMap.get(cleanDeviceId);
     const revokedRecord: AuthorizedDevice = existing
-      ? { ...existing, status: 'REVOKED' }
+      ? { ...existing, status: "REVOKED" }
       : {
           deviceId: cleanDeviceId,
           deviceName: `Revoked Device (${cleanDeviceId})`,
           isPrimaryAdminDevice: false,
-          status: 'REVOKED',
-          authorizedBy: 'REVOKED_BY_SUPER_ADMIN',
+          status: "REVOKED",
+          authorizedBy: "REVOKED_BY_SUPER_ADMIN",
           authorizedAt: new Date().toISOString()
         };
-    authorizedDevicesMap.set(cleanDeviceId, revokedRecord);
-    commitDatabase();
+    ctx.authorizedDevicesMap.set(cleanDeviceId, revokedRecord);
+    commitDatabase(ctx);
 
-    recordAuditTrail({
-      actor: req.body?.author || 'SUPER ADMINISTRATOR',
-      actorId: 'JPMP-002',
-      action: 'DEVICE_REVOKED',
-      recordType: 'authorizedDevices',
+    recordAuditTrail(ctx, {
+      actor: req.body?.author || "SUPER ADMINISTRATOR",
+      actorId: "JPMP-002",
+      action: "DEVICE_REVOKED",
+      recordType: "authorizedDevices",
       recordId: cleanDeviceId,
       summary: `Revoked device ${revokedRecord.deviceName} (${cleanDeviceId})`,
       deviceId: cleanDeviceId
     });
 
-    broadcast({
+    broadcast(ctx, {
       type: "DEVICE_REVOKED",
       deviceId: cleanDeviceId,
-      systemResetVersion
+      systemResetVersion: ctx.systemResetVersion
     });
-    closeDeviceSockets(cleanDeviceId, "DEVICE_REVOKED");
+    closeDeviceSockets(ctx, cleanDeviceId, "DEVICE_REVOKED");
 
     return res.json({ success: true, message: `Device ${cleanDeviceId} revoked` });
   });
 
-  // REST API: One-time initial random PIN display on fresh install (available until first-login PIN change completes)
+  // REST API: One-time initial random PIN display on fresh install
   app.get("/api/setup/initial-pin", (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    if (rejectIfDeviceRevokedHttp(req, res)) return;
-    const superAdmin = state.registeredUsers.find(
-      u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002'
+    if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
+    const superAdmin = ctx.state.registeredUsers.find(
+      (u: RegisteredAccount) => (u.employeeId || "").toUpperCase().trim() === "JPMP-002"
     );
-    if (oneTimeSetupPin && superAdmin?.mustChangePin && !superAdmin?.pinChangedAt) {
+    if (ctx.oneTimeSetupPin && superAdmin?.mustChangePin && !superAdmin?.pinChangedAt) {
       return res.json({
         hasInitialPin: true,
-        employeeId: 'JPMP-002',
-        initialPin: oneTimeSetupPin,
+        employeeId: "JPMP-002",
+        initialPin: ctx.oneTimeSetupPin,
         mustChangePin: true
       });
     }
-    oneTimeSetupPin = null;
+    ctx.oneTimeSetupPin = null;
     return res.json({
       hasInitialPin: false,
       initialPin: null,
@@ -5560,50 +900,47 @@ async function startServer() {
   app.post("/api/terminal/fresh-install", (req, res) => {
     try {
       const { deviceId, deviceName } = req.body;
-      const targetDeviceId = String(deviceId || primaryDeviceId || "").trim();
+      const targetDeviceId = String(deviceId || ctx.primaryDeviceId || "").trim();
 
-      if (isDeviceRevoked(targetDeviceId)) {
-        closeDeviceSockets(targetDeviceId, "DEVICE_REVOKED");
+      if (isDeviceRevoked(ctx, targetDeviceId)) {
+        closeDeviceSockets(ctx, targetDeviceId, "DEVICE_REVOKED");
         return res.status(403).json({ error: "DEVICE_REVOKED" });
       }
 
-      // Ensure target device is authorized
-      if (!authorizedDevicesMap.has(targetDeviceId)) {
-        authorizedDevicesMap.set(targetDeviceId, {
+      if (!ctx.authorizedDevicesMap.has(targetDeviceId)) {
+        ctx.authorizedDevicesMap.set(targetDeviceId, {
           deviceId: targetDeviceId,
-          deviceName: deviceName || 'Primary Administrator PC',
+          deviceName: deviceName || "Primary Administrator PC",
           isPrimaryAdminDevice: true,
-          status: 'AUTHORIZED',
-          authorizedBy: 'SYSTEM_FRESH_INSTALL',
+          status: "AUTHORIZED",
+          authorizedBy: "SYSTEM_FRESH_INSTALL",
           authorizedAt: new Date().toISOString()
         });
       }
 
-      // If this PC is registering as primary administrator device:
-      primaryDeviceId = targetDeviceId;
+      ctx.primaryDeviceId = targetDeviceId;
 
-      // Ensure Super Administrator JPMP-002 is bound to this device
-      const superAdminIndex = state.registeredUsers.findIndex(
-        u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002'
+      const superAdminIndex = ctx.state.registeredUsers.findIndex(
+        (u: RegisteredAccount) => (u.employeeId || "").toUpperCase().trim() === "JPMP-002"
       );
       if (superAdminIndex >= 0) {
-        state.registeredUsers[superAdminIndex] = {
-          ...state.registeredUsers[superAdminIndex],
+        ctx.state.registeredUsers[superAdminIndex] = {
+          ...ctx.state.registeredUsers[superAdminIndex],
           deviceId: targetDeviceId,
           isPrimaryAdminDevice: true,
           authorizedDevices: [targetDeviceId]
         };
       }
 
-      commitDatabase();
+      commitDatabase(ctx);
 
-      const sa = state.registeredUsers.find(u => u.employeeId === 'JPMP-002');
+      const sa = ctx.state.registeredUsers.find((u: RegisteredAccount) => u.employeeId === "JPMP-002");
       return res.json({
         success: true,
-        installationId,
-        primaryDeviceId,
-        systemResetVersion,
-        systemResetId,
+        installationId: ctx.installationId,
+        primaryDeviceId: ctx.primaryDeviceId,
+        systemResetVersion: ctx.systemResetVersion,
+        systemResetId: ctx.systemResetId,
         superAdmin: sa ? sanitizeUserForClient(sa) : null
       });
     } catch (err: any) {
@@ -5611,150 +948,110 @@ async function startServer() {
     }
   });
 
-  // Helper to authenticate Super Admin strictly via server-side context or scrypt-verified Super Admin PIN
-  function isAuthorizedSuperAdmin(req: express.Request): boolean {
-    const auth = resolveRequestAuthContext(req);
-    if (auth.authenticated && auth.permission === 'FULL_ACCESS') {
-      return true;
-    }
-
-    const bodyPin = (
-      req.body?.adminPin || 
-      req.body?.pin || 
-      req.headers['x-admin-pin'] || 
-      req.headers['x-user-pin'] || 
-      ''
-    ).toString().trim();
-
-    if (!bodyPin) return false;
-
-    const superAdmin = state.registeredUsers.find(
-      u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002'
-    );
-    const pinCheck = verifyUserPin(superAdmin, bodyPin);
-    if (pinCheck.upgradedFromPlaintext) {
-      commitDatabase();
-    }
-    return pinCheck.matched;
-  }
-
-  /**
-   * GLOBAL RESET API
-   * ONLY SUPER ADMIN CAN PERFORM THE GLOBAL RESET THROUGH A SECURE SERVER-SIDE RESET API.
-   * AFTER RESET, BROADCAST GLOBAL_RESET, INVALIDATE ALL CLIENT STATE AND OFFLINE QUEUES,
-   * UPDATE RESET_VERSION, AND FORCE ALL CLIENTS TO RESYNC FROM THE CENTRAL DATABASE.
-   */
+  // GLOBAL RESET API
   app.post(["/api/reset-everything", "/api/reset-database"], async (req, res) => {
     try {
-      if (rejectIfDeviceRevokedHttp(req, res)) return;
+      if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
 
       if (!req.body?.confirmed) {
-        return res.status(400).json({ 
-          error: "CONFIRMATION_REQUIRED: Global reset requires explicit 'confirmed: true'." 
+        return res.status(400).json({
+          error: "CONFIRMATION_REQUIRED: Global reset requires explicit 'confirmed: true'."
         });
       }
 
-      if (!isAuthorizedSuperAdmin(req)) {
-        return res.status(403).json({ 
-          error: "PERMISSION_DENIED: Only the Super Administrator (JPMP-002) is authorized to execute a complete global database reset." 
+      if (!isAuthorizedSuperAdmin(ctx, req, commitDatabase)) {
+        return res.status(403).json({
+          error: "PERMISSION_DENIED: Only the Super Administrator (JPMP-002) is authorized to execute a complete global database reset."
         });
       }
 
       const author = req.body?.author || "ALDRIN BANAWA (SUPER ADMINISTRATOR)";
       const keepUsers = req.body?.keepUsers !== false;
 
-      // 1. Advance reset version
-      systemResetVersion += 1;
-      systemResetTimestamp = new Date().toISOString();
-      systemResetId = `RESET-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
-      systemResetBy = author;
-      stateRevision += 1;
+      ctx.systemResetVersion += 1;
+      ctx.systemResetTimestamp = new Date().toISOString();
+      ctx.systemResetId = `RESET-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      ctx.systemResetBy = author;
+      ctx.stateRevision += 1;
 
-      // 2. Reset operational datasets
-      state.stocks = [];
-      state.receiving = [];
-      state.returns = [];
-      state.recycling = [];
-      state.issuances = [];
-      state.deliveries = [];
-      state.envLogs = [];
-      state.forkliftChecks = [];
-      state.registries = [];
-      state.stockMovements = [];
+      ctx.state.stocks = [];
+      ctx.state.receiving = [];
+      ctx.state.returns = [];
+      ctx.state.recycling = [];
+      ctx.state.issuances = [];
+      ctx.state.deliveries = [];
+      ctx.state.envLogs = [];
+      ctx.state.forkliftChecks = [];
+      ctx.state.registries = [];
+      ctx.state.stockMovements = [];
 
-      // 3. Handle accounts reset
       if (!keepUsers) {
-        state.registeredUsers = [];
-        deletedUserTombstones.clear();
-        ensureSuperAdminSeed(true);
-        const sa = state.registeredUsers[0];
+        ctx.state.registeredUsers = [];
+        ctx.deletedUserTombstones.clear();
+        ensureSuperAdminSeed(ctx, true);
+        const sa = ctx.state.registeredUsers[0];
         if (sa) {
-          sa.reset_version = systemResetVersion;
+          sa.reset_version = ctx.systemResetVersion;
           sa.version = 1;
-          sa.updated_at = systemResetTimestamp;
+          sa.updated_at = ctx.systemResetTimestamp;
         }
       } else {
-        // Retain users but stamp new reset_version
-        state.registeredUsers = state.registeredUsers.map(u => ({
+        ctx.state.registeredUsers = ctx.state.registeredUsers.map((u: RegisteredAccount) => ({
           ...u,
-          reset_version: systemResetVersion,
+          reset_version: ctx.systemResetVersion,
           version: (u.version || 1) + 1,
-          updated_at: systemResetTimestamp
+          updated_at: ctx.systemResetTimestamp
         }));
       }
 
-      // 4. Clear old tombstones
-      deletedRecordTombstones.clear();
+      ctx.deletedRecordTombstones.clear();
 
-      // 5. System audit log
       const resetMsg: ChatMessage = {
         id: `sys-reset-${Date.now()}`,
         sender: "SYSTEM SECURITY AUDIT",
-        text: `GLOBAL DATABASE RESET executed by ${author}. System reset version advanced to v${systemResetVersion} (${systemResetId}).`,
-        timestamp: systemResetTimestamp,
+        text: `GLOBAL DATABASE RESET executed by ${author}. System reset version advanced to v${ctx.systemResetVersion} (${ctx.systemResetId}).`,
+        timestamp: ctx.systemResetTimestamp,
         isSystem: true
       };
-      chatMessages.push(resetMsg);
+      ctx.chatMessages.push(resetMsg);
 
-      // 6. COMMIT DATABASE SYNCHRONOUSLY TO DISK BEFORE WEBSOCKET BROADCAST
-      const commitOk = commitDatabase();
+      const commitOk = commitDatabase(ctx);
       if (!commitOk) {
         return res.status(500).json({ error: "CRITICAL: Failed to commit global reset to central disk database." });
       }
 
-      recordAuditTrail({
-        timestamp: systemResetTimestamp,
+      recordAuditTrail(ctx, {
+        timestamp: ctx.systemResetTimestamp,
         actor: author,
-        actorId: 'JPMP-002',
-        action: 'GLOBAL_RESET',
-        recordType: 'system',
-        recordId: systemResetId,
-        summary: `Global database reset to v${systemResetVersion} (${keepUsers ? 'kept operator accounts' : 'reset all accounts'})`,
+        actorId: "JPMP-002",
+        action: "GLOBAL_RESET",
+        recordType: "system",
+        recordId: ctx.systemResetId,
+        summary: `Global database reset to v${ctx.systemResetVersion} (${keepUsers ? "kept operator accounts" : "reset all accounts"})`,
         deviceId: extractDeviceIdFromHttp(req) || undefined
       });
 
-      // 7. Broadcast GLOBAL_RESET to all connected clients
-      broadcast({
+      broadcast(ctx, {
         type: "GLOBAL_RESET",
-        systemResetVersion,
-        systemResetTimestamp,
-        systemResetId,
-        systemResetBy,
+        systemResetVersion: ctx.systemResetVersion,
+        systemResetTimestamp: ctx.systemResetTimestamp,
+        systemResetId: ctx.systemResetId,
+        systemResetBy: ctx.systemResetBy,
         author,
         keepUsers,
         data: {
-          ...state,
-          registeredUsers: (state.registeredUsers || []).map(sanitizeUserForClient),
-          chatMessages
+          ...ctx.state,
+          registeredUsers: (ctx.state.registeredUsers || []).map(sanitizeUserForClient),
+          chatMessages: ctx.chatMessages
         }
       });
 
-      broadcast({
+      broadcast(ctx, {
         type: "global_reset",
-        systemResetVersion,
-        systemResetTimestamp,
-        systemResetId,
-        systemResetBy,
+        systemResetVersion: ctx.systemResetVersion,
+        systemResetTimestamp: ctx.systemResetTimestamp,
+        systemResetId: ctx.systemResetId,
+        systemResetBy: ctx.systemResetBy,
         author,
         keepUsers
       });
@@ -5762,9 +1059,9 @@ async function startServer() {
       return res.json({
         success: true,
         message: "GLOBAL DATABASE RESET EXECUTED SUCCESSFULLY",
-        systemResetVersion,
-        systemResetId,
-        systemResetTimestamp,
+        systemResetVersion: ctx.systemResetVersion,
+        systemResetId: ctx.systemResetId,
+        systemResetTimestamp: ctx.systemResetTimestamp,
         author,
         keepUsers
       });
@@ -5773,58 +1070,53 @@ async function startServer() {
     }
   });
 
-  // =========================================================================
-  // BACKUPS MANAGEMENT REST API (SUPER ADMIN ONLY)
-  // =========================================================================
-
-  // 1. List existing backups and recent backup/restore audit log
+  // BACKUPS MANAGEMENT REST API
   app.get("/api/admin/backups", (_req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     try {
-      if (!fs.existsSync(BACKUPS_DIR)) {
-        fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+      if (!fs.existsSync(serverConfig.backupsDir)) {
+        fs.mkdirSync(serverConfig.backupsDir, { recursive: true });
       }
 
-      const backups = getAllBackupRecords();
+      const backups = getAllBackupRecords(ctx);
 
       return res.json({
         success: true,
-        backupsDir: BACKUPS_DIR,
+        backupsDir: serverConfig.backupsDir,
         intervalHours: 1,
         retentionPolicy: "PERMANENT_NO_DELETION",
         maxRetained: null,
         backups,
-        auditLogs: backupAuditLogs.slice(0, 50)
+        auditLogs: ctx.backupAuditLogs.slice(0, 50)
       });
     } catch (err: any) {
       return res.status(500).json({ error: err?.message || "Failed to list backups" });
     }
   });
 
-  // 2. Trigger on-demand backup
   app.post("/api/admin/backups/create", async (req, res) => {
     try {
-      if (rejectIfDeviceRevokedHttp(req, res)) return;
-      if (!isAuthorizedSuperAdmin(req)) {
-        return res.status(403).json({ 
-          error: "PERMISSION_DENIED: Only Super Administrator (JPMP-002) is authorized to trigger manual backups." 
+      if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
+      if (!isAuthorizedSuperAdmin(ctx, req, commitDatabase)) {
+        return res.status(403).json({
+          error: "PERMISSION_DENIED: Only Super Administrator (JPMP-002) is authorized to trigger manual backups."
         });
       }
       const author = req.body?.author || "SUPER_ADMIN";
-      const result = await createDatabaseBackup("MANUAL_ON_DEMAND", author);
+      const result = await createDatabaseBackup(ctx, "MANUAL_ON_DEMAND", author);
       if (result.success) {
-        recordAuditTrail({
+        recordAuditTrail(ctx, {
           actor: author,
-          actorId: req.body?.employeeId || 'JPMP-002',
-          action: 'BACKUP_CREATED',
-          recordType: 'system',
-          recordId: result.filename || 'backup',
+          actorId: req.body?.employeeId || "JPMP-002",
+          action: "BACKUP_CREATED",
+          recordType: "system",
+          recordId: result.filename || "backup",
           summary: `Created manual database backup '${result.filename}'`
         });
-        return res.json({ 
-          success: true, 
-          filename: result.filename, 
-          message: `Backup '${result.filename}' created successfully.` 
+        return res.json({
+          success: true,
+          filename: result.filename,
+          message: `Backup '${result.filename}' created successfully.`
         });
       } else {
         return res.status(500).json({ error: result.error || "Failed to create database backup" });
@@ -5834,19 +1126,18 @@ async function startServer() {
     }
   });
 
-  // 3. Restore database snapshot (overwrite live database with selected backup)
   app.post("/api/admin/backups/restore", (req, res) => {
     try {
-      if (rejectIfDeviceRevokedHttp(req, res)) return;
-      if (!isAuthorizedSuperAdmin(req)) {
-        return res.status(403).json({ 
-          error: "PERMISSION_DENIED: Only Super Administrator (JPMP-002) is authorized to restore database snapshots." 
+      if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
+      if (!isAuthorizedSuperAdmin(ctx, req, commitDatabase)) {
+        return res.status(403).json({
+          error: "PERMISSION_DENIED: Only Super Administrator (JPMP-002) is authorized to restore database snapshots."
         });
       }
 
       if (!req.body?.confirmed) {
-        return res.status(400).json({ 
-          error: "CONFIRMATION_REQUIRED: Database restore requires explicit 'confirmed: true'." 
+        return res.status(400).json({
+          error: "CONFIRMATION_REQUIRED: Database restore requires explicit 'confirmed: true'."
         });
       }
 
@@ -5856,14 +1147,14 @@ async function startServer() {
       }
 
       const author = req.body?.author || "SUPER_ADMIN";
-      const result = restoreDatabaseFromBackup(filename, author);
+      const result = restoreDatabaseFromBackup(ctx, filename, author);
 
       if (result.success) {
-        recordAuditTrail({
+        recordAuditTrail(ctx, {
           actor: author,
-          actorId: req.body?.employeeId || 'JPMP-002',
-          action: 'DATABASE_RESTORED',
-          recordType: 'system',
+          actorId: req.body?.employeeId || "JPMP-002",
+          action: "DATABASE_RESTORED",
+          recordType: "system",
           recordId: filename,
           summary: `Restored live database from snapshot '${filename}'`
         });
@@ -5880,11 +1171,10 @@ async function startServer() {
     }
   });
 
-  // 5. Super Admin Unified Audit Trail Viewer API (filterable by date, user, recordType)
   app.get("/api/admin/audit-logs", (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    if (rejectIfDeviceRevokedHttp(req, res)) return;
-    if (!isAuthorizedSuperAdmin(req)) {
+    if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
+    if (!isAuthorizedSuperAdmin(ctx, req, commitDatabase)) {
       return res.status(403).json({
         error: "PERMISSION_DENIED: Only Super Administrator is authorized to view the system audit trail."
       });
@@ -5903,25 +1193,25 @@ async function startServer() {
     const availableTypesSet = new Set<string>();
     const availableActionsSet = new Set<string>();
 
-    for (const entry of auditTrailLogs) {
+    for (const entry of ctx.auditTrailLogs) {
       if (entry.actor) availableUsersSet.add(entry.actor);
       if (entry.recordType) availableTypesSet.add(entry.recordType);
       if (entry.action) availableActionsSet.add(entry.action);
     }
 
-    const filtered = auditTrailLogs.filter(entry => {
+    const filtered = ctx.auditTrailLogs.filter(entry => {
       const entryDate = String(entry.timestamp || "").slice(0, 10);
       if (dateFrom && entryDate && entryDate < dateFrom) return false;
       if (dateTo && entryDate && entryDate > dateTo) return false;
-      if (userFilter && userFilter !== 'all') {
+      if (userFilter && userFilter !== "all") {
         const actorMatch = String(entry.actor || "").toLowerCase().includes(userFilter);
         const actorIdMatch = String(entry.actorId || "").toLowerCase().includes(userFilter);
         if (!actorMatch && !actorIdMatch) return false;
       }
-      if (recordTypeFilter && recordTypeFilter !== 'ALL') {
+      if (recordTypeFilter && recordTypeFilter !== "ALL") {
         if (entry.recordType !== recordTypeFilter) return false;
       }
-      if (actionFilter && actionFilter !== 'ALL') {
+      if (actionFilter && actionFilter !== "ALL") {
         if (entry.action !== actionFilter) return false;
       }
       if (searchQuery) {
@@ -5932,9 +1222,9 @@ async function startServer() {
           entry.recordType,
           entry.recordId,
           entry.summary,
-          entry.details || '',
-          entry.deviceId || ''
-        ].join(' ').toLowerCase();
+          entry.details || "",
+          entry.deviceId || ""
+        ].join(" ").toLowerCase();
         if (!haystack.includes(searchQuery)) return false;
       }
       return true;
@@ -5942,7 +1232,7 @@ async function startServer() {
 
     return res.json({
       success: true,
-      total: auditTrailLogs.length,
+      total: ctx.auditTrailLogs.length,
       filteredCount: filtered.length,
       logs: filtered.slice(0, limit),
       availableUsers: Array.from(availableUsersSet).sort((a, b) => a.localeCompare(b)),
@@ -5951,11 +1241,14 @@ async function startServer() {
     });
   });
 
-  // 4. Download backup snapshot file
   app.get("/api/admin/backups/download/:filename", (req, res) => {
     try {
       const filename = path.basename(req.params.filename);
-      const filePath = path.join(BACKUPS_DIR, filename);
+      const resolvedBackupsDir = path.resolve(serverConfig.backupsDir);
+      const filePath = path.resolve(resolvedBackupsDir, filename);
+      if (!filePath.startsWith(resolvedBackupsDir + path.sep)) {
+        return res.status(400).json({ error: "Invalid backup filename" });
+      }
       if (!fs.existsSync(filePath)) {
         return res.status(404).json({ error: "Backup file not found" });
       }
@@ -5971,20 +1264,20 @@ async function startServer() {
     }
   });
 
-  // REST API: Operator Accounts List (always stripped of plain-text PINs, hashes, and salts)
+  // REST API: Operator Accounts List
   app.get("/api/accounts", async (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     try {
-      if (rejectIfDeviceRevokedHttp(req, res)) return;
-      ensureSuperAdminSeed(false);
+      if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
+      ensureSuperAdminSeed(ctx, false);
 
-      const safeAccounts = state.registeredUsers.map(sanitizeUserForClient);
+      const safeAccounts = ctx.state.registeredUsers.map(sanitizeUserForClient);
       return res.json({
         success: true,
         count: safeAccounts.length,
         accounts: safeAccounts,
-        revision: stateRevision,
-        systemResetVersion
+        revision: ctx.stateRevision,
+        systemResetVersion: ctx.systemResetVersion
       });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
@@ -5992,15 +1285,14 @@ async function startServer() {
   });
 
   // REST API: Verify Operator Credentials & PIN
-  // Single Source of Truth: Central database scrypt verification + legacy plaintext upgrade
   app.post("/api/accounts/verify", async (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     try {
-      if (rejectIfDeviceRevokedHttp(req, res)) return;
+      if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
 
       const { identifier, pin } = req.body;
-      const rawInput = String(identifier || '').trim();
-      const enteredPin = String(pin || '').trim();
+      const rawInput = String(identifier || "").trim();
+      const enteredPin = String(pin || "").trim();
       const reqDevId = extractDeviceIdFromHttp(req);
 
       if (!rawInput || !enteredPin) {
@@ -6008,19 +1300,18 @@ async function startServer() {
       }
 
       let searchId = rawInput.toUpperCase();
-      if (!searchId.startsWith('JPMP-')) {
-        searchId = 'JPMP-' + searchId.replace(/^EMP-/, '');
+      if (!searchId.startsWith("JPMP-")) {
+        searchId = "JPMP-" + searchId.replace(/^EMP-/, "");
       }
-      const inputPhone = rawInput.replace(/\D/g, '');
+      const inputPhone = rawInput.replace(/\D/g, "");
 
-      // Check central in-memory database using timing-safe scrypt / legacy upgrade
       let matchedUser: RegisteredAccount | undefined;
       let upgradedLegacyPin = false;
-      for (const u of state.registeredUsers) {
-        if (u.status === 'INACTIVE') continue;
-        const uEmpId = (u.employeeId || '').toUpperCase().trim();
-        const uUsername = (u.username || '').toUpperCase().trim();
-        const uPhone = (u.phoneNumber || '').replace(/\D/g, '');
+      for (const u of ctx.state.registeredUsers) {
+        if (u.status === "INACTIVE") continue;
+        const uEmpId = (u.employeeId || "").toUpperCase().trim();
+        const uUsername = (u.username || "").toUpperCase().trim();
+        const uPhone = (u.phoneNumber || "").replace(/\D/g, "");
         const idMatches = uEmpId === searchId || uEmpId === rawInput.toUpperCase() || uUsername === rawInput.toUpperCase() || (inputPhone.length >= 10 && uPhone === inputPhone);
         if (!idMatches) continue;
         const check = verifyUserPin(u, enteredPin);
@@ -6033,39 +1324,37 @@ async function startServer() {
 
       if (matchedUser) {
         matchedUser.lastActive = new Date().toISOString();
-        if (enteredPin === '1234') {
+        if (enteredPin === "1234") {
           matchedUser.isPinCompromised = true;
         }
 
-        // Bind session token on server
-        const sessionToken = crypto.randomBytes(32).toString('hex');
-        sessionTokensMap.set(sessionToken, {
+        const sessionToken = crypto.randomBytes(32).toString("hex");
+        ctx.sessionTokensMap.set(sessionToken, {
           employeeId: matchedUser.employeeId,
           ...(reqDevId ? { deviceId: reqDevId } : {}),
           createdAt: Date.now()
         });
 
-        // Bind account & permission to authorized device record if present
         if (reqDevId) {
-          const devRec = authorizedDevicesMap.get(reqDevId);
-          if (devRec && devRec.status === 'AUTHORIZED') {
+          const devRec = ctx.authorizedDevicesMap.get(reqDevId);
+          if (devRec && devRec.status === "AUTHORIZED") {
             devRec.employeeId = matchedUser.employeeId;
             devRec.username = matchedUser.username;
             devRec.role = matchedUser.role;
             devRec.permission = matchedUser.permission;
             devRec.boundAt = new Date().toISOString();
           }
-          for (const conn of connectionRegistry.values()) {
+          for (const conn of ctx.connectionRegistry.values()) {
             if (conn.device_id === reqDevId || conn.deviceId === reqDevId) {
               conn.employeeId = matchedUser.employeeId;
               conn.username = matchedUser.username;
               conn.role = matchedUser.role;
-              conn.permission = matchedUser.status === 'INACTIVE' ? 'VIEW_ONLY' : matchedUser.permission;
+              conn.permission = matchedUser.status === "INACTIVE" ? "VIEW_ONLY" : matchedUser.permission;
             }
           }
         }
 
-        commitDatabase();
+        commitDatabase(ctx);
         if (upgradedLegacyPin) {
           logger.info(`[SECURITY] Upgraded legacy plain-text PIN to scrypt hash for operator ${matchedUser.employeeId}.`);
         }
@@ -6077,9 +1366,9 @@ async function startServer() {
           sessionToken,
           permission: matchedUser.permission,
           mustChangePin: Boolean(matchedUser.mustChangePin),
-          isPinCompromised: enteredPin === '1234' || !!matchedUser.isPinCompromised,
+          isPinCompromised: enteredPin === "1234" || !!matchedUser.isPinCompromised,
           user: safeUser,
-          systemResetVersion
+          systemResetVersion: ctx.systemResetVersion
         });
       }
 
@@ -6095,16 +1384,14 @@ async function startServer() {
   });
 
   // REST API: Update Account PIN
-  // Strict Security Rule: PIN changes only allowed via explicit Super Admin authorization or verified operator self-change.
-  // Hashes PIN using crypto.scrypt with per-account random salt and clears any plain-text PIN.
   app.post("/api/accounts/update-pin", async (req, res) => {
     try {
-      if (rejectIfDeviceRevokedHttp(req, res)) return;
+      if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
 
       const { employeeId, currentPin, newPin, requesterEmployeeId, author, reason } = req.body;
-      const cleanEmpId = String(employeeId || '').trim().toUpperCase();
-      const cleanNewPin = String(newPin || '').trim();
-      const cleanCurrentPin = String(currentPin || '').trim();
+      const cleanEmpId = String(employeeId || "").trim().toUpperCase();
+      const cleanNewPin = String(newPin || "").trim();
+      const cleanCurrentPin = String(currentPin || "").trim();
       const requesterId = String(requesterEmployeeId || cleanEmpId).trim().toUpperCase();
 
       if (!cleanEmpId || !cleanNewPin) {
@@ -6114,25 +1401,23 @@ async function startServer() {
         return res.status(400).json({ error: "PIN must be between 4 and 6 numeric digits" });
       }
 
-      // Security Guard: Forbid trivial and compromised PINs
-      if (cleanNewPin === '1234') {
-        return res.status(400).json({ 
-          error: "SECURITY_REJECTED: '1234' is a compromised default PIN and is strictly prohibited." 
+      if (cleanNewPin === "1234") {
+        return res.status(400).json({
+          error: "SECURITY_REJECTED: '1234' is a compromised default PIN and is strictly prohibited."
         });
       }
       if (/^(\d)\1+$/.test(cleanNewPin)) {
-        return res.status(400).json({ 
-          error: "SECURITY_REJECTED: Repetitive PIN patterns (e.g. 0000, 1111) are not allowed." 
+        return res.status(400).json({
+          error: "SECURITY_REJECTED: Repetitive PIN patterns (e.g. 0000, 1111) are not allowed."
         });
       }
 
-      const target = state.registeredUsers.find(u => u.employeeId.toUpperCase().trim() === cleanEmpId);
+      const target = ctx.state.registeredUsers.find((u: RegisteredAccount) => u.employeeId.toUpperCase().trim() === cleanEmpId);
       if (!target) {
         return res.status(404).json({ error: "Operator account not found in central database" });
       }
 
-      // Verification: must be confirmed Super Admin OR operator verifying their own current PIN
-      const isSuper = isAuthorizedSuperAdmin(req);
+      const isSuper = isAuthorizedSuperAdmin(ctx, req, commitDatabase);
       if (!isSuper) {
         const currentCheck = verifyUserPin(target, cleanCurrentPin);
         if (!currentCheck.matched) {
@@ -6141,7 +1426,7 @@ async function startServer() {
         }
       }
 
-      const previousWasCompromised = target.pin === '1234' || !!target.isPinCompromised;
+      const previousWasCompromised = target.pin === "1234" || !!target.isPinCompromised;
       const actionType = previousWasCompromised ? "COMPROMISED_PIN_RESOLVED" : (isSuper ? "PIN_RESET" : "PIN_CHANGED");
 
       const { pinHash, pinSalt } = hashPinScrypt(cleanNewPin);
@@ -6153,36 +1438,36 @@ async function startServer() {
       target.isPinCompromised = false;
       target.pinChangedAt = new Date().toISOString();
       target.pinChangedBy = requesterId;
-      if (cleanEmpId === 'JPMP-002') {
-        oneTimeSetupPin = null;
+      if (cleanEmpId === "JPMP-002") {
+        ctx.oneTimeSetupPin = null;
       }
       target.version = (target.version || 1) + 1;
       target.updated_at = new Date().toISOString();
-      target.reset_version = systemResetVersion;
+      target.reset_version = ctx.systemResetVersion;
 
-      stateRevision++;
-      const commitOk = commitDatabase();
+      ctx.stateRevision++;
+      const commitOk = commitDatabase(ctx);
       if (!commitOk) {
         return res.status(500).json({ error: "Failed to persist PIN change to central database" });
       }
 
-      // Record permanent audit entry
       logPinAudit(
+        ctx,
         actionType,
         cleanEmpId,
         target.username,
-        author || (isSuper ? 'Super Administrator (ALDRIN BANAWA)' : target.username),
+        author || (isSuper ? "Super Administrator (ALDRIN BANAWA)" : target.username),
         requesterId,
-        reason || (previousWasCompromised ? 'Resolving compromised default PIN' : 'Explicit PIN update'),
+        reason || (previousWasCompromised ? "Resolving compromised default PIN" : "Explicit PIN update"),
         previousWasCompromised,
         req.ip
       );
 
-      recordAuditTrail({
-        actor: author || (isSuper ? 'ALDRIN BANAWA' : target.username),
+      recordAuditTrail(ctx, {
+        actor: author || (isSuper ? "ALDRIN BANAWA" : target.username),
         actorId: requesterId,
         action: actionType,
-        recordType: 'registeredUsers',
+        recordType: "registeredUsers",
         recordId: cleanEmpId,
         summary: `${actionType} for ${target.username} (${cleanEmpId})`,
         details: reason || undefined,
@@ -6191,57 +1476,57 @@ async function startServer() {
 
       const safeTarget = sanitizeUserForClient(target);
 
-      broadcast({
+      broadcast(ctx, {
         type: "account_updated",
         account: safeTarget,
         user: safeTarget,
         author: author || requesterId,
-        systemResetVersion
+        systemResetVersion: ctx.systemResetVersion
       });
 
-      broadcast({
+      broadcast(ctx, {
         type: "collection_updated",
         collection: "registeredUsers",
-        data: state.registeredUsers,
-        systemResetVersion
+        data: ctx.state.registeredUsers,
+        systemResetVersion: ctx.systemResetVersion
       });
 
-      return res.json({ 
-        success: true, 
-        message: previousWasCompromised 
-          ? "Compromised PIN resolved and secure PIN activated in central database" 
-          : "PIN updated successfully in central database", 
-        user: safeTarget 
+      return res.json({
+        success: true,
+        message: previousWasCompromised
+          ? "Compromised PIN resolved and secure PIN activated in central database"
+          : "PIN updated successfully in central database",
+        user: safeTarget
       });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
   });
 
-  // REST API: Get PIN Audit Logs (Super Admin Only)
+  // REST API: Get PIN Audit Logs
   app.get("/api/accounts/pin-audit-log", (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    if (rejectIfDeviceRevokedHttp(req, res)) return;
+    if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
     return res.json({
       success: true,
-      count: pinAuditLogs.length,
-      logs: pinAuditLogs
+      count: ctx.pinAuditLogs.length,
+      logs: ctx.pinAuditLogs
     });
   });
 
-  // REST API: Register New Operator Account (stores scrypt hash + salt, never plain-text pin)
+  // REST API: Register New Operator Account
   app.post("/api/accounts/register", async (req, res) => {
     try {
-      if (rejectIfDeviceRevokedHttp(req, res)) return;
-      const auth = resolveRequestAuthContext(req);
-      if (auth.permission === 'VIEW_ONLY') {
+      if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
+      const auth = resolveRequestAuthContext(ctx, req);
+      if (auth.permission === "VIEW_ONLY") {
         return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
       }
 
       const { employeeId, username, role, phoneNumber, permission, pin, registeredBy } = req.body;
-      const cleanEmpId = String(employeeId || '').trim().toUpperCase();
-      const cleanUsername = String(username || '').trim().toUpperCase();
-      const cleanPin = String(pin || '').trim();
+      const cleanEmpId = String(employeeId || "").trim().toUpperCase();
+      const cleanUsername = String(username || "").trim().toUpperCase();
+      const cleanPin = String(pin || "").trim();
 
       if (!cleanEmpId || !cleanUsername || !cleanPin) {
         return res.status(400).json({ error: "Employee ID, Full Name, and PIN code are required." });
@@ -6249,17 +1534,16 @@ async function startServer() {
       if (!/^\d{4,6}$/.test(cleanPin)) {
         return res.status(400).json({ error: "PIN must be between 4 and 6 numeric digits." });
       }
-      if (cleanPin === '1234' || /^(\d)\1+$/.test(cleanPin)) {
+      if (cleanPin === "1234" || /^(\d)\1+$/.test(cleanPin)) {
         return res.status(400).json({ error: "SECURITY_REJECTED: Compromise/trivial PINs ('1234', repetitive digits) are not allowed." });
       }
 
-      // Check existence
-      const exists = state.registeredUsers.some(u => u.employeeId.toUpperCase().trim() === cleanEmpId);
+      const exists = ctx.state.registeredUsers.some((u: RegisteredAccount) => u.employeeId.toUpperCase().trim() === cleanEmpId);
       if (exists) {
         return res.status(409).json({ error: `Account with ID ${cleanEmpId} already exists in the central database.` });
       }
 
-      unmarkUserTombstone(cleanEmpId);
+      unmarkUserTombstone(ctx, cleanEmpId);
 
       const { pinHash, pinSalt } = hashPinScrypt(cleanPin);
 
@@ -6267,34 +1551,34 @@ async function startServer() {
         id: `USR-${cleanEmpId}`,
         employeeId: cleanEmpId,
         username: cleanUsername,
-        role: String(role || 'WAREHOUSE CLERK').trim().toUpperCase(),
-        phoneNumber: phoneNumber ? String(phoneNumber).trim() : '',
-        permission: String(permission || 'LIMITED_ACCESS').trim(),
+        role: String(role || "WAREHOUSE CLERK").trim().toUpperCase(),
+        phoneNumber: phoneNumber ? String(phoneNumber).trim() : "",
+        permission: String(permission || "LIMITED_ACCESS").trim(),
         pinHash,
         pinSalt,
-        status: 'ACTIVE',
-        registeredBy: registeredBy || 'JPMP-002 (ALDRIN BANAWA)',
+        status: "ACTIVE",
+        registeredBy: registeredBy || "JPMP-002 (ALDRIN BANAWA)",
         registeredBySuperAdmin: true,
         registeredAt: new Date().toISOString(),
         version: 1,
         updated_at: new Date().toISOString(),
-        reset_version: systemResetVersion
+        reset_version: ctx.systemResetVersion
       };
 
-      state.registeredUsers.push(newUser);
-      stateRevision++;
+      ctx.state.registeredUsers.push(newUser);
+      ctx.stateRevision++;
 
-      const commitOk = commitDatabase();
+      const commitOk = commitDatabase(ctx);
       if (!commitOk) {
         return res.status(500).json({ error: "Failed to commit new account to central database" });
       }
 
-      const authCtx = resolveRequestAuthContext(req);
-      recordAuditTrail({
-        actor: authCtx.account?.username || registeredBy || 'Super Administrator',
-        actorId: authCtx.employeeId || 'JPMP-002',
-        action: 'CREATE',
-        recordType: 'registeredUsers',
+      const authCtx = resolveRequestAuthContext(ctx, req);
+      recordAuditTrail(ctx, {
+        actor: authCtx.account?.username || registeredBy || "Super Administrator",
+        actorId: authCtx.employeeId || "JPMP-002",
+        action: "CREATE",
+        recordType: "registeredUsers",
         recordId: cleanEmpId,
         summary: `Registered account ${cleanUsername} (${cleanEmpId}) — Role: ${newUser.role}, Permission: ${newUser.permission}`,
         deviceId: authCtx.deviceId || undefined
@@ -6302,28 +1586,28 @@ async function startServer() {
 
       const safeUser = sanitizeUserForClient(newUser);
 
-      broadcast({
+      broadcast(ctx, {
         type: "account_registered",
         user: safeUser,
-        author: registeredBy || 'Super Administrator',
-        systemResetVersion
+        author: registeredBy || "Super Administrator",
+        systemResetVersion: ctx.systemResetVersion
       });
 
-      broadcast({
+      broadcast(ctx, {
         type: "account_created",
         account: safeUser,
         user: safeUser,
-        systemResetVersion
+        systemResetVersion: ctx.systemResetVersion
       });
 
-      broadcast({
+      broadcast(ctx, {
         type: "collection_updated",
         collection: "registeredUsers",
-        data: state.registeredUsers,
-        systemResetVersion
+        data: ctx.state.registeredUsers,
+        systemResetVersion: ctx.systemResetVersion
       });
 
-      return res.json({ success: true, user: safeUser, systemResetVersion });
+      return res.json({ success: true, user: safeUser, systemResetVersion: ctx.systemResetVersion });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
@@ -6332,34 +1616,34 @@ async function startServer() {
   // REST API: Update Operator Account
   app.post("/api/accounts/update", async (req, res) => {
     try {
-      if (rejectIfDeviceRevokedHttp(req, res)) return;
-      const auth = resolveRequestAuthContext(req);
-      if (auth.permission === 'VIEW_ONLY') {
+      if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
+      const auth = resolveRequestAuthContext(ctx, req);
+      if (auth.permission === "VIEW_ONLY") {
         return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
       }
 
       const { oldEmployeeId, updatedUser } = req.body;
-      const cleanOldId = String(oldEmployeeId || updatedUser?.employeeId || '').trim().toUpperCase();
+      const cleanOldId = String(oldEmployeeId || updatedUser?.employeeId || "").trim().toUpperCase();
 
       if (!cleanOldId || !updatedUser) {
         return res.status(400).json({ error: "Old Employee ID and updated account data required" });
       }
 
-      const index = state.registeredUsers.findIndex(u => u.employeeId.toUpperCase().trim() === cleanOldId);
+      const index = ctx.state.registeredUsers.findIndex((u: RegisteredAccount) => u.employeeId.toUpperCase().trim() === cleanOldId);
       if (index === -1) {
         return res.status(404).json({ error: "Account not found in central database" });
       }
 
-      const existing = state.registeredUsers[index];
-      const isSuper = cleanOldId === 'JPMP-002';
+      const existing = ctx.state.registeredUsers[index];
+      const isSuper = cleanOldId === "JPMP-002";
 
       const cleanNewId = String(updatedUser.employeeId || cleanOldId).trim().toUpperCase();
       if (cleanNewId !== cleanOldId) {
         if (isSuper) {
           return res.status(403).json({ error: "Super Administrator Employee ID cannot be altered." });
         }
-        const duplicate = state.registeredUsers.some(
-          (u, idx) => idx !== index && u.employeeId.toUpperCase().trim() === cleanNewId
+        const duplicate = ctx.state.registeredUsers.some(
+          (u: RegisteredAccount, idx: number) => idx !== index && u.employeeId.toUpperCase().trim() === cleanNewId
         );
         if (duplicate) {
           return res.status(409).json({ error: `Employee ID ${cleanNewId} is already taken by another account.` });
@@ -6369,11 +1653,10 @@ async function startServer() {
       const mergedUser: RegisteredAccount = {
         ...existing,
         ...updatedUser,
-        employeeId: isSuper ? 'JPMP-002' : cleanNewId,
+        employeeId: isSuper ? "JPMP-002" : cleanNewId,
         username: String(updatedUser.username || existing.username).trim().toUpperCase(),
-        role: isSuper ? 'SUPER ADMINISTRATOR' : String(updatedUser.role || existing.role).trim().toUpperCase(),
-        permission: isSuper ? 'FULL_ACCESS' : String(updatedUser.permission || existing.permission).trim(),
-        // CRITICAL SECURITY FIX: General profile edit CANNOT alter PIN or hash! Must use /api/accounts/update-pin.
+        role: isSuper ? "SUPER ADMINISTRATOR" : String(updatedUser.role || existing.role).trim().toUpperCase(),
+        permission: isSuper ? "FULL_ACCESS" : String(updatedUser.permission || existing.permission).trim(),
         pinHash: existing.pinHash,
         pinSalt: existing.pinSalt,
         ...(existing.pin && !existing.pinHash ? { pin: existing.pin } : {}),
@@ -6383,47 +1666,47 @@ async function startServer() {
         pinChangedBy: existing.pinChangedBy,
         version: (existing.version || 1) + 1,
         updated_at: new Date().toISOString(),
-        reset_version: systemResetVersion
+        reset_version: ctx.systemResetVersion
       };
       if (mergedUser.pinHash) delete mergedUser.pin;
 
-      state.registeredUsers[index] = mergedUser;
-      stateRevision++;
+      ctx.state.registeredUsers[index] = mergedUser;
+      ctx.stateRevision++;
 
-      const commitOk = commitDatabase();
+      const commitOk = commitDatabase(ctx);
       if (!commitOk) {
         return res.status(500).json({ error: "Failed to persist account update to central database" });
       }
 
       const accountDiff = describeRecordDiff(existing, mergedUser);
-      recordAuditTrail({
-        actor: auth.account?.username || req.body.author || 'Admin',
-        actorId: auth.employeeId || 'ADMIN',
-        action: 'UPDATE',
-        recordType: 'registeredUsers',
+      recordAuditTrail(ctx, {
+        actor: auth.account?.username || req.body.author || "Admin",
+        actorId: auth.employeeId || "ADMIN",
+        action: "UPDATE",
+        recordType: "registeredUsers",
         recordId: mergedUser.employeeId,
-        summary: `Updated account ${mergedUser.username} (${mergedUser.employeeId})${accountDiff ? ` — ${accountDiff}` : ''}`,
+        summary: `Updated account ${mergedUser.username} (${mergedUser.employeeId})${accountDiff ? ` — ${accountDiff}` : ""}`,
         deviceId: auth.deviceId || undefined
       });
 
       const safeUser = sanitizeUserForClient(mergedUser);
 
-      broadcast({
+      broadcast(ctx, {
         type: "account_updated",
         account: safeUser,
         user: safeUser,
-        author: req.body.author || 'Admin',
-        systemResetVersion
+        author: req.body.author || "Admin",
+        systemResetVersion: ctx.systemResetVersion
       });
 
-      broadcast({
+      broadcast(ctx, {
         type: "collection_updated",
         collection: "registeredUsers",
-        data: state.registeredUsers,
-        systemResetVersion
+        data: ctx.state.registeredUsers,
+        systemResetVersion: ctx.systemResetVersion
       });
 
-      return res.json({ success: true, user: safeUser, systemResetVersion });
+      return res.json({ success: true, user: safeUser, systemResetVersion: ctx.systemResetVersion });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
@@ -6432,54 +1715,54 @@ async function startServer() {
   // REST API: Delete Operator Account
   app.post("/api/accounts/delete", async (req, res) => {
     try {
-      if (rejectIfDeviceRevokedHttp(req, res)) return;
-      const auth = resolveRequestAuthContext(req);
-      if (auth.permission === 'VIEW_ONLY') {
+      if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
+      const auth = resolveRequestAuthContext(ctx, req);
+      if (auth.permission === "VIEW_ONLY") {
         return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
       }
 
       const { employeeId } = req.body;
-      const cleanId = String(employeeId || '').trim().toUpperCase();
+      const cleanId = String(employeeId || "").trim().toUpperCase();
 
       if (!cleanId) return res.status(400).json({ error: "Employee ID is required" });
-      if (cleanId === 'JPMP-002') {
+      if (cleanId === "JPMP-002") {
         return res.status(403).json({ error: "PROTECTED_ACCOUNT: Super Administrator JPMP-002 cannot be deleted." });
       }
 
-      const deletedAcc = state.registeredUsers.find(u => u.employeeId.toUpperCase().trim() === cleanId);
-      markUserTombstone(cleanId);
-      state.registeredUsers = state.registeredUsers.filter(u => u.employeeId.toUpperCase().trim() !== cleanId);
-      stateRevision++;
+      const deletedAcc = ctx.state.registeredUsers.find((u: RegisteredAccount) => u.employeeId.toUpperCase().trim() === cleanId);
+      markUserTombstone(ctx, cleanId);
+      ctx.state.registeredUsers = ctx.state.registeredUsers.filter((u: RegisteredAccount) => u.employeeId.toUpperCase().trim() !== cleanId);
+      ctx.stateRevision++;
 
-      const commitOk = commitDatabase();
+      const commitOk = commitDatabase(ctx);
       if (!commitOk) {
         return res.status(500).json({ error: "Failed to commit account deletion to central database" });
       }
 
-      recordAuditTrail({
-        actor: auth.account?.username || req.body?.author || 'Admin',
-        actorId: auth.employeeId || 'ADMIN',
-        action: 'DELETE',
-        recordType: 'registeredUsers',
+      recordAuditTrail(ctx, {
+        actor: auth.account?.username || req.body?.author || "Admin",
+        actorId: auth.employeeId || "ADMIN",
+        action: "DELETE",
+        recordType: "registeredUsers",
         recordId: cleanId,
         summary: `Deleted account ${deletedAcc?.username || cleanId} (${cleanId})`,
         deviceId: auth.deviceId || undefined
       });
 
-      broadcast({
+      broadcast(ctx, {
         type: "account_deleted",
         employeeId: cleanId,
-        systemResetVersion
+        systemResetVersion: ctx.systemResetVersion
       });
 
-      broadcast({
+      broadcast(ctx, {
         type: "collection_updated",
         collection: "registeredUsers",
-        data: state.registeredUsers,
-        systemResetVersion
+        data: ctx.state.registeredUsers,
+        systemResetVersion: ctx.systemResetVersion
       });
 
-      return res.json({ success: true, employeeId: cleanId, systemResetVersion });
+      return res.json({ success: true, employeeId: cleanId, systemResetVersion: ctx.systemResetVersion });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
@@ -6488,61 +1771,61 @@ async function startServer() {
   // REST API: Clear All Accounts Except Super Admin
   app.post("/api/accounts/clear-all-except-super-admin", async (req, res) => {
     try {
-      if (rejectIfDeviceRevokedHttp(req, res)) return;
+      if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
 
-      if (!isAuthorizedSuperAdmin(req)) {
+      if (!isAuthorizedSuperAdmin(ctx, req, commitDatabase)) {
         return res.status(403).json({ error: "PERMISSION_DENIED: Only Super Administrator is authorized to clear accounts." });
       }
 
-      const superAdmin = state.registeredUsers.find(u => u.employeeId.toUpperCase().trim() === 'JPMP-002');
-      state.registeredUsers.forEach(u => {
-        if (u.employeeId.toUpperCase().trim() !== 'JPMP-002') {
-          markUserTombstone(u.employeeId);
+      const superAdmin = ctx.state.registeredUsers.find((u: RegisteredAccount) => u.employeeId.toUpperCase().trim() === "JPMP-002");
+      ctx.state.registeredUsers.forEach((u: RegisteredAccount) => {
+        if (u.employeeId.toUpperCase().trim() !== "JPMP-002") {
+          markUserTombstone(ctx, u.employeeId);
         }
       });
 
       if (superAdmin) {
-        state.registeredUsers = [{ ...superAdmin }];
+        ctx.state.registeredUsers = [{ ...superAdmin }];
       } else {
-        state.registeredUsers = [];
-        ensureSuperAdminSeed(true);
+        ctx.state.registeredUsers = [];
+        ensureSuperAdminSeed(ctx, true);
       }
-      stateRevision++;
+      ctx.stateRevision++;
 
-      const commitOk = commitDatabase();
+      const commitOk = commitDatabase(ctx);
       if (!commitOk) {
         return res.status(500).json({ error: "Failed to commit accounts purge to central database" });
       }
 
-      const authCtx = resolveRequestAuthContext(req);
-      recordAuditTrail({
-        actor: authCtx.account?.username || req.body?.author || 'Super Administrator',
-        actorId: authCtx.employeeId || 'JPMP-002',
-        action: 'PURGE',
-        recordType: 'registeredUsers',
-        recordId: 'ALL_NON_ADMIN',
-        summary: 'Cleared all operator accounts except Super Administrator (JPMP-002)',
+      const authCtx = resolveRequestAuthContext(ctx, req);
+      recordAuditTrail(ctx, {
+        actor: authCtx.account?.username || req.body?.author || "Super Administrator",
+        actorId: authCtx.employeeId || "JPMP-002",
+        action: "PURGE",
+        recordType: "registeredUsers",
+        recordId: "ALL_NON_ADMIN",
+        summary: "Cleared all operator accounts except Super Administrator (JPMP-002)",
         deviceId: authCtx.deviceId || undefined
       });
 
-      const safeAccounts = state.registeredUsers.map(sanitizeUserForClient);
+      const safeAccounts = ctx.state.registeredUsers.map(sanitizeUserForClient);
 
-      broadcast({
+      broadcast(ctx, {
         type: "all_accounts_cleared",
-        data: state.registeredUsers,
-        systemResetVersion
+        data: ctx.state.registeredUsers,
+        systemResetVersion: ctx.systemResetVersion
       });
 
-      broadcast({
+      broadcast(ctx, {
         type: "accounts_cleared",
-        systemResetVersion
+        systemResetVersion: ctx.systemResetVersion
       });
 
-      broadcast({
+      broadcast(ctx, {
         type: "collection_updated",
         collection: "registeredUsers",
-        data: state.registeredUsers,
-        systemResetVersion
+        data: ctx.state.registeredUsers,
+        systemResetVersion: ctx.systemResetVersion
       });
 
       return res.json({ success: true, count: safeAccounts.length, accounts: safeAccounts });
@@ -6556,44 +1839,44 @@ async function startServer() {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     res.json({
       success: true,
-      roles: state.operationalRoles || DEFAULT_OPERATIONAL_ROLES
+      roles: ctx.state.operationalRoles || DEFAULT_OPERATIONAL_ROLES
     });
   });
 
-  // REST API: Manage / Update Operational Roles (Super Admin)
+  // REST API: Manage / Update Operational Roles
   app.post("/api/roles", async (req, res) => {
     try {
-      if (rejectIfDeviceRevokedHttp(req, res)) return;
-      const auth = resolveRequestAuthContext(req);
-      if (auth.permission === 'VIEW_ONLY') {
+      if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
+      const auth = resolveRequestAuthContext(ctx, req);
+      if (auth.permission === "VIEW_ONLY") {
         return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
       }
       const { action, role, oldRole, newRole, roles, updateExistingAccounts } = req.body;
       let modified = false;
       let usersModified = false;
 
-      if (action === 'add' && role) {
+      if (action === "add" && role) {
         const clean = String(role).trim().toUpperCase();
-        if (clean && !state.operationalRoles.includes(clean)) {
-          state.operationalRoles.push(clean);
+        if (clean && !ctx.state.operationalRoles.includes(clean)) {
+          ctx.state.operationalRoles.push(clean);
           modified = true;
         }
-      } else if (action === 'rename' && oldRole && newRole) {
+      } else if (action === "rename" && oldRole && newRole) {
         const cleanOld = String(oldRole).trim().toUpperCase();
         const cleanNew = String(newRole).trim().toUpperCase();
         if (cleanOld && cleanNew) {
-          const idx = state.operationalRoles.indexOf(cleanOld);
+          const idx = ctx.state.operationalRoles.indexOf(cleanOld);
           if (idx !== -1) {
-            state.operationalRoles[idx] = cleanNew;
+            ctx.state.operationalRoles[idx] = cleanNew;
             modified = true;
-          } else if (!state.operationalRoles.includes(cleanNew)) {
-            state.operationalRoles.push(cleanNew);
+          } else if (!ctx.state.operationalRoles.includes(cleanNew)) {
+            ctx.state.operationalRoles.push(cleanNew);
             modified = true;
           }
 
           if (updateExistingAccounts !== false) {
-            state.registeredUsers = state.registeredUsers.map(u => {
-              if ((u.role || '').toUpperCase().trim() === cleanOld) {
+            ctx.state.registeredUsers = ctx.state.registeredUsers.map((u: RegisteredAccount) => {
+              if ((u.role || "").toUpperCase().trim() === cleanOld) {
                 usersModified = true;
                 return {
                   ...u,
@@ -6606,60 +1889,60 @@ async function startServer() {
             });
           }
         }
-      } else if (action === 'delete' && role) {
+      } else if (action === "delete" && role) {
         const clean = String(role).trim().toUpperCase();
         if (clean) {
-          state.operationalRoles = state.operationalRoles.filter(r => r !== clean);
+          ctx.state.operationalRoles = ctx.state.operationalRoles.filter((r: string) => r !== clean);
           modified = true;
         }
       } else if (Array.isArray(roles)) {
-        const cleaned = Array.from(new Set<string>(roles.map((r: any) => String(r || '').trim().toUpperCase()).filter(Boolean)));
+        const cleaned = Array.from(new Set<string>(roles.map((r: any) => String(r || "").trim().toUpperCase()).filter(Boolean)));
         if (cleaned.length > 0) {
-          state.operationalRoles = cleaned;
+          ctx.state.operationalRoles = cleaned;
           modified = true;
         }
       }
 
       if (modified || usersModified) {
-        stateRevision++;
-        commitDatabase();
+        ctx.stateRevision++;
+        commitDatabase(ctx);
 
-        recordAuditTrail({
-          actor: auth.account?.username || req.body?.author || 'Admin',
-          actorId: auth.employeeId || 'ADMIN',
-          action: 'UPDATE',
-          recordType: 'operationalRoles',
-          recordId: 'operationalRoles',
-          summary: `Updated operational roles (${action || 'replace'}${role ? `: ${role}` : oldRole ? `: ${oldRole} -> ${newRole}` : ''})`,
+        recordAuditTrail(ctx, {
+          actor: auth.account?.username || req.body?.author || "Admin",
+          actorId: auth.employeeId || "ADMIN",
+          action: "UPDATE",
+          recordType: "operationalRoles",
+          recordId: "operationalRoles",
+          summary: `Updated operational roles (${action || "replace"}${role ? `: ${role}` : oldRole ? `: ${oldRole} -> ${newRole}` : ""})`,
           deviceId: auth.deviceId || undefined
         });
 
-        broadcast({
+        broadcast(ctx, {
           type: "roles_updated",
-          roles: state.operationalRoles,
-          systemResetVersion
+          roles: ctx.state.operationalRoles,
+          systemResetVersion: ctx.systemResetVersion
         });
 
-        broadcast({
+        broadcast(ctx, {
           type: "collection_updated",
           collection: "operationalRoles",
-          data: state.operationalRoles,
-          systemResetVersion
+          data: ctx.state.operationalRoles,
+          systemResetVersion: ctx.systemResetVersion
         });
 
         if (usersModified) {
-          broadcast({
+          broadcast(ctx, {
             type: "collection_updated",
             collection: "registeredUsers",
-            data: state.registeredUsers,
-            systemResetVersion
+            data: ctx.state.registeredUsers,
+            systemResetVersion: ctx.systemResetVersion
           });
         }
       }
 
       return res.json({
         success: true,
-        roles: state.operationalRoles,
+        roles: ctx.state.operationalRoles,
         accountsUpdated: usersModified
       });
     } catch (err: any) {
@@ -6667,304 +1950,23 @@ async function startServer() {
     }
   });
 
-  // REST API: Get Receiving Categories
-  app.get("/api/categories", (_req, res) => {
-    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    res.json({
-      success: true,
-      categories: state.receivingCategories || DEFAULT_RECEIVING_CATEGORIES
-    });
-  });
 
-  // REST API: Manage / Update Receiving Categories (Super Admin)
-  app.post("/api/categories", async (req, res) => {
-    try {
-      if (rejectIfDeviceRevokedHttp(req, res)) return;
-      const auth = resolveRequestAuthContext(req);
-      if (auth.permission === 'VIEW_ONLY') {
-        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
-      }
-      const { action, category, oldCategory, newCategory, oldCat, newCat, categories, updateExistingRecords } = req.body;
-      let modified = false;
-      let recModified = false;
-      let retModified = false;
-      let stocksModified = false;
 
-      if (action === 'add' && category) {
-        const clean = String(category).trim().toUpperCase();
-        if (clean && !state.receivingCategories.includes(clean)) {
-          state.receivingCategories.push(clean);
-          modified = true;
-        }
-      } else if (action === 'rename') {
-        const cleanOld = String(oldCategory || oldCat || '').trim().toUpperCase();
-        const cleanNew = String(newCategory || newCat || '').trim().toUpperCase();
-        if (cleanOld && cleanNew && cleanOld !== cleanNew) {
-          const idx = state.receivingCategories.indexOf(cleanOld);
-          if (idx !== -1) {
-            state.receivingCategories[idx] = cleanNew;
-            modified = true;
-          } else if (!state.receivingCategories.includes(cleanNew)) {
-            state.receivingCategories.push(cleanNew);
-            modified = true;
-          }
-
-          if (updateExistingRecords !== false) {
-            state.receiving = state.receiving.map(r => {
-              let ch = false;
-              const up = { ...r };
-              if ((r.supplierOrDept || '').trim().toUpperCase() === cleanOld) {
-                up.supplierOrDept = cleanNew;
-                ch = true;
-              }
-              if (((r as any).category || '').trim().toUpperCase() === cleanOld) {
-                (up as any).category = cleanNew;
-                ch = true;
-              }
-              if (ch) {
-                recModified = true;
-                return { ...up, version: (r.version || 1) + 1, updated_at: new Date().toISOString() };
-              }
-              return r;
-            });
-
-            state.returns = state.returns.map(ret => {
-              if ((ret.category || '').trim().toUpperCase() === cleanOld) {
-                retModified = true;
-                return { ...ret, category: cleanNew, version: (ret.version || 1) + 1, updated_at: new Date().toISOString() };
-              }
-              return ret;
-            });
-
-            state.stocks = state.stocks.map(s => {
-              if (((s as any).category || '').trim().toUpperCase() === cleanOld) {
-                stocksModified = true;
-                return { ...s, category: cleanNew, version: (s.version || 1) + 1, updated_at: new Date().toISOString() };
-              }
-              return s;
-            });
-          }
-        }
-      } else if (action === 'delete' && category) {
-        const clean = String(category).trim().toUpperCase();
-        if (clean) {
-          // Block deleting if any existing record still uses it
-          const recCount = state.receiving.filter(r => (r.supplierOrDept || '').trim().toUpperCase() === clean || ((r as any).category || '').trim().toUpperCase() === clean).length;
-          const retCount = state.returns.filter(ret => (ret.category || '').trim().toUpperCase() === clean).length;
-          const stockCount = state.stocks.filter(s => ((s as any).category || '').trim().toUpperCase() === clean).length;
-          const inUseCount = recCount + retCount + stockCount;
-
-          if (inUseCount > 0) {
-            return res.status(400).json({
-              success: false,
-              error: `Cannot delete category "${clean}" because it is currently assigned to ${inUseCount} active record(s) (${recCount} receiving, ${retCount} returns). You must reassign or remove these records first.`,
-              inUseCount,
-              recCount,
-              retCount,
-              stockCount
-            });
-          }
-
-          state.receivingCategories = state.receivingCategories.filter(c => c !== clean);
-          modified = true;
-        }
-      } else if (action === 'reset') {
-        state.receivingCategories = [...DEFAULT_RECEIVING_CATEGORIES];
-        modified = true;
-      } else if (Array.isArray(categories)) {
-        const cleaned = Array.from(new Set<string>(categories.map((c: any) => String(c || '').trim().toUpperCase()).filter(Boolean)));
-        if (cleaned.length > 0) {
-          state.receivingCategories = cleaned;
-          modified = true;
-        }
-      }
-
-      if (modified || recModified || retModified || stocksModified) {
-        stateRevision++;
-        commitDatabase();
-
-        recordAuditTrail({
-          actor: auth.account?.username || req.body?.author || 'Admin',
-          actorId: auth.employeeId || 'ADMIN',
-          action: 'UPDATE',
-          recordType: 'receivingCategories',
-          recordId: 'receivingCategories',
-          summary: `Updated receiving categories (${action || 'replace'}${category ? `: ${category}` : oldCategory || oldCat ? `: ${oldCategory || oldCat} -> ${newCategory || newCat}` : ''})`,
-          deviceId: auth.deviceId || undefined
-        });
-
-        broadcast({
-          type: "categories_updated",
-          categories: state.receivingCategories,
-          systemResetVersion
-        });
-
-        broadcast({
-          type: "collection_updated",
-          collection: "receivingCategories",
-          data: state.receivingCategories,
-          systemResetVersion
-        });
-
-        if (recModified) {
-          broadcast({
-            type: "collection_updated",
-            collection: "receiving",
-            data: state.receiving,
-            systemResetVersion
-          });
-        }
-        if (retModified) {
-          broadcast({
-            type: "collection_updated",
-            collection: "returns",
-            data: state.returns,
-            systemResetVersion
-          });
-        }
-        if (stocksModified) {
-          broadcast({
-            type: "collection_updated",
-            collection: "stocks",
-            data: state.stocks,
-            systemResetVersion
-          });
-        }
-      }
-
-      return res.json({
-        success: true,
-        categories: state.receivingCategories,
-        recordsUpdated: recModified || retModified || stocksModified
-      });
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message });
-    }
-  });
-
-  /**
-   * REST API: FIFO Color Coding Calendar
-   * Allows querying and central updates for monthly FIFO color definitions.
-   * Locked in per record at receipt time; updates do not retroactively alter existing records.
-   */
-  app.get("/api/fifo-colors", (_req, res) => {
-    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-    res.setHeader("Pragma", "no-cache");
-    res.setHeader("Expires", "0");
-    return res.json({
-      success: true,
-      fifoColorsByMonth: state.fifoColorsByMonth || DEFAULT_FIFO_COLORS_BY_MONTH
-    });
-  });
-
-  app.post("/api/fifo-colors", async (req, res) => {
-    try {
-      if (rejectIfDeviceRevokedHttp(req, res)) return;
-      const { action, month, color, fifoColorsByMonth } = req.body;
-      // Derive account and permission strictly from server-side device/session context; ignore x-user-permission and body.permission
-      const auth = resolveRequestAuthContext(req);
-      const isSuperAdmin = auth.employeeId === 'JPMP-002' || auth.permission === 'FULL_ACCESS';
-
-      if (!isSuperAdmin) {
-        return res.status(403).json({ error: "PERMISSION DENIED: Only Super Administrator (JPMP-002) can edit the FIFO color calendar." });
-      }
-
-      let modified = false;
-
-      if (fifoColorsByMonth && typeof fifoColorsByMonth === 'object') {
-        state.fifoColorsByMonth = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...fifoColorsByMonth };
-        modified = true;
-      } else if (action === 'reset') {
-        state.fifoColorsByMonth = { ...DEFAULT_FIFO_COLORS_BY_MONTH };
-        modified = true;
-      } else if (month && color) {
-        const m = Number(month);
-        if (m >= 1 && m <= 12 && color.name) {
-          state.fifoColorsByMonth[m] = {
-            name: String(color.name).trim(),
-            colorClass: color.colorClass || 'bg-indigo-600',
-            textClass: color.textClass || 'text-indigo-600',
-            hex: color.hex || undefined
-          };
-          modified = true;
-        }
-      }
-
-      if (modified) {
-        stateRevision++;
-        commitDatabase();
-
-        recordAuditTrail({
-          actor: auth.account?.username || req.body?.author || 'Super Administrator',
-          actorId: auth.employeeId || 'JPMP-002',
-          action: 'UPDATE',
-          recordType: 'fifoColorsByMonth',
-          recordId: month ? `month-${month}` : 'fifoColorsByMonth',
-          summary: month && color?.name
-            ? `Updated FIFO color for month ${month} to ${color.name}`
-            : `Updated FIFO color calendar (${action || 'batch'})`,
-          deviceId: auth.deviceId || undefined
-        });
-
-        broadcast({
-          type: "fifo_colors_updated",
-          fifoColorsByMonth: state.fifoColorsByMonth,
-          systemResetVersion
-        });
-
-        broadcast({
-          type: "collection_updated",
-          collection: "fifoColorsByMonth",
-          data: state.fifoColorsByMonth,
-          systemResetVersion
-        });
-      }
-
-      return res.json({
-        success: true,
-        fifoColorsByMonth: state.fifoColorsByMonth,
-        systemResetVersion
-      });
-    } catch (err: any) {
-      console.error("Error updating FIFO colors:", err);
-      return res.status(500).json({ error: err.message || "Failed to update FIFO color calendar" });
-    }
-  });
-
-  /**
-   * REST API: FIFO Tag Color Repair Report & Audit Logs
-   */
-  app.get("/api/system/fifo-repair-report", (_req, res) => {
-    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-    res.setHeader("Pragma", "no-cache");
-    res.setHeader("Expires", "0");
-    return res.json({
-      success: true,
-      report: initialFifoRepairReport,
-      totalAuditEntries: fifoRepairAuditLogs.length,
-      auditLogs: fifoRepairAuditLogs
-    });
-  });
-
-  /**
-   * REST API: Upsert Record
-   * Concurrency checks, version increment, and synchronous disk commit BEFORE WebSocket broadcast.
-   */
+  // REST API: Upsert Record
   app.post("/api/records/upsert", async (req, res) => {
     try {
       const { collection, record, author, employeeId, actionDesc, expectedVersion } = req.body;
-      const reqDevId = String(req.body.device_id || req.body.deviceId || req.headers['x-device-id'] || record?.device_id || record?.deviceId || "").trim();
-      if (isDeviceRevoked(reqDevId)) {
-        closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+      const reqDevId = String(req.body.device_id || req.body.deviceId || req.headers["x-device-id"] || record?.device_id || record?.deviceId || "").trim();
+      if (isDeviceRevoked(ctx, reqDevId)) {
+        closeDeviceSockets(ctx, reqDevId, "DEVICE_REVOKED");
         return res.status(403).json({ error: "DEVICE_REVOKED" });
       }
 
-      // Derive permission strictly from server-side device/session record; ignore x-user-permission and body.permission
-      const auth = resolveRequestAuthContext(req, reqDevId);
+      const auth = resolveRequestAuthContext(ctx, req, reqDevId);
       const userPermission = auth.permission;
-      const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version'] || record?.reset_version) || systemResetVersion;
+      const clientResetVersion = Number(req.body.reset_version || req.headers["x-reset-version"] || record?.reset_version) || ctx.systemResetVersion;
 
-      const result = executeRecordUpsert({
+      const result = executeRecordUpsert(ctx, {
         collection,
         record,
         author: auth.account?.username || author,
@@ -6998,25 +2000,21 @@ async function startServer() {
     }
   });
 
-  /**
-   * REST API: Delete Record
-   * Synchronous disk commit BEFORE WebSocket broadcast.
-   */
+  // REST API: Delete Record
   app.post("/api/records/delete", async (req, res) => {
     try {
       const { collection, id, author, employeeId, actionDesc, expectedVersion } = req.body;
-      const reqDevId = String(req.body.device_id || req.body.deviceId || req.headers['x-device-id'] || "").trim();
-      if (isDeviceRevoked(reqDevId)) {
-        closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
+      const reqDevId = String(req.body.device_id || req.body.deviceId || req.headers["x-device-id"] || "").trim();
+      if (isDeviceRevoked(ctx, reqDevId)) {
+        closeDeviceSockets(ctx, reqDevId, "DEVICE_REVOKED");
         return res.status(403).json({ error: "DEVICE_REVOKED" });
       }
 
-      // Derive permission strictly from server-side device/session record; ignore x-user-permission and body.permission
-      const auth = resolveRequestAuthContext(req, reqDevId);
+      const auth = resolveRequestAuthContext(ctx, req, reqDevId);
       const userPermission = auth.permission;
-      const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version']) || systemResetVersion;
+      const clientResetVersion = Number(req.body.reset_version || req.headers["x-reset-version"]) || ctx.systemResetVersion;
 
-      const result = executeRecordDelete({
+      const result = executeRecordDelete(ctx, {
         collection,
         id,
         author: auth.account?.username || author,
@@ -7050,219 +2048,17 @@ async function startServer() {
     }
   });
 
-  /**
-   * REST API: Atomic Stock Movements (Single Source of Truth)
-   * Synchronous disk commit BEFORE WebSocket broadcast.
-   */
-  app.post("/api/stock-movements", async (req, res) => {
-    try {
-      const reqDevId = String(req.body.deviceId || req.body.device_id || req.headers['x-device-id'] || "").trim();
-      if (isDeviceRevoked(reqDevId)) {
-        closeDeviceSockets(reqDevId, "DEVICE_REVOKED");
-        return res.status(403).json({ error: "DEVICE_REVOKED" });
-      }
-
-      const auth = resolveRequestAuthContext(req, reqDevId);
-      if (auth.permission === 'VIEW_ONLY') {
-        return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
-      }
-
-      const clientResetVersion = Number(req.body.reset_version || req.headers['x-reset-version']);
-      if (clientResetVersion && clientResetVersion < systemResetVersion) {
-        return res.status(409).json({
-          error: "STALE_RESET_VERSION: Central database was reset. Movement rejected.",
-          systemResetVersion
-        });
-      }
-
-      const {
-        productId,
-        warehouseId,
-        type,
-        quantity,
-        delta,
-        referenceId,
-        referenceNumber,
-        notes,
-        userId,
-        userName,
-        deviceId,
-        idempotencyKey,
-        preventNegativeStock = true,
-        lotNumber,
-        location
-      } = req.body;
-
-      if (!productId) {
-        return res.status(400).json({ error: "productId is required" });
-      }
-
-      // Check Idempotency Key
-      if (idempotencyKey && state.stockMovements) {
-        const existing: any = state.stockMovements.find(
-          (m: any) => m.idempotency_key === idempotencyKey || m.idempotencyKey === idempotencyKey
-        );
-        if (existing) {
-          return res.json({
-            success: true,
-            idempotency_replayed: true,
-            movementId: existing.id,
-            productId: existing.product_id || existing.productId,
-            warehouseId: existing.warehouse_id || existing.warehouseId,
-            previousQuantity: existing.previous_quantity || existing.previousQuantity || 0,
-            newQuantity: existing.new_quantity || existing.newQuantity || 0,
-            delta: existing.quantity || existing.delta || 0,
-            timestamp: existing.created_at || existing.timestamp || new Date().toISOString()
-          });
-        }
-      }
-
-      let finalDelta = Number(delta !== undefined ? delta : quantity);
-      if (isNaN(finalDelta)) finalDelta = 0;
-
-      if (['SALE', 'PURCHASE_RETURN', 'ADJUSTMENT_OUT', 'TRANSFER_OUT'].includes(type)) {
-        if (finalDelta > 0) finalDelta = -finalDelta;
-      } else if (['PURCHASE', 'SALE_RETURN', 'ADJUSTMENT_IN', 'TRANSFER_IN'].includes(type)) {
-        if (finalDelta < 0) finalDelta = Math.abs(finalDelta);
-      }
-
-      let stockItem = state.stocks.find((s: any) => String(s.id) === String(productId) || s.partCode === productId);
-      const prevQty = stockItem ? Number(stockItem.quantity) || 0 : 0;
-      const newQty = prevQty + finalDelta;
-
-      if (preventNegativeStock && newQty < 0) {
-        return res.status(400).json({
-          error: `Insufficient stock in central database. Available: ${prevQty}, Requested: ${finalDelta}`
-        });
-      }
-
-      const serverTime = new Date().toISOString();
-      if (stockItem) {
-        stockItem.quantity = newQty;
-        stockItem.version = (stockItem.version || 1) + 1;
-        stockItem.updated_at = serverTime;
-        stockItem.reset_version = systemResetVersion;
-        if (location) stockItem.location = location;
-        if (lotNumber) stockItem.lotNumber = lotNumber;
-      } else {
-        stockItem = normalizeRecord({
-          id: productId,
-          partCode: productId,
-          description: notes || 'Warehouse Stock Item',
-          type: 'RAW',
-          location: location || 'Zone A',
-          quantity: newQty,
-          unit: 'PCS',
-          lotNumber: lotNumber || '',
-          receivedDate: serverTime.split('T')[0],
-          fifoColor: getFifoColorForDate(serverTime.split('T')[0], state.fifoColorsByMonth),
-          status: 'APPROVED'
-        });
-        state.stocks.push(stockItem);
-      }
-
-      const movementId = `mov-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-      const movementRecord = {
-        id: movementId,
-        product_id: productId,
-        warehouse_id: warehouseId || 'wh-main',
-        type: type || 'ADJUSTMENT_IN',
-        quantity: finalDelta,
-        previous_quantity: prevQty,
-        new_quantity: newQty,
-        reference_id: referenceId || null,
-        reference_number: referenceNumber || null,
-        notes: notes || null,
-        user_id: userId || null,
-        user_name: userName || 'Operator',
-        device_id: deviceId || 'CENTRAL-SERVER',
-        idempotency_key: idempotencyKey || null,
-        created_at: serverTime,
-        product_name: stockItem.description,
-        product_sku: stockItem.partCode,
-        unit: stockItem.unit,
-        reset_version: systemResetVersion
-      };
-
-      if (!state.stockMovements) state.stockMovements = [];
-      state.stockMovements.unshift(movementRecord);
-      if (state.stockMovements.length > 500) state.stockMovements.pop();
-
-      stateRevision++;
-
-      // COMMIT DATABASE SYNCHRONOUSLY BEFORE BROADCAST
-      const commitOk = commitDatabase();
-      if (!commitOk) {
-        return res.status(500).json({ error: "Failed to commit stock movement to central database" });
-      }
-
-      recordAuditTrail({
-        timestamp: serverTime,
-        actor: auth.account?.username || userName || 'Operator',
-        actorId: auth.employeeId || userId || 'OPERATOR',
-        action: 'STOCK_MOVEMENT',
-        recordType: 'stockMovements',
-        recordId: movementId,
-        summary: `${type || 'ADJUSTMENT'} ${stockItem.partCode || productId} (${prevQty} -> ${newQty}, delta ${finalDelta >= 0 ? `+${finalDelta}` : finalDelta})`,
-        details: notes || (referenceNumber ? `Ref: ${referenceNumber}` : undefined),
-        deviceId: reqDevId || deviceId
-      });
-
-      // BROADCAST REAL-TIME MOVEMENT & UPDATED STOCKS STRICTLY TO MATCHING ROOM
-      let movementEventType = "INVENTORY_UPDATE";
-      if (['TRANSFER_IN', 'TRANSFER_OUT', 'TRANSFER', 'LOCATION_TRANSFER'].includes(type)) {
-        movementEventType = "LOCATION_TRANSFER";
-      } else if (['ADJUSTMENT_IN', 'ADJUSTMENT_OUT', 'CYCLE_COUNT', 'ADJUSTMENT'].includes(type)) {
-        movementEventType = "STOCK_ADJUSTMENT";
-      } else if (['SALE', 'PICK', 'PACK', 'SHIP', 'DISPATCH'].includes(type)) {
-        movementEventType = "PICK_PACK_SHIP";
-      }
-
-      broadcastInventoryEvent({
-        type: movementEventType,
-        accountId: req.body.accountId || stockItem.accountId || 'ACC-JUWEI',
-        warehouseId: warehouseId || stockItem.warehouseId || 'WH-MAIN',
-        collection: 'stocks',
-        record: stockItem,
-        movement: movementRecord,
-        actionDesc: notes || `Stock movement: ${type} (${finalDelta})`,
-        author: userName || 'Operator',
-        user_id: userId,
-        device_id: deviceId,
-        timestamp: serverTime
-      });
-
-      return res.json({
-        success: true,
-        movementId,
-        productId,
-        warehouseId: warehouseId || 'wh-main',
-        previousQuantity: prevQty,
-        newQuantity: newQty,
-        delta: finalDelta,
-        timestamp: movementRecord.created_at,
-        systemResetVersion
-      });
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.get("/api/stock-movements", (req, res) => {
-    const limit = parseInt(req.query.limit as string) || 100;
-    res.json((state.stockMovements || []).slice(0, limit));
-  });
 
   // REST API: Chat message
   app.post("/api/chat", (req, res) => {
     try {
-      if (rejectIfDeviceRevokedHttp(req, res)) return;
-      const auth = resolveRequestAuthContext(req);
-      if (auth.permission === 'VIEW_ONLY') {
+      if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
+      const auth = resolveRequestAuthContext(ctx, req);
+      if (auth.permission === "VIEW_ONLY") {
         return res.status(403).json({ error: "PERMISSION DENIED: Account has VIEW_ONLY privileges." });
       }
       const { sender, text } = req.body;
-      const cleanText = String(text || '').trim();
+      const cleanText = String(text || "").trim();
       if (!cleanText) return res.status(400).json({ error: "Text required" });
 
       const newMsg: ChatMessage = {
@@ -7273,11 +2069,11 @@ async function startServer() {
         isSystem: false
       };
 
-      chatMessages.push(newMsg);
-      if (chatMessages.length > 200) chatMessages.shift();
-      commitDatabase();
+      ctx.chatMessages.push(newMsg);
+      if (ctx.chatMessages.length > 200) ctx.chatMessages.shift();
+      commitDatabase(ctx);
 
-      broadcast({
+      broadcast(ctx, {
         type: "chat_broadcast",
         message: newMsg
       });
@@ -7322,7 +2118,7 @@ async function startServer() {
     isShuttingDown = true;
     logger.info(`[SERVER SHUTDOWN] Received ${signal}. Executing graceful SQLite database persistence and close...`);
     try {
-      commitDatabase();
+      commitDatabase(ctx);
     } catch (e) {
       console.error("[SERVER SHUTDOWN] Error during final database commit:", e);
     }
@@ -7344,8 +2140,7 @@ async function startServer() {
       console.warn(`[SERVER WARNING] JUWEI_DATA_DIR is not set. Database file (${DATA_FILE}) is stored on ephemeral local disk and won't be shared across multiple server instances.`);
     }
 
-    // Warm GitHub latest release version cache asynchronously on boot
-    getLatestGitHubReleaseVersion("").catch(() => {});
+    getLatestGitHubReleaseVersion(ctx, "").catch(() => {});
   });
 }
 
