@@ -1,5 +1,6 @@
 // JUWEI WMS Mobile & Desktop Service Worker
-const CACHE_NAME = 'juwei-wms-v6';
+const CACHE_VERSION = 'v7';
+const CACHE_NAME = `juwei-wms-${CACHE_VERSION}`;
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
@@ -26,6 +27,7 @@ self.addEventListener('activate', (event) => {
           if (name !== CACHE_NAME) {
             return caches.delete(name);
           }
+          return Promise.resolve();
         })
       );
     })
@@ -39,12 +41,18 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  const upgradeHeader = (event.request.headers.get('upgrade') || '').toLowerCase();
   const url = new URL(event.request.url);
 
-  // CRITICAL: NEVER cache or intercept dynamic dev modules, Vite chunks, or source files
+  // Never cache or intercept /api requests, WebSocket traffic, or dev modules
   if (
-    url.pathname.startsWith('/api') ||
-    url.pathname.startsWith('/ws') ||
+    upgradeHeader === 'websocket' ||
+    url.protocol === 'ws:' ||
+    url.protocol === 'wss:' ||
+    url.pathname === '/api' ||
+    url.pathname.startsWith('/api/') ||
+    url.pathname === '/ws' ||
+    url.pathname.startsWith('/ws/') ||
     url.pathname.startsWith('/src/') ||
     url.pathname.startsWith('/node_modules/') ||
     url.pathname.startsWith('/@') ||
@@ -57,20 +65,32 @@ self.addEventListener('fetch', (event) => {
     url.pathname.endsWith('.jsx') ||
     url.pathname.endsWith('.map')
   ) {
-    return; // Pass through straight to network
+    return;
   }
 
   // Network-first with cache fallback for HTML navigation
   if (event.request.mode === 'navigate') {
     event.respondWith(
       fetch(event.request)
-        .catch(() => caches.match('/') || caches.match('/index.html'))
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.ok && networkResponse.status === 200 && networkResponse.type === 'basic') {
+            const responseToCache = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(event.request, responseToCache);
+            });
+          }
+          return networkResponse;
+        })
+        .catch(() =>
+          caches.match(event.request)
+            .then((cached) => cached || caches.match('/index.html'))
+            .then((cached) => cached || caches.match('/'))
+        )
     );
     return;
   }
 
-  // Network-first for all other static assets (favicon, manifest, png icons)
-  // NEVER cache failed (non-200), 404, or opaque error responses
+  // Network-first for all other app files & static assets
   event.respondWith(
     fetch(event.request)
       .then((networkResponse) => {

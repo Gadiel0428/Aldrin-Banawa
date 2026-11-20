@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noImplicitAny": true
+  },
+  "include": [
+    "src/vite-env.d.ts",
+    "src/utils/**/*",
+    "src/database/**/*",
+    "server/**/*"
+  ]
+}

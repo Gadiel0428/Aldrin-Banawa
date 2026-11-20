@@ -21,6 +21,7 @@ import {
 import { QRCodeSVG } from 'qrcode.react';
 import { getPublicAppUrl } from '../config/serverConfig';
 import { showPrintToast } from '../utils/printDocument';
+import logger from '../lib/logger';
 
 interface MobileAppDownloadModalProps {
   isOpen: boolean;
@@ -52,7 +53,7 @@ export default function MobileAppDownloadModal({
     };
 
     const handleAppInstalled = () => {
-      console.log('[JUWEI WMS] PWA installation confirmed.');
+      logger.info('[JUWEI WMS] PWA installation confirmed.');
       setInstallSuccess(true);
       setIsInstallable(false);
       if (onFreshInstallSync) {

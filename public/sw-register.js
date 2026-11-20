@@ -38,16 +38,14 @@
     if ('caches' in window) {
       caches.keys().then(function (keys) {
         keys.forEach(function (k) {
-          if (k.startsWith('juwei-wms-') && k !== 'juwei-wms-v6') {
+          if (k.startsWith('juwei-wms-') && k !== 'juwei-wms-v7') {
             caches.delete(k);
           }
         });
       });
     }
 
-    var isDev =
-      window.location.hostname === 'localhost' ||
-      window.location.hostname.includes('run.app');
+    var isDev = window.location.hostname === 'localhost';
     if (isDev) {
       navigator.serviceWorker.getRegistrations().then(function (registrations) {
         registrations.forEach(function (reg) {

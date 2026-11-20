@@ -67,20 +67,96 @@ jobs:
           } else {
             "v1.0.${{ github.run_number }}"
           }
-          $cleanVersion = $tag.TrimStart('v').TrimStart('V')
+          $cleanVersion = $tag -replace '^[vV]', ''
           Write-Host "Authoritative GitHub Release Version: $cleanVersion (Tag: $tag)"
 
-          # Update package.json version BEFORE compiling so electron-builder names the .exe binaries matching the GitHub release exactly
-          $pkgPath = "$dir/package.json"
-          if (Test-Path $pkgPath) {
-            $content = Get-Content -Raw $pkgPath | ConvertFrom-Json
-            $content.version = $cleanVersion
-            $content | ConvertTo-Json -Depth 10 | Set-Content -Path $pkgPath -Encoding utf8
-            Write-Host "Synced package.json version to $cleanVersion"
+          $pkgPath = Join-Path $dir "package.json"
+          if (-not (Test-Path $pkgPath)) {
+            throw "package.json not found at $pkgPath"
           }
+
+          $env:PKG_PATH = $pkgPath
+          $env:CLEAN_VERSION = $cleanVersion
+          node -e "
+            const fs = require('fs');
+            const p = process.env.PKG_PATH;
+            const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
+            pkg.version = process.env.CLEAN_VERSION;
+            fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
+          "
+          if ($LASTEXITCODE -ne 0) { throw "Failed to update package.json version" }
+          Write-Host "Synced package.json version to $cleanVersion"
 
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "version=$cleanVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Run Lint (TypeScript & strict modules)
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: npm run lint
+
+      - name: Build Application and Server Bundle
+        working-directory: ${{ steps.locate.outputs.dir }}
+        env:
+          BUILD_VERSION: ${{ steps.versioning.outputs.version }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: npm run build
+
+      - name: Start Server and Run Multi-User Sync Verification
+        working-directory: ${{ steps.locate.outputs.dir }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $testDataDir = Join-Path $env:RUNNER_TEMP "juwei-ci-sync-data"
+          New-Item -ItemType Directory -Force -Path $testDataDir | Out-Null
+          $stdoutLog = Join-Path $env:RUNNER_TEMP "juwei-server-stdout.log"
+          $stderrLog = Join-Path $env:RUNNER_TEMP "juwei-server-stderr.log"
+
+          $env:PORT = "3000"
+          $env:NODE_ENV = "production"
+          $env:JUWEI_DATA_DIR = $testDataDir
+          $env:LOG_LEVEL = "info"
+
+          $proc = Start-Process -FilePath "node" -ArgumentList "dist/server.cjs" -PassThru -NoNewWindow -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              if ($proc.HasExited) {
+                throw "Server exited prematurely with code $($proc.ExitCode)"
+              }
+              try {
+                $resp = Invoke-WebRequest -Uri "http://127.0.0.1:3000/api/health" -UseBasicParsing -TimeoutSec 2
+                if ($resp.StatusCode -eq 200) {
+                  $ready = $true
+                  break
+                }
+              } catch {
+                Start-Sleep -Seconds 1
+              }
+            }
+            if (-not $ready) {
+              throw "Server failed to respond on /api/health within 30 seconds"
+            }
+
+            node scripts/test-multi-user-sync.mjs
+            if ($LASTEXITCODE -ne 0) {
+              throw "scripts/test-multi-user-sync.mjs failed with exit code $LASTEXITCODE"
+            }
+          } catch {
+            if (Test-Path $stdoutLog) {
+              Write-Host "=== SERVER STDOUT ==="
+              Get-Content $stdoutLog
+            }
+            if (Test-Path $stderrLog) {
+              Write-Host "=== SERVER STDERR ==="
+              Get-Content $stderrLog
+            }
+            throw
+          } finally {
+            if ($proc -and -not $proc.HasExited) {
+              Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            }
+            Remove-Item -Path $testDataDir -Recurse -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Build Windows EXE Setup
         working-directory: ${{ steps.locate.outputs.dir }}

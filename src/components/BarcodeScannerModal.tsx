@@ -17,13 +17,31 @@ import {
   VolumeX, 
   Loader2,
   Camera,
-  CameraOff
+  CameraOff,
+  CheckCircle2,
+  RotateCcw,
+  Package,
+  MapPin,
+  Layers
 } from 'lucide-react';
+
+export interface ScannedItemPreview {
+  code: string;
+  itemName: string;
+  lot: string;
+  location: string;
+  partCode?: string;
+  category?: string;
+  quantityLabel?: string;
+  matchedSource?: 'STOCK' | 'REGISTRY' | 'UNMATCHED';
+}
 
 interface BarcodeScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onScanResult: (code: string) => void;
+  resolveScanDetails?: (code: string) => ScannedItemPreview;
+  confirmButtonLabel?: string;
   title?: string;
   subtitle?: string;
   initialTab?: 'scanner' | 'camera' | 'upload';
@@ -33,12 +51,15 @@ export default function BarcodeScannerModal({
   isOpen,
   onClose,
   onScanResult,
+  resolveScanDetails,
+  confirmButtonLabel = "Confirm",
   title = "Barcode & QR Scanner",
   subtitle = "Scan material tag, lot label, or QR code using USB / Bluetooth scanner, camera, or image upload",
   initialTab = 'scanner'
 }: BarcodeScannerModalProps) {
   const [activeTab, setActiveTab] = useState<'scanner' | 'camera' | 'upload'>(initialTab);
   const [scannedCode, setScannedCode] = useState<string | null>(null);
+  const [pendingPreview, setPendingPreview] = useState<ScannedItemPreview | null>(null);
   const [barcodeInput, setBarcodeInput] = useState('');
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [audioEnabled, setAudioEnabled] = useState(true);
@@ -93,11 +114,36 @@ export default function BarcodeScannerModal({
       });
     }
 
+    if (resolveScanDetails) {
+      const preview = resolveScanDetails(clean);
+      setPendingPreview(preview);
+      return;
+    }
+
     setTimeout(() => {
       onScanResult(clean);
       onClose();
       setScannedCode(null);
     }, 450);
+  };
+
+  const handleConfirmScannedItem = () => {
+    if (!pendingPreview) return;
+    const confirmedCode = pendingPreview.code;
+    setPendingPreview(null);
+    setScannedCode(null);
+    onScanResult(confirmedCode);
+    onClose();
+  };
+
+  const handleRescan = () => {
+    setPendingPreview(null);
+    setScannedCode(null);
+    setBarcodeInput('');
+    setUploadError(null);
+    if (activeTab === 'scanner') {
+      setTimeout(() => inputRef.current?.focus(), 80);
+    }
   };
 
   const handleInputSubmit = (e: React.FormEvent) => {
@@ -142,7 +188,7 @@ export default function BarcodeScannerModal({
   useEffect(() => {
     let isCancelled = false;
 
-    if (isOpen && activeTab === 'camera' && !scannedCode) {
+    if (isOpen && activeTab === 'camera' && !scannedCode && !pendingPreview) {
       setCameraError(null);
       setCameraStarting(true);
 
@@ -193,12 +239,13 @@ export default function BarcodeScannerModal({
     } else {
       safelyStopCamera();
     }
-  }, [isOpen, activeTab, scannedCode]);
+  }, [isOpen, activeTab, scannedCode, pendingPreview]);
 
   // Auto-focus barcode input whenever scanner modal opens or scanner tab is active
   useEffect(() => {
     if (isOpen) {
       setScannedCode(null);
+      setPendingPreview(null);
       setBarcodeInput('');
       setUploadError(null);
       if (activeTab === 'scanner') {
@@ -208,9 +255,27 @@ export default function BarcodeScannerModal({
         return () => clearTimeout(timer);
       }
     } else {
+      setPendingPreview(null);
+      setScannedCode(null);
       safelyStopCamera();
     }
   }, [isOpen, activeTab]);
+
+  // Allow Escape to cancel confirmation or close modal
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        safelyStopCamera();
+        setPendingPreview(null);
+        setScannedCode(null);
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, onClose]);
 
   const modalContent = (
     <AnimatePresence>
@@ -273,53 +338,184 @@ export default function BarcodeScannerModal({
             </div>
 
             {/* Minimalist Tab Navigation */}
-            <div className="px-5 pt-3 pb-1">
-              <div className="flex p-1 bg-slate-950/60 rounded-xl border border-slate-800/80 text-xs gap-1">
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('scanner')}
-                  className={`flex-1 py-1.5 px-2 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer text-xs font-medium ${
-                    activeTab === 'scanner'
-                      ? 'bg-slate-800 text-white shadow-xs'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <Barcode className="h-3.5 w-3.5" />
-                  <span className="truncate">Handheld Scanner</span>
-                </button>
+            {!pendingPreview && (
+              <div className="px-5 pt-3 pb-1">
+                <div className="flex p-1 bg-slate-950/60 rounded-xl border border-slate-800/80 text-xs gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('scanner')}
+                    className={`flex-1 py-1.5 px-2 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer text-xs font-medium ${
+                      activeTab === 'scanner'
+                        ? 'bg-slate-800 text-white shadow-xs'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Barcode className="h-3.5 w-3.5" />
+                    <span className="truncate">Handheld Scanner</span>
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('camera')}
-                  className={`flex-1 py-1.5 px-2 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer text-xs font-medium ${
-                    activeTab === 'camera'
-                      ? 'bg-indigo-600 text-white shadow-xs'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <Camera className="h-3.5 w-3.5" />
-                  <span className="truncate">Live Camera</span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('camera')}
+                    className={`flex-1 py-1.5 px-2 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer text-xs font-medium ${
+                      activeTab === 'camera'
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Camera className="h-3.5 w-3.5" />
+                    <span className="truncate">Live Camera</span>
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('upload')}
-                  className={`flex-1 py-1.5 px-2 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer text-xs font-medium ${
-                    activeTab === 'upload'
-                      ? 'bg-slate-800 text-white shadow-xs'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  <span className="truncate">Upload Image</span>
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('upload')}
+                    className={`flex-1 py-1.5 px-2 rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer text-xs font-medium ${
+                      activeTab === 'upload'
+                        ? 'bg-slate-800 text-white shadow-xs'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    <span className="truncate">Upload Image</span>
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Modal Body */}
             <div className="p-5 overflow-y-auto flex-1 space-y-4">
+              {/* Post-Scan Confirmation Step */}
+              {pendingPreview && (
+                <div
+                  id="barcode-scan-confirm-step"
+                  className="bg-slate-950/80 border border-slate-800 rounded-2xl p-5 space-y-4 animate-in fade-in duration-200"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <span
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase border ${
+                          pendingPreview.matchedSource === 'STOCK'
+                            ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                            : pendingPreview.matchedSource === 'REGISTRY'
+                            ? 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30'
+                            : 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                        }`}
+                      >
+                        <CheckCircle2 className="h-3 w-3" />
+                        {pendingPreview.matchedSource === 'STOCK'
+                          ? 'Stock Record Matched'
+                          : pendingPreview.matchedSource === 'REGISTRY'
+                          ? 'Master Registry Matched'
+                          : 'Unregistered Barcode'}
+                      </span>
+                      <h4 className="text-sm font-bold text-white mt-2">
+                        Confirm Scanned Item
+                      </h4>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Verify item name, lot, and location before continuing. Nothing is saved until you tap Confirm.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Scanned Code Header */}
+                  <div className="px-3 py-2 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between gap-2 text-xs">
+                    <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400">
+                      Scanned Barcode
+                    </span>
+                    <span className="font-mono font-bold text-indigo-300 break-all text-right">
+                      {pendingPreview.code}
+                    </span>
+                  </div>
+
+                  {/* Item Name, Lot, and Location Confirmation Fields */}
+                  <div className="space-y-2.5">
+                    <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 flex items-start gap-3">
+                      <div className="p-2 rounded-lg bg-indigo-500/15 text-indigo-300 border border-indigo-500/20 shrink-0">
+                        <Package className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400">
+                          Item Name
+                        </div>
+                        <div
+                          id="scan-confirm-item-name"
+                          className="text-sm font-bold text-white break-words mt-0.5"
+                        >
+                          {pendingPreview.itemName}
+                        </div>
+                        {(pendingPreview.partCode || pendingPreview.quantityLabel) && (
+                          <div className="text-[11px] text-slate-400 font-mono mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+                            {pendingPreview.partCode && <span>Part: {pendingPreview.partCode}</span>}
+                            {pendingPreview.quantityLabel && <span>On Hand: {pendingPreview.quantityLabel}</span>}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 flex items-start gap-3">
+                        <div className="p-2 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/20 shrink-0">
+                          <Layers className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400">
+                            Lot
+                          </div>
+                          <div
+                            id="scan-confirm-lot"
+                            className="text-xs font-mono font-bold text-emerald-300 break-all mt-0.5"
+                          >
+                            {pendingPreview.lot}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 flex items-start gap-3">
+                        <div className="p-2 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/20 shrink-0">
+                          <MapPin className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400">
+                            Location
+                          </div>
+                          <div
+                            id="scan-confirm-location"
+                            className="text-xs font-semibold text-amber-200 break-words mt-0.5"
+                          >
+                            {pendingPreview.location}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Confirm / Rescan Action Buttons */}
+                  <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2 pt-2 border-t border-slate-800/80">
+                    <button
+                      type="button"
+                      onClick={handleRescan}
+                      id="btn-rescan-barcode"
+                      className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      <span>Scan Again</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleConfirmScannedItem}
+                      id="btn-confirm-scanned-item"
+                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-md shadow-emerald-950/50 transition cursor-pointer"
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                      <span>{confirmButtonLabel}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Success / Verification Circle Loading Overlay */}
-              {scannedCode && (
+              {scannedCode && !pendingPreview && (
                 <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-6 text-center space-y-2.5 animate-in fade-in duration-200">
                   <div className="inline-flex p-2.5 bg-indigo-500/10 text-indigo-400 rounded-full border border-indigo-500/20">
                     <Loader2 className="h-6 w-6 animate-spin text-indigo-400" />
@@ -495,16 +691,20 @@ export default function BarcodeScannerModal({
 
             {/* Modal Footer */}
             <div className="px-5 py-2.5 border-t border-slate-800/80 bg-slate-950/40 flex justify-between items-center text-[11px] text-slate-400">
-              <span className="font-mono text-slate-500">USB / Bluetooth Scanner Ready</span>
+              <span className="font-mono text-slate-500">
+                {pendingPreview ? 'Confirmation required before saving' : 'USB / Bluetooth Scanner Ready'}
+              </span>
               <button
                 type="button"
                 onClick={() => {
                   safelyStopCamera();
+                  setPendingPreview(null);
+                  setScannedCode(null);
                   onClose();
                 }}
                 className="px-3 py-1 bg-slate-800/80 hover:bg-slate-800 text-slate-300 rounded-lg font-medium transition cursor-pointer"
               >
-                Close
+                {pendingPreview ? 'Cancel' : 'Close'}
               </button>
             </div>
           </motion.div>

@@ -36,7 +36,7 @@ import {
 } from 'lucide-react';
 import { ReceivingRecord, ReturnRecord, MaterialStockItem, getCustomerForPart, UOM_OPTIONS, MasterRegistryItem, RegistryType, FifoColorsMap } from '../types';
 import { resolveFifoColor, getFifoColorForDate, normalizeFifoColor } from '../data';
-import BarcodeScannerModal from './BarcodeScannerModal';
+import BarcodeScannerModal, { ScannedItemPreview } from './BarcodeScannerModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAuthoritativeId } from '../lib/idGenerator';
 import { showPrintToast } from '../utils/printDocument';
@@ -99,6 +99,7 @@ export default function ReceivingModule({
   const [searchQuery, setSearchQuery] = useState('');
   const [classificationFilter, setClassificationFilter] = useState<string>('ALL');
   const [showScannerModal, setShowScannerModal] = useState(false);
+  const [confirmedScanInfo, setConfirmedScanInfo] = useState<ScannedItemPreview | null>(null);
 
   // States for Editing Modals
   const [editingReceiving, setEditingReceiving] = useState<ReceivingRecord | null>(null);
@@ -267,10 +268,65 @@ export default function ReceivingModule({
     });
   };
 
-  // Handle scanned barcode / QR code result
+  const resolveReceivingScanDetails = (scannedCode: string): ScannedItemPreview => {
+    const cleanCode = scannedCode.trim();
+    const lower = cleanCode.toLowerCase();
+
+    const matchedStock = stocks.find(
+      s => (s.lotNumber || '').trim().toLowerCase() === lower ||
+           (s.partCode || '').trim().toLowerCase() === lower
+    );
+    const matchedRegistry = registries.find(
+      r => (r.code || '').trim().toLowerCase() === lower ||
+           (r.name || '').trim().toLowerCase() === lower ||
+           (r.id || '').trim().toLowerCase() === lower
+    );
+    const stockByRegistryCode = !matchedStock && matchedRegistry
+      ? stocks.find(s => (s.partCode || '').trim().toLowerCase() === (matchedRegistry.code || '').trim().toLowerCase())
+      : undefined;
+    const effectiveStock = matchedStock || stockByRegistryCode;
+
+    if (matchedRegistry) {
+      return {
+        code: cleanCode,
+        itemName: matchedRegistry.name || matchedRegistry.description || matchedRegistry.code,
+        lot: effectiveStock?.lotNumber || 'Pending Lot Assignment',
+        location: matchedRegistry.location || effectiveStock?.location || 'Unassigned',
+        partCode: matchedRegistry.code,
+        category: matchedRegistry.category,
+        quantityLabel: effectiveStock ? `${effectiveStock.quantity.toLocaleString()} ${(effectiveStock.unit || 'PCS').toUpperCase()}` : undefined,
+        matchedSource: 'REGISTRY'
+      };
+    }
+
+    if (matchedStock) {
+      return {
+        code: cleanCode,
+        itemName: matchedStock.description || matchedStock.partCode,
+        lot: matchedStock.lotNumber || `LOT-${cleanCode}`,
+        location: matchedStock.location || 'Unassigned',
+        partCode: matchedStock.partCode,
+        quantityLabel: `${matchedStock.quantity.toLocaleString()} ${(matchedStock.unit || 'PCS').toUpperCase()}`,
+        matchedSource: 'STOCK'
+      };
+    }
+
+    return {
+      code: cleanCode,
+      itemName: `Unregistered Item (${cleanCode})`,
+      lot: cleanCode,
+      location: 'Unassigned',
+      partCode: cleanCode,
+      matchedSource: 'UNMATCHED'
+    };
+  };
+
+  // Handle scanned barcode / QR code result (called after operator taps Confirm)
   const handleScanResult = (scannedCode: string) => {
     const cleanCode = scannedCode.trim();
     if (!cleanCode) return;
+
+    setConfirmedScanInfo(resolveReceivingScanDetails(cleanCode));
 
     // Search in stocks or master registries
     const matchedStock = stocks.find(
@@ -581,6 +637,7 @@ export default function ReceivingModule({
     setSopSystemRecording(true);
     setBomItems([]);
     setAutoDeductBom(true);
+    setConfirmedScanInfo(null);
     setShowAddForm(false);
   };
 
@@ -601,6 +658,7 @@ export default function ReceivingModule({
     setRetReason('');
     setRetCondition('Good');
     setRetSlip('');
+    setConfirmedScanInfo(null);
     setShowReturnForm(false);
   };
 
@@ -708,6 +766,7 @@ export default function ReceivingModule({
     setSopSystemRecording(true);
     setBomItems([]);
     setAutoDeductBom(true);
+    setConfirmedScanInfo(null);
     setShowAddForm(false);
   };
 
@@ -753,6 +812,7 @@ export default function ReceivingModule({
     setRetReason('');
     setRetCondition('Good');
     setRetSlip('');
+    setConfirmedScanInfo(null);
     setShowReturnForm(false);
   };
 
@@ -1037,6 +1097,20 @@ export default function ReceivingModule({
                   Cancel
                 </button>
               </div>
+
+              {confirmedScanInfo && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-900">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    <span className="inline-flex items-center gap-1.5 font-bold text-emerald-800">
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                      Scan Confirmed:
+                    </span>
+                    <span><strong>Item:</strong> {confirmedScanInfo.itemName}</span>
+                    <span className="font-mono"><strong>Lot:</strong> {confirmedScanInfo.lot}</span>
+                    <span><strong>Location:</strong> {confirmedScanInfo.location}</span>
+                  </div>
+                </div>
+              )}
 
               {/* Category Selector at Top */}
               <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 space-y-2">
@@ -2135,6 +2209,20 @@ export default function ReceivingModule({
                 </button>
               </div>
 
+              {confirmedScanInfo && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-900">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    <span className="inline-flex items-center gap-1.5 font-bold text-emerald-800">
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                      Scan Confirmed:
+                    </span>
+                    <span><strong>Item:</strong> {confirmedScanInfo.itemName}</span>
+                    <span className="font-mono"><strong>Lot:</strong> {confirmedScanInfo.lot}</span>
+                    <span><strong>Location:</strong> {confirmedScanInfo.location}</span>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {/* Category Selector at Top of Return Form */}
                 <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 space-y-2 col-span-1 md:col-span-3">
@@ -3165,6 +3253,7 @@ export default function ReceivingModule({
         isOpen={showScannerModal}
         onClose={() => setShowScannerModal(false)}
         onScanResult={handleScanResult}
+        resolveScanDetails={resolveReceivingScanDetails}
         title="Receiving Material Barcode Scanner"
         subtitle="Use handheld barcode scanner or enter barcode manually"
       />

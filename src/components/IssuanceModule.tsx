@@ -25,7 +25,7 @@ import {
   Check
 } from 'lucide-react';
 import { MaterialStockItem, IssuanceRecord, MasterRegistryItem } from '../types';
-import BarcodeScannerModal from './BarcodeScannerModal';
+import BarcodeScannerModal, { ScannedItemPreview } from './BarcodeScannerModal';
 import PrintablePickingListModal, { DocViewMode } from './PrintablePickingListModal';
 import { showPrintToast } from '../utils/printDocument';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
@@ -60,6 +60,7 @@ export default function IssuanceModule({
   const effectiveCanEdit = canEdit || isSuperAdmin;
   const [searchQuery, setSearchQuery] = useState('');
   const [showScannerModal, setShowScannerModal] = useState(false);
+  const [confirmedScanInfo, setConfirmedScanInfo] = useState<ScannedItemPreview | null>(null);
   const [editingIssuance, setEditingIssuance] = useState<IssuanceRecord | null>(null);
   const [selectedPickingDocIssuance, setSelectedPickingDocIssuance] = useState<IssuanceRecord | null>(null);
   const [printInitialView, setPrintInitialView] = useState<DocViewMode>('OFFICIAL_DOC');
@@ -146,6 +147,7 @@ export default function IssuanceModule({
     setQuantityRequested(0);
     setQuantityIssued(0);
     setReceivedBy('');
+    setConfirmedScanInfo(null);
     setShowForm(false);
   };
 
@@ -156,22 +158,78 @@ export default function IssuanceModule({
   const [availableLots, setAvailableLots] = useState<MaterialStockItem[]>([]);
   const [fifoAlert, setFifoAlert] = useState<string | null>(null);
 
-  // Handle scanned barcode / QR code result
+  const resolveIssuanceScanDetails = (scannedCode: string): ScannedItemPreview => {
+    const cleanCode = scannedCode.trim();
+    const lower = cleanCode.toLowerCase();
+
+    const matchedStock =
+      approvedStocks.find(s => (s.lotNumber || '').trim().toLowerCase() === lower) ||
+      approvedStocks.find(s => (s.partCode || '').trim().toLowerCase() === lower) ||
+      stocks.find(s => (s.lotNumber || '').trim().toLowerCase() === lower) ||
+      stocks.find(s => (s.partCode || '').trim().toLowerCase() === lower);
+
+    const matchedRegistry = registries.find(
+      r => (r.code || '').trim().toLowerCase() === lower ||
+           (r.name || '').trim().toLowerCase() === lower ||
+           (r.id || '').trim().toLowerCase() === lower
+    );
+
+    if (matchedStock) {
+      return {
+        code: cleanCode,
+        itemName: matchedStock.description || matchedStock.partCode,
+        lot: matchedStock.lotNumber || 'Unassigned Lot',
+        location: matchedStock.location || 'Unassigned',
+        partCode: matchedStock.partCode,
+        quantityLabel: `${matchedStock.quantity.toLocaleString()} ${(matchedStock.unit || 'PCS').toUpperCase()}`,
+        matchedSource: 'STOCK'
+      };
+    }
+
+    if (matchedRegistry) {
+      return {
+        code: cleanCode,
+        itemName: matchedRegistry.name || matchedRegistry.description || matchedRegistry.code,
+        lot: 'No active lot in stock',
+        location: matchedRegistry.location || 'Unassigned',
+        partCode: matchedRegistry.code,
+        category: matchedRegistry.category,
+        matchedSource: 'REGISTRY'
+      };
+    }
+
+    return {
+      code: cleanCode,
+      itemName: `Unregistered Item (${cleanCode})`,
+      lot: 'No active lot in stock',
+      location: 'Unassigned',
+      partCode: cleanCode.toUpperCase(),
+      matchedSource: 'UNMATCHED'
+    };
+  };
+
+  // Handle scanned barcode / QR code result (called after operator taps Confirm)
   const handleScanResult = (scannedCode: string) => {
     const cleanCode = scannedCode.trim();
     if (!cleanCode) return;
 
-    // Search stocks for matching part code or lot number
-    const matchedPart = stocks.find(s => (s.partCode || '').toLowerCase() === cleanCode.toLowerCase());
-    const matchedLot = stocks.find(s => (s.lotNumber || '').toLowerCase() === cleanCode.toLowerCase());
+    setConfirmedScanInfo(resolveIssuanceScanDetails(cleanCode));
+
+    // Search approved stocks first, then all stocks for matching part code or lot number
+    const matchedLot =
+      approvedStocks.find(s => (s.lotNumber || '').toLowerCase() === cleanCode.toLowerCase()) ||
+      stocks.find(s => (s.lotNumber || '').toLowerCase() === cleanCode.toLowerCase());
+    const matchedPart =
+      approvedStocks.find(s => (s.partCode || '').toLowerCase() === cleanCode.toLowerCase()) ||
+      stocks.find(s => (s.partCode || '').toLowerCase() === cleanCode.toLowerCase());
     const matchedUniqueCode = uniquePartCodes.find(c => (c || '').toLowerCase() === cleanCode.toLowerCase());
 
-    if (matchedPart) {
-      setSelectedPartCode(matchedPart.partCode);
-      setShowForm(true);
-    } else if (matchedLot) {
+    if (matchedLot) {
       setSelectedPartCode(matchedLot.partCode);
       setSelectedLotNumber(matchedLot.lotNumber);
+      setShowForm(true);
+    } else if (matchedPart) {
+      setSelectedPartCode(matchedPart.partCode);
       setShowForm(true);
     } else if (matchedUniqueCode) {
       setSelectedPartCode(matchedUniqueCode);
@@ -277,6 +335,7 @@ export default function IssuanceModule({
     setQuantityRequested(0);
     setQuantityIssued(0);
     setReceivedBy('');
+    setConfirmedScanInfo(null);
     setShowForm(false);
   };
 
@@ -414,6 +473,20 @@ export default function IssuanceModule({
               Cancel
             </button>
           </div>
+
+          {confirmedScanInfo && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-900">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                <span className="inline-flex items-center gap-1.5 font-bold text-emerald-800">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                  Scan Confirmed:
+                </span>
+                <span><strong>Item:</strong> {confirmedScanInfo.itemName}</span>
+                <span className="font-mono"><strong>Lot:</strong> {confirmedScanInfo.lot}</span>
+                <span><strong>Location:</strong> {confirmedScanInfo.location}</span>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
@@ -1100,6 +1173,7 @@ export default function IssuanceModule({
         isOpen={showScannerModal}
         onClose={() => setShowScannerModal(false)}
         onScanResult={handleScanResult}
+        resolveScanDetails={resolveIssuanceScanDetails}
         title="Issuance Material Barcode Scanner"
         subtitle="Use handheld barcode scanner or enter barcode manually"
       />

@@ -10,9 +10,41 @@
  * or a local database for production synchronization.
  */
 
-// Authoritative Production Central Server URL (Warehouse Local Server Host)
-export const DEFAULT_PRODUCTION_SERVER_HOST = '192.168.20.214:3000';
-const DEFAULT_PRODUCTION_SERVER_URL = `http://${DEFAULT_PRODUCTION_SERVER_HOST}`;
+import logger from '../lib/logger';
+
+interface RuntimeServerConfig {
+  centralServerUrl?: string;
+  centralServerHost?: string;
+}
+
+let runtimeServerConfig: RuntimeServerConfig = {};
+
+/**
+ * Loads server-config.json into memory so standalone/browser clients use the
+ * authoritative server address configured in server-config.json.
+ */
+export async function loadServerConfig(): Promise<void> {
+  if (typeof window === 'undefined' || typeof fetch !== 'function') return;
+  if (window.location?.protocol === 'file:') return;
+
+  const candidates = ['./server-config.json', '/server-config.json'];
+  for (const url of candidates) {
+    try {
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data && typeof data === 'object') {
+        runtimeServerConfig = {
+          centralServerUrl: typeof data.centralServerUrl === 'string' ? data.centralServerUrl.trim() : undefined,
+          centralServerHost: typeof data.centralServerHost === 'string' ? data.centralServerHost.trim() : undefined,
+        };
+        return;
+      }
+    } catch {
+      // Try next candidate
+    }
+  }
+}
 
 /**
  * Returns the clean, authoritative application URL.
@@ -25,7 +57,7 @@ export function getPublicAppUrl(): string {
       return origin;
     }
   }
-  return DEFAULT_PRODUCTION_SERVER_URL;
+  return getCentralServerUrl();
 }
 
 /**
@@ -47,9 +79,6 @@ export function isSecureHost(cleanHost: string, rawInput: string = ''): boolean 
   if (!cleanHost) return false;
   if (/^https:\/\//i.test(rawInput) || /^wss:\/\//i.test(rawInput)) return true;
   if (/^http:\/\//i.test(rawInput) || /^ws:\/\//i.test(rawInput)) return false;
-  if (cleanHost.includes('.run.app') || cleanHost.includes('render.com') || cleanHost.includes('cloud')) {
-    return true;
-  }
   if (typeof window !== 'undefined' && window.location && window.location.protocol === 'https:') {
     return true;
   }
@@ -60,25 +89,41 @@ let hasLoggedResolution = false;
 
 /**
  * Resolves the authoritative central server URL for the client.
- * Enforces correct runtime environment detection:
- * - If running in browser over HTTP/HTTPS, uses current window origin (authoritative host)
- * - If running inside Electron, uses Electron config or cached setting
- * - If user explicitly set custom server address, validates compatibility
+ * Uses only the user-set server address, the running browser origin,
+ * Electron config, or server-config.json (never cloud fallbacks).
  */
 export function getCentralServerUrl(): string {
   const finalize = (
     resolvedUrl: string,
-    source: 'current window origin' | 'Electron config' | 'cached localStorage' | 'build env var' | 'hardcoded default'
+    source: 'current window origin' | 'Electron config' | 'user localStorage' | 'server-config.json' | 'build env var'
   ): string => {
     if (!hasLoggedResolution) {
       hasLoggedResolution = true;
-      console.log(`[Central Server URL] Resolved via [${source}]: ${resolvedUrl}`);
+      logger.debug(`[Central Server URL] Resolved via [${source}]: ${resolvedUrl}`);
     }
     return resolvedUrl;
   };
 
-  // 1. Check if browsing on a genuine web host (browser environment)
-  // When running on Web / Cloud / Dev server, window.location.origin is the authoritative backend
+  // 1. Check explicit user setting in localStorage
+  if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+    const cached = localStorage.getItem('juwei_wms_server_address');
+    if (cached) {
+      const isPageHttps = window.location && window.location.protocol === 'https:';
+      const isCachedInsecure = cached.startsWith('http://192.') || cached.startsWith('http://10.') || cached.startsWith('http://172.');
+      const isLegacyCloud = cached.includes('.run.app') || cached.includes('render.com') || cached.includes('ais-dev-') || cached.includes('ais-pre-');
+      if ((isPageHttps && isCachedInsecure) || isLegacyCloud) {
+        localStorage.removeItem('juwei_wms_server_address');
+      } else {
+        const cleanCached = sanitizeServerHost(cached);
+        if (cleanCached && cleanCached.length > 0) {
+          const isHttps = isSecureHost(cleanCached, cached);
+          return finalize(`${isHttps ? 'https:' : 'http:'}//${cleanCached}`, 'user localStorage');
+        }
+      }
+    }
+  }
+
+  // 2. Check if browsing on a genuine web host (browser environment)
   const isElectron = typeof window !== 'undefined' && Boolean((window as any).electronAPI?.isElectron);
   if (!isElectron && typeof window !== 'undefined' && window.location && window.location.host && !window.location.protocol.startsWith('file')) {
     const currentHost = window.location.host;
@@ -87,7 +132,7 @@ export function getCentralServerUrl(): string {
     }
   }
 
-  // 2. Check Electron injected API (Source: Electron config)
+  // 3. Check Electron injected API (populated from server-config.json)
   if (typeof window !== 'undefined' && (window as any).electronAPI?.centralServerUrl) {
     const rawElectronUrl = String((window as any).electronAPI.centralServerUrl).trim();
     if (rawElectronUrl) {
@@ -95,38 +140,23 @@ export function getCentralServerUrl(): string {
     }
   }
 
-  // 3. Check environment variable injected at build time
+  // 4. Check server-config.json loaded at startup
+  const cfgUrl = runtimeServerConfig.centralServerUrl
+    || (runtimeServerConfig.centralServerHost ? `http://${sanitizeServerHost(runtimeServerConfig.centralServerHost)}` : '');
+  if (cfgUrl) {
+    return finalize(cfgUrl.replace(/\/+$/, ''), 'server-config.json');
+  }
+
+  // 5. Check environment variable injected at build time
   const metaEnv = typeof import.meta !== 'undefined' ? (import.meta as any).env : undefined;
   const envUrl = metaEnv && metaEnv.VITE_CENTRAL_SERVER_URL
     ? String(metaEnv.VITE_CENTRAL_SERVER_URL).trim()
     : '';
-
-  // 4. Check cached settings (Source: cached localStorage)
-  if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
-    const cached = localStorage.getItem('juwei_wms_server_address');
-    if (cached) {
-      // If browsing over HTTPS and cached is plain HTTP IP, ignore cached to prevent mixed content failure
-      const isPageHttps = window.location && window.location.protocol === 'https:';
-      const isCachedInsecure = cached.startsWith('http://192.') || cached.startsWith('http://10.') || cached.startsWith('http://172.');
-      if (isPageHttps && isCachedInsecure) {
-        localStorage.removeItem('juwei_wms_server_address');
-      } else {
-        const cleanCached = sanitizeServerHost(cached);
-        if (cleanCached && cleanCached.length > 0) {
-          const isHttps = isSecureHost(cleanCached, cached);
-          return finalize(`${isHttps ? 'https:' : 'http:'}//${cleanCached}`, 'cached localStorage');
-        }
-      }
-    }
-  }
-
-  // 5. Use build env URL if valid non-localhost (Source: build env var)
   if (envUrl) {
     return finalize(envUrl.replace(/\/+$/, ''), 'build env var');
   }
 
-  // 6. Fallback for Electron / Standalone: Default Central Production Server
-  return finalize(DEFAULT_PRODUCTION_SERVER_URL, 'hardcoded default');
+  return '';
 }
 
 /**
@@ -134,7 +164,7 @@ export function getCentralServerUrl(): string {
  */
 export function getCentralServerHost(): string {
   const url = getCentralServerUrl();
-  return sanitizeServerHost(url) || DEFAULT_PRODUCTION_SERVER_HOST;
+  return sanitizeServerHost(url);
 }
 
 /**
@@ -149,7 +179,8 @@ export function getApiBaseUrl(): string {
  */
 export function getCentralWebSocketUrl(accountId?: string, warehouseId?: string): string {
   const serverUrl = getCentralServerUrl();
-  const cleanHost = sanitizeServerHost(serverUrl) || DEFAULT_PRODUCTION_SERVER_HOST;
+  const cleanHost = sanitizeServerHost(serverUrl);
+  if (!cleanHost) return '';
   const isHttps = isSecureHost(cleanHost, serverUrl);
   const wsProto = isHttps ? 'wss:' : 'ws:';
   

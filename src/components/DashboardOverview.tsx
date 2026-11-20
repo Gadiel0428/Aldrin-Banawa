@@ -35,7 +35,8 @@ import {
   Printer,
   Info,
   X,
-  ShieldCheck
+  ShieldCheck,
+  Bell
 } from 'lucide-react';
 import {
   MaterialStockItem,
@@ -47,8 +48,9 @@ import {
   DeliveryRecord,
   RegisteredAccount,
   MasterRegistryItem,
-  getCustomerForPart
+  ChatMessage
 } from '../types';
+import { computeStockAlerts } from '../utils/stockAlerts';
 import ReceivingVsIssuanceReportModal from './ReceivingVsIssuanceReportModal';
 import InventoryReportModal from './InventoryReportModal';
 import { PrintPreviewModal } from './PrintPreviewModal';
@@ -66,16 +68,17 @@ interface DashboardOverviewProps {
   setView: (view: string) => void;
   // Real-time communication props
   activeUsers: string[];
-  chatMessages: any[];
+  chatMessages: ChatMessage[];
   currentUser: string;
   sendChatMessage: (text: string) => void;
   registeredUsers?: RegisteredAccount[];
   isSuperAdmin?: boolean;
   canEdit?: boolean;
   registries?: MasterRegistryItem[];
+  openAlertsSignal?: number;
 }
 
-type DashboardPopup = 'safety' | 'iso' | 'flow' | 'lowStock' | 'shelfLife' | 'operators' | null;
+type DashboardPopup = 'safety' | 'iso' | 'flow' | 'lowStock' | 'shelfLife' | 'alerts' | 'operators' | null;
 
 export default function DashboardOverview({
   stocks,
@@ -93,9 +96,11 @@ export default function DashboardOverview({
   registeredUsers = [],
   isSuperAdmin = false,
   canEdit: _canEdit = false,
-  registries = []
+  registries = [],
+  openAlertsSignal = 0
 }: DashboardOverviewProps) {
   const [activePopup, setActivePopup] = useState<DashboardPopup>(null);
+  const [alertsFilter, setAlertsFilter] = useState<'ALL' | 'LOW_STOCK' | 'SHELF_LIFE'>('ALL');
   const [activeTab, setActiveTab] = useState<'transactions' | 'chat'>('transactions');
   const [msgText, setMsgText] = useState('');
   const [showReportModal, setShowReportModal] = useState(false);
@@ -114,6 +119,24 @@ export default function DashboardOverview({
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  useEffect(() => {
+    if (openAlertsSignal > 0) {
+      setAlertsFilter('ALL');
+      setActivePopup('alerts');
+    }
+  }, [openAlertsSignal]);
+
+  useEffect(() => {
+    if (!activePopup) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setActivePopup(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activePopup]);
 
   // Fewer alert rows on 1366x768 (<=800px height) so desktop layout adapts cleanly without page scroll
   const isCompactHeight = viewportHeight <= 800;
@@ -199,14 +222,16 @@ export default function DashboardOverview({
   const quarantineCount = stocks.filter(item => item.status === 'QUARANTINE' || item.status === 'HOLD').length;
   const pendingIqcCount = receiving.filter(item => item.iqcStatus === 'PENDING_IQC').length;
 
-  // Expiry & Shelf Life Warning (items with less than 30 days to expire, or already expired)
-  const todayStr = '2026-07-19'; // Fixed system date as provided in metadata
-  const nearExpiryItems = stocks.filter(item => {
-    if (!item.expirationDate) return false;
-    const diffTime = new Date(item.expirationDate).getTime() - new Date(todayStr).getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    return diffDays <= 30; // within 30 days
-  });
+  // Compute Low-Stock and Shelf-Life (<= 30 days) alerts from existing stock data
+  const {
+    todayStr,
+    lowStockSkus,
+    nearExpiryItems,
+    unifiedAlerts,
+    totalCount: totalAlertCount,
+    lowStockCount,
+    shelfLifeCount
+  } = React.useMemo(() => computeStockAlerts(stocks), [stocks]);
 
   // Broken Resin Sacks Risk
   const brokenResinSacks = stocks.filter(item => item.resinSackRisk && item.status === 'QUARANTINE');
@@ -242,57 +267,11 @@ export default function DashboardOverview({
     }))
   ].sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 5);
 
-  // Automatic Reorder Min Threshold Alert Logic
-  const stockQtyByPart = stocks.reduce((acc, item) => {
-    if (item.status === 'APPROVED') {
-      acc[item.partCode] = (acc[item.partCode] || 0) + item.quantity;
-    }
-    return acc;
-  }, {} as Record<string, number>);
-
-  // Determine max defined reorderMin threshold per part code
-  const reorderMinByPart = stocks.reduce((acc, item) => {
-    if (typeof item.reorderMin === 'number' && item.reorderMin > 0) {
-      acc[item.partCode] = Math.max(acc[item.partCode] || 0, item.reorderMin);
-    }
-    return acc;
-  }, {} as Record<string, number>);
-
-  const lowStockSkusMap: Record<string, {
-    partCode: string;
-    description: string;
-    type: string;
-    location: string;
-    unit: string;
-    currentQty: number;
-    reorderMin: number;
-    shortage: number;
-    customer: string;
-  }> = {};
-
-  stocks.forEach(item => {
-    const minThreshold = item.reorderMin || reorderMinByPart[item.partCode];
-    if (typeof minThreshold === 'number' && minThreshold > 0) {
-      const currentQty = stockQtyByPart[item.partCode] ?? 0;
-      if (currentQty <= minThreshold) {
-        if (!lowStockSkusMap[item.partCode]) {
-          lowStockSkusMap[item.partCode] = {
-            partCode: item.partCode,
-            description: item.description,
-            type: item.type,
-            location: item.location,
-            unit: item.unit,
-            currentQty,
-            reorderMin: minThreshold,
-            shortage: Math.max(0, minThreshold - currentQty),
-            customer: item.customer || getCustomerForPart(item.partCode, item.description)
-          };
-        }
-      }
-    }
-  });
-
-  const lowStockSkus = Object.values(lowStockSkusMap);
+  const filteredAlerts = React.useMemo(() => {
+    if (alertsFilter === 'LOW_STOCK') return unifiedAlerts.filter(a => a.isLowStock);
+    if (alertsFilter === 'SHELF_LIFE') return unifiedAlerts.filter(a => a.isExpiring);
+    return unifiedAlerts;
+  }, [unifiedAlerts, alertsFilter]);
 
   // Top Active SKUs for 7-Day Stock Level Trend Chart (Recharts)
   const topActiveSkus = React.useMemo(() => {
@@ -420,6 +399,34 @@ export default function DashboardOverview({
         </div>
 
         <div className="flex flex-wrap lg:flex-nowrap items-center gap-1.5 xl:gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              setAlertsFilter('ALL');
+              setActivePopup('alerts');
+            }}
+            id="btn-dashboard-alerts-badge"
+            className={`px-2.5 xl:px-3 py-1.5 rounded-lg text-[11px] xl:text-xs font-bold transition shadow-xs flex items-center gap-1.5 cursor-pointer border whitespace-nowrap shrink-0 ${
+              totalAlertCount > 0
+                ? 'bg-rose-600 hover:bg-rose-500 text-white border-rose-400/40'
+                : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-600'
+            }`}
+            title="View items below minimum quantity or expiring within 30 days"
+          >
+            <Bell className="h-3.5 w-3.5 shrink-0" />
+            <span>Alerts</span>
+            <span
+              id="dashboard-alerts-count-badge"
+              className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-extrabold tabular-nums leading-none ${
+                totalAlertCount > 0
+                  ? 'bg-white text-rose-700'
+                  : 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/30'
+              }`}
+            >
+              {totalAlertCount}
+            </span>
+          </button>
+
           <button
             type="button"
             onClick={() => setShowInventoryReportModal(true)}
@@ -695,10 +702,8 @@ export default function DashboardOverview({
             </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar divide-y divide-slate-100 mt-1">
-              {displayedShelfLife.map((item, idx) => {
-                const diffTime = new Date(item.expirationDate!).getTime() - new Date(todayStr).getTime();
-                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                const isExpired = diffDays <= 0;
+              {displayedShelfLife.map((lotAlert, idx) => {
+                const { item, diffDays, isExpired } = lotAlert;
                 return (
                   <button
                     type="button"
@@ -1249,10 +1254,8 @@ export default function DashboardOverview({
                     </div>
 
                     <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden">
-                      {nearExpiryItems.map((item, idx) => {
-                        const diffTime = new Date(item.expirationDate!).getTime() - new Date(todayStr).getTime();
-                        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                        const isExpired = diffDays <= 0;
+                      {nearExpiryItems.map((lotAlert, idx) => {
+                        const { item, expirationDate, diffDays, isExpired } = lotAlert;
                         return (
                           <div key={item.id || `popup-exp-${idx}`} className="px-3 py-2 text-xs flex items-center justify-between gap-2 bg-white">
                             <div className="min-w-0">
@@ -1264,7 +1267,7 @@ export default function DashboardOverview({
                               <span className={`font-bold ${isExpired ? 'text-rose-600' : 'text-amber-600'}`}>
                                 {isExpired ? 'EXPIRED' : `${diffDays} Days Left`}
                               </span>
-                              <span className="text-[10px] text-slate-400 block">Exp: {item.expirationDate}</span>
+                              <span className="text-[10px] text-slate-400 block">Exp: {expirationDate}</span>
                             </div>
                           </div>
                         );
@@ -1272,6 +1275,149 @@ export default function DashboardOverview({
                       {nearExpiryItems.length === 0 && (
                         <div className="p-6 text-center text-xs text-slate-500">
                           All stored materials have healthy remaining shelf life.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Pop-up: Unified Low-Stock & Shelf-Life Alerts */}
+              {activePopup === 'alerts' && (
+                <>
+                  <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between shrink-0">
+                    <div className="flex items-center gap-2">
+                      <Bell className="h-5 w-5 text-rose-400" />
+                      <h3 className="font-bold text-sm">
+                        Low-Stock &amp; Shelf-Life Alerts ({totalAlertCount})
+                      </h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActivePopup(null)}
+                      className="p-1 text-slate-400 hover:text-white rounded-lg cursor-pointer"
+                      aria-label="Close"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="p-5 overflow-y-auto space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setAlertsFilter('ALL')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer border ${
+                            alertsFilter === 'ALL'
+                              ? 'bg-slate-900 text-white border-slate-900'
+                              : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                          }`}
+                        >
+                          All ({totalAlertCount})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAlertsFilter('LOW_STOCK')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer border ${
+                            alertsFilter === 'LOW_STOCK'
+                              ? 'bg-rose-600 text-white border-rose-600'
+                              : 'bg-white text-rose-700 border-rose-200 hover:bg-rose-50'
+                          }`}
+                        >
+                          Low Stock ({lowStockCount})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAlertsFilter('SHELF_LIFE')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer border ${
+                            alertsFilter === 'SHELF_LIFE'
+                              ? 'bg-amber-600 text-white border-amber-600'
+                              : 'bg-white text-amber-700 border-amber-200 hover:bg-amber-50'
+                          }`}
+                        >
+                          Expiring &le; 30d ({shelfLifeCount})
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActivePopup(null);
+                          setView('stock');
+                        }}
+                        className="text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 px-3 py-1.5 rounded-lg transition cursor-pointer"
+                      >
+                        Open Stock &amp; FIFO Bins &rarr;
+                      </button>
+                    </div>
+
+                    <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden" id="dashboard-alerts-list">
+                      {filteredAlerts.map(entry => (
+                        <div
+                          key={entry.key}
+                          className={`px-3.5 py-2.5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
+                            entry.isLowStock || entry.isExpired ? 'bg-rose-50/30' : 'bg-amber-50/20'
+                          }`}
+                        >
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="font-mono font-bold text-slate-900">{entry.partCode}</span>
+                              <span className="font-semibold text-slate-800">{entry.description}</span>
+                              {entry.isLowStock && (
+                                <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200 text-[10px] font-bold font-mono">
+                                  BELOW MIN QTY
+                                </span>
+                              )}
+                              {entry.isExpiring && (
+                                <span
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold font-mono border ${
+                                    entry.isExpired
+                                      ? 'bg-rose-100 text-rose-800 border-rose-200'
+                                      : 'bg-amber-100 text-amber-800 border-amber-200'
+                                  }`}
+                                >
+                                  {entry.isExpired ? 'EXPIRED' : `EXPIRING IN ${entry.diffDays}D`}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-slate-500 font-mono flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                              <span>Loc: {entry.location || 'N/A'}</span>
+                              {entry.lotNumber && <span>Lot: {entry.lotNumber}</span>}
+                              {entry.customer && <span>Customer: {entry.customer}</span>}
+                              {entry.status && <span>Status: {entry.status}</span>}
+                            </div>
+                          </div>
+
+                          <div className="text-left sm:text-right font-mono shrink-0 tabular-nums space-y-0.5">
+                            {entry.isLowStock && typeof entry.currentQty === 'number' && typeof entry.reorderMin === 'number' && (
+                              <div>
+                                <span className="font-bold text-rose-700">
+                                  {entry.currentQty.toLocaleString()} / {entry.reorderMin.toLocaleString()} {entry.unit}
+                                </span>
+                                <span className="text-[10px] text-rose-600 block">
+                                  Shortage: -{(entry.shortage ?? 0).toLocaleString()} {entry.unit}
+                                </span>
+                              </div>
+                            )}
+                            {entry.isExpiring && entry.expirationDate && (
+                              <div>
+                                <span className={`font-bold ${entry.isExpired ? 'text-rose-600' : 'text-amber-700'}`}>
+                                  {entry.isExpired ? 'EXPIRED' : `${entry.diffDays}d left`}
+                                </span>
+                                <span className="text-[10px] text-slate-500 block">
+                                  Exp: {entry.expirationDate}
+                                  {typeof entry.quantity === 'number' ? ` · ${entry.quantity.toLocaleString()} ${entry.unit}` : ''}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+
+                      {filteredAlerts.length === 0 && (
+                        <div className="p-6 text-center text-xs text-slate-500 flex items-center justify-center gap-2">
+                          <CheckCircle className="h-4 w-4 text-emerald-500 shrink-0" />
+                          <span>No items below minimum quantity or expiring within 30 days.</span>
                         </div>
                       )}
                     </div>

@@ -18,26 +18,63 @@ import {
   checkpointAndClose,
   openSqliteDatabase
 } from "./server/sqliteStore.ts";
+import {
+  loadAndValidateServerConfig,
+  printServerStartupSummary,
+  compareServerSemver,
+  maxSemverVersion,
+  resolveServerBundleVersion,
+  normalizeGitHubRepo,
+} from "./server/config.ts";
+import logger from "./src/lib/logger.ts";
+import type {
+  AuthorizedDevice,
+  RegisteredAccount,
+  ChatMessage,
+  BackupAuditEntry,
+  BackupItemRecord,
+  PinAuditEntry,
+  AuditTrailEntry,
+  FifoRepairAuditEntry,
+  CentralDatabaseState,
+  FifoColorsMap,
+  MasterRegistryItem,
+  MaterialStockItem,
+  ReceivingRecord,
+  ReturnRecord,
+  RecyclingRecord,
+  IssuanceRecord,
+  DeliveryRecord,
+  EnvironmentalLog,
+  ForkliftChecklist,
+  StockMovement,
+} from "./shared/types.ts";
 
 // Ephemeral per-process instance identifiers (fresh every boot, never persisted)
 const SERVER_INSTANCE_ID = crypto.randomUUID();
 const SERVER_BOOT_TIME = new Date().toISOString();
 
 // Initial seed structures for empty database bootstrapping
-const INITIAL_STOCK: any[] = [];
-const INITIAL_RECEIVING: any[] = [];
-const INITIAL_RETURNS: any[] = [];
-const INITIAL_RECYCLING: any[] = [];
-const INITIAL_ISSUANCE: any[] = [];
-const INITIAL_DELIVERIES: any[] = [];
-const INITIAL_ENV_LOGS: any[] = [];
-const INITIAL_FORKLIFT_CHECKS: any[] = [];
+const INITIAL_STOCK: MaterialStockItem[] = [];
+const INITIAL_RECEIVING: ReceivingRecord[] = [];
+const INITIAL_RETURNS: ReturnRecord[] = [];
+const INITIAL_RECYCLING: RecyclingRecord[] = [];
+const INITIAL_ISSUANCE: IssuanceRecord[] = [];
+const INITIAL_DELIVERIES: DeliveryRecord[] = [];
+const INITIAL_ENV_LOGS: EnvironmentalLog[] = [];
+const INITIAL_FORKLIFT_CHECKS: ForkliftChecklist[] = [];
 
 async function startServer() {
+  const serverConfig = loadAndValidateServerConfig();
+  printServerStartupSummary(serverConfig, {
+    instanceId: SERVER_INSTANCE_ID,
+    bootTime: SERVER_BOOT_TIME,
+  });
+
   const app = express();
   const server = http.createServer(app);
   const wss = new WebSocketServer({ noServer: true });
-  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+  const PORT = serverConfig.port;
 
   server.on("upgrade", (request, socket, head) => {
     const pathname = request.url?.split("?")[0] || "";
@@ -51,21 +88,12 @@ async function startServer() {
   });
 
   // Safe Disk Storage Path Resolution (AppData on Windows Desktop, Current Working Dir in Container)
-  function getStorageFilePath(filename: string): string {
-    const customDir = process.env.JUWEI_DATA_DIR;
-    if (customDir) {
-      try {
-        if (!fs.existsSync(customDir)) fs.mkdirSync(customDir, { recursive: true });
-        return path.join(customDir, filename);
-      } catch (e) {}
-    }
-    return path.join(process.cwd(), filename);
-  }
+  const getStorageFilePath = serverConfig.getStorageFilePath;
 
   // Authoritative Central Database File
-  const DATA_FILE_SQLITE = getStorageFilePath("central-database.sqlite");
-  const DATA_FILE_JSON = getStorageFilePath("central-database.json");
-  const DATA_FILE = DATA_FILE_SQLITE;
+  const DATA_FILE_SQLITE = serverConfig.dataFileSqlite;
+  const DATA_FILE_JSON = serverConfig.dataFileJson;
+  const DATA_FILE = serverConfig.dataFile;
 
   // =========================================================================
   // STORAGE CONFIGURATION GUARD RAIL:
@@ -73,9 +101,8 @@ async function startServer() {
   // preventing database files from residing in the ephemeral project source folder.
   // =========================================================================
   const resolvedDataFile = path.resolve(DATA_FILE);
-  const projectRootDir = path.resolve(process.cwd());
-  const configuredDataDir = process.env.JUWEI_DATA_DIR ? path.resolve(process.env.JUWEI_DATA_DIR) : null;
-  const isInsideProjectSource = resolvedDataFile.startsWith(projectRootDir) && (!configuredDataDir || !resolvedDataFile.startsWith(configuredDataDir));
+  const configuredDataDir = serverConfig.configuredDataDir;
+  const isInsideProjectSource = serverConfig.isInsideProjectSource;
 
   if (!configuredDataDir || isInsideProjectSource) {
     const bannerBorder = "=".repeat(100);
@@ -83,61 +110,18 @@ async function startServer() {
     console.warn("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
     console.warn("WARNING: JUWEI_DATA_DIR is not set correctly — data is NOT being saved to the safe location and WILL be lost on the next update.");
     console.warn(`Resolved Database File: ${resolvedDataFile}`);
-    console.warn(`Configured JUWEI_DATA_DIR: ${process.env.JUWEI_DATA_DIR || "(NOT SET)"}`);
+    console.warn(`Configured JUWEI_DATA_DIR: ${serverConfig.configuredDataDirRaw || "(NOT SET)"}`);
     console.warn("Action Required: Set environment variable JUWEI_DATA_DIR to an external persistent folder (e.g. C:\\JuweiData or /var/juwei-data) before deploying updates!");
     console.warn("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
     console.warn(`${bannerBorder}\n`);
   } else {
-    console.log(`[STORAGE CONFIG] Persistent safe storage verified at: ${configuredDataDir} (Database: ${resolvedDataFile})`);
-  }
-
-  interface AuthorizedDeviceRecord {
-    deviceId: string;
-    deviceName: string;
-    isPrimaryAdminDevice?: boolean;
-    status: 'AUTHORIZED' | 'PENDING' | 'REVOKED';
-    authorizedBy?: string;
-    authorizedAt?: string;
-    employeeId?: string;
-    username?: string;
-    role?: string;
-    permission?: string;
-    boundAt?: string;
-  }
-
-  interface ServerUser {
-    employeeId: string;
-    username: string;
-    role: string;
-    phoneNumber?: string;
-    permission: string;
-    pin?: string;
-    pinHash?: string;
-    pinSalt?: string;
-    mustChangePin?: boolean;
-    hasPin?: boolean;
-    status: string;
-    lastActive?: string;
-    registeredBy?: string;
-    registeredBySuperAdmin?: boolean;
-    registeredAt?: string;
-    stationId?: string;
-    id: string;
-    deviceId?: string;
-    isPrimaryAdminDevice?: boolean;
-    authorizedDevices?: string[];
-    version: number;
-    updated_at: string;
-    reset_version: number;
-    isPinCompromised?: boolean;
-    pinChangedAt?: string;
-    pinChangedBy?: string;
+    logger.info(`[STORAGE CONFIG] Persistent safe storage verified at: ${configuredDataDir} (Database: ${resolvedDataFile})`);
   }
 
   // Installation & Primary Device Identification
   let installationId = "INS-2026-JUWEI-PRIM01";
   let primaryDeviceId = "dev_primary_admin_pc";
-  const authorizedDevicesMap = new Map<string, AuthorizedDeviceRecord>([
+  const authorizedDevicesMap = new Map<string, AuthorizedDevice>([
     [
       "dev_primary_admin_pc",
       {
@@ -151,7 +135,7 @@ async function startServer() {
     ]
   ]);
 
-  const defaultSuperAdmin: ServerUser = { 
+  const defaultSuperAdmin: RegisteredAccount = { 
     id: 'USR-JPMP-002',
     employeeId: 'JPMP-002', 
     username: 'ALDRIN BANAWA', 
@@ -233,7 +217,7 @@ async function startServer() {
     }
   }
 
-  function verifyUserPin(user: ServerUser | undefined, enteredPin: string): { matched: boolean; upgradedFromPlaintext: boolean } {
+  function verifyUserPin(user: RegisteredAccount | undefined, enteredPin: string): { matched: boolean; upgradedFromPlaintext: boolean } {
     if (!user) return { matched: false, upgradedFromPlaintext: false };
     const cleanEntered = String(enteredPin || "").trim();
     if (!cleanEntered) return { matched: false, upgradedFromPlaintext: false };
@@ -298,8 +282,8 @@ async function startServer() {
 
   function resolveRequestAuthContext(req: express.Request, explicitDeviceId?: string): {
     deviceId: string;
-    deviceRecord?: AuthorizedDeviceRecord;
-    account?: ServerUser;
+    deviceRecord?: AuthorizedDevice;
+    account?: RegisteredAccount;
     permission: string;
     employeeId: string;
     authenticated: boolean;
@@ -378,7 +362,7 @@ async function startServer() {
       u => (u.employeeId || "").toUpperCase().trim() === "JPMP-002"
     );
     if (idx === -1) {
-      const seedUser: ServerUser = {
+      const seedUser: RegisteredAccount = {
         ...defaultSuperAdmin,
         deviceId: primaryDeviceId,
         authorizedDevices: [primaryDeviceId]
@@ -390,25 +374,27 @@ async function startServer() {
         seedUser.pinSalt = pinSalt;
         seedUser.mustChangePin = true;
         oneTimeSetupPin = initialPin;
-        console.log(`[SECURITY SETUP] Generated one-time Super Admin (JPMP-002) initial PIN for fresh install. Must be changed on first login.`);
+        logger.info(`[SECURITY SETUP] Generated one-time Super Admin (JPMP-002) initial PIN for fresh install. Must be changed on first login.`);
       }
       state.registeredUsers.unshift(seedUser);
     } else {
       const existing = state.registeredUsers[idx];
-      const updated: ServerUser = {
+      const updated: RegisteredAccount = {
         ...existing,
         deviceId: existing.deviceId || primaryDeviceId,
         isPrimaryAdminDevice: true,
         authorizedDevices: Array.from(new Set([...(existing.authorizedDevices || []), primaryDeviceId]))
       };
-      if (!updated.pinHash && !updated.pin) {
+      const needsInitialPin = (!updated.pinHash && !updated.pin) || (Boolean(updated.mustChangePin) && !updated.pinChangedAt && !oneTimeSetupPin);
+      if (needsInitialPin) {
         const initialPin = generateSecureRandom4DigitPin();
         const { pinHash, pinSalt } = hashPinScrypt(initialPin);
         updated.pinHash = pinHash;
         updated.pinSalt = pinSalt;
+        delete updated.pin;
         updated.mustChangePin = true;
         oneTimeSetupPin = initialPin;
-        console.log(`[SECURITY SETUP] Super Admin (JPMP-002) had no credentials; generated one-time initial PIN requiring change on first login.`);
+        logger.info(`[SECURITY SETUP] Generated one-time Super Admin (JPMP-002) initial PIN requiring change on first login.`);
       }
       state.registeredUsers[idx] = updated;
     }
@@ -478,14 +464,6 @@ async function startServer() {
     }
   }
 
-  interface ChatMessage {
-    id: string;
-    sender: string;
-    text: string;
-    timestamp: string;
-    isSystem: boolean;
-  }
-
   const chatMessages: ChatMessage[] = [
     {
       id: "sys-init",
@@ -550,7 +528,7 @@ async function startServer() {
   ];
 
   // Default FIFO Color Coding by Month (12 Months Calendar)
-  const DEFAULT_FIFO_COLORS_BY_MONTH: Record<number, { name: string; colorClass: string; textClass: string; hex?: string }> = {
+  const DEFAULT_FIFO_COLORS_BY_MONTH: FifoColorsMap = {
     1: { name: 'Magenta', colorClass: 'bg-fuchsia-600', textClass: 'text-fuchsia-600', hex: '#c026d3' },
     2: { name: 'Orange', colorClass: 'bg-orange-500', textClass: 'text-orange-500', hex: '#f97316' },
     3: { name: 'Dark Green', colorClass: 'bg-emerald-800', textClass: 'text-emerald-800', hex: '#065f46' },
@@ -606,7 +584,7 @@ async function startServer() {
     return Object.values(activeMap).some((m: any) => m?.name?.toLowerCase() === s.toLowerCase());
   }
 
-  const STARTER_BARCODE_PRESETS = [
+  const STARTER_BARCODE_PRESETS: MasterRegistryItem[] = [
     {
       id: 'REG-BCP-RESIN-001',
       type: 'BARCODE_PRESET',
@@ -722,22 +700,7 @@ async function startServer() {
   ];
 
   // Central Database In-Memory Collections (Single Source of Truth)
-  const state: {
-    stocks: any[];
-    receiving: any[];
-    returns: any[];
-    recycling: any[];
-    issuances: any[];
-    deliveries: any[];
-    envLogs: any[];
-    forkliftChecks: any[];
-    registries: any[];
-    registeredUsers: ServerUser[];
-    stockMovements: any[];
-    operationalRoles: string[];
-    receivingCategories: string[];
-    fifoColorsByMonth: Record<number, { name: string; colorClass: string; textClass: string; hex?: string }>;
-  } = {
+  const state: CentralDatabaseState = {
     stocks: INITIAL_STOCK.map((item: any) => normalizeRecord(item)),
     receiving: INITIAL_RECEIVING.map((item: any) => normalizeRecord(item)),
     returns: INITIAL_RETURNS.map((item: any) => normalizeRecord(item)),
@@ -812,30 +775,9 @@ async function startServer() {
   // 6. Logs every backup created, restore performed, and startup load/recovery action.
   // =========================================================================
 
-  const BACKUPS_DIR = process.env.JUWEI_DATA_DIR 
-    ? path.join(process.env.JUWEI_DATA_DIR, "backups")
-    : path.join(path.dirname(DATA_FILE), "backups");
+  const BACKUPS_DIR = serverConfig.backupsDir;
 
   const BACKUP_AUDIT_LOG_FILE = getStorageFilePath("backup-audit-log.json");
-
-  interface BackupAuditEntry {
-    id: string;
-    action: "BACKUP_CREATED" | "DATABASE_RESTORED" | "PRUNE";
-    filename: string;
-    author: string;
-    timestamp: string;
-    details?: string;
-    fileSizeBytes?: number;
-  }
-
-  interface BackupItemRecord {
-    filename: string;
-    filePath: string;
-    sizeBytes: number;
-    sizeFormatted: string;
-    createdAt: string;
-    mtime: number;
-  }
 
   let backupAuditLogs: BackupAuditEntry[] = [];
   try {
@@ -873,9 +815,9 @@ async function startServer() {
     } catch (e) {}
 
     if (action === "BACKUP_CREATED") {
-      console.log(`[DATABASE BACKUP] Created backup '${filename}' (${fileSizeBytes || 0} bytes) by ${author}. Reason: ${details || 'N/A'}`);
+      logger.info(`[DATABASE BACKUP] Created backup '${filename}' (${fileSizeBytes || 0} bytes) by ${author}. Reason: ${details || 'N/A'}`);
     } else if (action === "DATABASE_RESTORED") {
-      console.log(`[DATABASE RESTORE] OVERWROTE live database with backup '${filename}' by ${author}. Reason: ${details || 'N/A'}`);
+      logger.info(`[DATABASE RESTORE] OVERWROTE live database with backup '${filename}' by ${author}. Reason: ${details || 'N/A'}`);
     }
   }
 
@@ -885,19 +827,6 @@ async function startServer() {
   // status resolution. Never silently resets or falls back.
   // =========================================================================
   const PIN_AUDIT_LOG_FILE = getStorageFilePath("pin-audit-log.json");
-
-  interface PinAuditEntry {
-    id: string;
-    action: "PIN_CHANGED" | "PIN_RESET" | "COMPROMISED_PIN_RESOLVED";
-    targetEmployeeId: string;
-    targetUsername: string;
-    changedBy: string;
-    changedByEmployeeId: string;
-    timestamp: string;
-    ip?: string;
-    reason?: string;
-    previousPinWasCompromised: boolean;
-  }
 
   let pinAuditLogs: PinAuditEntry[] = [];
   try {
@@ -941,7 +870,237 @@ async function startServer() {
     } catch (err) {
       console.error("[PIN-AUDIT-LOG] Failed to persist pin audit log to disk:", err);
     }
-    console.log(`[PIN-AUDIT-LOG] ${action} | Target: ${targetEmployeeId} (${targetUsername}) | By: ${changedByEmployeeId} (${changedBy}) | Reason: ${entry.reason} | Time: ${entry.timestamp}`);
+    logger.info(`[PIN-AUDIT-LOG] ${action} | Target: ${targetEmployeeId} (${targetUsername}) | By: ${changedByEmployeeId} (${changedBy}) | Reason: ${entry.reason} | Time: ${entry.timestamp}`);
+  }
+
+  // =========================================================================
+  // UNIFIED SUPER ADMIN AUDIT TRAIL (who changed what and when)
+  // Persisted to audit-trail.json in JUWEI_DATA_DIR (capped at 5,000 entries).
+  // =========================================================================
+  const AUDIT_TRAIL_FILE = getStorageFilePath("audit-trail.json");
+  const MAX_AUDIT_TRAIL_ENTRIES = 5000;
+
+  let auditTrailLogs: AuditTrailEntry[] = [];
+  let auditTrailFileExistsOnBoot = false;
+  try {
+    if (fs.existsSync(AUDIT_TRAIL_FILE)) {
+      auditTrailFileExistsOnBoot = true;
+      const raw = fs.readFileSync(AUDIT_TRAIL_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) auditTrailLogs = parsed;
+    }
+  } catch (e) {
+    auditTrailLogs = [];
+  }
+
+  function persistAuditTrailLogs() {
+    try {
+      fs.writeFileSync(AUDIT_TRAIL_FILE, JSON.stringify(auditTrailLogs, null, 2), "utf-8");
+    } catch (err) {
+      console.error("[AUDIT-TRAIL] Failed to persist audit trail to disk:", err);
+    }
+  }
+
+  const AUDIT_IGNORED_FIELDS = new Set<string>([
+    'updated_at',
+    'updated_by',
+    'created_at',
+    'created_by',
+    'version',
+    'reset_version',
+    'user_id',
+    'device_id',
+    'record_id',
+    'pin',
+    'pinHash',
+    'pinSalt',
+    'pin_hash'
+  ]);
+
+  function formatAuditValue(val: unknown): string {
+    if (val === undefined) return 'unset';
+    if (val === null) return 'null';
+    if (typeof val === 'string') {
+      const s = val.trim();
+      return s.length > 40 ? `${s.slice(0, 37)}...` : s;
+    }
+    if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+    try {
+      const json = JSON.stringify(val);
+      return json.length > 50 ? `${json.slice(0, 47)}...` : json;
+    } catch {
+      return '[object]';
+    }
+  }
+
+  function getAuditRecordLabel(recordType: string, record: any): string {
+    if (!record || typeof record !== 'object') return '';
+    const parts: string[] = [];
+    if (record.partCode) parts.push(String(record.partCode));
+    if (record.lotNumber) parts.push(`Lot ${record.lotNumber}`);
+    if (record.gatePassNumber) parts.push(`GP ${record.gatePassNumber}`);
+    if (record.requisitionNumber) parts.push(`Req ${record.requisitionNumber}`);
+    if (record.employeeId) parts.push(String(record.employeeId));
+    if (record.username) parts.push(String(record.username));
+    if (record.code && !record.partCode) parts.push(String(record.code));
+    if (record.name && !record.username) parts.push(String(record.name));
+    if (record.zone) parts.push(String(record.zone));
+    if (record.forkliftId) parts.push(String(record.forkliftId));
+    if (record.description && parts.length < 2) {
+      const desc = String(record.description).trim();
+      if (desc) parts.push(desc.length > 35 ? `${desc.slice(0, 32)}...` : desc);
+    }
+    return parts.join(' · ') || String(record.id || record.record_id || recordType);
+  }
+
+  function describeRecordDiff(before: any, after: any): string {
+    if (!before || !after || typeof before !== 'object' || typeof after !== 'object') return '';
+    const keys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)]));
+    const diffs: string[] = [];
+    for (const k of keys) {
+      if (AUDIT_IGNORED_FIELDS.has(k)) continue;
+      const oldVal = before[k];
+      const newVal = after[k];
+      let same = oldVal === newVal;
+      if (!same && typeof oldVal === 'object' && typeof newVal === 'object' && oldVal !== null && newVal !== null) {
+        try {
+          same = JSON.stringify(oldVal) === JSON.stringify(newVal);
+        } catch {
+          same = false;
+        }
+      }
+      if (!same) {
+        diffs.push(`${k}: ${formatAuditValue(oldVal)} -> ${formatAuditValue(newVal)}`);
+      }
+      if (diffs.length >= 6) break;
+    }
+    return diffs.join(', ');
+  }
+
+  function recordAuditTrail(entry: {
+    timestamp?: string;
+    actor?: string;
+    actorId?: string;
+    action: string;
+    recordType: string;
+    recordId: string;
+    summary: string;
+    details?: string;
+    deviceId?: string;
+  }) {
+    const cleanActor = String(entry.actor || entry.actorId || 'SYSTEM').trim() || 'SYSTEM';
+    const cleanActorId = String(entry.actorId || cleanActor).trim() || 'SYSTEM';
+    const cleanType = String(entry.recordType || 'system').trim();
+    const cleanId = String(entry.recordId || 'N/A').trim();
+
+    const item: AuditTrailEntry = {
+      id: `AUD-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      timestamp: entry.timestamp || new Date().toISOString(),
+      actor: cleanActor,
+      actorId: cleanActorId,
+      action: String(entry.action || 'UPDATE').trim().toUpperCase(),
+      recordType: cleanType,
+      recordId: cleanId,
+      summary: String(entry.summary || `${entry.action} ${cleanType} ${cleanId}`).trim(),
+      ...(entry.details ? { details: String(entry.details).trim() } : {}),
+      ...(entry.deviceId ? { deviceId: String(entry.deviceId).trim() } : {})
+    };
+
+    auditTrailLogs.unshift(item);
+    if (auditTrailLogs.length > MAX_AUDIT_TRAIL_ENTRIES) {
+      auditTrailLogs = auditTrailLogs.slice(0, MAX_AUDIT_TRAIL_ENTRIES);
+    }
+    persistAuditTrailLogs();
+  }
+
+  function ensureInitialAuditTrailSeed() {
+    if (auditTrailFileExistsOnBoot && auditTrailLogs.length > 0) return;
+
+    const seeded: AuditTrailEntry[] = [];
+    for (const p of pinAuditLogs) {
+      seeded.push({
+        id: p.id || `AUD-PIN-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        timestamp: p.timestamp || new Date().toISOString(),
+        actor: p.changedBy || p.changedByEmployeeId || 'Super Administrator',
+        actorId: p.changedByEmployeeId || 'JPMP-002',
+        action: p.action || 'PIN_CHANGE',
+        recordType: 'registeredUsers',
+        recordId: p.targetEmployeeId,
+        summary: `${p.action} for ${p.targetUsername} (${p.targetEmployeeId})`,
+        details: p.reason || 'PIN audit entry'
+      });
+    }
+
+    for (const b of backupAuditLogs) {
+      seeded.push({
+        id: b.id || `AUD-BAK-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        timestamp: b.timestamp || new Date().toISOString(),
+        actor: b.author || 'SYSTEM',
+        actorId: b.author || 'SYSTEM',
+        action: b.action || 'BACKUP_CREATED',
+        recordType: 'system',
+        recordId: b.filename || 'database',
+        summary: `${b.action}: ${b.filename}`,
+        details: b.details
+      });
+    }
+
+    const recordCollections = [
+      'stocks',
+      'receiving',
+      'returns',
+      'recycling',
+      'issuances',
+      'deliveries',
+      'envLogs',
+      'forkliftChecks',
+      'registries',
+      'registeredUsers'
+    ];
+    for (const col of recordCollections) {
+      const list: any[] = Array.isArray((state as any)[col]) ? (state as any)[col] : [];
+      for (const rec of list) {
+        if (!rec || typeof rec !== 'object') continue;
+        const ts = rec.updated_at || rec.created_at || rec.registeredAt || rec.date;
+        if (!ts) continue;
+        const isoTs = /^\d{4}-\d{2}-\d{2}$/.test(String(ts)) ? `${ts}T00:00:00.000Z` : String(ts);
+        const actorName = rec.updated_by || rec.created_by || rec.registeredBy || 'System';
+        const recId = String(rec.id || rec.record_id || rec.employeeId || 'N/A');
+        const label = getAuditRecordLabel(col, rec);
+        seeded.push({
+          id: `AUD-INIT-${col}-${recId}`,
+          timestamp: isoTs,
+          actor: String(actorName),
+          actorId: String(rec.user_id || actorName),
+          action: Number(rec.version) > 1 ? 'UPDATE' : 'CREATE',
+          recordType: col,
+          recordId: recId,
+          summary: `${Number(rec.version) > 1 ? 'Updated' : 'Created'} ${col}${label ? ` [${label}]` : ''}`,
+          deviceId: rec.device_id
+        });
+      }
+    }
+
+    if (Array.isArray(state.stockMovements)) {
+      for (const m of state.stockMovements.slice(0, 200) as any[]) {
+        seeded.push({
+          id: `AUD-MOV-${m.id || Math.random().toString(36).substring(2, 7)}`,
+          timestamp: m.created_at || m.timestamp || new Date().toISOString(),
+          actor: m.user_name || m.userName || 'Operator',
+          actorId: m.user_id || m.user_name || 'OPERATOR',
+          action: 'STOCK_MOVEMENT',
+          recordType: 'stockMovements',
+          recordId: String(m.id || m.product_id || 'N/A'),
+          summary: `${m.type || 'MOVEMENT'} ${m.product_sku || m.product_id || ''} (${Number(m.quantity) > 0 ? `+${m.quantity}` : m.quantity})`,
+          details: m.notes || undefined,
+          deviceId: m.device_id
+        });
+      }
+    }
+
+    seeded.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+    auditTrailLogs = seeded.slice(0, MAX_AUDIT_TRAIL_ENTRIES);
+    persistAuditTrailLogs();
   }
 
   function formatBackupTimestamp(date: Date = new Date()): string {
@@ -1006,7 +1165,7 @@ async function startServer() {
   let isBackupInProgress = false;
   async function createDatabaseBackup(reason: string = "SCHEDULED", author: string = "SYSTEM"): Promise<{ success: boolean; filename?: string; error?: string }> {
     if (isBackupInProgress) {
-      console.log(`[DATABASE BACKUP] Backup already in progress, skipping concurrent trigger (${reason})`);
+      logger.info(`[DATABASE BACKUP] Backup already in progress, skipping concurrent trigger (${reason})`);
       return { success: false, error: "A backup is already in progress" };
     }
     isBackupInProgress = true;
@@ -1056,7 +1215,7 @@ async function startServer() {
 
       if (Array.isArray(parsed.authorizedDevices)) {
         authorizedDevicesMap.clear();
-        parsed.authorizedDevices.forEach((dev: AuthorizedDeviceRecord) => {
+        parsed.authorizedDevices.forEach((dev: AuthorizedDevice) => {
           if (dev && dev.deviceId) authorizedDevicesMap.set(dev.deviceId, dev);
         });
       }
@@ -1161,7 +1320,10 @@ async function startServer() {
       if (validation.valid && validation.data) {
         initSqliteStore(DATA_FILE_SQLITE);
         applyDatabaseObject(validation.data);
-        console.log("Live database loaded normally");
+        if (oneTimeSetupPin) {
+          commitDatabase();
+        }
+        logger.info("Live database loaded normally");
         return;
       }
 
@@ -1170,7 +1332,7 @@ async function startServer() {
       try {
         const corruptTarget = `${DATA_FILE_SQLITE}.corrupt-${timestampStr}`;
         fs.renameSync(DATA_FILE_SQLITE, corruptTarget);
-        console.log(`[CORRUPT DB] Moved corrupt database aside to: ${corruptTarget}`);
+        logger.info(`[CORRUPT DB] Moved corrupt database aside to: ${corruptTarget}`);
         if (fs.existsSync(`${DATA_FILE_SQLITE}-wal`)) {
           try { fs.renameSync(`${DATA_FILE_SQLITE}-wal`, `${DATA_FILE_SQLITE}-wal.corrupt-${timestampStr}`); } catch (e) {}
         }
@@ -1204,7 +1366,7 @@ async function startServer() {
             if (stocksMatch && receivingMatch && usersMatch) {
               const migratedTarget = `${DATA_FILE_JSON}.migrated-${timestampStr}`;
               fs.renameSync(DATA_FILE_JSON, migratedTarget);
-              console.log(`[MIGRATION SUCCESS] Legacy JSON database successfully migrated to SQLite (${DATA_FILE_SQLITE}). Original renamed to: ${migratedTarget}`);
+              logger.info(`[MIGRATION SUCCESS] Legacy JSON database successfully migrated to SQLite (${DATA_FILE_SQLITE}). Original renamed to: ${migratedTarget}`);
               return;
             } else {
               console.error("[MIGRATION WARNING] SQLite verification did not match in-memory state after importing legacy JSON!");
@@ -1250,7 +1412,7 @@ async function startServer() {
                 applyDatabaseObject(validation.data);
 
                 autoRestoredBackupFilename = candidate.filename;
-                console.log(`Live database missing/corrupted — auto-restored from backup '${candidate.filename}'`);
+                logger.info(`Live database missing/corrupted — auto-restored from backup '${candidate.filename}'`);
                 logBackupAudit(
                   "DATABASE_RESTORED",
                   candidate.filename,
@@ -1270,7 +1432,7 @@ async function startServer() {
                   commitDatabase();
 
                   autoRestoredBackupFilename = candidate.filename;
-                  console.log(`Live database missing/corrupted — auto-restored from backup '${candidate.filename}'`);
+                  logger.info(`Live database missing/corrupted — auto-restored from backup '${candidate.filename}'`);
                   logBackupAudit(
                     "DATABASE_RESTORED",
                     candidate.filename,
@@ -1344,7 +1506,7 @@ async function startServer() {
             "Mandatory pre-startup safety copy taken before server code loads or touches data",
             backupStat.size
           );
-          console.log(`[DATABASE PRE-STARTUP BACKUP] Safety backup created: '${filename}' (${backupStat.size} bytes). Taken before server code touches data.`);
+          logger.info(`[DATABASE PRE-STARTUP BACKUP] Safety backup created: '${filename}' (${backupStat.size} bytes). Taken before server code touches data.`);
           return { success: true, filename };
         } else {
           // If the live DB is unreadable at startup, keep a raw copy named *.sqlite.unreadable
@@ -1381,12 +1543,12 @@ async function startServer() {
             "Mandatory pre-startup safety copy of legacy JSON taken before server code loads or touches data",
             backupStat.size
           );
-          console.log(`[DATABASE PRE-STARTUP BACKUP] Safety legacy JSON backup created: '${filename}' (${backupStat.size} bytes).`);
+          logger.info(`[DATABASE PRE-STARTUP BACKUP] Safety legacy JSON backup created: '${filename}' (${backupStat.size} bytes).`);
           return { success: true, filename };
         }
       }
 
-      console.log("[DATABASE PRE-STARTUP BACKUP] No existing live database file found on disk (fresh install) — skipping pre-startup backup.");
+      logger.info("[DATABASE PRE-STARTUP BACKUP] No existing live database file found on disk (fresh install) — skipping pre-startup backup.");
       return { success: false };
     } catch (err: any) {
       console.error("[DATABASE PRE-STARTUP BACKUP] Failed to create pre-startup safety backup:", err);
@@ -1400,6 +1562,9 @@ async function startServer() {
   // 2. Load database state (or auto-recover from backups if needed) on server initialization
   loadDatabaseFromDisk();
 
+  // 2b. Seed unified audit trail from existing database history on first initialization
+  ensureInitialAuditTrailSeed();
+
   // =========================================================================
   // ONE-TIME FIFO TAG COLOR DATA REPAIR ON SERVER STARTUP:
   // Scans all stock and receiving records right after pre-startup backup & load.
@@ -1409,18 +1574,6 @@ async function startServer() {
   // Each change is logged to console and the dedicated FIFO repair audit log.
   // =========================================================================
   const FIFO_REPAIR_AUDIT_LOG_FILE = getStorageFilePath("fifo-repair-audit-log.json");
-
-  interface FifoRepairAuditEntry {
-    id: string;
-    collection: "stocks" | "receiving";
-    recordId: string;
-    partCode?: string;
-    receivedDate?: string;
-    oldFifoColor: any;
-    newFifoColor: string;
-    timestamp: string;
-    reason: string;
-  }
 
   let fifoRepairAuditLogs: FifoRepairAuditEntry[] = [];
   try {
@@ -1440,7 +1593,7 @@ async function startServer() {
     receivingRepaired: number;
     repairs: FifoRepairAuditEntry[];
   } {
-    console.log("[FIFO STARTUP AUDIT] Beginning inspection of FIFO tag colors across stock and receiving records...");
+    logger.info("[FIFO STARTUP AUDIT] Beginning inspection of FIFO tag colors across stock and receiving records...");
     let stocksRepaired = 0;
     let receivingRepaired = 0;
     const newRepairs: FifoRepairAuditEntry[] = [];
@@ -1477,7 +1630,7 @@ async function startServer() {
           fifoRepairAuditLogs.unshift(auditEntry);
           stocksRepaired++;
 
-          console.log(`[FIFO REPAIR AUDIT] Repaired Stock [ID: ${stock.id}] (${stock.partCode || 'N/A'}): Old '${currentColor}' -> New '${newColor}' (Date: ${recDate})`);
+          logger.debug(`[FIFO REPAIR AUDIT] Repaired Stock [ID: ${stock.id}] (${stock.partCode || 'N/A'}): Old '${currentColor}' -> New '${newColor}' (Date: ${recDate})`);
         }
       });
     }
@@ -1514,7 +1667,7 @@ async function startServer() {
           fifoRepairAuditLogs.unshift(auditEntry);
           receivingRepaired++;
 
-          console.log(`[FIFO REPAIR AUDIT] Repaired Receiving [ID: ${rcv.id}] (${rcv.partCode || 'N/A'}): Old '${currentColor}' -> New '${newColor}' (Date: ${recDate})`);
+          logger.debug(`[FIFO REPAIR AUDIT] Repaired Receiving [ID: ${rcv.id}] (${rcv.partCode || 'N/A'}): Old '${currentColor}' -> New '${newColor}' (Date: ${recDate})`);
         }
       });
     }
@@ -1531,7 +1684,7 @@ async function startServer() {
       }
 
       commitDatabase();
-      console.log(`[FIFO DATA REPAIR SUMMARY] REPAIRED ${stocksRepaired} stock record(s) and ${receivingRepaired} receiving record(s). Database persisted to SQLite.`);
+      logger.info(`[FIFO DATA REPAIR SUMMARY] REPAIRED ${stocksRepaired} stock record(s) and ${receivingRepaired} receiving record(s). Database persisted to SQLite.`);
 
       chatMessages.push({
         id: `fifo-repair-${Date.now()}`,
@@ -1541,7 +1694,7 @@ async function startServer() {
         isSystem: true
       });
     } else {
-      console.log(`[FIFO DATA REPAIR SUMMARY] Clean check completed: all ${state.stocks?.length || 0} stock records and ${state.receiving?.length || 0} receiving records already possess valid FIFO tag colors. No repairs required.`);
+      logger.info(`[FIFO DATA REPAIR SUMMARY] Clean check completed: all ${state.stocks?.length || 0} stock records and ${state.receiving?.length || 0} receiving records already possess valid FIFO tag colors. No repairs required.`);
     }
 
     return {
@@ -1591,7 +1744,7 @@ async function startServer() {
           const safetyPath = path.join(BACKUPS_DIR, safetyName);
           vacuumInto(safetyPath);
           scrubPlaintextPinsInSqliteBackup(safetyPath);
-          console.log(`[DATABASE RESTORE] Pre-restore safety snapshot created: ${safetyName}`);
+          logger.info(`[DATABASE RESTORE] Pre-restore safety snapshot created: ${safetyName}`);
           logBackupAudit("BACKUP_CREATED", safetyName, "SYSTEM_SAFETY", "Pre-restore safety snapshot before overwriting database", fs.statSync(safetyPath).size);
         }
       } catch (e) {
@@ -1787,7 +1940,7 @@ async function startServer() {
         conn.warehouseId = warehouseId;
       }
     }
-    console.log(`[WS ROOM] Assigned socket to Group -> Account: [${accountId}], Warehouse: [${warehouseId}]`);
+    logger.debug(`[WS ROOM] Assigned socket to Group -> Account: [${accountId}], Warehouse: [${warehouseId}]`);
   }
 
   function removeSocketFromGroups(ws: WebSocket) {
@@ -2090,7 +2243,7 @@ async function startServer() {
       }
     }
 
-    console.log(`[INVENTORY-BROADCAST] [${event.type}] Dispatched ${messagesToSend.length} messages to ${targetSockets.size} active sockets in Room [${targetAccountId}:${targetWarehouseId}]`);
+    logger.debug(`[INVENTORY-BROADCAST] [${event.type}] Dispatched ${messagesToSend.length} messages to ${targetSockets.size} active sockets in Room [${targetAccountId}:${targetWarehouseId}]`);
   }
 
   // Helper metrics calculated directly from the server-side registry
@@ -2357,7 +2510,23 @@ async function startServer() {
       return { success: false, status: 500, error: "Failed to commit record to central disk database" };
     }
 
-    console.log(`[CENTRAL-DB] [${isCreation ? 'CREATE' : 'UPDATE'}] [${collection}] ID: ${recordId} | Rev: v${confirmedRecord.version} | User: ${effectiveUserId} | Device: ${effectiveDeviceId} | Time: ${serverTime}`);
+    const auditLabel = getAuditRecordLabel(collection, confirmedRecord);
+    const auditDiff = isCreation ? '' : describeRecordDiff(existingRecord, confirmedRecord);
+    recordAuditTrail({
+      timestamp: serverTime,
+      actor: author || employeeId || confirmedRecord.updated_by || 'Operator',
+      actorId: employeeId || effectiveUserId,
+      action: isCreation ? 'CREATE' : 'UPDATE',
+      recordType: collection,
+      recordId,
+      summary: isCreation
+        ? `Created ${collection}${auditLabel ? ` [${auditLabel}]` : ''}`
+        : `Updated ${collection}${auditLabel ? ` [${auditLabel}]` : ''}${auditDiff ? ` — ${auditDiff}` : ''}`,
+      details: actionDesc || (auditDiff ? `Changed: ${auditDiff}` : undefined),
+      deviceId: effectiveDeviceId
+    });
+
+    logger.debug(`[CENTRAL-DB] [${isCreation ? 'CREATE' : 'UPDATE'}] [${collection}] ID: ${recordId} | Rev: v${confirmedRecord.version} | User: ${effectiveUserId} | Device: ${effectiveDeviceId} | Time: ${serverTime}`);
 
     const isInventoryCollection = ['stocks', 'issuances', 'deliveries', 'receiving', 'returns', 'recycling'].includes(collection);
     if (isInventoryCollection) {
@@ -2526,7 +2695,20 @@ async function startServer() {
     const effectiveUserId = String(user_id || (employeeId ? `USR-${employeeId}` : (author ? `USR-${author}` : 'OPERATOR'))).trim();
     const effectiveDeviceId = String(device_id || 'DEV-CENTRAL').trim();
 
-    console.log(`[CENTRAL-DB] [DELETE] [${collection}] ID: ${recordId} | User: ${effectiveUserId} | Device: ${effectiveDeviceId} | Time: ${serverTime}`);
+    const deletedLabel = existingRecord ? getAuditRecordLabel(collection, existingRecord) : recordId;
+    recordAuditTrail({
+      timestamp: serverTime,
+      actor: author || employeeId || 'Operator',
+      actorId: employeeId || effectiveUserId,
+      action: 'DELETE',
+      recordType: collection,
+      recordId,
+      summary: `Deleted ${collection}${deletedLabel ? ` [${deletedLabel}]` : ''}`,
+      details: actionDesc || undefined,
+      deviceId: effectiveDeviceId
+    });
+
+    logger.debug(`[CENTRAL-DB] [DELETE] [${collection}] ID: ${recordId} | User: ${effectiveUserId} | Device: ${effectiveDeviceId} | Time: ${serverTime}`);
 
     const isInventoryCollection = ['stocks', 'issuances', 'deliveries', 'receiving', 'returns', 'recycling'].includes(collection);
     if (isInventoryCollection) {
@@ -2657,7 +2839,7 @@ async function startServer() {
     // Generate unique connection_id for this socket
     const connection_id = `conn_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
     socketToConnectionId.set(ws, connection_id);
-    console.log(`[WS Connection] New client connected (${connection_id}) on server instance: ${SERVER_INSTANCE_ID}`);
+    logger.debug(`[WS Connection] New client connected (${connection_id}) on server instance: ${SERVER_INSTANCE_ID}`);
 
     const ip = (req.headers['x-forwarded-for'] as string) || req.socket?.remoteAddress || '127.0.0.1';
     const userAgent = req.headers['user-agent'] || '';
@@ -3236,7 +3418,7 @@ async function startServer() {
               device_id: conn?.device_id || 'TERMINAL',
               created_at: serverTime,
               reset_version: systemResetVersion
-            };
+            } as StockMovement;
 
             if (!state.stockMovements) state.stockMovements = [];
             state.stockMovements.unshift(movementRecord);
@@ -3300,7 +3482,7 @@ async function startServer() {
               device_id: conn?.device_id || 'TERMINAL',
               created_at: serverTime,
               reset_version: systemResetVersion
-            };
+            } as unknown as StockMovement;
 
             if (!state.stockMovements) state.stockMovements = [];
             state.stockMovements.unshift(movementRecord);
@@ -3370,13 +3552,25 @@ async function startServer() {
               device_id: conn?.device_id || 'TERMINAL',
               created_at: serverTime,
               reset_version: systemResetVersion
-            };
+            } as unknown as StockMovement;
 
             if (!state.stockMovements) state.stockMovements = [];
             state.stockMovements.unshift(movementRecord);
             stateRevision++;
 
             commitDatabase();
+
+            recordAuditTrail({
+              timestamp: serverTime,
+              actor: conn?.username || 'Operator',
+              actorId: conn?.employeeId || conn?.user_id || 'OPERATOR',
+              action: 'STOCK_MOVEMENT',
+              recordType: 'stockMovements',
+              recordId: movementId,
+              summary: `${operationType || 'PICK_PACK_SHIP'} for order ${orderId}`,
+              details: notes || undefined,
+              deviceId: conn?.device_id || conn?.deviceId
+            });
 
             broadcastInventoryEvent({
               type: "PICK_PACK_SHIP",
@@ -3577,6 +3771,15 @@ async function startServer() {
                   state.operationalRoles = cleaned;
                   stateRevision++;
                   commitDatabase();
+                  recordAuditTrail({
+                    actor: conn?.username || payload.author || 'Admin',
+                    actorId: conn?.employeeId || payload.employeeId || 'ADMIN',
+                    action: 'UPDATE',
+                    recordType: 'operationalRoles',
+                    recordId: 'operationalRoles',
+                    summary: `Updated operational roles (${cleaned.length} roles)`,
+                    deviceId: reqDevId
+                  });
                   broadcast({
                     type: "roles_updated",
                     roles: state.operationalRoles,
@@ -3600,6 +3803,15 @@ async function startServer() {
                   state.receivingCategories = cleaned;
                   stateRevision++;
                   commitDatabase();
+                  recordAuditTrail({
+                    actor: conn?.username || payload.author || 'Admin',
+                    actorId: conn?.employeeId || payload.employeeId || 'ADMIN',
+                    action: 'UPDATE',
+                    recordType: 'receivingCategories',
+                    recordId: 'receivingCategories',
+                    summary: `Updated receiving categories (${cleaned.length} categories)`,
+                    deviceId: reqDevId
+                  });
                   broadcast({
                     type: "categories_updated",
                     categories: state.receivingCategories,
@@ -3621,6 +3833,15 @@ async function startServer() {
                 state.fifoColorsByMonth = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...payload.data };
                 stateRevision++;
                 commitDatabase();
+                recordAuditTrail({
+                  actor: conn?.username || payload.author || 'Admin',
+                  actorId: conn?.employeeId || payload.employeeId || 'ADMIN',
+                  action: 'UPDATE',
+                  recordType: 'fifoColorsByMonth',
+                  recordId: 'fifoColorsByMonth',
+                  summary: 'Updated monthly FIFO color calendar',
+                  deviceId: reqDevId
+                });
                 broadcast({
                   type: "fifo_colors_updated",
                   fifoColorsByMonth: state.fifoColorsByMonth,
@@ -3716,7 +3937,18 @@ async function startServer() {
               stateRevision++;
               commitDatabase();
 
-              console.log(`[CENTRAL-DB] [WS-SYNC-COLLECTION] Collection: ${col} | Items: ${items.length} | Modified: ${modifiedCount} | User: ${effectiveUserId} | Device: ${effectiveDevId}`);
+              recordAuditTrail({
+                timestamp: serverTime,
+                actor: effectiveAuthor,
+                actorId: effectiveEmpId || effectiveUserId,
+                action: 'SYNC',
+                recordType: col,
+                recordId: `${modifiedCount} records`,
+                summary: `Synced ${col} (${modifiedCount} item(s) modified)`,
+                deviceId: effectiveDevId
+              });
+
+              logger.debug(`[CENTRAL-DB] [WS-SYNC-COLLECTION] Collection: ${col} | Items: ${items.length} | Modified: ${modifiedCount} | User: ${effectiveUserId} | Device: ${effectiveDevId}`);
 
               if (['stocks', 'issuances', 'deliveries', 'receiving', 'returns', 'recycling'].includes(col)) {
                 broadcastInventoryEvent({
@@ -3843,7 +4075,7 @@ async function startServer() {
 
             if (batchAbortedRevoked) break;
 
-            console.log(`[CENTRAL-DB] [WS-BATCH-MUTATIONS] Processed ${processed}/${mutations.length} mutations | User: ${conn?.username || 'Operator'} | Device: ${reqDevId || 'Terminal'}`);
+            logger.debug(`[CENTRAL-DB] [WS-BATCH-MUTATIONS] Processed ${processed}/${mutations.length} mutations | User: ${conn?.username || 'Operator'} | Device: ${reqDevId || 'Terminal'}`);
 
             ws.send(JSON.stringify({
               type: "BATCH_SYNC_CONFIRMED",
@@ -3991,7 +4223,7 @@ async function startServer() {
             }
             const { pinHash, pinSalt } = hashPinScrypt(cleanPin);
 
-            const userToStore: ServerUser = {
+            const userToStore: RegisteredAccount = {
               id: newUser.id || `USR-${cleanEmpId}`,
               employeeId: cleanEmpId,
               username: cleanUsername,
@@ -4056,7 +4288,7 @@ async function startServer() {
 
             const existing = state.registeredUsers[existingIdx];
             const isSuper = cleanEmpId === 'JPMP-002';
-            const mergedUser: ServerUser = {
+            const mergedUser: RegisteredAccount = {
               ...existing,
               ...updated,
               employeeId: isSuper ? 'JPMP-002' : cleanEmpId,
@@ -4227,8 +4459,8 @@ async function startServer() {
                     up.supplierOrDept = cleanNew;
                     ch = true;
                   }
-                  if ((r.category || '').trim().toUpperCase() === cleanOld) {
-                    up.category = cleanNew;
+                  if (((r as any).category || '').trim().toUpperCase() === cleanOld) {
+                    (up as any).category = cleanNew;
                     ch = true;
                   }
                   if (ch) {
@@ -4365,7 +4597,7 @@ async function startServer() {
             const conn = connectionRegistry.get(connId);
             if (rejectIfDeviceRevokedWs(payload, conn).revoked) break;
             const { stationId, installId, username, employeeId, platform, timestamp } = payload;
-            console.log(`[CENTRAL-DB] Client installed: Station ${stationId} by ${username} (${employeeId}) on ${platform}`);
+            logger.info(`[CENTRAL-DB] Client installed: Station ${stationId} by ${username} (${employeeId}) on ${platform}`);
             broadcast({
               type: "client_installed_broadcast",
               stationId: stationId || "STATION",
@@ -4485,36 +4717,6 @@ async function startServer() {
     });
   });
 
-  const DEFAULT_GITHUB_REPO = "Gadiel0428/Aldrin-Banawa";
-
-  function compareServerSemver(a: string, b: string): number {
-    const cleanA = String(a || "").replace(/^v/i, "").trim();
-    const cleanB = String(b || "").replace(/^v/i, "").trim();
-    if (!cleanA && !cleanB) return 0;
-    if (!cleanA) return -1;
-    if (!cleanB) return 1;
-    const pa = cleanA.split(/[.-]/).map((p) => (/^\d+$/.test(p) ? parseInt(p, 10) : 0));
-    const pb = cleanB.split(/[.-]/).map((p) => (/^\d+$/.test(p) ? parseInt(p, 10) : 0));
-    const len = Math.max(pa.length, pb.length);
-    for (let i = 0; i < len; i++) {
-      const diff = (pa[i] || 0) - (pb[i] || 0);
-      if (diff !== 0) return diff > 0 ? 1 : -1;
-    }
-    return 0;
-  }
-
-  function maxSemverVersion(...versions: Array<string | null | undefined>): string {
-    let best = "";
-    for (const v of versions) {
-      const clean = String(v || "").replace(/^v/i, "").trim();
-      if (!clean) continue;
-      if (!best || compareServerSemver(clean, best) > 0) {
-        best = clean;
-      }
-    }
-    return best;
-  }
-
   // In-memory cache for latest GitHub release version (e.g. "v1.0.117" -> "1.0.117")
   let cachedGitHubVersion: string | null = null;
   let lastGitHubFetchTimestamp = 0;
@@ -4528,7 +4730,7 @@ async function startServer() {
       const persisted = JSON.parse(fs.readFileSync(RELEASE_PERSIST_FILE, "utf8"));
       if (persisted && persisted.version) {
         cachedGitHubVersion = String(persisted.version).replace(/^v/i, "").trim();
-        console.log(`[RELEASE SYNC] Loaded persisted GitHub release fallback: ${cachedGitHubVersion}`);
+        logger.info(`[RELEASE SYNC] Loaded persisted GitHub release fallback: ${cachedGitHubVersion}`);
       }
     }
   } catch (e) {}
@@ -4578,8 +4780,7 @@ async function startServer() {
       } catch (e) {}
     }
 
-    const rawRepo = process.env.GITHUB_REPO?.trim() || DEFAULT_GITHUB_REPO;
-    const cleanRepo = rawRepo.replace(/^https?:\/\/github\.com\//i, '').replace(/\/+$/, '');
+    const cleanRepo = normalizeGitHubRepo(serverConfig.githubRepo);
     const now = Date.now();
 
     // Return cached value if still fresh within TTL (unless forceRefresh requested)
@@ -4594,7 +4795,7 @@ async function startServer() {
 
     isFetchingGitHubRelease = true;
     try {
-      const token = process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() || undefined;
+      const token = serverConfig.githubToken;
       const apiUrl = `https://api.github.com/repos/${cleanRepo}/releases/latest`;
       let resolvedTag = "";
 
@@ -4638,7 +4839,7 @@ async function startServer() {
             updatedAt: new Date().toISOString()
           }, null, 2), "utf8");
         } catch (wErr) {}
-        console.log(`[GITHUB RELEASE SYNC] Authoritative release tag resolved from GitHub (${cleanRepo}): ${resolvedTag} -> version ${parsed}`);
+        logger.info(`[GITHUB RELEASE SYNC] Authoritative release tag resolved from GitHub (${cleanRepo}): ${resolvedTag} -> version ${parsed}`);
       }
     } catch (err: any) {
       console.warn(`[GITHUB RELEASE SYNC] Request to GitHub Releases API failed:`, err?.message || err);
@@ -4661,13 +4862,16 @@ async function startServer() {
       cachedGitHubVersion = newVersion;
       lastGitHubFetchTimestamp = Date.now();
       if (repository && typeof repository === "string") {
-        process.env.GITHUB_REPO = repository;
+        const cleanRepoUpdate = normalizeGitHubRepo(repository);
+        if (cleanRepoUpdate) {
+          serverConfig.githubRepo = cleanRepoUpdate;
+        }
       }
 
       const releaseRecord = {
         version: newVersion,
         tag: tag || `v${newVersion}`,
-        repository: repository || process.env.GITHUB_REPO || DEFAULT_GITHUB_REPO,
+        repository: repository || serverConfig.githubRepo,
         releaseUrl: releaseUrl || "",
         buildId: buildId || Date.now(),
         updatedAt: new Date().toISOString()
@@ -4677,41 +4881,12 @@ async function startServer() {
         fs.writeFileSync(RELEASE_PERSIST_FILE, JSON.stringify(releaseRecord, null, 2), "utf8");
       } catch (err) {}
 
-      console.log(`[RELEASE SYNC] Received authoritative release update from GitHub Actions: version ${newVersion} (tag: ${tag || newVersion})`);
+      logger.info(`[RELEASE SYNC] Received authoritative release update from GitHub Actions: version ${newVersion} (tag: ${tag || newVersion})`);
       return res.json({ success: true, activeVersion: newVersion, release: releaseRecord });
     } catch (e: any) {
       return res.status(500).json({ error: e.message });
     }
   });
-
-  function resolveServerBundleVersion(): { fileContent: any; bundleVersion: string } {
-    const possiblePaths = [
-      path.join(process.cwd(), "dist", "build-info.json"),
-      path.join(process.cwd(), "public", "build-info.json"),
-      path.join(process.cwd(), "build-info.json"),
-    ];
-
-    let fileContent: any = null;
-    for (const p of possiblePaths) {
-      if (fs.existsSync(p)) {
-        try {
-          fileContent = JSON.parse(fs.readFileSync(p, "utf8"));
-          if (fileContent) break;
-        } catch (e) {}
-      }
-    }
-
-    let pkgVersion = "";
-    try {
-      const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
-      if (pkg.version) pkgVersion = String(pkg.version).replace(/^v/i, "").trim();
-    } catch (e) {}
-
-    const fileVersion = fileContent?.version ? String(fileContent.version).replace(/^v/i, "").trim() : "";
-    const bundleVersion = maxSemverVersion(fileVersion, pkgVersion);
-
-    return { fileContent, bundleVersion };
-  }
 
   // REST API: Build Info for Live Application Updates
   app.get(["/api/build-info", "/build-info.json"], async (req, res) => {
@@ -4753,8 +4928,7 @@ async function startServer() {
     const { bundleVersion } = resolveServerBundleVersion();
     const targetVer = await getLatestGitHubReleaseVersion(bundleVersion);
     const cleanVer = targetVer || bundleVersion || "1.0.94";
-    const rawRepo = process.env.GITHUB_REPO?.trim() || DEFAULT_GITHUB_REPO;
-    const cleanRepo = rawRepo.replace(/^https?:\/\/github\.com\//i, "").replace(/\/+$/, "");
+    const cleanRepo = normalizeGitHubRepo(serverConfig.githubRepo);
     const assetName = `JUWEI.WMS.Desktop.System.Setup.${cleanVer}.exe`;
     const directDownloadUrl = `https://github.com/${cleanRepo}/releases/download/v${cleanVer}/${assetName}`;
     return res.redirect(302, directDownloadUrl);
@@ -4878,6 +5052,15 @@ async function startServer() {
             state.operationalRoles = cleaned;
             stateRevision++;
             commitDatabase();
+            recordAuditTrail({
+              actor: auth.account?.username || author || 'Admin',
+              actorId: auth.employeeId || employeeId || 'ADMIN',
+              action: 'UPDATE',
+              recordType: 'operationalRoles',
+              recordId: 'operationalRoles',
+              summary: `Updated operational roles (${cleaned.length} roles)`,
+              deviceId: reqDevId
+            });
             broadcast({
               type: "roles_updated",
               roles: state.operationalRoles,
@@ -4901,6 +5084,15 @@ async function startServer() {
             state.receivingCategories = cleaned;
             stateRevision++;
             commitDatabase();
+            recordAuditTrail({
+              actor: auth.account?.username || author || 'Admin',
+              actorId: auth.employeeId || employeeId || 'ADMIN',
+              action: 'UPDATE',
+              recordType: 'receivingCategories',
+              recordId: 'receivingCategories',
+              summary: `Updated receiving categories (${cleaned.length} categories)`,
+              deviceId: reqDevId
+            });
             broadcast({
               type: "categories_updated",
               categories: state.receivingCategories,
@@ -4922,6 +5114,15 @@ async function startServer() {
           state.fifoColorsByMonth = { ...DEFAULT_FIFO_COLORS_BY_MONTH, ...data };
           stateRevision++;
           commitDatabase();
+          recordAuditTrail({
+            actor: auth.account?.username || author || 'Admin',
+            actorId: auth.employeeId || employeeId || 'ADMIN',
+            action: 'UPDATE',
+            recordType: 'fifoColorsByMonth',
+            recordId: 'fifoColorsByMonth',
+            summary: 'Updated monthly FIFO color calendar',
+            deviceId: reqDevId
+          });
           broadcast({
             type: "fifo_colors_updated",
             fifoColorsByMonth: state.fifoColorsByMonth,
@@ -5014,7 +5215,18 @@ async function startServer() {
         stateRevision++;
         commitDatabase();
 
-        console.log(`[CENTRAL-DB] [REST-POST-SYNC] Collection: ${collection} | Items received: ${items.length} | Modified: ${modifiedCount} | User: ${effectiveUserId} | Device: ${effectiveDevId}`);
+        recordAuditTrail({
+          timestamp: serverTime,
+          actor: auth.account?.username || effectiveAuthor,
+          actorId: auth.employeeId || employeeId || effectiveUserId,
+          action: 'SYNC',
+          recordType: collection,
+          recordId: `${modifiedCount} records`,
+          summary: `Synced ${collection} (${modifiedCount} item(s) modified)`,
+          deviceId: effectiveDevId
+        });
+
+        logger.debug(`[CENTRAL-DB] [REST-POST-SYNC] Collection: ${collection} | Items received: ${items.length} | Modified: ${modifiedCount} | User: ${effectiveUserId} | Device: ${effectiveDevId}`);
 
         broadcast({
           type: "collection_updated",
@@ -5128,7 +5340,7 @@ async function startServer() {
         }
       }
 
-      console.log(`[CENTRAL-DB] [REST-BATCH-MUTATIONS] Processed ${processed}/${mutList.length} offline mutations from device ${effectiveDevId} | User: ${effectiveUserId}`);
+      logger.debug(`[CENTRAL-DB] [REST-BATCH-MUTATIONS] Processed ${processed}/${mutList.length} offline mutations from device ${effectiveDevId} | User: ${effectiveUserId}`);
 
       return res.json({
         success: true,
@@ -5234,7 +5446,7 @@ async function startServer() {
       : undefined;
     const requestedStatus = String(req.body?.status || "").trim().toUpperCase();
     const finalStatus: "AUTHORIZED" | "PENDING" = requestedStatus === "PENDING" ? "PENDING" : "AUTHORIZED";
-    const deviceRecord: AuthorizedDeviceRecord = {
+    const deviceRecord: AuthorizedDevice = {
       ...(existing || {}),
       deviceId: cleanDeviceId,
       deviceName: cleanDeviceName,
@@ -5253,6 +5465,16 @@ async function startServer() {
 
     authorizedDevicesMap.set(cleanDeviceId, deviceRecord);
     commitDatabase();
+
+    recordAuditTrail({
+      actor: authorId || 'SUPER ADMINISTRATOR',
+      actorId: 'JPMP-002',
+      action: finalStatus === 'PENDING' ? 'DEVICE_PENDING' : 'DEVICE_AUTHORIZED',
+      recordType: 'authorizedDevices',
+      recordId: cleanDeviceId,
+      summary: `${finalStatus === 'PENDING' ? 'Marked device pending' : 'Authorized device'} ${cleanDeviceName} (${cleanDeviceId})`,
+      deviceId: cleanDeviceId
+    });
 
     broadcast({
       type: "DEVICE_AUTHORIZATION_UPDATED",
@@ -5278,7 +5500,7 @@ async function startServer() {
     }
 
     const existing = authorizedDevicesMap.get(cleanDeviceId);
-    const revokedRecord: AuthorizedDeviceRecord = existing
+    const revokedRecord: AuthorizedDevice = existing
       ? { ...existing, status: 'REVOKED' }
       : {
           deviceId: cleanDeviceId,
@@ -5291,6 +5513,16 @@ async function startServer() {
     authorizedDevicesMap.set(cleanDeviceId, revokedRecord);
     commitDatabase();
 
+    recordAuditTrail({
+      actor: req.body?.author || 'SUPER ADMINISTRATOR',
+      actorId: 'JPMP-002',
+      action: 'DEVICE_REVOKED',
+      recordType: 'authorizedDevices',
+      recordId: cleanDeviceId,
+      summary: `Revoked device ${revokedRecord.deviceName} (${cleanDeviceId})`,
+      deviceId: cleanDeviceId
+    });
+
     broadcast({
       type: "DEVICE_REVOKED",
       deviceId: cleanDeviceId,
@@ -5301,23 +5533,22 @@ async function startServer() {
     return res.json({ success: true, message: `Device ${cleanDeviceId} revoked` });
   });
 
-  // REST API: One-time initial random PIN display on fresh install
+  // REST API: One-time initial random PIN display on fresh install (available until first-login PIN change completes)
   app.get("/api/setup/initial-pin", (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     if (rejectIfDeviceRevokedHttp(req, res)) return;
     const superAdmin = state.registeredUsers.find(
       u => (u.employeeId || '').toUpperCase().trim() === 'JPMP-002'
     );
-    if (oneTimeSetupPin) {
-      const revealedPin = oneTimeSetupPin;
-      oneTimeSetupPin = null;
+    if (oneTimeSetupPin && superAdmin?.mustChangePin && !superAdmin?.pinChangedAt) {
       return res.json({
         hasInitialPin: true,
         employeeId: 'JPMP-002',
-        initialPin: revealedPin,
+        initialPin: oneTimeSetupPin,
         mustChangePin: true
       });
     }
+    oneTimeSetupPin = null;
     return res.json({
       hasInitialPin: false,
       initialPin: null,
@@ -5491,6 +5722,17 @@ async function startServer() {
         return res.status(500).json({ error: "CRITICAL: Failed to commit global reset to central disk database." });
       }
 
+      recordAuditTrail({
+        timestamp: systemResetTimestamp,
+        actor: author,
+        actorId: 'JPMP-002',
+        action: 'GLOBAL_RESET',
+        recordType: 'system',
+        recordId: systemResetId,
+        summary: `Global database reset to v${systemResetVersion} (${keepUsers ? 'kept operator accounts' : 'reset all accounts'})`,
+        deviceId: extractDeviceIdFromHttp(req) || undefined
+      });
+
       // 7. Broadcast GLOBAL_RESET to all connected clients
       broadcast({
         type: "GLOBAL_RESET",
@@ -5571,6 +5813,14 @@ async function startServer() {
       const author = req.body?.author || "SUPER_ADMIN";
       const result = await createDatabaseBackup("MANUAL_ON_DEMAND", author);
       if (result.success) {
+        recordAuditTrail({
+          actor: author,
+          actorId: req.body?.employeeId || 'JPMP-002',
+          action: 'BACKUP_CREATED',
+          recordType: 'system',
+          recordId: result.filename || 'backup',
+          summary: `Created manual database backup '${result.filename}'`
+        });
         return res.json({ 
           success: true, 
           filename: result.filename, 
@@ -5609,6 +5859,14 @@ async function startServer() {
       const result = restoreDatabaseFromBackup(filename, author);
 
       if (result.success) {
+        recordAuditTrail({
+          actor: author,
+          actorId: req.body?.employeeId || 'JPMP-002',
+          action: 'DATABASE_RESTORED',
+          recordType: 'system',
+          recordId: filename,
+          summary: `Restored live database from snapshot '${filename}'`
+        });
         return res.json({
           success: true,
           message: `Live database successfully restored from '${filename}'. All connected workstations updated.`,
@@ -5620,6 +5878,77 @@ async function startServer() {
     } catch (err: any) {
       return res.status(500).json({ error: err?.message || "Internal server error" });
     }
+  });
+
+  // 5. Super Admin Unified Audit Trail Viewer API (filterable by date, user, recordType)
+  app.get("/api/admin/audit-logs", (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    if (rejectIfDeviceRevokedHttp(req, res)) return;
+    if (!isAuthorizedSuperAdmin(req)) {
+      return res.status(403).json({
+        error: "PERMISSION_DENIED: Only Super Administrator is authorized to view the system audit trail."
+      });
+    }
+
+    const dateFrom = String(req.query.dateFrom || "").trim();
+    const dateTo = String(req.query.dateTo || "").trim();
+    const userFilter = String(req.query.user || "").trim().toLowerCase();
+    const recordTypeFilter = String(req.query.recordType || "").trim();
+    const actionFilter = String(req.query.action || "").trim().toUpperCase();
+    const searchQuery = String(req.query.q || "").trim().toLowerCase();
+    const limitParam = parseInt(String(req.query.limit || "1000"), 10);
+    const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, MAX_AUDIT_TRAIL_ENTRIES) : 1000;
+
+    const availableUsersSet = new Set<string>();
+    const availableTypesSet = new Set<string>();
+    const availableActionsSet = new Set<string>();
+
+    for (const entry of auditTrailLogs) {
+      if (entry.actor) availableUsersSet.add(entry.actor);
+      if (entry.recordType) availableTypesSet.add(entry.recordType);
+      if (entry.action) availableActionsSet.add(entry.action);
+    }
+
+    const filtered = auditTrailLogs.filter(entry => {
+      const entryDate = String(entry.timestamp || "").slice(0, 10);
+      if (dateFrom && entryDate && entryDate < dateFrom) return false;
+      if (dateTo && entryDate && entryDate > dateTo) return false;
+      if (userFilter && userFilter !== 'all') {
+        const actorMatch = String(entry.actor || "").toLowerCase().includes(userFilter);
+        const actorIdMatch = String(entry.actorId || "").toLowerCase().includes(userFilter);
+        if (!actorMatch && !actorIdMatch) return false;
+      }
+      if (recordTypeFilter && recordTypeFilter !== 'ALL') {
+        if (entry.recordType !== recordTypeFilter) return false;
+      }
+      if (actionFilter && actionFilter !== 'ALL') {
+        if (entry.action !== actionFilter) return false;
+      }
+      if (searchQuery) {
+        const haystack = [
+          entry.actor,
+          entry.actorId,
+          entry.action,
+          entry.recordType,
+          entry.recordId,
+          entry.summary,
+          entry.details || '',
+          entry.deviceId || ''
+        ].join(' ').toLowerCase();
+        if (!haystack.includes(searchQuery)) return false;
+      }
+      return true;
+    });
+
+    return res.json({
+      success: true,
+      total: auditTrailLogs.length,
+      filteredCount: filtered.length,
+      logs: filtered.slice(0, limit),
+      availableUsers: Array.from(availableUsersSet).sort((a, b) => a.localeCompare(b)),
+      availableRecordTypes: Array.from(availableTypesSet).sort((a, b) => a.localeCompare(b)),
+      availableActions: Array.from(availableActionsSet).sort((a, b) => a.localeCompare(b))
+    });
   });
 
   // 4. Download backup snapshot file
@@ -5685,7 +6014,7 @@ async function startServer() {
       const inputPhone = rawInput.replace(/\D/g, '');
 
       // Check central in-memory database using timing-safe scrypt / legacy upgrade
-      let matchedUser: ServerUser | undefined;
+      let matchedUser: RegisteredAccount | undefined;
       let upgradedLegacyPin = false;
       for (const u of state.registeredUsers) {
         if (u.status === 'INACTIVE') continue;
@@ -5738,7 +6067,7 @@ async function startServer() {
 
         commitDatabase();
         if (upgradedLegacyPin) {
-          console.log(`[SECURITY] Upgraded legacy plain-text PIN to scrypt hash for operator ${matchedUser.employeeId}.`);
+          logger.info(`[SECURITY] Upgraded legacy plain-text PIN to scrypt hash for operator ${matchedUser.employeeId}.`);
         }
 
         const safeUser = sanitizeUserForClient(matchedUser);
@@ -5824,6 +6153,9 @@ async function startServer() {
       target.isPinCompromised = false;
       target.pinChangedAt = new Date().toISOString();
       target.pinChangedBy = requesterId;
+      if (cleanEmpId === 'JPMP-002') {
+        oneTimeSetupPin = null;
+      }
       target.version = (target.version || 1) + 1;
       target.updated_at = new Date().toISOString();
       target.reset_version = systemResetVersion;
@@ -5845,6 +6177,17 @@ async function startServer() {
         previousWasCompromised,
         req.ip
       );
+
+      recordAuditTrail({
+        actor: author || (isSuper ? 'ALDRIN BANAWA' : target.username),
+        actorId: requesterId,
+        action: actionType,
+        recordType: 'registeredUsers',
+        recordId: cleanEmpId,
+        summary: `${actionType} for ${target.username} (${cleanEmpId})`,
+        details: reason || undefined,
+        deviceId: extractDeviceIdFromHttp(req) || undefined
+      });
 
       const safeTarget = sanitizeUserForClient(target);
 
@@ -5920,7 +6263,7 @@ async function startServer() {
 
       const { pinHash, pinSalt } = hashPinScrypt(cleanPin);
 
-      const newUser: ServerUser = {
+      const newUser: RegisteredAccount = {
         id: `USR-${cleanEmpId}`,
         employeeId: cleanEmpId,
         username: cleanUsername,
@@ -5945,6 +6288,17 @@ async function startServer() {
       if (!commitOk) {
         return res.status(500).json({ error: "Failed to commit new account to central database" });
       }
+
+      const authCtx = resolveRequestAuthContext(req);
+      recordAuditTrail({
+        actor: authCtx.account?.username || registeredBy || 'Super Administrator',
+        actorId: authCtx.employeeId || 'JPMP-002',
+        action: 'CREATE',
+        recordType: 'registeredUsers',
+        recordId: cleanEmpId,
+        summary: `Registered account ${cleanUsername} (${cleanEmpId}) — Role: ${newUser.role}, Permission: ${newUser.permission}`,
+        deviceId: authCtx.deviceId || undefined
+      });
 
       const safeUser = sanitizeUserForClient(newUser);
 
@@ -6012,7 +6366,7 @@ async function startServer() {
         }
       }
 
-      const mergedUser: ServerUser = {
+      const mergedUser: RegisteredAccount = {
         ...existing,
         ...updatedUser,
         employeeId: isSuper ? 'JPMP-002' : cleanNewId,
@@ -6040,6 +6394,17 @@ async function startServer() {
       if (!commitOk) {
         return res.status(500).json({ error: "Failed to persist account update to central database" });
       }
+
+      const accountDiff = describeRecordDiff(existing, mergedUser);
+      recordAuditTrail({
+        actor: auth.account?.username || req.body.author || 'Admin',
+        actorId: auth.employeeId || 'ADMIN',
+        action: 'UPDATE',
+        recordType: 'registeredUsers',
+        recordId: mergedUser.employeeId,
+        summary: `Updated account ${mergedUser.username} (${mergedUser.employeeId})${accountDiff ? ` — ${accountDiff}` : ''}`,
+        deviceId: auth.deviceId || undefined
+      });
 
       const safeUser = sanitizeUserForClient(mergedUser);
 
@@ -6081,6 +6446,7 @@ async function startServer() {
         return res.status(403).json({ error: "PROTECTED_ACCOUNT: Super Administrator JPMP-002 cannot be deleted." });
       }
 
+      const deletedAcc = state.registeredUsers.find(u => u.employeeId.toUpperCase().trim() === cleanId);
       markUserTombstone(cleanId);
       state.registeredUsers = state.registeredUsers.filter(u => u.employeeId.toUpperCase().trim() !== cleanId);
       stateRevision++;
@@ -6089,6 +6455,16 @@ async function startServer() {
       if (!commitOk) {
         return res.status(500).json({ error: "Failed to commit account deletion to central database" });
       }
+
+      recordAuditTrail({
+        actor: auth.account?.username || req.body?.author || 'Admin',
+        actorId: auth.employeeId || 'ADMIN',
+        action: 'DELETE',
+        recordType: 'registeredUsers',
+        recordId: cleanId,
+        summary: `Deleted account ${deletedAcc?.username || cleanId} (${cleanId})`,
+        deviceId: auth.deviceId || undefined
+      });
 
       broadcast({
         type: "account_deleted",
@@ -6137,6 +6513,17 @@ async function startServer() {
       if (!commitOk) {
         return res.status(500).json({ error: "Failed to commit accounts purge to central database" });
       }
+
+      const authCtx = resolveRequestAuthContext(req);
+      recordAuditTrail({
+        actor: authCtx.account?.username || req.body?.author || 'Super Administrator',
+        actorId: authCtx.employeeId || 'JPMP-002',
+        action: 'PURGE',
+        recordType: 'registeredUsers',
+        recordId: 'ALL_NON_ADMIN',
+        summary: 'Cleared all operator accounts except Super Administrator (JPMP-002)',
+        deviceId: authCtx.deviceId || undefined
+      });
 
       const safeAccounts = state.registeredUsers.map(sanitizeUserForClient);
 
@@ -6237,6 +6624,16 @@ async function startServer() {
         stateRevision++;
         commitDatabase();
 
+        recordAuditTrail({
+          actor: auth.account?.username || req.body?.author || 'Admin',
+          actorId: auth.employeeId || 'ADMIN',
+          action: 'UPDATE',
+          recordType: 'operationalRoles',
+          recordId: 'operationalRoles',
+          summary: `Updated operational roles (${action || 'replace'}${role ? `: ${role}` : oldRole ? `: ${oldRole} -> ${newRole}` : ''})`,
+          deviceId: auth.deviceId || undefined
+        });
+
         broadcast({
           type: "roles_updated",
           roles: state.operationalRoles,
@@ -6320,8 +6717,8 @@ async function startServer() {
                 up.supplierOrDept = cleanNew;
                 ch = true;
               }
-              if ((r.category || '').trim().toUpperCase() === cleanOld) {
-                up.category = cleanNew;
+              if (((r as any).category || '').trim().toUpperCase() === cleanOld) {
+                (up as any).category = cleanNew;
                 ch = true;
               }
               if (ch) {
@@ -6352,7 +6749,7 @@ async function startServer() {
         const clean = String(category).trim().toUpperCase();
         if (clean) {
           // Block deleting if any existing record still uses it
-          const recCount = state.receiving.filter(r => (r.supplierOrDept || '').trim().toUpperCase() === clean || (r.category || '').trim().toUpperCase() === clean).length;
+          const recCount = state.receiving.filter(r => (r.supplierOrDept || '').trim().toUpperCase() === clean || ((r as any).category || '').trim().toUpperCase() === clean).length;
           const retCount = state.returns.filter(ret => (ret.category || '').trim().toUpperCase() === clean).length;
           const stockCount = state.stocks.filter(s => ((s as any).category || '').trim().toUpperCase() === clean).length;
           const inUseCount = recCount + retCount + stockCount;
@@ -6385,6 +6782,16 @@ async function startServer() {
       if (modified || recModified || retModified || stocksModified) {
         stateRevision++;
         commitDatabase();
+
+        recordAuditTrail({
+          actor: auth.account?.username || req.body?.author || 'Admin',
+          actorId: auth.employeeId || 'ADMIN',
+          action: 'UPDATE',
+          recordType: 'receivingCategories',
+          recordId: 'receivingCategories',
+          summary: `Updated receiving categories (${action || 'replace'}${category ? `: ${category}` : oldCategory || oldCat ? `: ${oldCategory || oldCat} -> ${newCategory || newCat}` : ''})`,
+          deviceId: auth.deviceId || undefined
+        });
 
         broadcast({
           type: "categories_updated",
@@ -6486,6 +6893,18 @@ async function startServer() {
       if (modified) {
         stateRevision++;
         commitDatabase();
+
+        recordAuditTrail({
+          actor: auth.account?.username || req.body?.author || 'Super Administrator',
+          actorId: auth.employeeId || 'JPMP-002',
+          action: 'UPDATE',
+          recordType: 'fifoColorsByMonth',
+          recordId: month ? `month-${month}` : 'fifoColorsByMonth',
+          summary: month && color?.name
+            ? `Updated FIFO color for month ${month} to ${color.name}`
+            : `Updated FIFO color calendar (${action || 'batch'})`,
+          deviceId: auth.deviceId || undefined
+        });
 
         broadcast({
           type: "fifo_colors_updated",
@@ -6680,7 +7099,7 @@ async function startServer() {
 
       // Check Idempotency Key
       if (idempotencyKey && state.stockMovements) {
-        const existing = state.stockMovements.find(
+        const existing: any = state.stockMovements.find(
           (m: any) => m.idempotency_key === idempotencyKey || m.idempotencyKey === idempotencyKey
         );
         if (existing) {
@@ -6777,6 +7196,18 @@ async function startServer() {
         return res.status(500).json({ error: "Failed to commit stock movement to central database" });
       }
 
+      recordAuditTrail({
+        timestamp: serverTime,
+        actor: auth.account?.username || userName || 'Operator',
+        actorId: auth.employeeId || userId || 'OPERATOR',
+        action: 'STOCK_MOVEMENT',
+        recordType: 'stockMovements',
+        recordId: movementId,
+        summary: `${type || 'ADJUSTMENT'} ${stockItem.partCode || productId} (${prevQty} -> ${newQty}, delta ${finalDelta >= 0 ? `+${finalDelta}` : finalDelta})`,
+        details: notes || (referenceNumber ? `Ref: ${referenceNumber}` : undefined),
+        deviceId: reqDevId || deviceId
+      });
+
       // BROADCAST REAL-TIME MOVEMENT & UPDATED STOCKS STRICTLY TO MATCHING ROOM
       let movementEventType = "INVENTORY_UPDATE";
       if (['TRANSFER_IN', 'TRANSFER_OUT', 'TRANSFER', 'LOCATION_TRANSFER'].includes(type)) {
@@ -6858,7 +7289,7 @@ async function startServer() {
   });
 
   // Vite middleware in dev or Static assets in prod
-  if (process.env.NODE_ENV !== "production") {
+  if (!serverConfig.isProduction) {
     try {
       const { createServer: createViteServer } = await import("vite");
       const vite = await createViteServer({
@@ -6889,7 +7320,7 @@ async function startServer() {
   function handleGracefulShutdown(signal: string) {
     if (isShuttingDown) return;
     isShuttingDown = true;
-    console.log(`[SERVER SHUTDOWN] Received ${signal}. Executing graceful SQLite database persistence and close...`);
+    logger.info(`[SERVER SHUTDOWN] Received ${signal}. Executing graceful SQLite database persistence and close...`);
     try {
       commitDatabase();
     } catch (e) {
@@ -6907,9 +7338,9 @@ async function startServer() {
   process.on("SIGTERM", () => handleGracefulShutdown("SIGTERM"));
 
   server.listen(PORT, "0.0.0.0", () => {
-    console.log(`JUWEI WAREHOUSE MANAGEMENT SYSTEM Central Real-time Server listening on http://0.0.0.0:${PORT}`);
-    console.log(`[SERVER STARTUP] Instance ID: ${SERVER_INSTANCE_ID} | Boot Time: ${SERVER_BOOT_TIME} | PID: ${process.pid}`);
-    if (!process.env.JUWEI_DATA_DIR) {
+    logger.info(`JUWEI WAREHOUSE MANAGEMENT SYSTEM Central Real-time Server listening on http://0.0.0.0:${PORT}`);
+    logger.info(`[SERVER STARTUP] Instance ID: ${SERVER_INSTANCE_ID} | Boot Time: ${SERVER_BOOT_TIME} | PID: ${process.pid}`);
+    if (!configuredDataDir) {
       console.warn(`[SERVER WARNING] JUWEI_DATA_DIR is not set. Database file (${DATA_FILE}) is stored on ephemeral local disk and won't be shared across multiple server instances.`);
     }
 

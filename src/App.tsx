@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   LayoutDashboard, 
   ArrowLeftRight, 
@@ -41,7 +41,8 @@ import {
   Smartphone,
   Activity,
   AlertTriangle,
-  Ban
+  Ban,
+  FileClock
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -91,7 +92,8 @@ import {
   QueuedMutation,
   SyncConflictItem,
   FifoColorsMap,
-  FifoMonthColor
+  FifoMonthColor,
+  ChatMessage
 } from './types';
 import { generateAuthoritativeId } from './lib/idGenerator';
 
@@ -110,10 +112,10 @@ import DeliveryModule from './components/DeliveryModule';
 import EnvironmentalModule from './components/EnvironmentalModule';
 import RegisteredAccountsModule, { DEFAULT_OPERATIONAL_ROLES } from './components/RegisteredAccountsModule';
 import MasterRegistryModule, { DEFAULT_MASTER_REGISTRIES } from './components/MasterRegistryModule';
+import AuditViewerModule from './components/AuditViewerModule';
 import VersionUpdateBanner from './components/VersionUpdateBanner';
 
 import {
-  DEFAULT_PRODUCTION_SERVER_HOST,
   getCentralServerUrl,
   getCentralServerHost,
   getApiBaseUrl,
@@ -125,6 +127,8 @@ import {
 } from './config/serverConfig';
 import StartupDiagnosticsModal from './components/StartupDiagnosticsModal';
 import { showPrintToast } from './utils/printDocument';
+import { computeStockAlerts } from './utils/stockAlerts';
+import logger from './lib/logger';
 
 // Isolated real-time clock component to prevent full application re-render cycles every second
 function LiveClock() {
@@ -143,8 +147,6 @@ function LiveClock() {
     </div>
   );
 }
-
-const DEFAULT_ONLINE_CLOUD_HOST = DEFAULT_PRODUCTION_SERVER_HOST;
 
 function getDefaultServerAddress(): string {
   return getCentralServerHost();
@@ -303,9 +305,9 @@ export default function App() {
       const role = localStorage.getItem('juwei_wms_userRole');
       const shouldRestore = stored === 'true' && Boolean(user);
       if (shouldRestore) {
-        console.log(`[AUTH STARTUP] Restoring persistent login session for user: ${user} (${empId || 'NO_ID'}), role: ${role || 'NO_ROLE'}`);
+        logger.debug(`[AUTH STARTUP] Restoring persistent login session for user: ${user} (${empId || 'NO_ID'}), role: ${role || 'NO_ROLE'}`);
       } else {
-        console.log(`[AUTH STARTUP] Landing on login screen (storedLoggedIn=${stored}, storedUser=${user || 'NONE'})`);
+        logger.debug(`[AUTH STARTUP] Landing on login screen (storedLoggedIn=${stored}, storedUser=${user || 'NONE'})`);
       }
       return shouldRestore;
     } catch (e) {
@@ -322,6 +324,9 @@ export default function App() {
   const [showStartupDiagnosticsModal, setShowStartupDiagnosticsModal] = useState<boolean>(false);
   // User Logout Confirmation modal state
   const [showLogoutConfirmModal, setShowLogoutConfirmModal] = useState<boolean>(false);
+  // Signal to open Dashboard Overview unified low-stock & shelf-life alerts popup
+  const [openDashboardAlertsSignal, setOpenDashboardAlertsSignal] = useState<number>(0);
+  const dashboardAlertCount = useMemo(() => computeStockAlerts(stocks).totalCount, [stocks]);
 
   // Persistent Device Identifier across sessions
   const getPersistentDeviceId = (): string => {
@@ -426,7 +431,7 @@ export default function App() {
   const [activePresence, setActivePresence] = useState<ActivePresenceUser[]>([]);
   const [wsPresence, setWsPresence] = useState<ActivePresenceUser[]>([]);
   const [localTabsPresence, setLocalTabsPresence] = useState<ActivePresenceUser[]>([]);
-  const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
   const serverAddress = getCentralServerHost();
@@ -974,7 +979,7 @@ export default function App() {
           if (ver) {
             const cleanVer = String(ver).replace(/^v/i, '').trim();
             if (!cleanVer) return;
-            console.log('[JUWEI WMS] Installed Electron Desktop version:', cleanVer);
+            logger.debug('[JUWEI WMS] Installed Electron Desktop version:', cleanVer);
             installedDesktopVersionRef.current = cleanVer;
             setInstalledDesktopVersion(cleanVer);
             if (isFileOrigin) {
@@ -2570,14 +2575,6 @@ export default function App() {
       });
       lastKnownVersionsRef.current.clear();
 
-      // Purge any legacy Cloud Run or dev server addresses to ensure zero Google/Gmail account login prompt
-      try {
-        const cachedServer = localStorage.getItem('juwei_wms_server_address');
-        if (cachedServer && (cachedServer.includes('.run.app') || cachedServer.includes('ais-dev-') || cachedServer.includes('ais-pre-'))) {
-          localStorage.setItem('juwei_wms_server_address', 'http://192.168.20.214:3000');
-        }
-      } catch (e) {}
-
       // 1. Fetch fresh authoritative state from central server
       const baseUrl = getApiBaseUrl();
       try {
@@ -2693,7 +2690,7 @@ export default function App() {
     try {
       const isInstalled = localStorage.getItem('juwei_wms_installed_flag_v1');
       if (!isInstalled) {
-        console.log('[JUWEI WMS] First-time launch / fresh install detected. Initializing clean station & syncing...');
+        logger.info('[JUWEI WMS] First-time launch / fresh install detected. Initializing clean station & syncing...');
         performFreshInstallAndSync(false);
       }
     } catch (e) {}
@@ -3096,7 +3093,7 @@ export default function App() {
       }
 
       let targetAddr = serverAddress.trim() || getDefaultServerAddress();
-      const cleanHost = sanitizeServerHost(targetAddr) || DEFAULT_ONLINE_CLOUD_HOST;
+      const cleanHost = sanitizeServerHost(targetAddr);
       const isHttps = isSecureServerHost(cleanHost, targetAddr);
       const httpProto = isHttps ? 'https:' : 'http:';
       const baseUrl = getApiBaseUrl();
@@ -3120,7 +3117,7 @@ export default function App() {
             const serverResetVer = Number(json.systemResetVersion) || 0;
             const localResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
             if (serverResetVer > localResetVer) {
-              console.log(`[JUWEI WMS] Manual sync detected hard reset (${serverResetVer} > ${localResetVer})`);
+              logger.info(`[JUWEI WMS] Manual sync detected hard reset (${serverResetVer} > ${localResetVer})`);
               purgeAllLocalOfflineCachesAndQueues(serverResetVer);
               applyAuthoritativeResetState(json.data, json.activeUsers, json.activePresence);
               setConnectionStatus('connected');
@@ -3362,7 +3359,7 @@ export default function App() {
             const serverResetVer = Number(json.systemResetVersion) || 0;
             const localResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
             if (serverResetVer > localResetVer) {
-              console.log(`[JUWEI WMS] Hard reset detected from tryFetchSync (${serverResetVer} > ${localResetVer}). Purging local cache.`);
+              logger.info(`[JUWEI WMS] Hard reset detected from tryFetchSync (${serverResetVer} > ${localResetVer}). Purging local cache.`);
               purgeAllLocalOfflineCachesAndQueues(serverResetVer);
               if (isMounted) {
                 hasConnectedOnce = true;
@@ -3479,7 +3476,7 @@ export default function App() {
                   localStorage.removeItem('juwei_wms_dismissed_version');
                 } catch (e) {}
                 if (updateAvailableRef.current) {
-                  console.log(`[JUWEI WMS UPDATE] App (${comparisonInstalledVer}) is up-to-date with latest (${latestRemoteVer}). Removing banner.`);
+                  logger.debug(`[JUWEI WMS UPDATE] App (${comparisonInstalledVer}) is up-to-date with latest (${latestRemoteVer}). Removing banner.`);
                   updateAvailableRef.current = false;
                   setUpdateAvailable(false);
                   setNewVersionString('');
@@ -3493,7 +3490,7 @@ export default function App() {
                   dismissedVer = (localStorage.getItem('juwei_wms_dismissed_version') || '').replace(/^v/i, '').trim();
                 } catch (e) {}
                 if (!updateAvailableRef.current && dismissedVer !== latestRemoteVer) {
-                  console.log(`[JUWEI WMS UPDATE] Update available: latest ${latestRemoteVer} > running ${comparisonInstalledVer}`);
+                  logger.debug(`[JUWEI WMS UPDATE] Update available: latest ${latestRemoteVer} > running ${comparisonInstalledVer}`);
                   updateAvailableRef.current = true;
                   setUpdateAvailable(true);
                   setNewVersionString(latestRemoteVer);
@@ -3548,7 +3545,7 @@ export default function App() {
 
       const clientAccountId = localStorage.getItem('juwei_wms_account_id') || 'ACC-JUWEI';
       const clientWarehouseId = localStorage.getItem('juwei_wms_warehouse_id') || 'WH-MAIN';
-      console.log(`[JUWEI WMS] Connecting WebSocket with accountId="${clientAccountId}", warehouseId="${clientWarehouseId}"`);
+      logger.debug(`[JUWEI WMS] Connecting WebSocket with accountId="${clientAccountId}", warehouseId="${clientWarehouseId}"`);
       // Strictly connect to Authoritative Central Server WebSocket endpoint
       const socketUrl = getCentralWebSocketUrl(clientAccountId, clientWarehouseId);
 
@@ -3653,12 +3650,12 @@ export default function App() {
               const incoming = Array.isArray(payload.inventory) ? payload.inventory : (Array.isArray(payload.stocks) ? payload.stocks : []);
               setLastSyncedTime(new Date());
               if (payload.serverInstanceId) {
-                console.log(`[JUWEI WMS] FULL_INVENTORY_SYNC serverInstanceId: ${payload.serverInstanceId}`);
+                logger.debug(`[JUWEI WMS] FULL_INVENTORY_SYNC serverInstanceId: ${payload.serverInstanceId}`);
               }
               if (incoming.length > 0 || payload.inventory !== undefined) {
                 const norm = normalizeRecords('stocks', incoming);
                 setStocks(norm);
-                console.log(`[JUWEI WMS] Received FULL_INVENTORY_SYNC (${norm.length} items) for account: ${payload.accountId || 'ALL'}, warehouse: ${payload.warehouseId || 'ALL'}`);
+                logger.debug(`[JUWEI WMS] Received FULL_INVENTORY_SYNC (${norm.length} items) for account: ${payload.accountId || 'ALL'}, warehouse: ${payload.warehouseId || 'ALL'}`);
               }
               break;
             }
@@ -3814,7 +3811,7 @@ export default function App() {
               const localResetVer = Number(localStorage.getItem('juwei_wms_system_reset_version')) || 0;
 
               if (serverResetVer > localResetVer) {
-                console.log(`[JUWEI WMS] Server reset version ${serverResetVer} > local ${localResetVer}. Hard purging local stale data.`);
+                logger.info(`[JUWEI WMS] Server reset version ${serverResetVer} > local ${localResetVer}. Hard purging local stale data.`);
                 purgeAllLocalOfflineCachesAndQueues(serverResetVer);
                 applyAuthoritativeResetState(payload.data, payload.activeUsers, payload.presenceList || payload.activePresence);
               } else {
@@ -3876,7 +3873,7 @@ export default function App() {
             case 'GLOBAL_RESET': {
               const { systemResetVersion: newVer, systemResetId: newId, resetBy: author, data } = payload;
               const resetVerNum = Number(newVer) || Date.now();
-              console.log(`[JUWEI WMS] Received authoritative GLOBAL_RESET (Version: ${resetVerNum}, ID: ${newId}) by ${author}`);
+              logger.info(`[JUWEI WMS] Received authoritative GLOBAL_RESET (Version: ${resetVerNum}, ID: ${newId}) by ${author}`);
               
               purgeAllLocalOfflineCachesAndQueues(resetVerNum);
               applyAuthoritativeResetState(data, payload.activeUsers, payload.activePresence);
@@ -5884,6 +5881,7 @@ export default function App() {
       case 'environmental': return 'Space Utilization Control';
       case 'master-registry': return 'Master Data Register';
       case 'accounts': return 'JPMP Accounts & Authorization Directory';
+      case 'audit': return 'Super Admin Audit Trail';
       default: return 'JUWEI WAREHOUSE MANAGEMENT SYSTEM';
     }
   };
@@ -6473,16 +6471,34 @@ export default function App() {
 
           {/* Navigation Links with Smooth Frosted Highlights */}
           <nav className="p-3 space-y-1 flex-1 overflow-y-auto no-scrollbar" id="nav-list">
-            <button 
-              onClick={() => setView('dashboard')}
-              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all duration-300 cursor-pointer ${
-                view === 'dashboard' 
-                  ? 'bg-indigo-600/95 text-white font-semibold shadow-lg shadow-indigo-600/25 border border-indigo-400/30 backdrop-blur-md' 
-                  : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
-              }`}
-            >
-              <LayoutDashboard className="h-4 w-4 shrink-0" /> Dashboard Overview
-            </button>
+            <div className="relative flex items-center">
+              <button 
+                onClick={() => setView('dashboard')}
+                className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all duration-300 cursor-pointer ${
+                  dashboardAlertCount > 0 ? 'pr-12' : ''
+                } ${
+                  view === 'dashboard' 
+                    ? 'bg-indigo-600/95 text-white font-semibold shadow-lg shadow-indigo-600/25 border border-indigo-400/30 backdrop-blur-md' 
+                    : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
+                }`}
+              >
+                <LayoutDashboard className="h-4 w-4 shrink-0" /> Dashboard Overview
+              </button>
+              {dashboardAlertCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setView('dashboard');
+                    setOpenDashboardAlertsSignal(n => n + 1);
+                  }}
+                  id="nav-dashboard-alerts-badge"
+                  title="View low-stock and shelf-life alerts"
+                  className="absolute right-2.5 px-1.5 py-0.5 rounded-full bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-mono font-extrabold tabular-nums leading-none shadow-xs cursor-pointer transition"
+                >
+                  {dashboardAlertCount}
+                </button>
+              )}
+            </div>
 
             <button 
               onClick={() => setView('receiving')}
@@ -6599,17 +6615,30 @@ export default function App() {
             </button>
 
             {(currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002' || (currentUser || '').toUpperCase().includes('ALDRIN') || (currentRole || '').toUpperCase().includes('SUPER')) && (
-              <button 
-                onClick={() => setView('accounts')}
-                className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all duration-300 cursor-pointer ${
-                  view === 'accounts' 
-                    ? 'bg-indigo-600/95 text-white font-semibold shadow-lg shadow-indigo-600/25 border border-indigo-400/30 backdrop-blur-md' 
-                    : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
-                }`}
-                id="nav-registered-accounts"
-              >
-                <Users className="h-4 w-4 shrink-0" /> JPMP Accounts
-              </button>
+              <>
+                <button 
+                  onClick={() => setView('accounts')}
+                  className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all duration-300 cursor-pointer ${
+                    view === 'accounts' 
+                      ? 'bg-indigo-600/95 text-white font-semibold shadow-lg shadow-indigo-600/25 border border-indigo-400/30 backdrop-blur-md' 
+                      : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
+                  }`}
+                  id="nav-registered-accounts"
+                >
+                  <Users className="h-4 w-4 shrink-0" /> JPMP Accounts
+                </button>
+                <button 
+                  onClick={() => setView('audit')}
+                  className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all duration-300 cursor-pointer ${
+                    view === 'audit' 
+                      ? 'bg-indigo-600/95 text-white font-semibold shadow-lg shadow-indigo-600/25 border border-indigo-400/30 backdrop-blur-md' 
+                      : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
+                  }`}
+                  id="nav-audit-viewer"
+                >
+                  <FileClock className="h-4 w-4 shrink-0" /> Audit Trail
+                </button>
+              </>
             )}
           </nav>
         </div>
@@ -6846,6 +6875,7 @@ export default function App() {
                   isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
                   canEdit={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
                   registries={registries}
+                  openAlertsSignal={openDashboardAlertsSignal}
                 />
               )}
 
@@ -6999,6 +7029,14 @@ export default function App() {
                   currentEmployeeId={currentEmployeeId}
                   isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002'}
                   canEdit={currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS'}
+                />
+              )}
+
+              {view === 'audit' && (currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002' || (currentUser || '').toUpperCase().includes('ALDRIN') || (currentRole || '').toUpperCase().includes('SUPER')) && (
+                <AuditViewerModule
+                  isSuperAdmin={currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002' || (currentUser || '').toUpperCase().includes('ALDRIN') || (currentRole || '').toUpperCase().includes('SUPER')}
+                  currentUser={currentUser}
+                  currentEmployeeId={currentEmployeeId}
                 />
               )}
             </motion.div>

@@ -15,24 +15,7 @@ import {
   FolderOpen
 } from 'lucide-react';
 import { getApiBaseUrl, getAuthHeaders } from '../config/serverConfig';
-
-interface BackupItem {
-  filename: string;
-  sizeBytes: number;
-  sizeFormatted: string;
-  createdAt: string;
-  mtime: number;
-}
-
-interface BackupAuditEntry {
-  id: string;
-  action: 'BACKUP_CREATED' | 'DATABASE_RESTORED' | 'PRUNE';
-  filename: string;
-  author: string;
-  timestamp: string;
-  details?: string;
-  fileSizeBytes?: number;
-}
+import type { BackupAuditEntry, BackupItemRecord } from '../types';
 
 interface ServerBackupsModalProps {
   isOpen: boolean;
@@ -47,7 +30,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
   currentUser = 'ALDRIN BANAWA',
   currentEmployeeId = 'JPMP-002'
 }) => {
-  const [backups, setBackups] = useState<BackupItem[]>([]);
+  const [backups, setBackups] = useState<BackupItemRecord[]>([]);
   const [auditLogs, setAuditLogs] = useState<BackupAuditEntry[]>([]);
   const [backupsDir, setBackupsDir] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -56,7 +39,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
   const [activeTab, setActiveTab] = useState<'files' | 'audit'>('files');
 
   // Restore Confirmation Dialog States
-  const [backupToRestore, setBackupToRestore] = useState<BackupItem | null>(null);
+  const [backupToRestore, setBackupToRestore] = useState<BackupItemRecord | null>(null);
   const [adminPin, setAdminPin] = useState<string>('');
   const [isConfirmChecked, setIsConfirmChecked] = useState<boolean>(false);
   const [isRestoring, setIsRestoring] = useState<boolean>(false);
