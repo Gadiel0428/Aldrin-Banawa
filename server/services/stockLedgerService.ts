@@ -505,7 +505,54 @@ export function ensureMovementsForBusinessRecord(
     return { createdMovements, updatedStocks: [] };
   }
 
-  if (collection === "receiving" && isCreation) {
+  if (collection === "stocks") {
+    const stock = record as MaterialStockItem;
+    const stockId = String(stock.id || (stock as any).record_id || "").trim();
+    const savedQty = roundStockQuantity(Number(stock.quantity) || 0);
+    const derivedBalance = computeDerivedBalanceForStock(ctx, stock);
+    const delta = roundStockQuantity(savedQty - derivedBalance);
+
+    if (delta !== 0) {
+      const outcome = ensureIdempotentMovement(ctx, {
+        productId: stockId,
+        warehouseId: stock.warehouseId || "WH-MAIN",
+        accountId: stock.accountId || "ACC-JUWEI",
+        type: delta > 0 ? "ADJUSTMENT_IN" : "ADJUSTMENT_OUT",
+        quantity: Math.abs(delta),
+        delta,
+        referenceId: stockId,
+        referenceNumber: `STOCK-ADJ-${stockId}`,
+        notes: isCreation
+          ? `Initial stock creation baseline (${savedQty})`
+          : `Stock quantity adjustment (${derivedBalance} -> ${savedQty})`,
+        userId: (stock as any).user_id || null,
+        userName: (stock as any).updated_by || (stock as any).created_by || "Operator",
+        deviceId: (stock as any).device_id || "CENTRAL-SERVER",
+        idempotencyKey: `STOCK-QTY:${stockId}:v${stock.version || 1}:${savedQty}`,
+        preventNegativeStock: false,
+        lotNumber: stock.lotNumber,
+        location: stock.location,
+        createdAt: stock.updated_at || stock.created_at || undefined,
+        allowCreateMissingStock: false,
+        fallbackPartCode: stock.partCode,
+        fallbackDescription: stock.description,
+        fallbackUnit: stock.unit,
+      });
+
+      if (outcome.created && outcome.movement) {
+        createdMovements.push(outcome.movement);
+      }
+      if (outcome.stockItem) {
+        updatedStocksMap.set(outcome.stockItem.id, outcome.stockItem);
+      }
+    }
+
+    // Crucial: Make sure the saved quantity is not overwritten
+    stock.quantity = savedQty;
+    if (record.version !== undefined && record.version !== null) {
+      stock.version = Number(record.version);
+    }
+  } else if (collection === "receiving" && isCreation) {
     const rcv = record as ReceivingRecord;
     const stockMatch = findMatchingStockForBusinessRecord(ctx, {
       stockId: rcv.stockId,

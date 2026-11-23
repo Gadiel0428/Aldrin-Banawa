@@ -32,6 +32,7 @@ import {
   findMovementByIdempotencyKey,
   resolveAndApplyRecordUnit,
   resolveStockItemForMovement,
+  roundStockQuantity,
 } from "./stockLedgerService.ts";
 import {
   broadcast,
@@ -215,8 +216,9 @@ export function executeRecordUpsert(
     backfillAndFlagUnits(ctx);
   }
 
-  if (collection === "stocks") {
-    confirmedRecord.quantity = computeDerivedBalanceForStock(ctx, confirmedRecord);
+  // Preserve saved quantity on stock records; adjustment movements are generated if balance differs
+  if (collection === "stocks" && confirmedRecord.quantity !== undefined) {
+    confirmedRecord.quantity = roundStockQuantity(Number(confirmedRecord.quantity) || 0);
   }
 
   const ledgerOutcome = ensureMovementsForBusinessRecord(
@@ -227,18 +229,47 @@ export function executeRecordUpsert(
     existingRecord
   );
 
+  // Re-affirm saved quantity is not overwritten
+  if (collection === "stocks" && confirmedRecord.quantity !== undefined) {
+    confirmedRecord.quantity = roundStockQuantity(Number(confirmedRecord.quantity) || 0);
+  }
+
   ctx.deletedRecordTombstones.delete(recordId);
   (ctx.state as any)[collection] = currentList;
   ctx.stateRevision++;
 
   const commitOk = commitDatabase(ctx);
   if (!commitOk) {
+    // Revert in-memory modification on commit failure
+    if (existingRecord) {
+      currentList[existingIndex] = existingRecord;
+    } else {
+      const idx = currentList.findIndex(
+        (item: any) =>
+          item && (String(item.id) === recordId || String(item.record_id) === recordId)
+      );
+      if (idx >= 0) currentList.splice(idx, 1);
+    }
+    (ctx.state as any)[collection] = currentList;
+    ctx.stateRevision--;
+
+    const errMsg = "Failed to commit record to central disk database";
+    console.error(`[SYNC] Failed to commit ${collection} id=${recordId}: ${errMsg}`);
+    logger.error(`[SYNC] Failed to commit ${collection} id=${recordId}: ${errMsg}`);
+
     return {
       success: false,
       status: 500,
-      error: "Failed to commit record to central disk database",
+      error: errMsg,
     };
   }
+
+  // Log committed upsert (never logs PINs)
+  const qtyStr =
+    confirmedRecord.quantity !== undefined ? confirmedRecord.quantity : "N/A";
+  const commitLog = `[SYNC] committed ${collection} id=${recordId} quantity=${qtyStr} version=${confirmedRecord.version || 1}`;
+  console.log(commitLog);
+  logger.info(commitLog);
 
   for (const createdMov of ledgerOutcome.createdMovements) {
     const relatedStock =

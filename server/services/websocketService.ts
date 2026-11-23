@@ -59,8 +59,10 @@ import {
 import {
   computeDerivedBalanceForStock,
   deriveAllStockBalances,
+  ensureMovementsForBusinessRecord,
   findMovementByIdempotencyKey,
   resolveStockItemForMovement,
+  roundStockQuantity,
 } from "./stockLedgerService.ts";
 
 export function setupWebSocketServer(server: http.Server, ctx: ServerContext): void {
@@ -1366,7 +1368,10 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
                 };
 
                 if (col === "stocks") {
-                  updatedRec.quantity = computeDerivedBalanceForStock(ctx, updatedRec);
+                  const savedQty = roundStockQuantity(Number(updatedRec.quantity) || 0);
+                  updatedRec.quantity = savedQty;
+                  ensureMovementsForBusinessRecord(ctx, "stocks", updatedRec, false, existing);
+                  updatedRec.quantity = savedQty;
                 }
 
                 if (col === "registeredUsers") {
@@ -1404,7 +1409,10 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
                   reset_version: ctx.systemResetVersion,
                 };
                 if (col === "stocks") {
-                  newRec.quantity = computeDerivedBalanceForStock(ctx, newRec);
+                  const savedQty = roundStockQuantity(Number(newRec.quantity) || 0);
+                  newRec.quantity = savedQty;
+                  ensureMovementsForBusinessRecord(ctx, "stocks", newRec, true);
+                  newRec.quantity = savedQty;
                 }
                 listMap.set(recId, newRec);
                 modifiedCount++;

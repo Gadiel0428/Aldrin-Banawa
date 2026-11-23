@@ -12,14 +12,18 @@ function readSqliteStocks() {
   const dbPath = process.env.JUWEI_DATA_DIR 
     ? path.join(process.env.JUWEI_DATA_DIR, 'central-database.sqlite')
     : 'central-database.sqlite';
+  if (!fs.existsSync(dbPath)) {
+    return [];
+  }
   const db = new DatabaseSync(dbPath, { readOnly: true });
   const rows = db.prepare('SELECT data FROM stocks').all();
   db.close();
   return rows.map(r => JSON.parse(r.data));
 }
 
-const WS_URL = 'ws://localhost:3000/ws';
-const API_URL = 'http://localhost:3000';
+const PORT = process.env.PORT || '3000';
+const WS_URL = process.env.WS_URL || `ws://localhost:${PORT}/ws`;
+const API_URL = process.env.API_URL || `http://localhost:${PORT}`;
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -184,9 +188,17 @@ async function runTest() {
     console.log(` -> Client ${i + 1} (${clients[i].username} on ${clients[i].platform}) received DATA_CREATE broadcast.`);
   }
 
-  // Verify central-database.sqlite on disk
-  const stocksInDb = readSqliteStocks();
-  const foundInDb = stocksInDb.find(s => s.id === testPartId);
+  // Verify central-database.sqlite on disk (poll every 250ms up to 5s before failing)
+  let foundInDb = null;
+  const pollStartStep3 = Date.now();
+  while (Date.now() - pollStartStep3 <= 5000) {
+    try {
+      const stocksInDb = readSqliteStocks();
+      foundInDb = stocksInDb.find(s => s.id === testPartId);
+      if (foundInDb) break;
+    } catch {}
+    await sleep(250);
+  }
   if (!foundInDb) {
     throw new Error('Test record was not saved to central-database.sqlite!');
   }
@@ -221,8 +233,20 @@ async function runTest() {
     console.log(` -> Client ${idx + 1} (${clients[idx].username} on ${clients[idx].platform}) received DATA_UPDATE with quantity = 115.`);
   }
 
-  const stocksUpdated = readSqliteStocks();
-  const foundUpdated = stocksUpdated.find(s => s.id === testPartId);
+  // Poll readSqliteStocks every 250ms for up to 5 seconds before failing
+  let foundUpdated = null;
+  const pollStartStep4 = Date.now();
+  while (Date.now() - pollStartStep4 <= 5000) {
+    try {
+      const stocksUpdated = readSqliteStocks();
+      foundUpdated = stocksUpdated.find(s => s.id === testPartId);
+      if (foundUpdated?.quantity === 115) break;
+    } catch {
+      // Retry on transient file lock
+    }
+    await sleep(250);
+  }
+
   if (foundUpdated?.quantity !== 115) {
     throw new Error(`Central database quantity expected 115, found ${foundUpdated?.quantity}`);
   }
@@ -251,8 +275,18 @@ async function runTest() {
     console.log(` -> Client ${idx + 1} (${clients[idx].username}) received DATA_DELETE for item ${testPartId}.`);
   }
 
-  const stocksDeleted = readSqliteStocks();
-  const foundDeleted = stocksDeleted.find(s => s.id === testPartId);
+  // Poll readSqliteStocks every 250ms for up to 5 seconds before failing
+  let foundDeleted = true;
+  const pollStartStep5 = Date.now();
+  while (Date.now() - pollStartStep5 <= 5000) {
+    try {
+      const stocksDeleted = readSqliteStocks();
+      foundDeleted = Boolean(stocksDeleted.find(s => s.id === testPartId));
+      if (!foundDeleted) break;
+    } catch {}
+    await sleep(250);
+  }
+
   if (foundDeleted) {
     throw new Error('Test record was not deleted from central-database.sqlite!');
   }

@@ -565,7 +565,9 @@ export function mapRecordFromApi(collection: string, raw: Record<string, any>): 
   const updated_at = pickDefined(rec.updated_at, rec.updatedAt);
   const updated_by = pickDefined(rec.updated_by, rec.updatedBy);
 
-  const partCode = pickDefined(rec.partCode, rec.part_code);
+  const partCode = pickDefined(rec.partCode, rec.part_code, rec.itemCode, rec.item_code);
+  const description = pickDefined(rec.description, rec.itemDescription, rec.materialDescription, rec.name);
+  const materialType = pickDefined(rec.type, rec.materialType, rec.material_type);
   const lotNumber = pickDefined(rec.lotNumber, rec.lot_number);
   const receivedDate = pickDefined(rec.receivedDate, rec.received_date);
   const expirationDate = pickDefined(rec.expirationDate, rec.expiration_date);
@@ -598,6 +600,10 @@ export function mapRecordFromApi(collection: string, raw: Record<string, any>): 
   delete rec.userId;
   delete rec.resetVersion;
   delete rec.createdAt;
+  delete rec.itemCode;
+  delete rec.item_code;
+  delete rec.materialType;
+  delete rec.material_type;
   delete rec.createdBy;
   delete rec.updatedAt;
   delete rec.updatedBy;
@@ -635,6 +641,8 @@ export function mapRecordFromApi(collection: string, raw: Record<string, any>): 
   if (updated_by !== undefined) rec.updated_by = updated_by;
 
   if (partCode !== undefined) rec.partCode = partCode;
+  if (description !== undefined && rec.description === undefined) rec.description = description;
+  if (materialType !== undefined && rec.type === undefined) rec.type = materialType;
   if (lotNumber !== undefined) rec.lotNumber = lotNumber;
   if (receivedDate !== undefined) rec.receivedDate = receivedDate;
   if (expirationDate !== undefined) rec.expirationDate = expirationDate;

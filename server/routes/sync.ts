@@ -39,7 +39,9 @@ import {
   backfillAndFlagUnits,
   computeDerivedBalanceForStock,
   deriveAllStockBalances,
+  ensureMovementsForBusinessRecord,
   resolveAndApplyRecordUnit,
+  roundStockQuantity,
 } from "../services/stockLedgerService.ts";
 
 export function registerSyncRoutes(app: Express, ctx: ServerContext): void {
@@ -311,7 +313,10 @@ export function registerSyncRoutes(app: Express, ctx: ServerContext): void {
           };
 
           if (collection === "stocks") {
-            updatedRec.quantity = computeDerivedBalanceForStock(ctx, updatedRec);
+            const savedQty = roundStockQuantity(Number(updatedRec.quantity) || 0);
+            updatedRec.quantity = savedQty;
+            ensureMovementsForBusinessRecord(ctx, "stocks", updatedRec, false, existing);
+            updatedRec.quantity = savedQty;
           }
 
           if (collection === "registeredUsers") {
@@ -347,7 +352,10 @@ export function registerSyncRoutes(app: Express, ctx: ServerContext): void {
             reset_version: ctx.systemResetVersion,
           };
           if (collection === "stocks") {
-            newRec.quantity = computeDerivedBalanceForStock(ctx, newRec);
+            const savedQty = roundStockQuantity(Number(newRec.quantity) || 0);
+            newRec.quantity = savedQty;
+            ensureMovementsForBusinessRecord(ctx, "stocks", newRec, true);
+            newRec.quantity = savedQty;
           }
           listMap.set(recId, newRec);
           modifiedCount++;
