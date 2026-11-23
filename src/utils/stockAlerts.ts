@@ -1,4 +1,6 @@
-import { MaterialStockItem, getCustomerForPart } from '../types';
+import { MasterRegistryItem, MaterialStockItem, getCustomerForPart } from '../types';
+import { resolveMasterDataUnit } from '../../shared/units';
+import { getManilaTodayString } from '../lib/businessDate';
 
 export interface LowStockAlertSku {
   partCode: string;
@@ -6,6 +8,7 @@ export interface LowStockAlertSku {
   type: string;
   location: string;
   unit: string;
+  unitMissing: boolean;
   currentQty: number;
   reorderMin: number;
   shortage: number;
@@ -26,6 +29,7 @@ export interface UnifiedStockAlertItem {
   location: string;
   lotNumber?: string;
   unit: string;
+  unitMissing: boolean;
   customer: string;
   status?: MaterialStockItem['status'];
   quantity?: number;
@@ -44,6 +48,8 @@ export interface StockAlertsSummary {
   lowStockSkus: LowStockAlertSku[];
   nearExpiryItems: ShelfLifeAlertLot[];
   unifiedAlerts: UnifiedStockAlertItem[];
+  missingUnitItems: MaterialStockItem[];
+  missingUnitCount: number;
   totalCount: number;
   lowStockCount: number;
   shelfLifeCount: number;
@@ -62,16 +68,24 @@ function parseIsoDayUtcMs(dateStr: string): number {
 
 export function computeStockAlerts(
   stocks: MaterialStockItem[],
-  referenceDateStr?: string
+  referenceDateStr?: string,
+  registries: MasterRegistryItem[] = []
 ): StockAlertsSummary {
-  const todayStr = referenceDateStr || new Date().toISOString().split('T')[0];
+  const todayStr = referenceDateStr || getManilaTodayString();
   const todayMs = parseIsoDayUtcMs(todayStr);
 
   // 1. Aggregate approved quantities and max defined reorderMin per partCode
   const stockQtyByPart: Record<string, number> = {};
   const reorderMinByPart: Record<string, number> = {};
+  const resolvedUnitById = new Map<string, { unit: string; isMissing: boolean }>();
+  const missingUnitItems: MaterialStockItem[] = [];
 
   for (const item of stocks) {
+    const resolvedUnit = resolveMasterDataUnit(item, registries, stocks);
+    resolvedUnitById.set(item.id, { unit: resolvedUnit.unit, isMissing: resolvedUnit.isMissing });
+    if (resolvedUnit.isMissing) {
+      missingUnitItems.push(item);
+    }
     const qty = Number(item.quantity) || 0;
     if (item.status === 'APPROVED') {
       stockQtyByPart[item.partCode] = (stockQtyByPart[item.partCode] || 0) + qty;
@@ -91,12 +105,14 @@ export function computeStockAlerts(
     if (typeof minThreshold === 'number' && minThreshold > 0) {
       const currentQty = stockQtyByPart[item.partCode] ?? 0;
       if (currentQty <= minThreshold && !lowStockMap[item.partCode]) {
+        const uInfo = resolvedUnitById.get(item.id) || resolveMasterDataUnit(item, registries, stocks);
         lowStockMap[item.partCode] = {
           partCode: item.partCode,
           description: item.description,
           type: item.type,
           location: item.location,
-          unit: item.unit || 'PCS',
+          unit: uInfo.unit,
+          unitMissing: uInfo.isMissing,
           currentQty,
           reorderMin: minThreshold,
           shortage: Math.max(0, minThreshold - currentQty),
@@ -142,6 +158,7 @@ export function computeStockAlerts(
     if (attachLowStock) {
       coveredLowStockParts.add(item.partCode);
     }
+    const uInfo = resolvedUnitById.get(item.id) || resolveMasterDataUnit(item, registries, stocks);
 
     unifiedAlerts.push({
       key: item.id ? `exp-${item.id}` : `exp-${item.partCode}-${item.lotNumber || idx}`,
@@ -149,7 +166,8 @@ export function computeStockAlerts(
       description: item.description,
       location: item.location,
       lotNumber: item.lotNumber,
-      unit: item.unit || 'PCS',
+      unit: uInfo.unit,
+      unitMissing: uInfo.isMissing,
       customer: item.customer || getCustomerForPart(item.partCode, item.description),
       status: item.status,
       quantity: Number(item.quantity) || 0,
@@ -172,6 +190,7 @@ export function computeStockAlerts(
       description: sku.description,
       location: sku.location,
       unit: sku.unit,
+      unitMissing: sku.unitMissing,
       customer: sku.customer,
       isLowStock: true,
       currentQty: sku.currentQty,
@@ -186,6 +205,8 @@ export function computeStockAlerts(
     lowStockSkus,
     nearExpiryItems,
     unifiedAlerts,
+    missingUnitItems,
+    missingUnitCount: missingUnitItems.length,
     totalCount: unifiedAlerts.length,
     lowStockCount: lowStockSkus.length,
     shelfLifeCount: nearExpiryItems.length

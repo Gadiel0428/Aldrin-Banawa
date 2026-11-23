@@ -105,7 +105,7 @@ export const STARTER_BARCODE_PRESETS: MasterRegistryItem[] = [
     name: "PC/ABS CYCOLOY RESIN PELLETS",
     description: "High-impact flame retardant engineering plastic resin pellets for injection molding",
     category: "RESIN/RAW MATERIALS",
-    unit: "KGS",
+    unit: "KG",
     vendorSupplier: "SABIC INNOVATIVE PLASTICS",
     location: "RAW-ZONE-A1",
     presetSource: "EXTERNAL",

@@ -6,6 +6,7 @@
 import { Product, ProductFilter } from '../types/product';
 import { getDeviceId } from './movements';
 import { getApiBaseUrl, getAuthHeaders } from '../config/serverConfig';
+import { normalizeUnitCode, resolveMasterDataUnit } from '../../shared/units';
 
 export async function fetchProducts(filter?: ProductFilter): Promise<Product[]> {
   try {
@@ -32,7 +33,7 @@ export async function fetchProducts(filter?: ProductFilter): Promise<Product[]> 
             sku: r.partNumber || r.sku || r.code || sku,
             name: r.partName || r.name || sku,
             barcode: r.barcode,
-            unit: r.unit || 'PCS',
+            unit: normalizeUnitCode(r.unit),
             cost: Number(r.unitCost || r.cost) || 0,
             price: Number(r.unitPrice || r.price) || 0,
             min_stock: Number(r.minStock || r.min_stock) || 10,
@@ -46,12 +47,13 @@ export async function fetchProducts(filter?: ProductFilter): Promise<Product[]> 
       stocks.forEach((s: any) => {
         const sku = String(s.partCode || s.partNumber || s.sku || s.id || '').toUpperCase().trim();
         if (sku && !productMap.has(sku)) {
+          const resolvedUnit = resolveMasterDataUnit(s, registries, stocks);
           productMap.set(sku, {
             id: String(s.id || s.record_id || sku),
             sku: s.partCode || s.partNumber || s.sku || sku,
             name: s.description || s.partName || s.name || sku,
             barcode: s.barcode,
-            unit: s.unit || 'PCS',
+            unit: resolvedUnit.unit,
             cost: Number(s.unitCost || s.cost) || 0,
             price: Number(s.unitPrice || s.price) || 0,
             min_stock: Number(s.reorderMin || s.minStock || s.min_stock) || 10,
@@ -97,7 +99,7 @@ export async function upsertProduct(input: Partial<Product>): Promise<Product> {
     sku: input.sku || `SKU-${Date.now()}`,
     name: input.name || 'New SKU',
     barcode: input.barcode,
-    unit: input.unit || 'PCS',
+    unit: normalizeUnitCode(input.unit),
     cost: Number(input.cost) || 0,
     price: Number(input.price) || 0,
     min_stock: Number(input.min_stock) || 10,

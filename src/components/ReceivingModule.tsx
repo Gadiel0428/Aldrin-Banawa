@@ -34,12 +34,20 @@ import {
   Pencil,
   AlertCircle
 } from 'lucide-react';
-import { ReceivingRecord, ReturnRecord, MaterialStockItem, getCustomerForPart, UOM_OPTIONS, MasterRegistryItem, RegistryType, FifoColorsMap } from '../types';
+import { ReceivingRecord, ReturnRecord, MaterialStockItem, getCustomerForPart, MasterRegistryItem, RegistryType, FifoColorsMap } from '../types';
 import { resolveFifoColor, getFifoColorForDate, normalizeFifoColor } from '../data';
 import BarcodeScannerModal, { ScannedItemPreview } from './BarcodeScannerModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAuthoritativeId } from '../lib/idGenerator';
 import { showPrintToast } from '../utils/printDocument';
+import {
+  MISSING_UNIT_LABEL,
+  findMasterPresetUnit,
+  getAllSelectUomOptions,
+  groupQuantitiesByUnit,
+  normalizeUnitCode,
+  resolveMasterDataUnit,
+} from '../../shared/units';
 
 // Default Receiving and Return Categories
 export const DEFAULT_RECEIVING_CATEGORIES: string[] = [
@@ -287,6 +295,11 @@ export default function ReceivingModule({
     const effectiveStock = matchedStock || stockByRegistryCode;
 
     if (matchedRegistry) {
+      const regUnit = resolveMasterDataUnit(
+        { unit: effectiveStock?.unit || matchedRegistry.unit, partCode: matchedRegistry.code, description: matchedRegistry.name },
+        registries,
+        stocks
+      );
       return {
         code: cleanCode,
         itemName: matchedRegistry.name || matchedRegistry.description || matchedRegistry.code,
@@ -294,19 +307,20 @@ export default function ReceivingModule({
         location: matchedRegistry.location || effectiveStock?.location || 'Unassigned',
         partCode: matchedRegistry.code,
         category: matchedRegistry.category,
-        quantityLabel: effectiveStock ? `${effectiveStock.quantity.toLocaleString()} ${(effectiveStock.unit || 'PCS').toUpperCase()}` : undefined,
+        quantityLabel: effectiveStock ? `${effectiveStock.quantity.toLocaleString()} ${regUnit.unit || MISSING_UNIT_LABEL}` : undefined,
         matchedSource: 'REGISTRY'
       };
     }
 
     if (matchedStock) {
+      const stkUnit = resolveMasterDataUnit(matchedStock, registries, stocks);
       return {
         code: cleanCode,
         itemName: matchedStock.description || matchedStock.partCode,
         lot: matchedStock.lotNumber || `LOT-${cleanCode}`,
         location: matchedStock.location || 'Unassigned',
         partCode: matchedStock.partCode,
-        quantityLabel: `${matchedStock.quantity.toLocaleString()} ${(matchedStock.unit || 'PCS').toUpperCase()}`,
+        quantityLabel: `${matchedStock.quantity.toLocaleString()} ${stkUnit.unit || MISSING_UNIT_LABEL}`,
         matchedSource: 'STOCK'
       };
     }
@@ -348,7 +362,8 @@ export default function ReceivingModule({
         if (matchedRegistry.presetSource) setSource(matchedRegistry.presetSource);
         if (matchedRegistry.vendorSupplier) setVendorSupplier(matchedRegistry.vendorSupplier);
         if (matchedRegistry.category) setSupplierOrDept(matchedRegistry.category);
-        if (matchedRegistry.unit) setUnit(matchedRegistry.unit);
+        const normRegUnit = normalizeUnitCode(matchedRegistry.unit);
+        if (normRegUnit) setUnit(normRegUnit);
         if (matchedRegistry.location) setLocation(matchedRegistry.location);
         const cust = getCustomerForPart(matchedRegistry.code, matchedRegistry.name);
         if (cust) setCustomer(cust);
@@ -356,7 +371,8 @@ export default function ReceivingModule({
         setItemDescription(matchedStock.partCode); // 1. Item Code
         setPartCode(matchedStock.description); // 2. Item Description
         setLotNumber(matchedStock.description || matchedStock.partCode); // 3. Item Name
-        setUnit(matchedStock.unit);
+        const normStkUnit = resolveMasterDataUnit(matchedStock, registries, stocks).unit;
+        if (normStkUnit) setUnit(normStkUnit);
         setLotNumber(matchedStock.lotNumber || `LOT-${cleanCode}`);
         setLocation(matchedStock.location || '');
         setReorderMin(matchedStock.reorderMin || 0);
@@ -382,10 +398,13 @@ export default function ReceivingModule({
       }
       if (matchedStock) {
         setRetDesc(matchedStock.description);
-        setRetUnit(matchedStock.unit);
+        const normRetUnit = resolveMasterDataUnit(matchedStock, registries, stocks).unit;
+        if (normRetUnit) setRetUnit(normRetUnit);
         setRetLot(matchedStock.lotNumber);
       } else if (matchedRegistry) {
         setRetDesc(matchedRegistry.description || matchedRegistry.name);
+        const normRegUnit = normalizeUnitCode(matchedRegistry.unit);
+        if (normRegUnit) setRetUnit(normRegUnit);
         setRetLot(matchedRegistry.name);
       }
     }
@@ -681,6 +700,13 @@ export default function ReceivingModule({
       return;
     }
 
+    const masterUnit = findMasterPresetUnit({ partCode, description: itemDescription }, registries);
+    const cleanUnit = normalizeUnitCode(unit) || masterUnit;
+    if (!cleanUnit) {
+      showPrintToast('Please select a valid Unit of Measure (UOM).', 'warning');
+      return;
+    }
+
     // Determine FIFO color code based on received date from synced calendar
     const fifoColor = getFifoColorForDate(receivedDate, fifoColorsByMonth);
 
@@ -709,7 +735,8 @@ export default function ReceivingModule({
       modelName: modelName.trim() || undefined,
       color: isRawCategory ? color.trim() || undefined : undefined,
       quantity,
-      unit,
+      unit: cleanUnit,
+      unitMissing: false,
       lotNumber: lotNumber || generateAuthoritativeId('LOT'),
       physicalCondition: {
         receivingInspection: sopReceivingInspection,
@@ -782,6 +809,13 @@ export default function ReceivingModule({
       return;
     }
 
+    const masterUnit = findMasterPresetUnit({ partCode: retPartCode, description: retDesc }, registries);
+    const cleanRetUnit = normalizeUnitCode(retUnit) || masterUnit;
+    if (!cleanRetUnit) {
+      showPrintToast('Please select a valid Unit of Measure (UOM).', 'warning');
+      return;
+    }
+
     const newReturn: ReturnRecord = {
       id: generateAuthoritativeId('RET'),
       date: new Date().toISOString().split('T')[0],
@@ -789,7 +823,8 @@ export default function ReceivingModule({
       materialDescription: retDesc,
       partCode: retPartCode,
       quantity: retQty,
-      unit: retUnit,
+      unit: cleanRetUnit,
+      unitMissing: false,
       lotNumber: retLot,
       department: retDept,
       reason: retReason,
@@ -1167,7 +1202,12 @@ export default function ReceivingModule({
                       required
                       placeholder={isWipCategory ? 'E.G. WIP-PRT-001' : isDirectBomCategory ? 'E.G. DIR-PRT-001' : isIndirectBomCategory ? 'E.G. IND-PRT-001' : isConsumableCategory ? 'E.G. CON-INT-001' : isOfficeSuppliesCategory ? 'E.G. OFF-INT-001' : isPackagingCategory ? 'E.G. PKG-INT-001' : isRawCategory ? 'E.G. RSN-INT-001' : 'E.G. ITM-001'}
                       value={itemDescription}
-                      onChange={e => setItemDescription(e.target.value)}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setItemDescription(val);
+                        const presetUnit = findMasterPresetUnit({ partCode: partCode || val, description: val }, registries);
+                        if (presetUnit) setUnit(presetUnit);
+                      }}
                       className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono focus:ring-1 focus:ring-slate-400 focus:outline-none"
                     />
                   </div>
@@ -1195,7 +1235,12 @@ export default function ReceivingModule({
                       required
                       placeholder={isWipCategory ? 'E.G. SUB-ASSEMBLY / BRACKET' : isDirectBomCategory ? 'E.G. FRONT COVER / BRACKET' : isIndirectBomCategory ? 'E.G. HEX BOLT M6 / CUSHION PAD' : isConsumableCategory ? 'E.G. CON-SPEC-001' : isOfficeSuppliesCategory ? 'E.G. 80GSM / BLUE / BOX OF 10' : isRawCategory ? 'E.G. ABS-301-NAT' : isPackagingCategory ? 'E.G. CARTON BOX / TAPE / FILM' : 'E.G. MODEL-X200'}
                       value={partCode}
-                      onChange={e => setPartCode(e.target.value)}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setPartCode(val);
+                        const presetUnit = findMasterPresetUnit({ partCode: val, description: itemDescription }, registries);
+                        if (presetUnit) setUnit(presetUnit);
+                      }}
                       className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono focus:ring-1 focus:ring-slate-400 focus:outline-none"
                     />
                   </div>
@@ -1242,9 +1287,11 @@ export default function ReceivingModule({
                     <select 
                       value={unit}
                       onChange={e => setUnit(e.target.value)}
+                      required
                       className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-slate-400 focus:outline-none font-semibold"
                     >
-                      {UOM_OPTIONS.map(u => (
+                      <option value="">-- Select UOM --</option>
+                      {getAllSelectUomOptions(unit).map(u => (
                         <option key={u} value={u}>{u}</option>
                       ))}
                     </select>
@@ -1519,6 +1566,27 @@ export default function ReceivingModule({
                   &bull; Sorted by <strong className="text-indigo-700 font-semibold">{recSortField}</strong> ({recSortDirection === 'asc' ? 'Ascending' : 'Descending'})
                 </span>
               </div>
+              {filteredReceiving.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Totals:</span>
+                  {groupQuantitiesByUnit(
+                    filteredReceiving,
+                    (rec) => rec.quantity,
+                    (rec) => resolveMasterDataUnit(rec, registries, stocks).unit
+                  ).buckets.map((b) => (
+                    <span
+                      key={b.key}
+                      className={`px-2 py-0.5 rounded font-mono text-[11px] font-bold border ${
+                        b.isMissing
+                          ? 'bg-rose-50 text-rose-700 border-rose-200'
+                          : 'bg-white text-slate-800 border-slate-200'
+                      }`}
+                    >
+                      {b.total.toLocaleString()} {b.displayUnit}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
             
             <div className="overflow-x-auto">
@@ -1726,7 +1794,21 @@ export default function ReceivingModule({
 
                           {/* 5. Quantity */}
                           <td className="p-4 text-right font-mono font-bold text-slate-800 whitespace-nowrap">
-                            {r.quantity.toLocaleString()} {(r.unit || 'PCS').toUpperCase()}
+                            {(() => {
+                              const recUnit = resolveMasterDataUnit(r, registries, stocks);
+                              return (
+                                <>
+                                  {r.quantity.toLocaleString()}{' '}
+                                  {recUnit.isMissing ? (
+                                    <span className="inline-block px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 text-[9px] font-bold">
+                                      {MISSING_UNIT_LABEL}
+                                    </span>
+                                  ) : (
+                                    recUnit.unit
+                                  )}
+                                </>
+                              );
+                            })()}
                           </td>
 
                           {/* 6. FIFO Tag Color */}
@@ -1897,11 +1979,14 @@ export default function ReceivingModule({
                                           Received: {r.date}
                                         </span>
                                         <span className="bg-indigo-50 text-indigo-800 font-bold px-2.5 py-1 rounded-lg border border-indigo-200 font-mono">
-                                          Qty: {r.quantity.toLocaleString()} {(r.unit || 'PCS').toUpperCase()}
+                                          {(() => {
+                                            const recUnit = resolveMasterDataUnit(r, registries, stocks);
+                                            return `Qty: ${r.quantity.toLocaleString()} ${recUnit.unit || MISSING_UNIT_LABEL}`;
+                                          })()}
                                         </span>
                                         {matchedStock && (
                                           <span className="bg-emerald-50 text-emerald-800 font-bold px-2.5 py-1 rounded-lg border border-emerald-200 font-mono">
-                                            Active Stock: {matchedStock.quantity.toLocaleString()} {matchedStock.unit}
+                                            Active Stock: {matchedStock.quantity.toLocaleString()} {resolveMasterDataUnit(matchedStock, registries, stocks).unit || MISSING_UNIT_LABEL}
                                           </span>
                                         )}
                                       </div>
@@ -1975,7 +2060,7 @@ export default function ReceivingModule({
                                               {r.bom.map((b, idx) => (
                                                 <div key={idx} className="flex justify-between items-center text-[10px] font-mono text-slate-600 leading-tight">
                                                   <span className="truncate max-w-[150px]" title={`${b.partCode}: ${b.description}`}>{b.partCode}</span>
-                                                  <span className="font-bold text-slate-800">{b.quantityRequired} {b.unit}</span>
+                                                  <span className="font-bold text-slate-800">{b.quantityRequired} {normalizeUnitCode(b.unit) || MISSING_UNIT_LABEL}</span>
                                                 </div>
                                               ))}
                                             </div>
@@ -2299,7 +2384,12 @@ export default function ReceivingModule({
                     required
                     placeholder="e.g. RM-RE-089"
                     value={retPartCode}
-                    onChange={e => setRetPartCode(e.target.value)}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setRetPartCode(val);
+                      const presetUnit = findMasterPresetUnit({ partCode: val, description: retDesc }, registries);
+                      if (presetUnit) setRetUnit(presetUnit);
+                    }}
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono focus:ring-1 focus:ring-slate-400 focus:outline-none"
                   />
                 </div>
@@ -2333,9 +2423,11 @@ export default function ReceivingModule({
                   <select 
                     value={retUnit}
                     onChange={e => setRetUnit(e.target.value)}
+                    required
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-slate-400 focus:outline-none font-semibold"
                   >
-                    {UOM_OPTIONS.map(u => (
+                    <option value="">-- Select UOM --</option>
+                    {getAllSelectUomOptions(retUnit).map(u => (
                       <option key={u} value={u}>{u}</option>
                     ))}
                   </select>
@@ -2409,6 +2501,27 @@ export default function ReceivingModule({
                   &bull; Sorted by <strong className="text-indigo-700 font-semibold">{retSortField}</strong> ({retSortDirection === 'asc' ? 'Ascending' : 'Descending'})
                 </span>
               </div>
+              {filteredReturns.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Totals:</span>
+                  {groupQuantitiesByUnit(
+                    filteredReturns,
+                    (ret) => ret.quantity,
+                    (ret) => resolveMasterDataUnit(ret, registries, stocks).unit
+                  ).buckets.map((b) => (
+                    <span
+                      key={b.key}
+                      className={`px-2 py-0.5 rounded font-mono text-[11px] font-bold border ${
+                        b.isMissing
+                          ? 'bg-rose-50 text-rose-700 border-rose-200'
+                          : 'bg-white text-slate-800 border-slate-200'
+                      }`}
+                    >
+                      {b.total.toLocaleString()} {b.displayUnit}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
             
             <div className="overflow-x-auto">
@@ -2588,7 +2701,23 @@ export default function ReceivingModule({
                             <div className="text-slate-500 text-[11px]">{r.materialDescription}</div>
                             <div className="text-[10px] text-slate-400 mt-1">Lot: {r.lotNumber}</div>
                           </td>
-                          <td className="p-4 text-right font-mono font-bold text-slate-800">{r.quantity.toLocaleString()} {(r.unit || 'PCS').toUpperCase()}</td>
+                          <td className="p-4 text-right font-mono font-bold text-slate-800">
+                            {(() => {
+                              const retUnitInfo = resolveMasterDataUnit(r, registries, stocks);
+                              return (
+                                <>
+                                  {r.quantity.toLocaleString()}{' '}
+                                  {retUnitInfo.isMissing ? (
+                                    <span className="inline-block px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 text-[9px] font-bold">
+                                      {MISSING_UNIT_LABEL}
+                                    </span>
+                                  ) : (
+                                    retUnitInfo.unit
+                                  )}
+                                </>
+                              );
+                            })()}
+                          </td>
                           <td className="p-4">
                             <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                               r.condition === 'Good' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
@@ -2704,11 +2833,14 @@ export default function ReceivingModule({
                                           Date: {r.date}
                                         </span>
                                         <span className="bg-purple-50 text-purple-800 font-bold px-2.5 py-1 rounded-lg border border-purple-200 font-mono">
-                                          Return Qty: {r.quantity.toLocaleString()} {(r.unit || 'PCS').toUpperCase()}
+                                          {(() => {
+                                            const retUnitInfo = resolveMasterDataUnit(r, registries, stocks);
+                                            return `Return Qty: ${r.quantity.toLocaleString()} ${retUnitInfo.unit || MISSING_UNIT_LABEL}`;
+                                          })()}
                                         </span>
                                         {matchedStock && (
                                           <span className="bg-emerald-50 text-emerald-800 font-bold px-2.5 py-1 rounded-lg border border-emerald-200 font-mono">
-                                            Active Stock: {matchedStock.quantity.toLocaleString()} {matchedStock.unit}
+                                            Active Stock: {matchedStock.quantity.toLocaleString()} {resolveMasterDataUnit(matchedStock, registries, stocks).unit || MISSING_UNIT_LABEL}
                                           </span>
                                         )}
                                       </div>
@@ -2916,11 +3048,15 @@ export default function ReceivingModule({
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 mb-1">Unit of Measure (UOM)</label>
                   <select 
-                    value={editingReceiving.unit}
-                    onChange={e => setEditingReceiving({ ...editingReceiving, unit: e.target.value })}
+                    value={normalizeUnitCode(editingReceiving.unit)}
+                    onChange={e => {
+                      const clean = normalizeUnitCode(e.target.value);
+                      setEditingReceiving({ ...editingReceiving, unit: clean, unitMissing: !clean });
+                    }}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono font-semibold"
                   >
-                    {UOM_OPTIONS.map(u => (
+                    <option value="">-- Select UOM --</option>
+                    {getAllSelectUomOptions(editingReceiving.unit).map(u => (
                       <option key={u} value={u}>{u}</option>
                     ))}
                   </select>
@@ -3054,7 +3190,16 @@ export default function ReceivingModule({
                 </button>
                 <button 
                   onClick={() => {
-                    onEditReceiving?.(editingReceiving);
+                    const resolved = resolveMasterDataUnit(editingReceiving, registries, stocks);
+                    if (!resolved.unit) {
+                      showPrintToast('Please assign a Unit of Measure (UOM) or configure it in Master Data.', 'warning');
+                      return;
+                    }
+                    onEditReceiving?.({
+                      ...editingReceiving,
+                      unit: resolved.unit,
+                      unitMissing: false,
+                    });
                     setEditingReceiving(null);
                   }}
                   className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold"
@@ -3189,6 +3334,23 @@ export default function ReceivingModule({
                 </div>
 
                 <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Unit of Measure (UOM)</label>
+                  <select
+                    value={normalizeUnitCode(editingReturn.unit)}
+                    onChange={e => {
+                      const clean = normalizeUnitCode(e.target.value);
+                      setEditingReturn({ ...editingReturn, unit: clean, unitMissing: !clean });
+                    }}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono font-semibold"
+                  >
+                    <option value="">-- Select UOM --</option>
+                    {getAllSelectUomOptions(editingReturn.unit).map(u => (
+                      <option key={u} value={u}>{u}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
                   <label className="block text-[10px] font-bold text-slate-500 mb-1">Lot Number</label>
                   <input 
                     type="text" 
@@ -3235,7 +3397,16 @@ export default function ReceivingModule({
                 </button>
                 <button 
                   onClick={() => {
-                    onEditReturn?.(editingReturn);
+                    const resolved = resolveMasterDataUnit(editingReturn, registries, stocks);
+                    if (!resolved.unit) {
+                      showPrintToast('Please assign a Unit of Measure (UOM) or configure it in Master Data.', 'warning');
+                      return;
+                    }
+                    onEditReturn?.({
+                      ...editingReturn,
+                      unit: resolved.unit,
+                      unitMissing: false,
+                    });
                     setEditingReturn(null);
                   }}
                   className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold"

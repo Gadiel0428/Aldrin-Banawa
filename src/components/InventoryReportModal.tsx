@@ -30,16 +30,23 @@ import {
   showPrintToast,
   formatPrintErrorMessage
 } from '../utils/printDocument';
-import { MaterialStockItem, getCustomerForPart } from '../types';
+import { MaterialStockItem, MasterRegistryItem, getCustomerForPart } from '../types';
 import { 
   filterInventoryData, 
   generateInventoryReportPages, 
   downloadInventoryReportCSV,
   InventoryReportOptions 
 } from '../utils/inventoryReportGenerator';
+import {
+  MISSING_UNIT_LABEL,
+  formatNumberForUnit,
+  formatQuantityWithUnit,
+  type UnitTotalBucket
+} from '../../shared/units';
 
 interface InventoryReportModalProps {
   stocks: MaterialStockItem[];
+  registries?: MasterRegistryItem[];
   currentUser?: string;
   isSuperAdmin?: boolean;
   initialCustomerFilter?: string;
@@ -48,13 +55,14 @@ interface InventoryReportModalProps {
 
 export default function InventoryReportModal({
   stocks,
+  registries = [],
   currentUser = 'Aldrin Banawa',
   isSuperAdmin = true,
   initialCustomerFilter = 'ALL',
   onClose
 }: InventoryReportModalProps) {
   const [customerFilter, setCustomerFilter] = useState<string>(initialCustomerFilter);
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'APPROVED' | 'LOW_STOCK' | 'QUARANTINE_HOLD'>('ALL');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'APPROVED' | 'LOW_STOCK' | 'QUARANTINE_HOLD' | 'MISSING_UNIT'>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [isExportingPDF, setIsExportingPDF] = useState(false);
   const [showPrintPreview, setShowPrintPreview] = useState(false);
@@ -94,6 +102,7 @@ export default function InventoryReportModal({
     customerFilter: customerFilter !== 'ALL' ? customerFilter : undefined,
     statusFilter,
     searchQuery,
+    registries,
     generatedBy: currentUser,
     userRole: isSuperAdmin ? 'Super Administrator' : 'Warehouse Manager',
     employeeId: 'JPMP-002',
@@ -101,7 +110,7 @@ export default function InventoryReportModal({
       ? `JUWEI WMS INVENTORY REPORT • ${customerFilter.toUpperCase()}`
       : 'JUWEI WMS MASTER INVENTORY AUDIT REPORT',
     ...signatories
-  }), [customerFilter, statusFilter, searchQuery, currentUser, isSuperAdmin, signatories]);
+  }), [customerFilter, statusFilter, searchQuery, registries, currentUser, isSuperAdmin, signatories]);
 
   const summary = useMemo(() => {
     return filterInventoryData(stocks, reportOptions);
@@ -209,6 +218,44 @@ export default function InventoryReportModal({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isPrintingPDF, showPrintPreview]);
 
+  const renderUnitBuckets = (buckets: UnitTotalBucket[], textColorClass: string, badgeClass: string) => {
+    if (!buckets || buckets.length === 0) {
+      return (
+        <div className="flex items-baseline gap-1">
+          <span className={`text-2xl font-extrabold font-mono ${textColorClass}`}>0</span>
+          <span className="text-[10px] font-bold font-mono opacity-70">RECORDS</span>
+        </div>
+      );
+    }
+    if (buckets.length === 1) {
+      const b = buckets[0];
+      return (
+        <div className="flex items-baseline gap-1.5 flex-wrap">
+          <span className={`text-2xl font-extrabold font-mono ${b.isMissing ? 'text-rose-700' : textColorClass}`}>
+            {formatNumberForUnit(b.total)}
+          </span>
+          <span className={`text-[10px] font-bold font-mono ${b.isMissing ? 'text-rose-700 bg-rose-100 px-1.5 py-0.5 rounded border border-rose-200' : badgeClass}`}>
+            {b.displayUnit}
+          </span>
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-1 mt-0.5">
+        {buckets.map(b => (
+          <div key={b.key} className="flex items-baseline justify-between gap-2 font-mono">
+            <span className={`text-sm font-extrabold tabular-nums ${b.isMissing ? 'text-rose-700' : textColorClass}`}>
+              {formatNumberForUnit(b.total)}
+            </span>
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${b.isMissing ? 'bg-rose-100 text-rose-700 border border-rose-200' : badgeClass}`}>
+              {b.displayUnit}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   const reportContent = (
     <div className="space-y-6">
       {/* Printable Report Header */}
@@ -237,7 +284,7 @@ export default function InventoryReportModal({
                   <span className="font-bold">Customer Scope:</span> {customerFilter !== 'ALL' ? customerFilter : 'All Customers (Canon, Brother, Dyson, General)'}
                 </div>
                 <div>
-                  <span className="font-bold">Status Scope:</span> {statusFilter === 'APPROVED' ? 'Approved Stock Only' : statusFilter === 'LOW_STOCK' ? 'Low Stock Reorder Alerts' : statusFilter === 'QUARANTINE_HOLD' ? 'Quarantine & Hold Area' : 'Complete Inventory'}
+                  <span className="font-bold">Status Scope:</span> {statusFilter === 'APPROVED' ? 'Approved Stock Only' : statusFilter === 'LOW_STOCK' ? 'Low Stock Reorder Alerts' : statusFilter === 'QUARANTINE_HOLD' ? 'Quarantine & Hold Area' : statusFilter === 'MISSING_UNIT' ? 'Missing Unit Flagged' : 'Complete Inventory'}
                 </div>
                 <div className="font-mono text-indigo-800 font-bold">
                   Total Records: {summary.items.length} lots | {summary.uniquePartCount} unique SKUs
@@ -245,7 +292,27 @@ export default function InventoryReportModal({
               </div>
             </div>
 
-            {/* Executive KPI Summary 4-Grid */}
+            {summary.missingUnitCount > 0 && (
+              <div className="p-3.5 rounded-2xl border border-rose-300 bg-rose-50 text-rose-900 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2 font-semibold">
+                  <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                  <span>
+                    <strong className="font-mono">{summary.missingUnitCount}</strong> stock lot(s) are missing a defined unit in both the lot record and Master Data Registry. Grouped separately as <strong className="font-mono">{MISSING_UNIT_LABEL}</strong>.
+                  </span>
+                </div>
+                {statusFilter !== 'MISSING_UNIT' && (
+                  <button
+                    type="button"
+                    onClick={() => setStatusFilter('MISSING_UNIT')}
+                    className="no-print px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] cursor-pointer transition"
+                  >
+                    Filter Missing Units
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Executive KPI Summary 4-Grid (Grouped Strictly by Unit) */}
             <div className="avoid-break grid grid-cols-2 sm:grid-cols-4 gap-3.5">
               {/* Approved Stock */}
               <div className="p-3.5 rounded-2xl border border-emerald-200 bg-emerald-50/50">
@@ -253,14 +320,9 @@ export default function InventoryReportModal({
                   <span className="text-[10px] font-extrabold uppercase font-mono">Approved Stock</span>
                   <Package className="h-4 w-4 text-emerald-600" />
                 </div>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-2xl font-extrabold text-emerald-700 font-mono">
-                    {summary.approvedQty.toLocaleString()}
-                  </span>
-                  <span className="text-[10px] font-bold text-emerald-600 font-mono">PCS</span>
-                </div>
-                <p className="text-[10px] text-emerald-700 font-medium mt-0.5">
-                  Verified in active bins
+                {renderUnitBuckets(summary.approvedByUnit, 'text-emerald-700', 'text-emerald-700 bg-emerald-100/80 border border-emerald-200')}
+                <p className="text-[10px] text-emerald-700 font-medium mt-1">
+                  Grouped by unit · Active bins
                 </p>
               </div>
 
@@ -278,7 +340,7 @@ export default function InventoryReportModal({
                   </span>
                   <span className="text-[10px] font-bold font-mono">SKUs</span>
                 </div>
-                <p className="text-[10px] font-medium mt-0.5 opacity-80">
+                <p className="text-[10px] font-medium mt-1 opacity-80">
                   {summary.lowStockCount > 0 ? 'Below minimum reorder limit' : 'All thresholds normal'}
                 </p>
               </div>
@@ -289,13 +351,8 @@ export default function InventoryReportModal({
                   <span className="text-[10px] font-extrabold uppercase font-mono">Quarantine & Hold</span>
                   <ShieldCheck className="h-4 w-4 text-amber-600" />
                 </div>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-2xl font-extrabold text-amber-700 font-mono">
-                    {(summary.quarantineQty + summary.holdQty).toLocaleString()}
-                  </span>
-                  <span className="text-[10px] font-bold text-amber-600 font-mono">PCS</span>
-                </div>
-                <p className="text-[10px] text-amber-700 font-medium mt-0.5">
+                {renderUnitBuckets(summary.quarantineHoldByUnit, 'text-amber-700', 'text-amber-700 bg-amber-100/80 border border-amber-200')}
+                <p className="text-[10px] text-amber-700 font-medium mt-1">
                   Restricted in isolation
                 </p>
               </div>
@@ -306,14 +363,9 @@ export default function InventoryReportModal({
                   <span className="text-[10px] font-extrabold uppercase font-mono">Total Warehouse Stock</span>
                   <Layers className="h-4 w-4 text-indigo-600" />
                 </div>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-2xl font-extrabold text-indigo-700 font-mono">
-                    {summary.totalQty.toLocaleString()}
-                  </span>
-                  <span className="text-[10px] font-bold text-indigo-600 font-mono">PCS</span>
-                </div>
-                <p className="text-[10px] text-indigo-700 font-medium mt-0.5">
-                  Across all warehouse zones
+                {renderUnitBuckets(summary.totalByUnit, 'text-indigo-700', 'text-indigo-700 bg-indigo-100/80 border border-indigo-200')}
+                <p className="text-[10px] text-indigo-700 font-medium mt-1">
+                  Grouped by unit across zones
                 </p>
               </div>
             </div>
@@ -322,17 +374,28 @@ export default function InventoryReportModal({
             <div className="avoid-break bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs space-y-2">
               <div className="flex justify-between items-center">
                 <span className="text-[11px] font-extrabold text-slate-700 uppercase font-mono flex items-center gap-1.5">
-                  <Building className="h-3.5 w-3.5 text-indigo-600" /> Customer Allocation Breakdown:
+                  <Building className="h-3.5 w-3.5 text-indigo-600" /> Customer Allocation Breakdown (By Unit):
                 </span>
                 <span className="text-[10px] font-mono text-slate-400">Approved & Active Stock</span>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                 {Object.entries(summary.customerBreakdown).map(([cust, val]) => (
-                  <div key={cust} className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80">
-                    <span className="text-[11px] font-bold text-slate-800 block truncate">{cust}</span>
-                    <div className="flex justify-between items-baseline mt-1 font-mono">
-                      <span className="text-xs font-extrabold text-indigo-700">{val.qty.toLocaleString()} PCS</span>
-                      <span className="text-[10px] text-slate-500">{val.count} lots</span>
+                  <div key={cust} className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
+                    <div className="flex justify-between items-center gap-1">
+                      <span className="text-[11px] font-bold text-slate-800 block truncate">{cust}</span>
+                      <span className="text-[10px] font-mono text-slate-500 shrink-0">{val.count} lots</span>
+                    </div>
+                    <div className="space-y-0.5 font-mono">
+                      {val.byUnit.map(b => (
+                        <div key={b.key} className="flex justify-between items-baseline text-xs">
+                          <span className={`font-extrabold ${b.isMissing ? 'text-rose-700' : 'text-indigo-700'}`}>
+                            {formatNumberForUnit(b.total)}
+                          </span>
+                          <span className={`text-[10px] font-bold ${b.isMissing ? 'text-rose-700' : 'text-slate-600'}`}>
+                            {b.displayUnit}
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ))}
@@ -362,7 +425,7 @@ export default function InventoryReportModal({
                     {summary.items.map((item, idx) => (
                       <tr 
                         key={item.id ? `modal-inv-item-${item.id}` : `modal-inv-${idx}`}
-                        className={`hover:bg-slate-50/80 transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}
+                        className={`hover:bg-slate-50/80 transition-colors ${item.unitMissing ? 'bg-rose-50/40' : idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'}`}
                       >
                         <td className="p-2.5 font-mono font-bold text-slate-900 whitespace-nowrap">
                           {item.partCode}
@@ -385,7 +448,14 @@ export default function InventoryReportModal({
                           {item.lotNumber}
                         </td>
                         <td className="p-2.5 font-mono font-bold text-slate-900 text-right whitespace-nowrap">
-                          {Number(item.quantity).toLocaleString()} <span className="text-[10px] text-slate-500 font-normal">{item.unit}</span>
+                          {formatNumberForUnit(item.quantity)}{' '}
+                          {item.unitMissing ? (
+                            <span className="text-[9px] font-bold text-rose-700 bg-rose-100 border border-rose-200 px-1.5 py-0.5 rounded">
+                              {MISSING_UNIT_LABEL}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-slate-600 font-semibold">{item.unit}</span>
+                          )}
                         </td>
                         <td className="p-2.5 whitespace-nowrap">
                           <span className="text-[10px] font-semibold text-slate-700">
@@ -404,7 +474,9 @@ export default function InventoryReportModal({
                         <td className="p-2.5 whitespace-nowrap">
                           {item.reorderMinThreshold > 0 ? (
                             <span className={`font-mono text-[10px] font-bold ${item.isLowStock ? 'text-rose-700' : 'text-slate-600'}`}>
-                              {item.isLowStock ? `⚠️ LOW (${item.currentTotalPartQty}/${item.reorderMinThreshold})` : `${item.reorderMinThreshold} ${item.unit}`}
+                              {item.isLowStock
+                                ? `LOW (${formatNumberForUnit(item.currentTotalPartQty)}/${formatQuantityWithUnit(item.reorderMinThreshold, item.unit)})`
+                                : formatQuantityWithUnit(item.reorderMinThreshold, item.unit)}
                             </span>
                           ) : (
                             <span className="text-slate-400 text-[10px]">--</span>
@@ -699,6 +771,7 @@ export default function InventoryReportModal({
                   <option value="APPROVED">Approved Only (Ready)</option>
                   <option value="LOW_STOCK">Low Stock Reorder Alerts</option>
                   <option value="QUARANTINE_HOLD">Quarantine & Hold Bins</option>
+                  <option value="MISSING_UNIT">Missing Unit Flagged</option>
                 </select>
               </div>
 

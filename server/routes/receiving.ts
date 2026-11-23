@@ -6,6 +6,7 @@
  */
 
 import type { Express, Request, Response } from "express";
+import { mapCategoryActionFromApi } from "../api/mapper.ts";
 import type { ServerContext } from "../services/context.ts";
 import { DEFAULT_RECEIVING_CATEGORIES } from "../services/context.ts";
 import { recordAuditTrail } from "../services/auditService.ts";
@@ -38,11 +39,9 @@ export function registerReceivingRoutes(app: Express, ctx: ServerContext): void 
         category,
         oldCategory,
         newCategory,
-        oldCat,
-        newCat,
         categories,
         updateExistingRecords,
-      } = req.body;
+      } = mapCategoryActionFromApi(req.body);
       let modified = false;
       let recModified = false;
       let retModified = false;
@@ -55,8 +54,8 @@ export function registerReceivingRoutes(app: Express, ctx: ServerContext): void 
           modified = true;
         }
       } else if (action === "rename") {
-        const cleanOld = String(oldCategory || oldCat || "").trim().toUpperCase();
-        const cleanNew = String(newCategory || newCat || "").trim().toUpperCase();
+        const cleanOld = oldCategory.toUpperCase();
+        const cleanNew = newCategory.toUpperCase();
         if (cleanOld && cleanNew && cleanOld !== cleanNew) {
           const idx = ctx.state.receivingCategories.indexOf(cleanOld);
           if (idx !== -1) {
@@ -170,7 +169,7 @@ export function registerReceivingRoutes(app: Express, ctx: ServerContext): void 
           action: "UPDATE",
           recordType: "receivingCategories",
           recordId: "receivingCategories",
-          summary: `Updated receiving categories (${action || "replace"}${category ? `: ${category}` : oldCategory || oldCat ? `: ${oldCategory || oldCat} -> ${newCategory || newCat}` : ""})`,
+          summary: `Updated receiving categories (${action || "replace"}${category ? `: ${category}` : oldCategory ? `: ${oldCategory} -> ${newCategory}` : ""})`,
           deviceId: auth.deviceId || undefined,
         });
 

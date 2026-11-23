@@ -15,6 +15,7 @@ import {
 import { InventoryItem, Warehouse } from '../types/inventory';
 import { fetchInventory, fetchWarehouses } from '../database/inventory';
 import { subscribeToInventory } from '../database/realtime';
+import { MISSING_UNIT_LABEL, normalizeUnitCode } from '../../shared/units';
 
 interface InventoryTableProps {
   onSelectProduct?: (productId: string) => void;
@@ -136,6 +137,7 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({ onSelectProduct 
                   const min = Number(item.product?.min_stock) || 0;
                   const isLow = qty <= min && qty > 0;
                   const isOut = qty <= 0;
+                  const resolvedUnit = normalizeUnitCode(item.product?.unit);
 
                   return (
                     <tr
@@ -165,7 +167,14 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({ onSelectProduct 
                       </td>
                       <td className="py-3 px-4 text-right font-mono font-bold text-sm">
                         <span className={isOut ? 'text-rose-600' : isLow ? 'text-amber-600' : 'text-slate-900 dark:text-slate-100'}>
-                          {qty.toLocaleString()} {item.product?.unit || 'PCS'}
+                          {qty.toLocaleString()}{' '}
+                          {resolvedUnit ? (
+                            resolvedUnit
+                          ) : (
+                            <span className="ml-1 px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-500 border border-rose-500/30 text-[10px]">
+                              {MISSING_UNIT_LABEL}
+                            </span>
+                          )}
                         </span>
                       </td>
                       <td className="py-3 px-4 text-center">

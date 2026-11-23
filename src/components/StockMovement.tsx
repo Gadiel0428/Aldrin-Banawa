@@ -25,6 +25,7 @@ import { syncManager } from '../sync/syncManager';
 import { StockMovement, StockMovementType } from '../types/movement';
 import { MaterialStockItem } from '../types';
 import { generateAuthoritativeId } from '../lib/idGenerator';
+import { MISSING_UNIT_LABEL, normalizeUnitCode } from '../../shared/units';
 
 interface StockMovementProps {
   stocks: MaterialStockItem[];
@@ -259,6 +260,8 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
                 filteredMovements.map((m) => {
                   const badge = getMovementBadge(m.type);
                   const isPositive = Number(m.quantity) > 0;
+                  const resolvedUnit = normalizeUnitCode(m.unit);
+                  const unitDisplay = resolvedUnit || MISSING_UNIT_LABEL;
                   return (
                     <tr key={m.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30 transition-colors">
                       <td className="py-3 px-4 text-slate-600 dark:text-slate-300 font-mono">
@@ -283,15 +286,19 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
                       </td>
                       <td className="py-3 px-4 text-right font-mono font-bold text-sm">
                         <span className={isPositive ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
-                          {isPositive ? `+${m.quantity}` : m.quantity} {m.unit || 'PCS'}
+                          {isPositive ? `+${m.quantity}` : m.quantity} {resolvedUnit ? resolvedUnit : (
+                            <span className="ml-1 px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-500 border border-rose-500/30 text-[10px]">
+                              {MISSING_UNIT_LABEL}
+                            </span>
+                          )}
                         </span>
                       </td>
                       <td className="py-3 px-4 text-right font-mono text-slate-600 dark:text-slate-300">
                         {m.previous_quantity !== undefined && m.new_quantity !== undefined ? (
                           <div className="text-[11px]">
-                            <span className="text-slate-400">{m.previous_quantity}</span>
+                            <span className="text-slate-400">{m.previous_quantity} {unitDisplay}</span>
                             <span className="mx-1 text-slate-300 dark:text-slate-600">→</span>
-                            <span className="font-bold text-slate-900 dark:text-slate-100">{m.new_quantity}</span>
+                            <span className="font-bold text-slate-900 dark:text-slate-100">{m.new_quantity} {unitDisplay}</span>
                           </div>
                         ) : (
                           '—'
@@ -358,11 +365,14 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
                   required
                 >
                   <option value="">-- Select Material --</option>
-                  {stocks.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.partCode} - {s.description} (Stock: {s.quantity} {s.unit})
-                    </option>
-                  ))}
+                  {stocks.map((s) => {
+                    const u = normalizeUnitCode(s.unit) || MISSING_UNIT_LABEL;
+                    return (
+                      <option key={s.id} value={s.id}>
+                        {s.partCode} - {s.description} (Stock: {s.quantity} {u})
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 

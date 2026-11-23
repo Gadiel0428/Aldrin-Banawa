@@ -8,13 +8,13 @@ import {
   FileText, 
   Calendar, 
   TrendingUp, 
-  TrendingDown, 
   ArrowDownLeft, 
   ArrowUpRight, 
   Package, 
   ShieldCheck, 
   Layers, 
   Search, 
+  AlertTriangle,
   Eye,
   Loader2
 } from 'lucide-react';
@@ -31,6 +31,12 @@ import {
   generateReceivingVsIssuanceReportPages, 
   ReportFilterOptions 
 } from '../utils/reportGenerator';
+import {
+  MISSING_UNIT_LABEL,
+  formatNumberForUnit,
+  formatQuantityWithUnit,
+  type UnitTotalBucket
+} from '../../shared/units';
 
 interface ReceivingVsIssuanceReportModalProps {
   receiving: ReceivingRecord[];
@@ -46,7 +52,7 @@ export default function ReceivingVsIssuanceReportModal({
   receiving,
   issuances,
   stocks,
-  registries: _registries = [],
+  registries = [],
   currentUser = 'Aldrin Banawa',
   isSuperAdmin = true,
   onClose
@@ -92,11 +98,12 @@ export default function ReceivingVsIssuanceReportModal({
     endDate,
     customerFilter: customerFilter || undefined,
     partFilter: partFilter || undefined,
+    registries,
     generatedBy: currentUser,
     userRole: isSuperAdmin ? 'Super Administrator' : 'Warehouse Manager',
     employeeId: 'JPMP-002',
     ...signatories
-  }), [dateRange, startDate, endDate, customerFilter, partFilter, currentUser, isSuperAdmin, signatories]);
+  }), [dateRange, startDate, endDate, customerFilter, partFilter, registries, currentUser, isSuperAdmin, signatories]);
 
   const summary = useMemo(() => {
     return filterReceivingAndIssuanceData(receiving, issuances, stocks, filterOptions);
@@ -192,10 +199,43 @@ export default function ReceivingVsIssuanceReportModal({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isExportingPrintPDF, showPrintPreview]);
 
-  const isNetPositive = summary.netDelta >= 0;
-  const totalVolume = summary.totalReceivedQty + summary.totalIssuedQty;
-  const receivedPct = totalVolume > 0 ? Math.round((summary.totalReceivedQty / totalVolume) * 100) : 50;
-  const issuedPct = totalVolume > 0 ? Math.round((summary.totalIssuedQty / totalVolume) * 100) : 50;
+  const renderUnitBucketRows = (buckets: UnitTotalBucket[], textClass: string, badgeClass: string) => {
+    if (!buckets || buckets.length === 0) {
+      return (
+        <div className="flex items-baseline gap-1.5">
+          <span className={`text-2xl font-extrabold font-mono ${textClass}`}>0</span>
+          <span className="text-[10px] font-bold font-mono opacity-60">RECORDS</span>
+        </div>
+      );
+    }
+    if (buckets.length === 1) {
+      const b = buckets[0];
+      return (
+        <div className="flex items-baseline gap-1.5 flex-wrap">
+          <span className={`text-2xl font-extrabold font-mono ${b.isMissing ? 'text-rose-700' : textClass}`}>
+            {formatNumberForUnit(b.total)}
+          </span>
+          <span className={`text-[10px] font-bold font-mono ${b.isMissing ? 'bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded border border-rose-200' : badgeClass}`}>
+            {b.displayUnit}
+          </span>
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-1">
+        {buckets.map(b => (
+          <div key={b.key} className="flex items-baseline justify-between gap-2 font-mono">
+            <span className={`text-sm font-extrabold tabular-nums ${b.isMissing ? 'text-rose-700' : textClass}`}>
+              {formatNumberForUnit(b.total)}
+            </span>
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${b.isMissing ? 'bg-rose-100 text-rose-700 border border-rose-200' : badgeClass}`}>
+              {b.displayUnit}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  };
 
   const reportContent = (
     <div className="space-y-6">
@@ -224,7 +264,16 @@ export default function ReceivingVsIssuanceReportModal({
               </div>
             </div>
 
-            {/* Executive KPI Summary 4-Grid */}
+            {summary.missingUnitCount > 0 && (
+              <div className="p-3 rounded-xl border border-rose-300 bg-rose-50 text-rose-900 text-xs flex items-center gap-2 font-semibold">
+                <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                <span>
+                  <strong className="font-mono">{summary.missingUnitCount}</strong> transaction(s) in this range have no defined unit in either the record or Master Data Registry and are flagged as <strong className="font-mono">{MISSING_UNIT_LABEL}</strong>.
+                </span>
+              </div>
+            )}
+
+            {/* Executive KPI Summary 4-Grid (Grouped Strictly by Unit) */}
             <div className="avoid-break grid grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
               
               {/* Total Received */}
@@ -233,12 +282,7 @@ export default function ReceivingVsIssuanceReportModal({
                   <span className="text-[10px] font-extrabold uppercase tracking-wider">Inbound Received</span>
                   <ArrowDownLeft className="h-4 w-4 text-emerald-600" />
                 </div>
-                <div className="flex items-baseline gap-1.5">
-                  <span className="text-2xl font-extrabold text-emerald-700 font-mono">
-                    {summary.totalReceivedQty.toLocaleString()}
-                  </span>
-                  <span className="text-[10px] font-bold text-emerald-600 font-mono">PCS</span>
-                </div>
+                {renderUnitBucketRows(summary.receivedByUnit, 'text-emerald-700', 'text-emerald-700 bg-emerald-100/80 border border-emerald-200')}
                 <p className="text-[10px] text-emerald-700 font-medium">
                   Across {summary.totalReceivedTxCount} Lot Receipt(s)
                 </p>
@@ -250,41 +294,48 @@ export default function ReceivingVsIssuanceReportModal({
                   <span className="text-[10px] font-extrabold uppercase tracking-wider">Outbound Issued</span>
                   <ArrowUpRight className="h-4 w-4 text-blue-600" />
                 </div>
-                <div className="flex items-baseline gap-1.5">
-                  <span className="text-2xl font-extrabold text-blue-700 font-mono">
-                    {summary.totalIssuedQty.toLocaleString()}
-                  </span>
-                  <span className="text-[10px] font-bold text-blue-600 font-mono">PCS</span>
-                </div>
+                {renderUnitBucketRows(summary.issuedByUnit, 'text-blue-700', 'text-blue-700 bg-blue-100/80 border border-blue-200')}
                 <p className="text-[10px] text-blue-700 font-medium">
                   Across {summary.totalIssuedTxCount} Requisition(s)
                 </p>
               </div>
 
-              {/* Net Delta */}
-              <div className={`p-3.5 rounded-xl border space-y-1 ${
-                isNetPositive 
-                  ? 'bg-indigo-50/80 border-indigo-200 text-indigo-900' 
-                  : 'bg-rose-50/80 border-rose-200 text-rose-900'
-              }`}>
+              {/* Net Delta per Unit */}
+              <div className="p-3.5 rounded-xl border border-indigo-200 bg-indigo-50/60 text-indigo-950 space-y-1">
                 <div className="flex justify-between items-center">
                   <span className="text-[10px] font-extrabold uppercase tracking-wider">Net Movement Delta</span>
-                  {isNetPositive ? (
-                    <TrendingUp className="h-4 w-4 text-indigo-600" />
-                  ) : (
-                    <TrendingDown className="h-4 w-4 text-rose-600" />
-                  )}
+                  <TrendingUp className="h-4 w-4 text-indigo-600" />
                 </div>
-                <div className="flex items-baseline gap-1.5">
-                  <span className={`text-2xl font-extrabold font-mono ${
-                    isNetPositive ? 'text-indigo-700' : 'text-rose-700'
-                  }`}>
-                    {summary.netDelta > 0 ? `+${summary.netDelta.toLocaleString()}` : summary.netDelta.toLocaleString()}
-                  </span>
-                  <span className="text-[10px] font-bold font-mono">PCS</span>
-                </div>
+                {summary.netByUnit.length === 0 ? (
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-2xl font-extrabold font-mono text-indigo-700">0</span>
+                    <span className="text-[10px] font-bold font-mono opacity-60">RECORDS</span>
+                  </div>
+                ) : summary.netByUnit.length === 1 ? (
+                  <div className="flex items-baseline gap-1.5 flex-wrap">
+                    <span className={`text-2xl font-extrabold font-mono ${summary.netByUnit[0].net >= 0 ? 'text-indigo-700' : 'text-rose-700'}`}>
+                      {summary.netByUnit[0].net > 0 ? `+${formatNumberForUnit(summary.netByUnit[0].net)}` : formatNumberForUnit(summary.netByUnit[0].net)}
+                    </span>
+                    <span className={`text-[10px] font-bold font-mono ${summary.netByUnit[0].isMissing ? 'bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded border border-rose-200' : 'text-indigo-700 bg-indigo-100 px-1.5 py-0.5 rounded border border-indigo-200'}`}>
+                      {summary.netByUnit[0].displayUnit}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {summary.netByUnit.map(nb => (
+                      <div key={nb.key} className="flex items-baseline justify-between gap-2 font-mono">
+                        <span className={`text-sm font-extrabold tabular-nums ${nb.net >= 0 ? 'text-indigo-700' : 'text-rose-700'}`}>
+                          {nb.net > 0 ? `+${formatNumberForUnit(nb.net)}` : formatNumberForUnit(nb.net)}
+                        </span>
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${nb.isMissing ? 'bg-rose-100 text-rose-700 border border-rose-200' : 'bg-indigo-100 text-indigo-700 border border-indigo-200'}`}>
+                          {nb.displayUnit}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <p className="text-[10px] font-medium opacity-80">
-                  {isNetPositive ? 'Inventory Inflow Surplus' : 'Net Outflow Consumption'}
+                  Grouped by unit (Inflow - Outflow)
                 </p>
               </div>
 
@@ -306,30 +357,47 @@ export default function ReceivingVsIssuanceReportModal({
               </div>
             </div>
 
-            {/* Material Inflow vs Outflow Velocity Ratio Bar */}
-            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
-              <div className="flex justify-between text-xs font-bold">
-                <span className="text-emerald-700 flex items-center gap-1.5">
-                  <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
-                  Inbound Velocity: {summary.totalReceivedQty.toLocaleString()} PCS ({receivedPct}%)
-                </span>
-                <span className="text-blue-700 flex items-center gap-1.5">
-                  Outbound Velocity: {summary.totalIssuedQty.toLocaleString()} PCS ({issuedPct}%)
-                  <span className="h-2 w-2 rounded-full bg-blue-500"></span>
-                </span>
+            {/* Material Inflow vs Outflow Velocity Ratio Bars (One bar per unit) */}
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5">
+              <div className="flex justify-between items-center text-[10px] font-mono font-bold uppercase text-slate-500">
+                <span>Inbound vs Outbound Velocity by Unit</span>
+                <span>Never aggregates across units</span>
               </div>
-              <div className="w-full bg-slate-200 rounded-full h-3 flex overflow-hidden">
-                <div 
-                  className="bg-emerald-500 transition-all duration-300"
-                  style={{ width: `${receivedPct}%` }}
-                  title={`Received: ${receivedPct}%`}
-                />
-                <div 
-                  className="bg-blue-600 transition-all duration-300"
-                  style={{ width: `${issuedPct}%` }}
-                  title={`Issued: ${issuedPct}%`}
-                />
-              </div>
+              {summary.netByUnit.length === 0 ? (
+                <div className="text-xs text-slate-400 italic py-1">No material movements in this period.</div>
+              ) : (
+                summary.netByUnit.map(nb => {
+                  const vol = nb.received + nb.issued;
+                  const rxPct = vol > 0 ? Math.round((nb.received / vol) * 100) : 50;
+                  const issPct = vol > 0 ? Math.round((nb.issued / vol) * 100) : 50;
+                  return (
+                    <div key={`vel-${nb.key}`} className="space-y-1">
+                      <div className="flex justify-between text-xs font-bold gap-2 flex-wrap">
+                        <span className="text-emerald-700 flex items-center gap-1.5 font-mono">
+                          <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
+                          Inbound [{nb.displayUnit}]: {formatNumberForUnit(nb.received)} {nb.displayUnit} ({rxPct}%)
+                        </span>
+                        <span className="text-blue-700 flex items-center gap-1.5 font-mono">
+                          Outbound [{nb.displayUnit}]: {formatNumberForUnit(nb.issued)} {nb.displayUnit} ({issPct}%)
+                          <span className="h-2 w-2 rounded-full bg-blue-500"></span>
+                        </span>
+                      </div>
+                      <div className="w-full bg-slate-200 rounded-full h-2.5 flex overflow-hidden">
+                        <div
+                          className="bg-emerald-500 transition-all duration-300"
+                          style={{ width: `${rxPct}%` }}
+                          title={`Received (${nb.displayUnit}): ${rxPct}%`}
+                        />
+                        <div
+                          className="bg-blue-600 transition-all duration-300"
+                          style={{ width: `${issPct}%` }}
+                          title={`Issued (${nb.displayUnit}): ${issPct}%`}
+                        />
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
 
@@ -366,27 +434,34 @@ export default function ReceivingVsIssuanceReportModal({
                 <tbody className="divide-y divide-slate-100 font-sans">
                   {summary.skuBreakdown.slice(0, 15).map((sku, idx) => {
                     const isSkuPositive = sku.netDelta >= 0;
+                    const unitBadge = sku.unitMissing ? (
+                      <span className="text-[9px] font-bold text-rose-700 bg-rose-100 border border-rose-200 px-1 py-0.5 rounded ml-1">
+                        {MISSING_UNIT_LABEL}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-normal text-slate-500 ml-1">{sku.unit}</span>
+                    );
                     return (
-                      <tr key={`sku-summary-row-${sku.partCode}-${idx}`} className="hover:bg-slate-50/80 transition">
+                      <tr key={`sku-summary-row-${sku.partCode}-${idx}`} className={`hover:bg-slate-50/80 transition ${sku.unitMissing ? 'bg-rose-50/30' : ''}`}>
                         <td className="py-2 px-2.5 font-mono font-bold text-slate-800 whitespace-nowrap">
                           {sku.partCode}
                         </td>
                         <td className="py-2 px-2.5 text-slate-700 max-w-[200px] truncate" title={sku.description}>
                           {sku.description}
                         </td>
-                        <td className="py-2 px-2.5 text-right font-mono font-bold text-emerald-600">
-                          {sku.receivedQty.toLocaleString()}
+                        <td className="py-2 px-2.5 text-right font-mono font-bold text-emerald-600 whitespace-nowrap">
+                          {formatNumberForUnit(sku.receivedQty)}{unitBadge}
                         </td>
-                        <td className="py-2 px-2.5 text-right font-mono font-bold text-blue-600">
-                          {sku.issuedQty.toLocaleString()}
+                        <td className="py-2 px-2.5 text-right font-mono font-bold text-blue-600 whitespace-nowrap">
+                          {formatNumberForUnit(sku.issuedQty)}{unitBadge}
                         </td>
-                        <td className={`py-2 px-2.5 text-right font-mono font-bold ${
+                        <td className={`py-2 px-2.5 text-right font-mono font-bold whitespace-nowrap ${
                           isSkuPositive ? 'text-indigo-600' : 'text-rose-600'
                         }`}>
-                          {sku.netDelta > 0 ? `+${sku.netDelta.toLocaleString()}` : sku.netDelta.toLocaleString()}
+                          {sku.netDelta > 0 ? `+${formatNumberForUnit(sku.netDelta)}` : formatNumberForUnit(sku.netDelta)}{unitBadge}
                         </td>
-                        <td className="py-2 px-2.5 text-right font-mono text-slate-700">
-                          {sku.currentStock.toLocaleString()} {sku.unit}
+                        <td className="py-2 px-2.5 text-right font-mono text-slate-700 whitespace-nowrap">
+                          {formatNumberForUnit(sku.currentStock)}{unitBadge}
                         </td>
                         <td className="py-2 px-2.5 text-center">
                           <span className={`inline-block text-[9px] font-mono font-bold px-2 py-0.5 rounded-full border ${
@@ -453,7 +528,16 @@ export default function ReceivingVsIssuanceReportModal({
                       <td className="py-2 px-2.5 font-mono font-bold text-slate-800">{r.partCode}</td>
                       <td className="py-2 px-2.5 text-slate-700 truncate max-w-[180px]">{r.itemDescription}</td>
                       <td className="py-2 px-2.5 font-mono text-slate-600">{r.lotNumber || 'N/A'}</td>
-                      <td className="py-2 px-2.5 text-right font-mono font-bold text-emerald-700">{r.quantity.toLocaleString()} {r.unit || 'PCS'}</td>
+                      <td className="py-2 px-2.5 text-right font-mono font-bold whitespace-nowrap">
+                        {r.unitMissing || !r.unit ? (
+                          <span className="text-rose-700">
+                            {formatNumberForUnit(r.quantity)}{' '}
+                            <span className="text-[9px] bg-rose-100 border border-rose-200 px-1 py-0.5 rounded">{MISSING_UNIT_LABEL}</span>
+                          </span>
+                        ) : (
+                          <span className="text-emerald-700">{formatQuantityWithUnit(r.quantity, r.unit)}</span>
+                        )}
+                      </td>
                       <td className="py-2 px-2.5 text-slate-600 truncate max-w-[140px]">{r.supplierOrDept || r.vendorSupplier || 'N/A'}</td>
                       <td className="py-2 px-2.5 text-center">
                         <span className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full border ${
@@ -517,7 +601,16 @@ export default function ReceivingVsIssuanceReportModal({
                       <td className="py-2 px-2.5 font-mono font-bold text-slate-800">{i.partCode}</td>
                       <td className="py-2 px-2.5 text-slate-700 truncate max-w-[180px]">{i.description}</td>
                       <td className="py-2 px-2.5 font-mono text-slate-600">{i.lotNumber || 'N/A'}</td>
-                      <td className="py-2 px-2.5 text-right font-mono font-bold text-blue-700">{i.quantityIssued.toLocaleString()} PCS</td>
+                      <td className="py-2 px-2.5 text-right font-mono font-bold whitespace-nowrap">
+                        {i.unitMissing || !i.unit ? (
+                          <span className="text-rose-700">
+                            {formatNumberForUnit(i.quantityIssued)}{' '}
+                            <span className="text-[9px] bg-rose-100 border border-rose-200 px-1 py-0.5 rounded">{MISSING_UNIT_LABEL}</span>
+                          </span>
+                        ) : (
+                          <span className="text-blue-700">{formatQuantityWithUnit(i.quantityIssued, i.unit)}</span>
+                        )}
+                      </td>
                       <td className="py-2 px-2.5 text-slate-700">{i.department}</td>
                       <td className="py-2 px-2.5 text-slate-600 text-[11px]">
                         <span className="font-semibold text-slate-800">{i.issuedBy || 'Warehouse Clerk'}</span> / {i.receivedBy || 'Line Operator'}

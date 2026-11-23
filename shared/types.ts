@@ -6,8 +6,33 @@
  * Single source of truth imported by both server (server.ts) and client (src/).
  */
 
-export type UOM = 'PCS' | 'KG' | 'SET' | 'BOX' | 'UNITS' | 'LITERS';
-export const UOM_OPTIONS: UOM[] = ['PCS', 'KG', 'SET', 'BOX', 'UNITS', 'LITERS'];
+export type UOM =
+  | 'PCS'
+  | 'KG'
+  | 'SET'
+  | 'BOX'
+  | 'UNITS'
+  | 'LITERS'
+  | 'ROLLS'
+  | 'PACKS'
+  | 'TUBES'
+  | 'BAGS'
+  | 'MTRS'
+  | 'LOT';
+export const UOM_OPTIONS: UOM[] = [
+  'PCS',
+  'KG',
+  'SET',
+  'BOX',
+  'UNITS',
+  'LITERS',
+  'ROLLS',
+  'PACKS',
+  'TUBES',
+  'BAGS',
+  'MTRS',
+  'LOT',
+];
 
 export type MaterialType = 'RAW' | 'PACKAGING' | 'CONSUMABLE' | 'WIP' | 'FG' | 'SUB_PART';
 
@@ -59,6 +84,7 @@ export interface MaterialStockItem extends BaseRecordAudit {
   location: string;
   quantity: number;
   unit: string;
+  unitMissing?: boolean;
   lotNumber: string;
   modelName?: string;
   color?: string;
@@ -100,6 +126,7 @@ export interface ReceivingRecord extends BaseRecordAudit {
   color?: string;
   quantity: number;
   unit: string;
+  unitMissing?: boolean;
   lotNumber: string;
   physicalCondition: {
     boxIntact?: boolean;
@@ -125,6 +152,8 @@ export interface ReceivingRecord extends BaseRecordAudit {
   bom?: BOMItem[];
   autoDeductBom?: boolean;
   customer?: string;
+  stockId?: string;
+  movementIdempotencyKey?: string;
 }
 
 export interface ReturnRecord extends BaseRecordAudit {
@@ -135,6 +164,7 @@ export interface ReturnRecord extends BaseRecordAudit {
   partCode: string;
   quantity: number;
   unit: string;
+  unitMissing?: boolean;
   lotNumber: string;
   department: string;
   reason: string;
@@ -142,6 +172,8 @@ export interface ReturnRecord extends BaseRecordAudit {
   iqcEvaluation: 'APPROVED_IQC' | 'REJECTED_IQC' | 'PENDING_IQC';
   status: 'PENDING' | 'APPROVED' | 'QUARANTINED';
   returnSlipFormNumber: string;
+  stockId?: string;
+  movementIdempotencyKey?: string;
 }
 
 export interface RecyclingRecord extends BaseRecordAudit {
@@ -149,10 +181,14 @@ export interface RecyclingRecord extends BaseRecordAudit {
   date: string;
   itemType: 'Carton Box' | 'Pallet' | 'Partition';
   quantity: number;
+  unit?: string;
+  unitMissing?: boolean;
   condition: 'Reusable' | 'Non-Reusable' | 'Contaminated' | 'Damaged';
   reuseCycleCount: number; // Max 5 cycles
   disposition: 'Re-used' | 'For Re-sorting' | 'Scrap Disposal';
   logSheetNumber: string;
+  stockId?: string;
+  movementIdempotencyKey?: string;
 }
 
 export interface IssuanceRecord extends BaseRecordAudit {
@@ -164,10 +200,14 @@ export interface IssuanceRecord extends BaseRecordAudit {
   description: string;
   quantityRequested: number;
   quantityIssued: number;
+  unit?: string;
+  unitMissing?: boolean;
   lotNumber: string;
   fifoVerified: boolean;
   issuedBy: string;
   receivedBy: string;
+  stockId?: string;
+  movementIdempotencyKey?: string;
 }
 
 export interface DeliveryRecord extends BaseRecordAudit {
@@ -178,6 +218,8 @@ export interface DeliveryRecord extends BaseRecordAudit {
   modelName: string;
   partCode: string;
   quantity: number;
+  unit?: string;
+  unitMissing?: boolean;
   packagingConditionOk: boolean;
   fifoVerified: boolean;
   forkliftChecklistSigned: boolean;
@@ -188,6 +230,8 @@ export interface DeliveryRecord extends BaseRecordAudit {
   status: 'PREPARING' | 'LOADED' | 'RELEASED';
   preparedBy: string;
   loadedBy?: string;
+  stockId?: string;
+  movementIdempotencyKey?: string;
 }
 
 export interface EnvironmentalLog extends BaseRecordAudit {
@@ -335,6 +379,7 @@ export interface StockMovement {
   product_name?: string;
   warehouse_name?: string;
   unit?: string;
+  unitMissing?: boolean;
   lot_number?: string;
   location?: string;
 }
@@ -355,6 +400,7 @@ export interface CreateStockMovementInput {
   idempotencyKey?: string;
   lotNumber?: string;
   location?: string;
+  unit?: string;
 }
 
 export interface StockMovementResult {
@@ -432,6 +478,59 @@ export interface FifoRepairAuditEntry {
   newFifoColor: string;
   timestamp: string;
   reason: string;
+}
+
+export interface ReconcileMismatch {
+  stockId: string;
+  partCode: string;
+  description?: string;
+  lotNumber: string;
+  location?: string;
+  unit?: string;
+  unitMissing?: boolean;
+  storedQuantity: number;
+  movementTotal: number;
+  difference: number;
+  movementCount: number;
+}
+
+export interface ReconcileOrphanMovementSummary {
+  productId: string;
+  movementTotal: number;
+  movementCount: number;
+}
+
+export interface ReconcileMissingUnitItem {
+  collection: string;
+  id: string;
+  partCode?: string;
+  description?: string;
+}
+
+export interface ReconcileReport {
+  generatedAt: string;
+  serverInstanceId: string;
+  dataDir: string;
+  reportPath: string;
+  totalStocksChecked: number;
+  totalMovements: number;
+  matchedCount: number;
+  mismatchCount: number;
+  mismatches: ReconcileMismatch[];
+  orphanMovementProductsCount: number;
+  orphanMovementProducts: ReconcileOrphanMovementSummary[];
+  missingUnitStocksCount?: number;
+  missingUnitRecordsCount?: number;
+  missingUnitItems?: ReconcileMissingUnitItem[];
+}
+
+export interface RebuildMovementsResult {
+  success: boolean;
+  createdMovements: number;
+  baselineMovements: number;
+  repairedBalances: number;
+  totalMovements: number;
+  totalStocks: number;
 }
 
 export interface CentralDatabaseState {

@@ -31,6 +31,13 @@ import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAuthoritativeId } from '../lib/idGenerator';
 import { showPrintToast } from '../utils/printDocument';
+import {
+  MISSING_UNIT_LABEL,
+  formatNumberForUnit,
+  getAllSelectUomOptions,
+  normalizeUnitCode,
+  resolveMasterDataUnit,
+} from '../../shared/units';
 
 interface DeliveryModuleProps {
   deliveries: DeliveryRecord[];
@@ -78,6 +85,7 @@ export default function DeliveryModule({
   const [modelName, setModelName] = useState('');
   const [partCode, setPartCode] = useState('');
   const [quantity, setQuantity] = useState(0);
+  const [unit, setUnit] = useState('PCS');
 
   // Forklift form states
   const [showForkliftForm, setShowForkliftForm] = useState(false);
@@ -101,10 +109,20 @@ export default function DeliveryModule({
 
   const isForkliftPrechecked = forkliftChecks.some(check => check.date === todayStr);
 
+  const handlePickPartCodeChange = (val: string) => {
+    const upper = val.toUpperCase();
+    setPartCode(upper);
+    const resolved = resolveMasterDataUnit({ partCode: upper, modelName }, registries, stocks);
+    if (resolved.unit) {
+      setUnit(resolved.unit);
+    }
+  };
+
   const handlePickSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!pickingListNumber || !poNumber || !modelName || !partCode || quantity <= 0) {
-      showPrintToast('Please fill out all fields correctly.', 'warning');
+    const resolvedUnit = normalizeUnitCode(unit) || resolveMasterDataUnit({ partCode, modelName }, registries, stocks).unit;
+    if (!pickingListNumber || !poNumber || !modelName || !partCode || quantity <= 0 || !resolvedUnit) {
+      showPrintToast('Please fill out all fields including Unit of Measure.', 'warning');
       return;
     }
 
@@ -116,6 +134,8 @@ export default function DeliveryModule({
       modelName,
       partCode,
       quantity,
+      unit: resolvedUnit,
+      unitMissing: false,
       packagingConditionOk: true,
       fifoVerified: true,
       forkliftChecklistSigned: isForkliftPrechecked,
@@ -132,6 +152,7 @@ export default function DeliveryModule({
     setModelName('');
     setPartCode('');
     setQuantity(0);
+    setUnit('PCS');
     setShowPickForm(false);
   };
 
@@ -369,7 +390,7 @@ export default function DeliveryModule({
                   <label className="block text-[10px] font-semibold text-slate-500 mb-1">Part Code *</label>
                   <input 
                     type="text" required placeholder="e.g. FG-SN-999" value={partCode}
-                    onChange={e => setPartCode(e.target.value)}
+                    onChange={e => handlePickPartCodeChange(e.target.value)}
                     className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs font-mono"
                   />
                 </div>
@@ -393,6 +414,18 @@ export default function DeliveryModule({
                     }}
                     className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs font-mono"
                   />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-1">Unit of Measure *</label>
+                  <select
+                    value={unit}
+                    onChange={e => setUnit(normalizeUnitCode(e.target.value))}
+                    className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs font-mono font-bold bg-white"
+                  >
+                    {getAllSelectUomOptions(unit).map(u => (
+                      <option key={u} value={u}>{u}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
@@ -435,6 +468,14 @@ export default function DeliveryModule({
                     const registryItem = registries.find(r => 
                       (r.code || '').trim().toLowerCase() === (d.partCode || '').trim().toLowerCase()
                     );
+                    const deliveryUnitRes = resolveMasterDataUnit(
+                      { unit: d.unit, partCode: d.partCode, modelName: d.modelName },
+                      registries,
+                      stocks
+                    );
+                    const matchedStockUnitRes = matchedStock
+                      ? resolveMasterDataUnit(matchedStock, registries)
+                      : null;
 
                     return (
                       <React.Fragment key={d.id}>
@@ -494,7 +535,14 @@ export default function DeliveryModule({
                             <div className="text-slate-500 text-[11px] truncate max-w-[150px]">{d.modelName}</div>
                           </td>
                           <td className="p-4 text-right font-mono font-bold text-slate-950">
-                            {d.quantity.toLocaleString()} units
+                            <span>{formatNumberForUnit(d.quantity)}</span>{' '}
+                            {deliveryUnitRes.isMissing ? (
+                              <span className="inline-block px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 text-[9px] font-bold">
+                                {MISSING_UNIT_LABEL}
+                              </span>
+                            ) : (
+                              <span className="text-[11px] font-bold text-slate-600">{deliveryUnitRes.unit}</span>
+                            )}
                           </td>
                           <td className="p-4 space-y-1">
                             <div className="flex items-center gap-1 text-[10px] font-medium text-slate-700">
@@ -648,12 +696,16 @@ export default function DeliveryModule({
                                         <span className="bg-slate-100 text-slate-700 font-mono font-semibold px-2.5 py-1 rounded-lg border border-slate-200">
                                           Date: {d.date}
                                         </span>
-                                        <span className="bg-blue-50 text-blue-800 font-bold px-2.5 py-1 rounded-lg border border-blue-200 font-mono">
-                                          Quantity: {d.quantity.toLocaleString()} UNITS
+                                        <span className={`font-bold px-2.5 py-1 rounded-lg border font-mono ${
+                                          deliveryUnitRes.isMissing
+                                            ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                            : 'bg-blue-50 text-blue-800 border-blue-200'
+                                        }`}>
+                                          Quantity: {formatNumberForUnit(d.quantity)} {deliveryUnitRes.isMissing ? MISSING_UNIT_LABEL : deliveryUnitRes.unit}
                                         </span>
-                                        {matchedStock && (
+                                        {matchedStock && matchedStockUnitRes && (
                                           <span className="bg-emerald-50 text-emerald-800 font-bold px-2.5 py-1 rounded-lg border border-emerald-200 font-mono">
-                                            Warehouse Stock: {matchedStock.quantity.toLocaleString()} {matchedStock.unit}
+                                            Warehouse Stock: {formatNumberForUnit(matchedStock.quantity)} {matchedStockUnitRes.isMissing ? MISSING_UNIT_LABEL : matchedStockUnitRes.unit}
                                           </span>
                                         )}
                                       </div>
@@ -1202,6 +1254,23 @@ export default function DeliveryModule({
                 </div>
 
                 <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Unit of Measure</label>
+                  <select
+                    value={normalizeUnitCode(editingDelivery.unit)}
+                    onChange={e => {
+                      const norm = normalizeUnitCode(e.target.value);
+                      setEditingDelivery({ ...editingDelivery, unit: norm, unitMissing: !norm });
+                    }}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono font-bold bg-white"
+                  >
+                    <option value="">-- Select UOM --</option>
+                    {getAllSelectUomOptions(editingDelivery.unit).map(u => (
+                      <option key={u} value={u}>{u}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
                   <label className="block text-[10px] font-bold text-slate-500 mb-1">Status</label>
                   <select 
                     value={editingDelivery.status}
@@ -1254,7 +1323,12 @@ export default function DeliveryModule({
                 </button>
                 <button 
                   onClick={() => {
-                    onEditDelivery?.(editingDelivery);
+                    const resolved = resolveMasterDataUnit(editingDelivery, registries, stocks);
+                    onEditDelivery?.({
+                      ...editingDelivery,
+                      unit: resolved.unit,
+                      unitMissing: resolved.isMissing,
+                    });
                     setEditingDelivery(null);
                   }}
                   className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold"

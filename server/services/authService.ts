@@ -9,6 +9,7 @@ import crypto from "crypto";
 import type { Request, Response } from "express";
 import type { AuthorizedDevice, RegisteredAccount } from "../../shared/types.ts";
 import logger from "../../src/lib/logger.ts";
+import { mapRequestMetaFromApi } from "../api/mapper.ts";
 import {
   DEFAULT_SUPER_ADMIN,
   type RequestAuthContext,
@@ -108,23 +109,11 @@ export function generateSecureRandom4DigitPin(): string {
 }
 
 export function extractDeviceIdFromHttp(req: Request, explicitDeviceId?: string): string {
-  return String(
-    explicitDeviceId ||
-      req.body?.device_id ||
-      req.body?.deviceId ||
-      req.headers["x-device-id"] ||
-      req.query?.deviceId ||
-      req.query?.device_id ||
-      ""
-  ).trim();
+  return mapRequestMetaFromApi(req, explicitDeviceId).deviceId;
 }
 
 export function extractBearerToken(req: Request): string {
-  const authHeader = String(req.headers["authorization"] || "").trim();
-  if (/^Bearer\s+/i.test(authHeader)) {
-    return authHeader.replace(/^Bearer\s+/i, "").trim();
-  }
-  return "";
+  return mapRequestMetaFromApi(req).sessionToken;
 }
 
 export function resolveRequestAuthContext(
@@ -274,15 +263,7 @@ export function isAuthorizedSuperAdmin(
     return true;
   }
 
-  const bodyPin = (
-    req.body?.adminPin ||
-    req.body?.pin ||
-    req.headers["x-admin-pin"] ||
-    req.headers["x-user-pin"] ||
-    ""
-  )
-    .toString()
-    .trim();
+  const bodyPin = mapRequestMetaFromApi(req).adminPin;
 
   if (!bodyPin) return false;
 

@@ -1,0 +1,13 @@
+{
+  "generatedAt": "2026-11-23T01:08:00.116Z",
+  "serverInstanceId": "cli-migration-1795396079905",
+  "dataDir": "/tmp/juwei-staging-6k0O2F",
+  "reportPath": "docs/reconcile-report.json",
+  "totalStocksChecked": 3,
+  "totalMovements": 15,
+  "matchedCount": 3,
+  "mismatchCount": 0,
+  "mismatches": [],
+  "orphanMovementProductsCount": 0,
+  "orphanMovementProducts": []
+}

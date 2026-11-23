@@ -14,6 +14,7 @@ import {
   type FifoStartupRepairReport,
   type ServerContext,
 } from "./context.ts";
+import { getManilaTodayString } from "../../src/lib/businessDate.ts";
 
 export function getMonthFromDate(dateStr?: string | null): number | null {
   if (!dateStr) return null;
@@ -81,7 +82,7 @@ export function repairFifoTagColorsOnStartup(
       const currentColor = stock.fifoColor ?? stock.fifo_color;
       if (!isValidFifoColorName(ctx, currentColor, ctx.state.fifoColorsByMonth)) {
         const recDate =
-          stock.receivedDate || stock.received_date || stock.date || stock.updated_at || nowIso.split("T")[0];
+          stock.receivedDate || stock.received_date || stock.date || stock.updated_at || getManilaTodayString();
         const newColor = getFifoColorForDate(ctx, recDate, ctx.state.fifoColorsByMonth);
         const auditEntry: FifoRepairAuditEntry = {
           id: `FIFO-AUDIT-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
@@ -121,7 +122,7 @@ export function repairFifoTagColorsOnStartup(
       const currentColor = rcv.fifoColorCode ?? rcv.fifo_color_code ?? rcv.fifoColor;
       if (!isValidFifoColorName(ctx, currentColor, ctx.state.fifoColorsByMonth)) {
         const recDate =
-          rcv.receivedDate || rcv.received_date || rcv.date || rcv.updated_at || nowIso.split("T")[0];
+          rcv.receivedDate || rcv.received_date || rcv.date || rcv.updated_at || getManilaTodayString();
         const newColor = getFifoColorForDate(ctx, recDate, ctx.state.fifoColorsByMonth);
         const auditEntry: FifoRepairAuditEntry = {
           id: `FIFO-AUDIT-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,

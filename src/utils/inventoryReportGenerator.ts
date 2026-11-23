@@ -1,12 +1,22 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { MaterialStockItem, getCustomerForPart } from '../types';
+import { MasterRegistryItem, MaterialStockItem, getCustomerForPart } from '../types';
 import { renderPdfDocToPages } from './printDocument';
+import {
+  MISSING_UNIT_LABEL,
+  type UnitTotalBucket,
+  formatGroupedTotals,
+  formatQuantityWithUnit,
+  groupQuantitiesByUnit,
+  normalizeUnitCode,
+  resolveMasterDataUnit,
+} from '../../shared/units';
 
 export interface InventoryReportOptions {
   customerFilter?: string;
-  statusFilter?: 'ALL' | 'APPROVED' | 'LOW_STOCK' | 'QUARANTINE_HOLD';
+  statusFilter?: 'ALL' | 'APPROVED' | 'LOW_STOCK' | 'QUARANTINE_HOLD' | 'MISSING_UNIT';
   searchQuery?: string;
+  registries?: MasterRegistryItem[];
   generatedBy?: string;
   userRole?: string;
   employeeId?: string;
@@ -30,14 +40,15 @@ export interface FilteredInventoryData {
     shortageQty: number;
     resolvedCustomer: string;
     shelfLifeStatus: string;
+    unitMissing: boolean;
   })[];
-  totalQty: number;
-  approvedQty: number;
-  quarantineQty: number;
-  holdQty: number;
+  totalByUnit: UnitTotalBucket[];
+  approvedByUnit: UnitTotalBucket[];
+  quarantineHoldByUnit: UnitTotalBucket[];
+  missingUnitCount: number;
   uniquePartCount: number;
   lowStockCount: number;
-  customerBreakdown: Record<string, { qty: number; count: number }>;
+  customerBreakdown: Record<string, { byUnit: UnitTotalBucket[]; count: number }>;
 }
 
 export function filterInventoryData(
@@ -66,6 +77,7 @@ export function filterInventoryData(
     const isLowStock = reorderMinThreshold > 0 && currentTotalPartQty <= reorderMinThreshold;
     const shortageQty = isLowStock ? Math.max(0, reorderMinThreshold - currentTotalPartQty) : 0;
     const resolvedCustomer = item.customer || getCustomerForPart(item.partCode, item.description) || 'General Stock';
+    const resolvedUnit = resolveMasterDataUnit(item, options.registries || [], stocks);
 
     let shelfLifeStatus = 'Normal';
     if (item.expirationDate) {
@@ -82,6 +94,8 @@ export function filterInventoryData(
 
     return {
       ...item,
+      unit: resolvedUnit.unit,
+      unitMissing: resolvedUnit.isMissing,
       reorderMinThreshold,
       currentTotalPartQty,
       isLowStock,
@@ -102,6 +116,7 @@ export function filterInventoryData(
     if (options.statusFilter === 'APPROVED' && item.status !== 'APPROVED') return false;
     if (options.statusFilter === 'QUARANTINE_HOLD' && item.status !== 'QUARANTINE' && item.status !== 'HOLD') return false;
     if (options.statusFilter === 'LOW_STOCK' && !item.isLowStock) return false;
+    if (options.statusFilter === 'MISSING_UNIT' && !item.unitMissing) return false;
 
     // Search query
     if (options.searchQuery && options.searchQuery.trim()) {
@@ -117,39 +132,45 @@ export function filterInventoryData(
     return true;
   });
 
-  // Calculate aggregates
-  let totalQty = 0;
-  let approvedQty = 0;
-  let quarantineQty = 0;
-  let holdQty = 0;
+  // Calculate unit-grouped aggregates (never mix incompatible units)
+  const totalGrouped = groupQuantitiesByUnit(filtered, i => Number(i.quantity) || 0, i => i.unit);
+  const approvedGrouped = groupQuantitiesByUnit(
+    filtered.filter(i => i.status === 'APPROVED'),
+    i => Number(i.quantity) || 0,
+    i => i.unit
+  );
+  const quarantineHoldGrouped = groupQuantitiesByUnit(
+    filtered.filter(i => i.status === 'QUARANTINE' || i.status === 'HOLD'),
+    i => Number(i.quantity) || 0,
+    i => i.unit
+  );
+
   const uniqueParts = new Set<string>();
   const lowStockParts = new Set<string>();
-  const customerBreakdown: Record<string, { qty: number; count: number }> = {};
+  const itemsByCustomer: Record<string, typeof filtered> = {};
 
   filtered.forEach(item => {
-    const q = Number(item.quantity) || 0;
-    totalQty += q;
     uniqueParts.add(item.partCode);
     if (item.isLowStock) lowStockParts.add(item.partCode);
-
-    if (item.status === 'APPROVED') approvedQty += q;
-    else if (item.status === 'QUARANTINE') quarantineQty += q;
-    else if (item.status === 'HOLD') holdQty += q;
-
     const cust = item.resolvedCustomer;
-    if (!customerBreakdown[cust]) {
-      customerBreakdown[cust] = { qty: 0, count: 0 };
-    }
-    customerBreakdown[cust].qty += q;
-    customerBreakdown[cust].count += 1;
+    if (!itemsByCustomer[cust]) itemsByCustomer[cust] = [];
+    itemsByCustomer[cust].push(item);
+  });
+
+  const customerBreakdown: Record<string, { byUnit: UnitTotalBucket[]; count: number }> = {};
+  Object.entries(itemsByCustomer).forEach(([cust, custItems]) => {
+    customerBreakdown[cust] = {
+      byUnit: groupQuantitiesByUnit(custItems, i => Number(i.quantity) || 0, i => i.unit).buckets,
+      count: custItems.length,
+    };
   });
 
   return {
     items: filtered,
-    totalQty,
-    approvedQty,
-    quarantineQty,
-    holdQty,
+    totalByUnit: totalGrouped.buckets,
+    approvedByUnit: approvedGrouped.buckets,
+    quarantineHoldByUnit: quarantineHoldGrouped.buckets,
+    missingUnitCount: totalGrouped.missingCount,
     uniquePartCount: uniqueParts.size,
     lowStockCount: lowStockParts.size,
     customerBreakdown
@@ -218,6 +239,7 @@ export function generateInventoryReportPDF(
   const scopeCustomer = options.customerFilter && options.customerFilter !== 'ALL' ? `Customer: ${options.customerFilter}` : 'All Customers (Canon, Brother, Dyson, General)';
   const scopeStatus = options.statusFilter === 'APPROVED' ? 'Approved Stock Only' :
     options.statusFilter === 'LOW_STOCK' ? 'Low Stock / Reorder Critical Items' :
+    options.statusFilter === 'MISSING_UNIT' ? 'Missing Unit Records Flagged' :
     options.statusFilter === 'QUARANTINE_HOLD' ? 'Quarantine & Hold Bins' : 'All Stock Statuses';
   doc.text(options.reportTitle || 'COMPREHENSIVE WAREHOUSE INVENTORY AUDIT REPORT', 14, yPos);
 
@@ -225,7 +247,8 @@ export function generateInventoryReportPDF(
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(100, 116, 139); // slate-500
-  doc.text(`Report Scope: ${scopeCustomer}   |   Status Filter: ${scopeStatus}   |   Active Lot Records: ${data.items.length} lots   |   Unique SKUs: ${data.uniquePartCount}`, 14, yPos);
+  const missingFlagSummary = data.missingUnitCount > 0 ? `   |   MISSING UNIT FLAGS: ${data.missingUnitCount}` : '';
+  doc.text(`Report Scope: ${scopeCustomer}   |   Status Filter: ${scopeStatus}   |   Active Lot Records: ${data.items.length} lots   |   Unique SKUs: ${data.uniquePartCount}${missingFlagSummary}`, 14, yPos);
 
   // KPI Summary Cards
   yPos += 5.5;
@@ -235,22 +258,23 @@ export function generateInventoryReportPDF(
   const cardWidth = totalCardWidth / numCards;
   const cardHeight = 14.5;
 
-  // Card 1: Total Approved Stock
+  // Card 1: Total Approved Stock (grouped by unit)
+  const approvedSummary = formatGroupedTotals(data.approvedByUnit, ' / ');
   doc.setFillColor(240, 253, 244); // emerald-50
   doc.setDrawColor(187, 247, 208); // emerald-200
   doc.roundedRect(14, yPos, cardWidth, cardHeight, 1.5, 1.5, 'FD');
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(6.5);
   doc.setTextColor(22, 101, 52);
-  doc.text('APPROVED STOCK', 16, yPos + 4);
+  doc.text('APPROVED STOCK (BY UNIT)', 16, yPos + 4);
   doc.setFont('courier', 'bold');
-  doc.setFontSize(10);
+  doc.setFontSize(approvedSummary.length > 22 ? 7 : approvedSummary.length > 14 ? 8 : 9.5);
   doc.setTextColor(5, 150, 105);
-  doc.text(`${data.approvedQty.toLocaleString()} PCS`, 16, yPos + 9);
+  doc.text(approvedSummary, 16, yPos + 9, { maxWidth: cardWidth - 4 });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6);
   doc.setTextColor(21, 128, 61);
-  doc.text('Ready for issuance', 16, yPos + 12.5);
+  doc.text('Grouped by unit • never mixed', 16, yPos + 12.5);
 
   // Card 2: Total Lots & SKUs
   const card2X = 14 + cardWidth + cardGap;
@@ -288,7 +312,8 @@ export function generateInventoryReportPDF(
   doc.setTextColor(data.lowStockCount > 0 ? 190 : 100, data.lowStockCount > 0 ? 18 : 116, data.lowStockCount > 0 ? 60 : 139);
   doc.text(data.lowStockCount > 0 ? 'Replenishment needed' : 'All thresholds normal', card3X + 2, yPos + 12.5);
 
-  // Card 4: Quarantine & Hold
+  // Card 4: Quarantine & Hold (grouped by unit)
+  const qhSummary = formatGroupedTotals(data.quarantineHoldByUnit, ' / ');
   const card4X = card3X + cardWidth + cardGap;
   doc.setFillColor(254, 243, 199); // amber-50
   doc.setDrawColor(253, 230, 138); // amber-200
@@ -298,15 +323,16 @@ export function generateInventoryReportPDF(
   doc.setTextColor(146, 64, 14);
   doc.text('QUARANTINE & HOLD', card4X + 2, yPos + 4);
   doc.setFont('courier', 'bold');
-  doc.setFontSize(10);
+  doc.setFontSize(qhSummary.length > 22 ? 7 : qhSummary.length > 14 ? 8 : 9.5);
   doc.setTextColor(217, 119, 6);
-  doc.text(`${(data.quarantineQty + data.holdQty).toLocaleString()} PCS`, card4X + 2, yPos + 9);
+  doc.text(qhSummary, card4X + 2, yPos + 9, { maxWidth: cardWidth - 4 });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6);
   doc.setTextColor(180, 83, 9);
   doc.text('Restricted in Isolation Bins', card4X + 2, yPos + 12.5);
 
-  // Card 5: Total Inventory Volume
+  // Card 5: Total Inventory Volume (grouped by unit)
+  const totalSummary = formatGroupedTotals(data.totalByUnit, ' / ');
   const card5X = card4X + cardWidth + cardGap;
   doc.setFillColor(245, 243, 255); // indigo-50
   doc.setDrawColor(221, 214, 254); // indigo-200
@@ -314,15 +340,15 @@ export function generateInventoryReportPDF(
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(6.5);
   doc.setTextColor(76, 29, 149);
-  doc.text('TOTAL GROSS STOCK', card5X + 2, yPos + 4);
+  doc.text('TOTAL STOCK (BY UNIT)', card5X + 2, yPos + 4);
   doc.setFont('courier', 'bold');
-  doc.setFontSize(10);
+  doc.setFontSize(totalSummary.length > 22 ? 7 : totalSummary.length > 14 ? 8 : 9.5);
   doc.setTextColor(79, 70, 229);
-  doc.text(`${data.totalQty.toLocaleString()} PCS`, card5X + 2, yPos + 9);
+  doc.text(totalSummary, card5X + 2, yPos + 9, { maxWidth: cardWidth - 4 });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6);
   doc.setTextColor(109, 40, 217);
-  doc.text('Full warehouse footprint', card5X + 2, yPos + 12.5);
+  doc.text(data.missingUnitCount > 0 ? `${data.missingUnitCount} flagged missing unit` : 'Full warehouse footprint', card5X + 2, yPos + 12.5);
 
   // Table Columns
   const tableColumns = [
@@ -339,19 +365,24 @@ export function generateInventoryReportPDF(
     { header: 'EXPIRATION / FEFO', dataKey: 'shelfLifeStatus' }
   ];
 
-  const tableRows = data.items.map(item => ({
-    partCode: item.partCode,
-    description: item.description,
-    type: item.type || 'RAW',
-    resolvedCustomer: item.resolvedCustomer,
-    location: item.location || 'Zone A',
-    lotNumber: item.lotNumber || 'N/A',
-    quantityFormatted: `${(Number(item.quantity) || 0).toLocaleString()} ${item.unit || 'PCS'}`,
-    fifoColor: item.fifoColor || 'N/A',
-    status: item.status || 'APPROVED',
-    reorderFormatted: item.reorderMinThreshold > 0 ? (item.isLowStock ? `LOW (${item.currentTotalPartQty}/${item.reorderMinThreshold})` : `${item.reorderMinThreshold} ${item.unit}`) : 'N/A',
-    shelfLifeStatus: item.expirationDate ? `${item.expirationDate} (${item.shelfLifeStatus})` : 'No Expiry'
-  }));
+  const tableRows = data.items.map(item => {
+    const unitDisplay = normalizeUnitCode(item.unit) || MISSING_UNIT_LABEL;
+    return {
+      partCode: item.partCode,
+      description: item.description,
+      type: item.type || 'RAW',
+      resolvedCustomer: item.resolvedCustomer,
+      location: item.location || 'Zone A',
+      lotNumber: item.lotNumber || 'N/A',
+      quantityFormatted: formatQuantityWithUnit(Number(item.quantity) || 0, item.unit),
+      fifoColor: item.fifoColor || 'N/A',
+      status: item.status || 'APPROVED',
+      reorderFormatted: item.reorderMinThreshold > 0
+        ? (item.isLowStock ? `LOW (${item.currentTotalPartQty}/${item.reorderMinThreshold} ${unitDisplay})` : `${item.reorderMinThreshold} ${unitDisplay}`)
+        : 'N/A',
+      shelfLifeStatus: item.expirationDate ? `${item.expirationDate} (${item.shelfLifeStatus})` : 'No Expiry'
+    };
+  });
 
   let startTableY = yPos + cardHeight + 4;
 
@@ -555,7 +586,7 @@ export function generateInventoryReportCSV(
     escapeCSV(item.location),
     escapeCSV(item.lotNumber),
     item.quantity ?? 0,
-    escapeCSV(item.unit || 'PCS'),
+    escapeCSV(normalizeUnitCode(item.unit) || MISSING_UNIT_LABEL),
     escapeCSV(item.status),
     escapeCSV(item.fifoColor),
     item.reorderMinThreshold || 0,
@@ -570,11 +601,12 @@ export function generateInventoryReportCSV(
   ].join(','));
 
   const generatedDate = new Date().toISOString();
+  const approvedByUnitText = formatGroupedTotals(data.approvedByUnit, ' + ');
   const summaryComments = [
     `# JUWEI PLASTIC MOULDING PHILIPPINES INC. - INVENTORY EXPORT`,
     `# Generated At: ${generatedDate}`,
     `# Operator: ${options.generatedBy || 'Aldrin Banawa'} (${options.employeeId || 'JPMP-002'})`,
-    `# Total Items: ${data.items.length} lots | Approved Qty: ${data.approvedQty} PCS | Low Stock SKUs: ${data.lowStockCount}`,
+    `# Total Items: ${data.items.length} lots | Approved Stock: ${approvedByUnitText} | Low Stock SKUs: ${data.lowStockCount} | Missing Units: ${data.missingUnitCount}`,
     ''
   ].join('\n');
 

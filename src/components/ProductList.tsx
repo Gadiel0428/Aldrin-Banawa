@@ -14,6 +14,7 @@ import {
 import { Product } from '../types/product';
 import { fetchProducts, upsertProduct } from '../database/products';
 import { subscribeToProducts } from '../database/realtime';
+import { getAllSelectUomOptions, MISSING_UNIT_LABEL, normalizeUnitCode } from '../../shared/units';
 
 export const ProductList: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
@@ -50,7 +51,8 @@ export const ProductList: React.FC = () => {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!sku || !name) return;
+    const cleanUnit = normalizeUnitCode(unit);
+    if (!sku || !name || !cleanUnit) return;
 
     setSaving(true);
     try {
@@ -58,7 +60,7 @@ export const ProductList: React.FC = () => {
         sku,
         name,
         barcode: barcode || undefined,
-        unit,
+        unit: cleanUnit,
         category,
         cost: 0,
         min_stock: Number(minStock),
@@ -114,7 +116,9 @@ export const ProductList: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {filtered.map((prod) => (
+        {filtered.map((prod) => {
+          const resolvedUnit = normalizeUnitCode(prod.unit);
+          return (
           <div
             key={prod.id || prod.sku}
             className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between hover:border-indigo-300 dark:hover:border-indigo-800 transition-all"
@@ -139,15 +143,24 @@ export const ProductList: React.FC = () => {
             <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 grid grid-cols-2 gap-2 text-xs">
               <div>
                 <span className="text-slate-400 text-[10px] uppercase">Unit</span>
-                <div className="font-semibold text-slate-700 dark:text-slate-300">{prod.unit}</div>
+                <div className="font-semibold text-slate-700 dark:text-slate-300">
+                  {resolvedUnit || (
+                    <span className="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-500 border border-rose-500/30 text-[10px] font-mono">
+                      {MISSING_UNIT_LABEL}
+                    </span>
+                  )}
+                </div>
               </div>
               <div>
                 <span className="text-slate-400 text-[10px] uppercase">Min Safety Stock</span>
-                <div className="font-semibold text-slate-700 dark:text-slate-300">{prod.min_stock} {prod.unit}</div>
+                <div className="font-semibold text-slate-700 dark:text-slate-300">
+                  {prod.min_stock} {resolvedUnit || MISSING_UNIT_LABEL}
+                </div>
               </div>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Add SKU Modal */}
@@ -196,14 +209,13 @@ export const ProductList: React.FC = () => {
                   <select
                     value={unit}
                     onChange={(e) => setUnit(e.target.value)}
+                    required
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800"
                   >
-                    <option value="PCS">PCS</option>
-                    <option value="KG">KG</option>
-                    <option value="SET">SET</option>
-                    <option value="BOX">BOX</option>
-                    <option value="UNITS">UNITS</option>
-                    <option value="LITERS">LITERS</option>
+                    <option value="">-- Select Unit --</option>
+                    {getAllSelectUomOptions(unit).map((u) => (
+                      <option key={u} value={u}>{u}</option>
+                    ))}
                   </select>
                 </div>
               </div>

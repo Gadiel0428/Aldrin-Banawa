@@ -30,6 +30,7 @@ import {
   RecyclingRecord, 
   MasterRegistryItem 
 } from '../types';
+import { MISSING_UNIT_LABEL, resolveMasterDataUnit } from '../../shared/units';
 
 export interface QuickRecordLookupModalProps {
   isOpen: boolean;
@@ -497,9 +498,21 @@ export default function QuickRecordLookupModal({
                               </div>
                               <div>
                                 <span className="text-[10px] text-slate-400 font-mono block">QUANTITY</span>
-                                <span className="font-bold text-emerald-400 text-sm">
-                                  {item.quantity.toLocaleString()} <span className="text-xs text-slate-400 font-normal">{item.unit}</span>
-                                </span>
+                                {(() => {
+                                  const res = resolveMasterDataUnit(item, registries, stocks);
+                                  return (
+                                    <span className="font-bold text-emerald-400 text-sm">
+                                      {item.quantity.toLocaleString()}{' '}
+                                      {res.isMissing ? (
+                                        <span className="ml-1 px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[10px] font-mono">
+                                          {MISSING_UNIT_LABEL}
+                                        </span>
+                                      ) : (
+                                        <span className="text-xs text-slate-300 font-normal">{res.unit}</span>
+                                      )}
+                                    </span>
+                                  );
+                                })()}
                               </div>
                               <div>
                                 <span className="text-[10px] text-slate-400 font-mono block">LOCATION</span>
@@ -583,9 +596,21 @@ export default function QuickRecordLookupModal({
                               </div>
                               <div>
                                 <span className="text-[10px] text-slate-400 font-mono block">QTY RECEIVED</span>
-                                <span className="font-bold text-blue-400 text-sm">
-                                  {item.quantity.toLocaleString()} <span className="text-xs text-slate-400 font-normal">{item.unit}</span>
-                                </span>
+                                {(() => {
+                                  const res = resolveMasterDataUnit(item, registries, stocks);
+                                  return (
+                                    <span className="font-bold text-blue-400 text-sm">
+                                      {item.quantity.toLocaleString()}{' '}
+                                      {res.isMissing ? (
+                                        <span className="ml-1 px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[10px] font-mono">
+                                          {MISSING_UNIT_LABEL}
+                                        </span>
+                                      ) : (
+                                        <span className="text-xs text-slate-300 font-normal">{res.unit}</span>
+                                      )}
+                                    </span>
+                                  );
+                                })()}
                               </div>
                               <div>
                                 <span className="text-[10px] text-slate-400 font-mono block">PO / DR NUMBER</span>
@@ -663,9 +688,21 @@ export default function QuickRecordLookupModal({
                               </div>
                               <div>
                                 <span className="text-[10px] text-slate-400 font-mono block">QTY ISSUED</span>
-                                <span className="font-bold text-indigo-400 text-sm">
-                                  {item.quantityIssued?.toLocaleString()}
-                                </span>
+                                {(() => {
+                                  const res = resolveMasterDataUnit(item, registries, stocks);
+                                  return (
+                                    <span className="font-bold text-indigo-400 text-sm">
+                                      {item.quantityIssued?.toLocaleString()}{' '}
+                                      {res.isMissing ? (
+                                        <span className="ml-1 px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[10px] font-mono">
+                                          {MISSING_UNIT_LABEL}
+                                        </span>
+                                      ) : (
+                                        <span className="text-xs text-slate-300 font-normal">{res.unit}</span>
+                                      )}
+                                    </span>
+                                  );
+                                })()}
                               </div>
                               <div>
                                 <span className="text-[10px] text-slate-400 font-mono block">ISSUED BY</span>
@@ -745,9 +782,21 @@ export default function QuickRecordLookupModal({
                               </div>
                               <div>
                                 <span className="text-[10px] text-slate-400 font-mono block">QTY DISPATCHED</span>
-                                <span className="font-bold text-purple-400 text-sm">
-                                  {item.quantity?.toLocaleString()}
-                                </span>
+                                {(() => {
+                                  const res = resolveMasterDataUnit(item, registries, stocks);
+                                  return (
+                                    <span className="font-bold text-purple-400 text-sm">
+                                      {item.quantity?.toLocaleString()}{' '}
+                                      {res.isMissing ? (
+                                        <span className="ml-1 px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[10px] font-mono">
+                                          {MISSING_UNIT_LABEL}
+                                        </span>
+                                      ) : (
+                                        <span className="text-xs text-slate-300 font-normal">{res.unit}</span>
+                                      )}
+                                    </span>
+                                  );
+                                })()}
                               </div>
                               <div>
                                 <span className="text-[10px] text-slate-400 font-mono block">GATE PASS</span>
@@ -821,9 +870,21 @@ export default function QuickRecordLookupModal({
                               </div>
                               <div>
                                 <span className="text-[10px] text-slate-400 font-mono block">QTY RETURNED</span>
-                                <span className="font-bold text-amber-400 text-sm">
-                                  {item.quantity?.toLocaleString()} <span className="text-xs text-slate-400 font-normal">{item.unit}</span>
-                                </span>
+                                {(() => {
+                                  const res = resolveMasterDataUnit(item, registries, stocks);
+                                  return (
+                                    <span className="font-bold text-amber-400 text-sm">
+                                      {item.quantity?.toLocaleString()}{' '}
+                                      {res.isMissing ? (
+                                        <span className="ml-1 px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[10px] font-mono">
+                                          {MISSING_UNIT_LABEL}
+                                        </span>
+                                      ) : (
+                                        <span className="text-xs text-slate-300 font-normal">{res.unit}</span>
+                                      )}
+                                    </span>
+                                  );
+                                })()}
                               </div>
                               <div className="col-span-2">
                                 <span className="text-[10px] text-slate-400 font-mono block">REASON / DEPT</span>
@@ -877,7 +938,7 @@ export default function QuickRecordLookupModal({
                               </span>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-2 text-xs bg-slate-900/80 rounded-xl p-2.5 border border-slate-800">
+                            <div className="grid grid-cols-3 gap-2 text-xs bg-slate-900/80 rounded-xl p-2.5 border border-slate-800">
                               <div>
                                 <span className="text-[10px] text-slate-400 font-mono block">CATEGORY</span>
                                 <span className="text-slate-200 truncate block">{item.category || 'N/A'}</span>
@@ -885,6 +946,19 @@ export default function QuickRecordLookupModal({
                               <div>
                                 <span className="text-[10px] text-slate-400 font-mono block">SUPPLIER</span>
                                 <span className="text-slate-200 truncate block">{item.vendorSupplier || 'N/A'}</span>
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-slate-400 font-mono block">UNIT</span>
+                                {(() => {
+                                  const u = resolveMasterDataUnit({ unit: item.unit, partCode: item.code }, registries).unit;
+                                  return u ? (
+                                    <span className="text-cyan-300 font-mono font-bold block">{u}</span>
+                                  ) : (
+                                    <span className="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[10px] font-mono inline-block">
+                                      {MISSING_UNIT_LABEL}
+                                    </span>
+                                  );
+                                })()}
                               </div>
                             </div>
                           </div>

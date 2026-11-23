@@ -6,6 +6,7 @@
 import { InventoryItem, Warehouse } from '../types/inventory';
 import { Product } from '../types/product';
 import { getApiBaseUrl, getAuthHeaders } from '../config/serverConfig';
+import { resolveMasterDataUnit } from '../../shared/units';
 
 const DEFAULT_WAREHOUSES: Warehouse[] = [
   { id: 'wh-main', name: 'Main Warehouse (Bays 1-4)', location: 'Building A', code: 'WH-MAIN', is_active: true },
@@ -24,21 +25,23 @@ export async function fetchInventory(warehouseId?: string): Promise<InventoryIte
     if (res.ok) {
       const json = await res.json();
       const rawStocks = json?.data?.stocks || [];
+      const rawRegistries = json?.data?.registries || [];
       const warehouses = DEFAULT_WAREHOUSES;
       const whMap = new Map(warehouses.map((w) => [w.id, w]));
 
       const items: InventoryItem[] = rawStocks.map((s: any) => {
         const whId = s.warehouseId || s.warehouse_id || 'wh-main';
         const wh = whMap.get(whId) || warehouses[0];
+        const resolvedUnit = resolveMasterDataUnit(s, rawRegistries, rawStocks);
         const prod: Product = {
           id: s.id,
-          sku: s.sku || s.partNumber || s.id,
-          name: s.partName || s.name || s.sku || 'Material Item',
-          unit: s.unit || 'PCS',
+          sku: s.partCode || s.sku || s.partNumber || s.id,
+          name: s.description || s.partName || s.name || s.sku || 'Material Item',
+          unit: resolvedUnit.unit,
           cost: Number(s.unitCost) || 0,
           price: Number(s.unitPrice) || 0,
-          min_stock: Number(s.minStock) || 10,
-          category: s.category || 'RAW',
+          min_stock: Number(s.reorderMin || s.minStock) || 10,
+          category: s.type || s.category || 'RAW',
           barcode: s.barcode,
           is_active: true,
         };

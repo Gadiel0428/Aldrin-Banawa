@@ -9,6 +9,7 @@ import fs from "fs";
 import path from "path";
 import type { AuthorizedDevice, BackupItemRecord, RegisteredAccount } from "../../shared/types.ts";
 import logger from "../../src/lib/logger.ts";
+import { mapRecordFromApi } from "../api/mapper.ts";
 import {
   checkpointAndClose,
   commitToSqlite,
@@ -35,6 +36,7 @@ import {
   type ServerContext,
 } from "./context.ts";
 import { broadcast, sanitizeUserForClient } from "./realtimeService.ts";
+import { backfillAndFlagUnits } from "./stockLedgerService.ts";
 
 export function getDbPayload(ctx: ServerContext): Record<string, any> {
   return {
@@ -296,7 +298,7 @@ export function applyDatabaseObject(ctx: ServerContext, parsed: any): boolean {
             }
           } else {
             (ctx.state as any)[key] = parsed.state[key].map((rec: any) =>
-              normalizeBaseRecord(rec, ctx.systemResetVersion)
+              normalizeBaseRecord(mapRecordFromApi(key, rec), ctx.systemResetVersion)
             );
           }
         } else if (
@@ -332,7 +334,7 @@ export function applyDatabaseObject(ctx: ServerContext, parsed: any): boolean {
         }
       } else if (Array.isArray(parsed[key]) && !(parsed.state && key in parsed.state)) {
         (ctx.state as any)[key] = parsed[key].map((rec: any) =>
-          normalizeBaseRecord(rec, ctx.systemResetVersion)
+          normalizeBaseRecord(mapRecordFromApi(key, rec), ctx.systemResetVersion)
         );
       }
     }
@@ -375,6 +377,7 @@ export function applyDatabaseObject(ctx: ServerContext, parsed: any): boolean {
     }
 
     ensureSuperAdminSeed(ctx, false);
+    backfillAndFlagUnits(ctx);
 
     let compromisedAccountsCount = 0;
     ctx.state.registeredUsers.forEach((u: RegisteredAccount) => {

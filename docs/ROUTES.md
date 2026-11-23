@@ -135,6 +135,9 @@ Inventory of all HTTP endpoints registered by `server.ts` and `server/routes/*`,
 | `POST` | `/api/reset-everything` | Super Admin (`FULL_ACCESS` / Super Admin PIN) | Rejects `REVOKED`/`PENDING` devices. Requires `confirmed: true`. Advances `systemResetVersion`, wipes operational collections, and broadcasts `GLOBAL_RESET`. |
 | `POST` | `/api/reset-database` | Super Admin (`FULL_ACCESS` / Super Admin PIN) | Alias for `/api/reset-everything`. |
 | `GET` | `/api/admin/audit-logs` | Super Admin (`FULL_ACCESS` / Super Admin PIN) | Rejects `REVOKED`/`PENDING` devices. Filterable by `dateFrom`, `dateTo`, `user`, `recordType`, `action`, `q`, and `limit`. |
+| `GET` | `/api/admin/reconcile-report` | Super Admin (`FULL_ACCESS` / Super Admin PIN) | Returns the latest `docs/reconcile-report.json` ledger comparison (runs reconciliation if none exists yet). |
+| `POST` | `/api/admin/reconcile` | Super Admin (`FULL_ACCESS` / Super Admin PIN) | Runs stock-to-movement reconciliation immediately and writes mismatches to `docs/reconcile-report.json`. |
+| `POST` | `/api/admin/migrate-movements` | Super Admin (`FULL_ACCESS` / Super Admin PIN) | Idempotently rebuilds missing movements from historical records + baseline adjustments and derives stock balances. |
 
 ---
 

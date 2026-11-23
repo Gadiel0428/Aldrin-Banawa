@@ -1,7 +1,18 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { ReceivingRecord, IssuanceRecord, MaterialStockItem } from '../types';
+import { ReceivingRecord, IssuanceRecord, MaterialStockItem, MasterRegistryItem } from '../types';
 import { renderPdfDocToPages } from './printDocument';
+import {
+  MISSING_UNIT_KEY,
+  MISSING_UNIT_LABEL,
+  type UnitTotalBucket,
+  compareUnitKeys,
+  formatGroupedTotals,
+  formatNumberForUnit,
+  formatQuantityWithUnit,
+  groupQuantitiesByUnit,
+  resolveMasterDataUnit,
+} from '../../shared/units';
 
 export interface ReportFilterOptions {
   dateRange: 'today' | '7days' | '30days' | 'all' | 'custom';
@@ -9,6 +20,7 @@ export interface ReportFilterOptions {
   endDate?: string;
   customerFilter?: string;
   partFilter?: string;
+  registries?: MasterRegistryItem[];
   generatedBy?: string;
   userRole?: string;
   employeeId?: string;
@@ -23,12 +35,23 @@ export interface ReportFilterOptions {
   approvedByDate?: string;
 }
 
+export interface NetUnitDeltaBucket {
+  key: string;
+  unit: string;
+  displayUnit: string;
+  received: number;
+  issued: number;
+  net: number;
+  isMissing: boolean;
+}
+
 export interface MaterialFlowSummary {
-  totalReceivedQty: number;
+  receivedByUnit: UnitTotalBucket[];
+  issuedByUnit: UnitTotalBucket[];
+  netByUnit: NetUnitDeltaBucket[];
+  missingUnitCount: number;
   totalReceivedTxCount: number;
-  totalIssuedQty: number;
   totalIssuedTxCount: number;
-  netDelta: number;
   filteredReceiving: ReceivingRecord[];
   filteredIssuances: IssuanceRecord[];
   skuBreakdown: {
@@ -39,6 +62,7 @@ export interface MaterialFlowSummary {
     netDelta: number;
     currentStock: number;
     unit: string;
+    unitMissing: boolean;
   }[];
   startDateStr: string;
   endDateStr: string;
@@ -74,27 +98,64 @@ export function filterReceivingAndIssuanceData(
     if (options.endDate) endIso = options.endDate;
   }
 
-  // Filter receiving
-  const filteredReceiving = receiving.filter(r => {
-    const rDate = r.date || r.receivedDate || '';
-    if (rDate && (rDate < startIso || rDate > endIso)) return false;
-    if (options.customerFilter && r.customer && r.customer !== options.customerFilter) return false;
-    if (options.partFilter && !r.partCode.toLowerCase().includes(options.partFilter.toLowerCase()) && !r.itemDescription.toLowerCase().includes(options.partFilter.toLowerCase())) return false;
-    return true;
-  });
+  const regs = options.registries || [];
 
-  // Filter issuances
-  const filteredIssuances = issuances.filter(i => {
-    const iDate = i.date || '';
-    if (iDate && (iDate < startIso || iDate > endIso)) return false;
-    if (options.partFilter && !i.partCode.toLowerCase().includes(options.partFilter.toLowerCase()) && !i.description.toLowerCase().includes(options.partFilter.toLowerCase())) return false;
-    return true;
-  });
+  // Filter receiving and resolve canonical units
+  const filteredReceiving = receiving
+    .filter(r => {
+      const rDate = r.date || r.receivedDate || '';
+      if (rDate && (rDate < startIso || rDate > endIso)) return false;
+      if (options.customerFilter && r.customer && r.customer !== options.customerFilter) return false;
+      if (options.partFilter && !r.partCode.toLowerCase().includes(options.partFilter.toLowerCase()) && !r.itemDescription.toLowerCase().includes(options.partFilter.toLowerCase())) return false;
+      return true;
+    })
+    .map(r => {
+      const res = resolveMasterDataUnit(r, regs, stocks);
+      return { ...r, unit: res.unit, unitMissing: res.isMissing };
+    });
 
-  // Calculate totals
-  const totalReceivedQty = filteredReceiving.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
-  const totalIssuedQty = filteredIssuances.reduce((sum, i) => sum + (Number(i.quantityIssued) || 0), 0);
-  const netDelta = totalReceivedQty - totalIssuedQty;
+  // Filter issuances and resolve canonical units
+  const filteredIssuances = issuances
+    .filter(i => {
+      const iDate = i.date || '';
+      if (iDate && (iDate < startIso || iDate > endIso)) return false;
+      if (options.partFilter && !i.partCode.toLowerCase().includes(options.partFilter.toLowerCase()) && !i.description.toLowerCase().includes(options.partFilter.toLowerCase())) return false;
+      return true;
+    })
+    .map(i => {
+      const res = resolveMasterDataUnit(i, regs, stocks);
+      return { ...i, unit: res.unit, unitMissing: res.isMissing };
+    });
+
+  // Unit-grouped totals (never mix KG, PCS, etc.)
+  const receivedGrouped = groupQuantitiesByUnit(filteredReceiving, r => Number(r.quantity) || 0, r => r.unit);
+  const issuedGrouped = groupQuantitiesByUnit(filteredIssuances, i => Number(i.quantityIssued) || 0, i => i.unit);
+
+  const unitKeySet = new Set<string>([
+    ...receivedGrouped.buckets.map(b => b.key),
+    ...issuedGrouped.buckets.map(b => b.key),
+  ]);
+  const recvByKey = new Map(receivedGrouped.buckets.map(b => [b.key, b]));
+  const issByKey = new Map(issuedGrouped.buckets.map(b => [b.key, b]));
+
+  const netByUnit: NetUnitDeltaBucket[] = Array.from(unitKeySet)
+    .sort(compareUnitKeys)
+    .map(key => {
+      const rb = recvByKey.get(key);
+      const ib = issByKey.get(key);
+      const received = rb?.total || 0;
+      const issued = ib?.total || 0;
+      const isMissing = key === MISSING_UNIT_KEY;
+      return {
+        key,
+        unit: isMissing ? '' : key,
+        displayUnit: isMissing ? MISSING_UNIT_LABEL : key,
+        received,
+        issued,
+        net: received - issued,
+        isMissing,
+      };
+    });
 
   // SKU Map
   const skuMap: Record<string, {
@@ -104,6 +165,7 @@ export function filterReceivingAndIssuanceData(
     issuedQty: number;
     currentStock: number;
     unit: string;
+    unitMissing: boolean;
   }> = {};
 
   filteredReceiving.forEach(r => {
@@ -115,8 +177,12 @@ export function filterReceivingAndIssuanceData(
         receivedQty: 0,
         issuedQty: 0,
         currentStock: 0,
-        unit: r.unit || 'PCS'
+        unit: r.unit,
+        unitMissing: Boolean(r.unitMissing),
       };
+    } else if (!skuMap[key].unit && r.unit) {
+      skuMap[key].unit = r.unit;
+      skuMap[key].unitMissing = false;
     }
     skuMap[key].receivedQty += Number(r.quantity) || 0;
   });
@@ -130,18 +196,26 @@ export function filterReceivingAndIssuanceData(
         receivedQty: 0,
         issuedQty: 0,
         currentStock: 0,
-        unit: 'PCS'
+        unit: i.unit,
+        unitMissing: Boolean(i.unitMissing),
       };
+    } else if (!skuMap[key].unit && i.unit) {
+      skuMap[key].unit = i.unit;
+      skuMap[key].unitMissing = false;
     }
     skuMap[key].issuedQty += Number(i.quantityIssued) || 0;
   });
 
-  // Populate current approved stock for each SKU
+  // Populate current approved stock and authoritative unit for each SKU
   stocks.forEach(s => {
     if (s.status === 'APPROVED') {
       if (skuMap[s.partCode]) {
         skuMap[s.partCode].currentStock += Number(s.quantity) || 0;
-        if (s.unit) skuMap[s.partCode].unit = s.unit;
+        const stockUnit = resolveMasterDataUnit(s, regs, stocks);
+        if (!stockUnit.isMissing) {
+          skuMap[s.partCode].unit = stockUnit.unit;
+          skuMap[s.partCode].unitMissing = false;
+        }
       }
     }
   });
@@ -154,11 +228,12 @@ export function filterReceivingAndIssuanceData(
     .sort((a, b) => (b.receivedQty + b.issuedQty) - (a.receivedQty + a.issuedQty));
 
   return {
-    totalReceivedQty,
+    receivedByUnit: receivedGrouped.buckets,
+    issuedByUnit: issuedGrouped.buckets,
+    netByUnit,
+    missingUnitCount: receivedGrouped.missingCount + issuedGrouped.missingCount,
     totalReceivedTxCount: filteredReceiving.length,
-    totalIssuedQty,
     totalIssuedTxCount: filteredIssuances.length,
-    netDelta,
     filteredReceiving,
     filteredIssuances,
     skuBreakdown,
@@ -246,44 +321,54 @@ export function generateReceivingVsIssuancePDF(
   const cardWidth = (pageWidth - 28 - 9) / 4;
   const cardHeight = 16;
 
-  // Card 1: Total Received
+  // Card 1: Total Received (grouped by unit)
+  const receivedLabel = formatGroupedTotals(summary.receivedByUnit, ' / ');
   doc.setFillColor(240, 253, 244); // emerald-50
   doc.setDrawColor(187, 247, 208); // emerald-200
   doc.roundedRect(14, yPos, cardWidth, cardHeight, 1.5, 1.5, 'FD');
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7);
+  doc.setFontSize(6.5);
   doc.setTextColor(22, 101, 52); // emerald-800
-  doc.text('TOTAL INBOUND RECEIVED', 16, yPos + 4.5);
+  doc.text('INBOUND RECEIVED (BY UNIT)', 16, yPos + 4.5);
   doc.setFont('courier', 'bold');
-  doc.setFontSize(11);
+  doc.setFontSize(receivedLabel.length > 20 ? 7.5 : receivedLabel.length > 13 ? 8.5 : 10);
   doc.setTextColor(5, 150, 105); // emerald-600
-  doc.text(`${summary.totalReceivedQty.toLocaleString()}`, 16, yPos + 10.5);
+  doc.text(receivedLabel, 16, yPos + 10.5, { maxWidth: cardWidth - 4 });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6.5);
   doc.setTextColor(21, 128, 61);
   doc.text(`${summary.totalReceivedTxCount} Lot Receipt(s)`, 16, yPos + 14);
 
-  // Card 2: Total Issued
+  // Card 2: Total Issued (grouped by unit)
+  const issuedLabel = formatGroupedTotals(summary.issuedByUnit, ' / ');
   const card2X = 14 + cardWidth + 3;
   doc.setFillColor(239, 246, 255); // blue-50
   doc.setDrawColor(191, 219, 254); // blue-200
   doc.roundedRect(card2X, yPos, cardWidth, cardHeight, 1.5, 1.5, 'FD');
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7);
+  doc.setFontSize(6.5);
   doc.setTextColor(30, 64, 175); // blue-800
-  doc.text('TOTAL OUTBOUND ISSUED', card2X + 2, yPos + 4.5);
+  doc.text('OUTBOUND ISSUED (BY UNIT)', card2X + 2, yPos + 4.5);
   doc.setFont('courier', 'bold');
-  doc.setFontSize(11);
+  doc.setFontSize(issuedLabel.length > 20 ? 7.5 : issuedLabel.length > 13 ? 8.5 : 10);
   doc.setTextColor(37, 99, 235); // blue-600
-  doc.text(`${summary.totalIssuedQty.toLocaleString()}`, card2X + 2, yPos + 10.5);
+  doc.text(issuedLabel, card2X + 2, yPos + 10.5, { maxWidth: cardWidth - 4 });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6.5);
   doc.setTextColor(29, 78, 216);
   doc.text(`${summary.totalIssuedTxCount} Requisition(s)`, card2X + 2, yPos + 14);
 
-  // Card 3: Net Material Delta
+  // Card 3: Net Material Delta (grouped by unit)
   const card3X = card2X + cardWidth + 3;
-  const isNetPositive = summary.netDelta >= 0;
+  const netDeltaLabel =
+    summary.netByUnit.length === 0
+      ? '0'
+      : summary.netByUnit
+          .map(b => `${b.net > 0 ? '+' : ''}${formatNumberForUnit(b.net)} ${b.displayUnit}`)
+          .join(' / ');
+  const hasAnyNegative = summary.netByUnit.some(b => b.net < 0);
+  const hasAnyPositive = summary.netByUnit.some(b => b.net > 0);
+  const isNetPositive = !hasAnyNegative || hasAnyPositive;
   if (isNetPositive) {
     doc.setFillColor(245, 243, 255); // indigo-50
     doc.setDrawColor(221, 214, 254);
@@ -295,17 +380,16 @@ export function generateReceivingVsIssuancePDF(
   }
   doc.roundedRect(card3X, yPos, cardWidth, cardHeight, 1.5, 1.5, 'FD');
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7);
-  doc.text('NET INVENTORY DELTA', card3X + 2, yPos + 4.5);
+  doc.setFontSize(6.5);
+  doc.text('NET DELTA (BY UNIT)', card3X + 2, yPos + 4.5);
   doc.setFont('courier', 'bold');
-  doc.setFontSize(11);
+  doc.setFontSize(netDeltaLabel.length > 20 ? 7.5 : netDeltaLabel.length > 13 ? 8.5 : 10);
   if (isNetPositive) {
     doc.setTextColor(79, 70, 229);
   } else {
     doc.setTextColor(225, 29, 72);
   }
-  const sign = summary.netDelta > 0 ? '+' : '';
-  doc.text(`${sign}${summary.netDelta.toLocaleString()}`, card3X + 2, yPos + 10.5);
+  doc.text(netDeltaLabel, card3X + 2, yPos + 10.5, { maxWidth: cardWidth - 4 });
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(6.5);
   if (isNetPositive) {
@@ -313,7 +397,7 @@ export function generateReceivingVsIssuancePDF(
   } else {
     doc.setTextColor(190, 18, 60);
   }
-  doc.text(isNetPositive ? 'Net Inflow Surplus' : 'Net Outflow Deficit', card3X + 2, yPos + 14);
+  doc.text('Per-unit net flow delta', card3X + 2, yPos + 14);
 
   // Card 4: Active SKUs
   const card4X = card3X + cardWidth + 3;
@@ -342,17 +426,18 @@ export function generateReceivingVsIssuancePDF(
   doc.text('1. TOP MATERIAL SKUS INFLOW VS OUTFLOW MATRIX', 14, yPos);
 
   const skuTableData = summary.skuBreakdown.slice(0, 10).map((sku, index) => {
-    const netFormatted = (sku.netDelta > 0 ? '+' : '') + sku.netDelta.toLocaleString();
+    const unitDisplay = sku.unit || MISSING_UNIT_LABEL;
+    const netFormatted = `${sku.netDelta > 0 ? '+' : ''}${sku.netDelta.toLocaleString()} ${unitDisplay}`;
     const velocityStatus = sku.receivedQty > sku.issuedQty ? 'REPLENISHED' :
       sku.issuedQty > sku.receivedQty ? 'HIGH CONSUMPTION' : 'BALANCED';
     return [
       (index + 1).toString(),
       sku.partCode,
       sku.description,
-      sku.receivedQty.toLocaleString(),
-      sku.issuedQty.toLocaleString(),
+      formatQuantityWithUnit(sku.receivedQty, sku.unit),
+      formatQuantityWithUnit(sku.issuedQty, sku.unit),
       netFormatted,
-      sku.currentStock.toLocaleString() + ' ' + sku.unit,
+      formatQuantityWithUnit(sku.currentStock, sku.unit),
       velocityStatus
     ];
   });
@@ -418,7 +503,7 @@ export function generateReceivingVsIssuancePDF(
     r.partCode,
     r.itemDescription,
     r.lotNumber || 'N/A',
-    `${r.quantity.toLocaleString()} ${r.unit || 'PCS'}`,
+    formatQuantityWithUnit(r.quantity, r.unit),
     r.supplierOrDept || r.vendorSupplier || 'N/A',
     r.iqcStatus === 'APPROVED_IQC' ? 'APPROVED' : r.iqcStatus === 'PENDING_IQC' ? 'PENDING' : 'REJECTED'
   ]);
@@ -473,7 +558,7 @@ export function generateReceivingVsIssuancePDF(
     i.partCode,
     i.description,
     i.lotNumber || 'N/A',
-    `${i.quantityIssued.toLocaleString()} PCS`,
+    formatQuantityWithUnit(i.quantityIssued, i.unit),
     i.department || 'N/A',
     i.issuedBy || 'Warehouse Clerk',
     i.receivedBy || 'Line Operator'

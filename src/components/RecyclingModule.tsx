@@ -14,10 +14,19 @@ import {
   Sparkles, 
   BarChart3
 } from 'lucide-react';
-import { RecyclingRecord } from '../types';
+import { RecyclingRecord, MasterRegistryItem } from '../types';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { generateAuthoritativeId } from '../lib/idGenerator';
 import { showPrintToast } from '../utils/printDocument';
+import {
+  MISSING_UNIT_LABEL,
+  formatNumberForUnit,
+  getAllSelectUomOptions,
+  groupQuantitiesByUnit,
+  normalizeUnitCode,
+  resolveMasterDataUnit,
+  type UnitTotalBucket,
+} from '../../shared/units';
 
 interface RecyclingModuleProps {
   recycling: RecyclingRecord[];
@@ -25,6 +34,7 @@ interface RecyclingModuleProps {
   onDeleteRecycling: (id: string) => void;
   isSuperAdmin?: boolean;
   canEdit?: boolean;
+  registries?: MasterRegistryItem[];
 }
 
 export default function RecyclingModule({
@@ -32,7 +42,8 @@ export default function RecyclingModule({
   onAddRecycling,
   onDeleteRecycling,
   isSuperAdmin = false,
-  canEdit = false
+  canEdit = false,
+  registries = []
 }: RecyclingModuleProps) {
   const effectiveCanEdit = canEdit || isSuperAdmin;
   const [searchQuery, setSearchQuery] = useState('');
@@ -43,14 +54,16 @@ export default function RecyclingModule({
   const [logSheetNumber, setLogSheetNumber] = useState('');
   const [itemType, setItemType] = useState<'Carton Box' | 'Pallet' | 'Partition'>('Carton Box');
   const [quantity, setQuantity] = useState(0);
+  const [unit, setUnit] = useState<string>('PCS');
   const [condition, setCondition] = useState<'Reusable' | 'Non-Reusable' | 'Contaminated' | 'Damaged'>('Reusable');
   const [reuseCycleCount, setReuseCycleCount] = useState(1);
   const [disposition, setDisposition] = useState<'Re-used' | 'For Re-sorting' | 'Scrap Disposal'>('Re-used');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!logSheetNumber || quantity <= 0) {
-      showPrintToast('Please fill out all fields correctly.', 'warning');
+    const cleanUnit = normalizeUnitCode(unit);
+    if (!logSheetNumber || quantity <= 0 || !cleanUnit) {
+      showPrintToast('Please fill out all fields including a valid Unit of Measure.', 'warning');
       return;
     }
 
@@ -59,6 +72,8 @@ export default function RecyclingModule({
       date: new Date().toISOString().split('T')[0],
       itemType,
       quantity,
+      unit: cleanUnit,
+      unitMissing: false,
       condition,
       reuseCycleCount,
       disposition,
@@ -70,6 +85,7 @@ export default function RecyclingModule({
     // Reset
     setLogSheetNumber('');
     setQuantity(0);
+    setUnit('PCS');
     setCondition('Reusable');
     setReuseCycleCount(1);
     setDisposition('Re-used');
@@ -83,10 +99,45 @@ export default function RecyclingModule({
     (log.disposition || '').toLowerCase().includes(q)
   );
 
-  // Simple stats
-  const totalReusable = recycling.filter(r => r.disposition === 'Re-used').reduce((sum, r) => sum + r.quantity, 0);
-  const totalScrapped = recycling.filter(r => r.disposition === 'Scrap Disposal').reduce((sum, r) => sum + r.quantity, 0);
-  const totalSorting = recycling.filter(r => r.disposition === 'For Re-sorting').reduce((sum, r) => sum + r.quantity, 0);
+  const resolveLogUnit = (log: RecyclingRecord) =>
+    resolveMasterDataUnit({ unit: log.unit, itemType: log.itemType }, registries);
+
+  const reusableGrouped = groupQuantitiesByUnit(
+    recycling.filter(r => r.disposition === 'Re-used'),
+    r => r.quantity,
+    r => resolveLogUnit(r).unit
+  );
+  const scrappedGrouped = groupQuantitiesByUnit(
+    recycling.filter(r => r.disposition === 'Scrap Disposal'),
+    r => r.quantity,
+    r => resolveLogUnit(r).unit
+  );
+  const sortingGrouped = groupQuantitiesByUnit(
+    recycling.filter(r => r.disposition === 'For Re-sorting'),
+    r => r.quantity,
+    r => resolveLogUnit(r).unit
+  );
+
+  const missingUnitLogsCount = recycling.filter(r => resolveLogUnit(r).isMissing).length;
+
+  const renderUnitBuckets = (buckets: UnitTotalBucket[], defaultTextClass: string) => {
+    if (buckets.length === 0) {
+      return <div className={`text-xl font-mono font-bold ${defaultTextClass}`}>0</div>;
+    }
+    return (
+      <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5 mt-0.5">
+        {buckets.map((bucket) => (
+          <span
+            key={bucket.key}
+            className={`text-lg font-mono font-bold ${bucket.isMissing ? 'text-rose-600' : defaultTextClass}`}
+          >
+            {formatNumberForUnit(bucket.total)}{' '}
+            <span className="text-[11px] font-bold uppercase">{bucket.displayUnit}</span>
+          </span>
+        ))}
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-6" id="recycling-module">
@@ -108,33 +159,33 @@ export default function RecyclingModule({
         </div>
       </div>
 
-      {/* Overview stats panel */}
+      {/* Overview stats panel (strictly grouped by unit) */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4" id="recycling-stats-row">
-        <div className="p-4 bg-white border border-slate-200 rounded-xl shadow-sm flex items-center justify-between">
+        <div className="p-4 bg-white border border-slate-200 rounded-xl shadow-sm flex items-center justify-between gap-2">
           <div>
             <span className="text-[10px] uppercase font-bold text-slate-400">Total In-Use / Reused</span>
-            <div className="text-xl font-mono font-bold text-slate-800">{totalReusable} pcs</div>
+            {renderUnitBuckets(reusableGrouped.buckets, 'text-slate-800')}
             <span className="text-[9px] text-slate-400">Active internal circulation</span>
           </div>
-          <span className="p-2 bg-emerald-50 text-emerald-600 rounded-lg"><CheckCircle className="h-4 w-4" /></span>
+          <span className="p-2 bg-emerald-50 text-emerald-600 rounded-lg shrink-0"><CheckCircle className="h-4 w-4" /></span>
         </div>
 
-        <div className="p-4 bg-white border border-slate-200 rounded-xl shadow-sm flex items-center justify-between">
+        <div className="p-4 bg-white border border-slate-200 rounded-xl shadow-sm flex items-center justify-between gap-2">
           <div>
             <span className="text-[10px] uppercase font-bold text-slate-400">Scrap / Condemned</span>
-            <div className="text-xl font-mono font-bold text-rose-600">{totalScrapped} pcs</div>
+            {renderUnitBuckets(scrappedGrouped.buckets, 'text-rose-600')}
             <span className="text-[9px] text-slate-400">Sent for waste disposal</span>
           </div>
-          <span className="p-2 bg-rose-50 text-rose-600 rounded-lg"><Trash2 className="h-4 w-4" /></span>
+          <span className="p-2 bg-rose-50 text-rose-600 rounded-lg shrink-0"><Trash2 className="h-4 w-4" /></span>
         </div>
 
-        <div className="p-4 bg-white border border-slate-200 rounded-xl shadow-sm flex items-center justify-between">
+        <div className="p-4 bg-white border border-slate-200 rounded-xl shadow-sm flex items-center justify-between gap-2">
           <div>
             <span className="text-[10px] uppercase font-bold text-slate-400">Pending Re-sorting</span>
-            <div className="text-xl font-mono font-bold text-amber-600">{totalSorting} pcs</div>
+            {renderUnitBuckets(sortingGrouped.buckets, 'text-amber-600')}
             <span className="text-[9px] text-slate-400">Requires washing or grading</span>
           </div>
-          <span className="p-2 bg-amber-50 text-amber-600 rounded-lg"><RefreshCcw className="h-4 w-4" /></span>
+          <span className="p-2 bg-amber-50 text-amber-600 rounded-lg shrink-0"><RefreshCcw className="h-4 w-4" /></span>
         </div>
 
         <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl shadow-sm text-white flex items-center justify-between">
@@ -146,6 +197,15 @@ export default function RecyclingModule({
           <span className="p-2 bg-slate-800 text-slate-400 rounded-lg"><BarChart3 className="h-4 w-4" /></span>
         </div>
       </div>
+
+      {missingUnitLogsCount > 0 && (
+        <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+          <span>
+            <strong>{missingUnitLogsCount}</strong> packaging recycling log{missingUnitLogsCount > 1 ? 's' : ''} are missing a unit of measure. Assign or update a defined UOM to preserve unit integrity.
+          </span>
+        </div>
+      )}
 
       {/* Controls */}
       <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
@@ -218,25 +278,37 @@ export default function RecyclingModule({
             </div>
 
             <div>
-              <label className="block text-[10px] font-semibold text-slate-500 mb-1">Quantity of Pieces *</label>
-              <input 
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                required
-                placeholder="Qty"
-                value={quantity || ''}
-                onKeyDown={(e) => {
-                  if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
-                    e.preventDefault();
-                  }
-                }}
-                onChange={e => {
-                  const sanitized = e.target.value.replace(/\D/g, '');
-                  setQuantity(sanitized ? parseInt(sanitized, 10) : 0);
-                }}
-                className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs font-mono focus:outline-none focus:ring-1 focus:ring-slate-400"
-              />
+              <label className="block text-[10px] font-semibold text-slate-500 mb-1">Quantity *</label>
+              <div className="flex gap-2">
+                <input 
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  required
+                  placeholder="Qty"
+                  value={quantity || ''}
+                  onKeyDown={(e) => {
+                    if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
+                      e.preventDefault();
+                    }
+                  }}
+                  onChange={e => {
+                    const sanitized = e.target.value.replace(/\D/g, '');
+                    setQuantity(sanitized ? parseInt(sanitized, 10) : 0);
+                  }}
+                  className="flex-1 px-3 py-1.5 border border-slate-200 rounded text-xs font-mono focus:outline-none focus:ring-1 focus:ring-slate-400"
+                />
+                <select
+                  value={unit}
+                  onChange={e => setUnit(e.target.value)}
+                  className="w-24 px-2 py-1.5 border border-slate-200 rounded text-xs font-mono font-bold bg-white focus:outline-none focus:ring-1 focus:ring-slate-400"
+                  aria-label="Unit of Measure"
+                >
+                  {getAllSelectUomOptions(unit).map(u => (
+                    <option key={u} value={u}>{u}</option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <div>
@@ -354,13 +426,23 @@ export default function RecyclingModule({
               {filteredLogs.map(log => {
                 const isLimitReached = log.reuseCycleCount >= 5;
                 const isScrapped = log.disposition === 'Scrap Disposal';
+                const unitRes = resolveLogUnit(log);
                 return (
                   <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
                     <td className="p-4 font-mono font-semibold text-slate-600">{log.id}</td>
                     <td className="p-4 text-slate-600 font-mono">{log.date}</td>
                     <td className="p-4 font-mono font-bold text-slate-800">{log.logSheetNumber}</td>
                     <td className="p-4 font-semibold text-slate-700">{log.itemType}</td>
-                    <td className="p-4 text-right font-mono font-bold text-slate-800">{log.quantity} pcs</td>
+                    <td className="p-4 text-right font-mono font-bold text-slate-800">
+                      <span>{formatNumberForUnit(log.quantity)}</span>{' '}
+                      {unitRes.isMissing ? (
+                        <span className="inline-block px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 text-[9px] font-bold">
+                          {MISSING_UNIT_LABEL}
+                        </span>
+                      ) : (
+                        <span className="text-[11px] font-bold text-slate-500">{unitRes.unit}</span>
+                      )}
+                    </td>
                     <td className="p-4">
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                         log.condition === 'Reusable' ? 'bg-emerald-50 text-emerald-700' :

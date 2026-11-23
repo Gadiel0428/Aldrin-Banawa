@@ -13,9 +13,12 @@ import type {
   ReceivingRecord,
   RegisteredAccount,
   ReturnRecord,
-  StockMovement,
 } from "../../shared/types.ts";
 import logger from "../../src/lib/logger.ts";
+import {
+  mapStockMovementFromApi,
+  mapSyncCollectionInputFromApi,
+} from "../api/mapper.ts";
 import { recordAuditTrail } from "./auditService.ts";
 import {
   ensureSuperAdminSeed,
@@ -28,11 +31,9 @@ import {
 import { commitDatabase } from "./backupService.ts";
 import {
   DEFAULT_FIFO_COLORS_BY_MONTH,
-  normalizeBaseRecord,
   type ActiveConnectionRecord,
   type ServerContext,
 } from "./context.ts";
-import { getFifoColorForDate } from "./fifoService.ts";
 import {
   assignSocketToGroup,
   broadcast,
@@ -53,7 +54,14 @@ import {
   INVENTORY_COLLECTIONS,
   executeRecordDelete,
   executeRecordUpsert,
+  executeStockMovement,
 } from "./recordService.ts";
+import {
+  computeDerivedBalanceForStock,
+  deriveAllStockBalances,
+  findMovementByIdempotencyKey,
+  resolveStockItemForMovement,
+} from "./stockLedgerService.ts";
 
 export function setupWebSocketServer(server: http.Server, ctx: ServerContext): void {
   const { wss } = ctx;
@@ -772,91 +780,58 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
             }
             const targetAcc = normalizeGroupId(payload.accountId || conn?.accountId, "ACC-JUWEI");
             const targetWh = normalizeGroupId(payload.warehouseId || conn?.warehouseId, "WH-MAIN");
-            const { productId, delta, location, lotNumber, notes } = payload;
-
-            let stockItem: any = ctx.state.stocks.find(
-              (s: any) => String(s.id) === String(productId) || s.partCode === productId
-            );
-            const prevQty = stockItem ? Number(stockItem.quantity) || 0 : 0;
             const appliedDelta =
               Number(
-                delta !== undefined ? delta : payload.quantity !== undefined ? payload.quantity : 0
+                payload.delta !== undefined
+                  ? payload.delta
+                  : payload.quantity !== undefined
+                    ? payload.quantity
+                    : 0
               ) || 0;
-            const calculatedQty = prevQty + appliedDelta;
+            const adjType =
+              payload.type && ["ADJUSTMENT_IN", "ADJUSTMENT_OUT", "PURCHASE", "SALE", "SALE_RETURN", "PURCHASE_RETURN", "TRANSFER_IN", "TRANSFER_OUT", "RECYCLING"].includes(payload.type)
+                ? payload.type
+                : appliedDelta < 0
+                  ? "ADJUSTMENT_OUT"
+                  : "ADJUSTMENT_IN";
 
-            const serverTime = new Date().toISOString();
-            if (stockItem) {
-              stockItem.quantity = Math.max(0, calculatedQty);
-              stockItem.version = (stockItem.version || 1) + 1;
-              stockItem.updated_at = serverTime;
-              stockItem.reset_version = ctx.systemResetVersion;
-              if (location) stockItem.location = location;
-              if (lotNumber) stockItem.lotNumber = lotNumber;
-              stockItem.warehouseId = targetWh;
-              stockItem.accountId = targetAcc;
-            } else if (productId) {
-              stockItem = normalizeBaseRecord(
-                {
-                  id: productId,
-                  partCode: productId,
-                  description: notes || "Adjusted Stock Item",
-                  type: "RAW",
-                  location: location || "Zone A",
-                  quantity: Math.max(0, calculatedQty),
-                  unit: "PCS",
-                  lotNumber: lotNumber || "",
-                  receivedDate: serverTime.split("T")[0],
-                  fifoColor: getFifoColorForDate(
-                    ctx,
-                    serverTime.split("T")[0],
-                    ctx.state.fifoColorsByMonth
-                  ),
-                  status: "APPROVED",
-                  warehouseId: targetWh,
-                  accountId: targetAcc,
-                },
-                ctx.systemResetVersion
-              );
-              ctx.state.stocks.push(stockItem);
-            }
-
-            const movementId = `mov-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-            const movementRecord = {
-              id: movementId,
-              product_id: productId,
-              warehouse_id: targetWh,
-              account_id: targetAcc,
-              type: payload.type || "STOCK_ADJUSTMENT",
-              quantity: appliedDelta,
-              previous_quantity: prevQty,
-              new_quantity: stockItem ? stockItem.quantity : calculatedQty,
-              notes: notes || "Stock adjustment via WebSocket",
-              user_id: conn?.user_id || "OPERATOR",
-              user_name: conn?.username || "Operator",
-              device_id: conn?.device_id || "TERMINAL",
-              created_at: serverTime,
-              reset_version: ctx.systemResetVersion,
-            } as StockMovement;
-
-            if (!ctx.state.stockMovements) ctx.state.stockMovements = [];
-            ctx.state.stockMovements.unshift(movementRecord);
-            ctx.stateRevision++;
-
-            commitDatabase(ctx);
-
-            broadcastInventoryEvent(ctx, {
-              type: "STOCK_ADJUSTMENT",
-              accountId: targetAcc,
-              warehouseId: targetWh,
-              collection: "stocks",
-              record: stockItem,
-              movement: movementRecord,
-              actionDesc:
-                notes || `Adjusted stock for ${productId} (${prevQty} -> ${stockItem?.quantity})`,
-              author: conn?.username || "Operator",
-              user_id: conn?.user_id,
-              device_id: conn?.device_id,
+            const movRes = executeStockMovement(ctx, {
+              reqDevId: conn?.device_id || "TERMINAL",
+              actorName: conn?.username || "Operator",
+              actorEmployeeId: conn?.employeeId,
+              clientResetVersion: Number(payload.reset_version) || conn?.resetVersion,
+              userPermission: conn?.permission,
+              body: {
+                productId: payload.productId || payload.product_id,
+                warehouseId: targetWh,
+                accountId: targetAcc,
+                type: adjType,
+                quantity: appliedDelta,
+                delta: appliedDelta,
+                location: payload.location,
+                lotNumber: payload.lotNumber || payload.lot_number,
+                notes: payload.notes || "Stock adjustment via WebSocket",
+                userId: conn?.user_id || "OPERATOR",
+                userName: conn?.username || "Operator",
+                deviceId: conn?.device_id || "TERMINAL",
+                idempotencyKey:
+                  payload.idempotency_key ||
+                  payload.idempotencyKey ||
+                  payload.clientMutationId ||
+                  `WS-ADJ:${Date.now()}:${Math.random().toString(36).substring(2, 7)}`,
+                preventNegativeStock: payload.preventNegativeStock !== false,
+              },
             });
+
+            if (movRes.status >= 400) {
+              ws.send(
+                JSON.stringify({
+                  type: "ERROR",
+                  error: movRes.payload?.error || "Stock adjustment rejected",
+                  status: movRes.status,
+                })
+              );
+            }
             break;
           }
 
@@ -882,10 +857,17 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
               "WH-MAIN"
             );
             const { productId, fromLocation, toLocation, quantity, notes } = payload;
+            const idempotencyKey =
+              payload.idempotency_key ||
+              payload.idempotencyKey ||
+              payload.clientMutationId ||
+              `WS-XFER:${Date.now()}:${Math.random().toString(36).substring(2, 7)}`;
 
-            const stockItem: any = ctx.state.stocks.find(
-              (s: any) => String(s.id) === String(productId) || s.partCode === productId
-            );
+            if (findMovementByIdempotencyKey(ctx, idempotencyKey)) {
+              break;
+            }
+
+            const stockItem = resolveStockItemForMovement(ctx, productId, payload.lotNumber);
             const serverTime = new Date().toISOString();
             if (stockItem) {
               if (toLocation) stockItem.location = toLocation;
@@ -896,21 +878,25 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
             }
 
             const movementId = `mov-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-            const movementRecord = {
+            const movementRecord = mapStockMovementFromApi({
               id: movementId,
-              product_id: productId,
+              product_id: stockItem ? stockItem.id : productId,
+              product_sku: stockItem?.partCode || productId,
               warehouse_id: targetWh,
               account_id: targetAcc,
               type: "LOCATION_TRANSFER",
               quantity: Number(quantity) || 0,
+              previous_quantity: stockItem ? Number(stockItem.quantity) || 0 : undefined,
+              new_quantity: stockItem ? Number(stockItem.quantity) || 0 : undefined,
               notes:
                 notes || `Transferred from ${fromLocation || sourceWh} to ${toLocation || targetWh}`,
               user_id: conn?.user_id || "OPERATOR",
               user_name: conn?.username || "Operator",
               device_id: conn?.device_id || "TERMINAL",
+              idempotency_key: idempotencyKey,
               created_at: serverTime,
               reset_version: ctx.systemResetVersion,
-            } as unknown as StockMovement;
+            });
 
             if (!ctx.state.stockMovements) ctx.state.stockMovements = [];
             ctx.state.stockMovements.unshift(movementRecord);
@@ -949,74 +935,42 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
             const targetWh = normalizeGroupId(payload.warehouseId || conn?.warehouseId, "WH-MAIN");
             const { orderId, operationType, items, notes } = payload;
 
-            const serverTime = new Date().toISOString();
-            let affectedStockItem: any = null;
-
-            if (Array.isArray(items)) {
-              for (const item of items) {
-                const pId = item.productId || item.id || item.partCode;
-                const qty = Number(item.quantity) || 0;
-                const stockItem: any = ctx.state.stocks.find(
-                  (s: any) => String(s.id) === String(pId) || s.partCode === pId
-                );
-                if (stockItem) {
-                  if (operationType === "SHIP" || operationType === "PICK") {
-                    stockItem.quantity = Math.max(0, (Number(stockItem.quantity) || 0) - qty);
-                  }
-                  stockItem.version = (stockItem.version || 1) + 1;
-                  stockItem.updated_at = serverTime;
-                  stockItem.reset_version = ctx.systemResetVersion;
-                  affectedStockItem = stockItem;
-                }
-              }
+            const isOutbound = operationType === "SHIP" || operationType === "PICK";
+            const itemList = Array.isArray(items) ? items : [];
+            for (const item of itemList) {
+              const pId = item.productId || item.id || item.partCode;
+              const qty = Math.abs(Number(item.quantity) || 0);
+              if (!pId || qty <= 0 || !isOutbound) continue;
+              const baseKey =
+                item.idempotencyKey ||
+                item.idempotency_key ||
+                payload.idempotencyKey ||
+                payload.idempotency_key ||
+                `WS-PPS:${orderId || Date.now()}:${pId}`;
+              executeStockMovement(ctx, {
+                reqDevId: conn?.device_id || "TERMINAL",
+                actorName: conn?.username || "Operator",
+                actorEmployeeId: conn?.employeeId,
+                clientResetVersion: Number(payload.reset_version) || conn?.resetVersion,
+                userPermission: conn?.permission,
+                body: {
+                  productId: pId,
+                  warehouseId: targetWh,
+                  accountId: targetAcc,
+                  type: "SALE",
+                  quantity: qty,
+                  delta: -qty,
+                  referenceNumber: orderId,
+                  notes:
+                    notes || `${operationType || "Pick/Pack/Ship"} operation for order ${orderId}`,
+                  userId: conn?.user_id || "OPERATOR",
+                  userName: conn?.username || "Operator",
+                  deviceId: conn?.device_id || "TERMINAL",
+                  idempotencyKey: baseKey,
+                  preventNegativeStock: true,
+                },
+              });
             }
-
-            const movementId = `mov-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-            const movementRecord = {
-              id: movementId,
-              warehouse_id: targetWh,
-              account_id: targetAcc,
-              type: operationType || "PICK_PACK_SHIP",
-              reference_number: orderId,
-              notes: notes || `${operationType || "Pick/Pack/Ship"} operation for order ${orderId}`,
-              user_id: conn?.user_id || "OPERATOR",
-              user_name: conn?.username || "Operator",
-              device_id: conn?.device_id || "TERMINAL",
-              created_at: serverTime,
-              reset_version: ctx.systemResetVersion,
-            } as unknown as StockMovement;
-
-            if (!ctx.state.stockMovements) ctx.state.stockMovements = [];
-            ctx.state.stockMovements.unshift(movementRecord);
-            ctx.stateRevision++;
-
-            commitDatabase(ctx);
-
-            recordAuditTrail(ctx, {
-              timestamp: serverTime,
-              actor: conn?.username || "Operator",
-              actorId: conn?.employeeId || conn?.user_id || "OPERATOR",
-              action: "STOCK_MOVEMENT",
-              recordType: "stockMovements",
-              recordId: movementId,
-              summary: `${operationType || "PICK_PACK_SHIP"} for order ${orderId}`,
-              details: notes || undefined,
-              deviceId: conn?.device_id || conn?.deviceId,
-            });
-
-            broadcastInventoryEvent(ctx, {
-              type: "PICK_PACK_SHIP",
-              accountId: targetAcc,
-              warehouseId: targetWh,
-              collection: "stocks",
-              record: affectedStockItem,
-              movement: movementRecord,
-              actionDesc:
-                notes || `${operationType || "Pick/Pack/Ship"} completed for order ${orderId}`,
-              author: conn?.username || "Operator",
-              user_id: conn?.user_id,
-              device_id: conn?.device_id,
-            });
             break;
           }
 
@@ -1349,11 +1303,20 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
               break;
             }
 
-            const items: any[] = Array.isArray(payload.data) ? payload.data : [];
+            const mappedSyncItems = mapSyncCollectionInputFromApi(col, payload.data);
+            const items: any[] = Array.isArray(mappedSyncItems) ? mappedSyncItems : [];
             const currentList: any[] = (ctx.state as any)[col] || [];
             const listMap = new Map<string, any>(
               currentList.map((item: any) => [String(item.id || item.record_id), item])
             );
+            const existingMovementKeys =
+              col === "stockMovements"
+                ? new Set<string>(
+                    currentList
+                      .map((m: any) => String(m?.idempotency_key || "").trim())
+                      .filter(Boolean)
+                  )
+                : null;
 
             let modifiedCount = 0;
             const serverTime = new Date().toISOString();
@@ -1374,6 +1337,14 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
               );
               if (ctx.deletedRecordTombstones.has(recId)) continue;
 
+              if (col === "stockMovements" && existingMovementKeys) {
+                const iKey = String(item.idempotency_key || "").trim();
+                if (iKey && existingMovementKeys.has(iKey)) {
+                  continue;
+                }
+                if (iKey) existingMovementKeys.add(iKey);
+              }
+
               const existing = listMap.get(recId);
               if (existing) {
                 const clientVer = Number(item.version) || 1;
@@ -1393,6 +1364,10 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
                   device_id: effectiveDevId,
                   reset_version: ctx.systemResetVersion,
                 };
+
+                if (col === "stocks") {
+                  updatedRec.quantity = computeDerivedBalanceForStock(ctx, updatedRec);
+                }
 
                 if (col === "registeredUsers") {
                   if (existing.pinHash) updatedRec.pinHash = existing.pinHash;
@@ -1428,6 +1403,9 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
                   device_id: effectiveDevId,
                   reset_version: ctx.systemResetVersion,
                 };
+                if (col === "stocks") {
+                  newRec.quantity = computeDerivedBalanceForStock(ctx, newRec);
+                }
                 listMap.set(recId, newRec);
                 modifiedCount++;
               }
@@ -1435,6 +1413,9 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
 
             if (modifiedCount > 0) {
               (ctx.state as any)[col] = Array.from(listMap.values());
+              if (col === "stockMovements") {
+                deriveAllStockBalances(ctx);
+              }
               ctx.stateRevision++;
               commitDatabase(ctx);
 

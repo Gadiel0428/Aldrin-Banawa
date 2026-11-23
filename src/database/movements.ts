@@ -68,6 +68,13 @@ export async function createStockMovement(input: CreateStockMovementInput): Prom
     }
 
     const resJson = await resp.json();
+    if (typeof window !== 'undefined' && resJson?.success) {
+      window.dispatchEvent(
+        new CustomEvent('juwei_stock_movement_executed', {
+          detail: { input: safeInput, delta, idempotencyKey, result: resJson },
+        })
+      );
+    }
     return resJson;
   } catch (err: any) {
     throw new Error(`Stock movement failed: ${err.message}`);

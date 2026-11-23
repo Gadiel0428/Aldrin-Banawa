@@ -6,6 +6,11 @@
  */
 
 import type { Express, Request, Response } from "express";
+import {
+  mapRequestMetaFromApi,
+  mapStockMovementInputFromApi,
+  mapStockMovementToApi,
+} from "../api/mapper.ts";
 import type { ServerContext } from "../services/context.ts";
 import { DEFAULT_FIFO_COLORS_BY_MONTH } from "../services/context.ts";
 import { recordAuditTrail } from "../services/auditService.ts";
@@ -65,7 +70,7 @@ export function registerStockRoutes(app: Express, ctx: ServerContext): void {
         commitDatabase(ctx);
 
         recordAuditTrail(ctx, {
-          actor: auth.account?.username || req.body?.author || "Super Administrator",
+          actor: auth.account?.username || mapRequestMetaFromApi(req).author || "Super Administrator",
           actorId: auth.employeeId || "JPMP-002",
           action: "UPDATE",
           recordType: "fifoColorsByMonth",
@@ -118,18 +123,16 @@ export function registerStockRoutes(app: Express, ctx: ServerContext): void {
   // REST API: Atomic Stock Movements
   app.post("/api/stock-movements", async (req: Request, res: Response) => {
     try {
-      const reqDevId = String(
-        req.body.deviceId || req.body.device_id || req.headers["x-device-id"] || ""
-      ).trim();
-      const auth = resolveRequestAuthContext(ctx, req, reqDevId);
-      const clientResetVersion = Number(req.body.reset_version || req.headers["x-reset-version"]);
+      const meta = mapRequestMetaFromApi(req);
+      const auth = resolveRequestAuthContext(ctx, req, meta.deviceId);
+      const movementInput = mapStockMovementInputFromApi(req.body || {});
       const result = executeStockMovement(ctx, {
-        reqDevId,
+        reqDevId: meta.deviceId,
         actorName: auth.account?.username,
         actorEmployeeId: auth.employeeId,
-        clientResetVersion,
+        clientResetVersion: meta.resetVersion,
         userPermission: auth.permission,
-        body: req.body || {},
+        body: movementInput,
       });
       return res.status(result.status).json(result.payload);
     } catch (err: any) {
@@ -138,7 +141,24 @@ export function registerStockRoutes(app: Express, ctx: ServerContext): void {
   });
 
   app.get("/api/stock-movements", (req: Request, res: Response) => {
-    const limit = parseInt(req.query.limit as string) || 100;
-    res.json((ctx.state.stockMovements || []).slice(0, limit));
+    const rawLimit = String(req.query.limit || "100").trim().toLowerCase();
+    const warehouseFilter = String(req.query.warehouseId || req.query.warehouse_id || "").trim();
+    const productFilter = String(req.query.productId || req.query.product_id || "").trim();
+    let list = ctx.state.stockMovements || [];
+    if (warehouseFilter) {
+      list = list.filter((m) => String(m.warehouse_id || "") === warehouseFilter);
+    }
+    if (productFilter) {
+      list = list.filter(
+        (m) =>
+          String(m.product_id || "") === productFilter ||
+          String(m.product_sku || "") === productFilter
+      );
+    }
+    if (rawLimit !== "all") {
+      const limit = parseInt(rawLimit, 10) || 100;
+      list = list.slice(0, limit);
+    }
+    res.json(list.map(mapStockMovementToApi));
   });
 }

@@ -7,19 +7,11 @@
 
 import { WebSocket } from "ws";
 import logger from "../../src/lib/logger.ts";
+import { mapAccountToApi, mapPresenceToApi, mapSyncStateToApi } from "../api/mapper.ts";
 import type { ActiveConnectionRecord, ServerContext } from "./context.ts";
 
 export function sanitizeUserForClient(u: any): any {
-  if (!u || typeof u !== "object") return u;
-  const hasConfiguredPin = Boolean(
-    u.pinHash || u.hasPin || (u.pin && String(u.pin).trim() !== "")
-  );
-  const { pin: _pin, pinHash: _pinHash, pinSalt: _pinSalt, pin_hash: _pinHashLegacy, ...safe } = u;
-  return {
-    ...safe,
-    hasPin: hasConfiguredPin,
-    mustChangePin: Boolean(u.mustChangePin),
-  };
+  return mapAccountToApi(u);
 }
 
 export function filterDataForClient(
@@ -27,11 +19,7 @@ export function filterDataForClient(
   _clientPermission?: string,
   _clientEmployeeId?: string
 ): any {
-  const cloned = { ...data };
-  if (Array.isArray(cloned.registeredUsers)) {
-    cloned.registeredUsers = cloned.registeredUsers.map((u: any) => sanitizeUserForClient(u));
-  }
-  return cloned;
+  return mapSyncStateToApi(data);
 }
 
 export function normalizeGroupId(id?: unknown, defaultVal: string = "WH-MAIN"): string {
@@ -507,29 +495,9 @@ export function getActiveUsersList(ctx: ServerContext): string[] {
 }
 
 export function getActivePresenceList(ctx: ServerContext): Array<Record<string, any>> {
-  return Array.from(ctx.connectionRegistry.values()).map((c: ActiveConnectionRecord) => ({
-    connection_id: c.connection_id,
-    connectionId: c.connection_id,
-    user_id: c.user_id,
-    userId: c.user_id,
-    session_id: c.session_id,
-    sessionId: c.session_id,
-    device_id: c.device_id,
-    deviceId: c.device_id,
-    stationId: c.stationId || "",
-    employeeId: c.employeeId || "",
-    username: c.username,
-    role: c.role || "OPERATOR",
-    permission: c.permission || "LIMITED_ACCESS",
-    platform: c.platform || "Web",
-    deviceName: c.deviceName || "Terminal",
-    activeView: c.activeView || "dashboard",
-    connectedAt: c.connectedAt,
-    lastPing: c.lastPing,
-    accountId: c.accountId || "ACC-JUWEI",
-    warehouseId: c.warehouseId || "WH-MAIN",
-    source: "central_websocket" as const,
-  }));
+  return Array.from(ctx.connectionRegistry.values()).map((c: ActiveConnectionRecord) =>
+    mapPresenceToApi(c)
+  );
 }
 
 export function broadcast(ctx: ServerContext, msg: any, excludeSocket?: WebSocket): void {

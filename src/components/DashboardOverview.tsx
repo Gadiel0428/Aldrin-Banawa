@@ -56,6 +56,16 @@ import InventoryReportModal from './InventoryReportModal';
 import { PrintPreviewModal } from './PrintPreviewModal';
 import { generateReceivingVsIssuanceReportPages } from '../utils/reportGenerator';
 import { showPrintToast, formatPrintErrorMessage } from '../utils/printDocument';
+import {
+  MISSING_UNIT_KEY,
+  MISSING_UNIT_LABEL,
+  compareUnitKeys,
+  formatNumberForUnit,
+  formatQuantityWithUnit,
+  groupQuantitiesByUnit,
+  resolveMasterDataUnit,
+  type UnitTotalBucket
+} from '../../shared/units';
 
 interface DashboardOverviewProps {
   stocks: MaterialStockItem[];
@@ -100,7 +110,8 @@ export default function DashboardOverview({
   openAlertsSignal = 0
 }: DashboardOverviewProps) {
   const [activePopup, setActivePopup] = useState<DashboardPopup>(null);
-  const [alertsFilter, setAlertsFilter] = useState<'ALL' | 'LOW_STOCK' | 'SHELF_LIFE'>('ALL');
+  const [alertsFilter, setAlertsFilter] = useState<'ALL' | 'LOW_STOCK' | 'SHELF_LIFE' | 'MISSING_UNIT'>('ALL');
+  const [selectedTrendUnit, setSelectedTrendUnit] = useState<string>('');
   const [activeTab, setActiveTab] = useState<'transactions' | 'chat'>('transactions');
   const [msgText, setMsgText] = useState('');
   const [showReportModal, setShowReportModal] = useState(false);
@@ -142,38 +153,100 @@ export default function DashboardOverview({
   const isCompactHeight = viewportHeight <= 800;
   const visibleAlertLimit = isCompactHeight ? 3 : 5;
 
-  // Receiving vs Issuance Snapshot Aggregates
-  const totalReceivedQty = receiving.reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
-  const totalIssuedQty = issuances.reduce((sum, i) => sum + (Number(i.quantityIssued) || 0), 0);
-  const totalMaterialVolume = totalReceivedQty + totalIssuedQty;
-  const rxVelocityPct = totalMaterialVolume > 0 ? Math.round((totalReceivedQty / totalMaterialVolume) * 100) : 50;
-  const issVelocityPct = totalMaterialVolume > 0 ? Math.round((totalIssuedQty / totalMaterialVolume) * 100) : 50;
+  // Resolve master-data/batch units across operational collections without blind PCS masking
+  const resolvedReceiving = React.useMemo(
+    () =>
+      receiving.map(r => {
+        const res = resolveMasterDataUnit(r, registries, stocks);
+        return { ...r, unit: res.unit, unitMissing: res.isMissing };
+      }),
+    [receiving, registries, stocks]
+  );
 
-  // Top SKUs by Flow Activity (Receiving + Issuance combined)
+  const resolvedIssuances = React.useMemo(
+    () =>
+      issuances.map(i => {
+        const res = resolveMasterDataUnit(i, registries, stocks);
+        return { ...i, unit: res.unit, unitMissing: res.isMissing };
+      }),
+    [issuances, registries, stocks]
+  );
+
+  const resolvedDeliveries = React.useMemo(
+    () =>
+      deliveries.map(d => {
+        const res = resolveMasterDataUnit({ ...d, description: d.modelName }, registries, stocks);
+        return { ...d, unit: res.unit, unitMissing: res.isMissing };
+      }),
+    [deliveries, registries, stocks]
+  );
+
+  // Unit-grouped Inbound vs Outbound KPI aggregates (never sum KG + PCS)
+  const receivedGrouped = React.useMemo(
+    () => groupQuantitiesByUnit(resolvedReceiving, r => Number(r.quantity) || 0, r => r.unit),
+    [resolvedReceiving]
+  );
+  const issuedGrouped = React.useMemo(
+    () => groupQuantitiesByUnit(resolvedIssuances, i => Number(i.quantityIssued) || 0, i => i.unit),
+    [resolvedIssuances]
+  );
+
+  const flowVelocityByUnit = React.useMemo(() => {
+    const rxMap = new Map(receivedGrouped.buckets.map(b => [b.key, b.total]));
+    const issMap = new Map(issuedGrouped.buckets.map(b => [b.key, b.total]));
+    const keys = Array.from(new Set([...rxMap.keys(), ...issMap.keys()])).sort(compareUnitKeys);
+    return keys.map(key => {
+      const rx = rxMap.get(key) || 0;
+      const iss = issMap.get(key) || 0;
+      const total = rx + iss;
+      const isMissing = key === MISSING_UNIT_KEY;
+      return {
+        key,
+        displayUnit: isMissing ? MISSING_UNIT_LABEL : key,
+        isMissing,
+        rx,
+        iss,
+        rxPct: total > 0 ? Math.round((rx / total) * 100) : 50,
+        issPct: total > 0 ? Math.round((iss / total) * 100) : 50
+      };
+    });
+  }, [receivedGrouped, issuedGrouped]);
+
+  // Top SKUs by Flow Activity (Receiving + Issuance combined within the SKU's own unit)
   const topFlowSkus = React.useMemo(() => {
-    const map: Record<string, { partCode: string; description: string; rx: number; iss: number; currentStock: number; unit: string }> = {};
-    receiving.forEach(r => {
+    const map: Record<string, { partCode: string; description: string; rx: number; iss: number; currentStock: number; unit: string; unitMissing: boolean }> = {};
+    resolvedReceiving.forEach(r => {
       if (!map[r.partCode]) {
-        map[r.partCode] = { partCode: r.partCode, description: r.itemDescription, rx: 0, iss: 0, currentStock: 0, unit: r.unit || 'PCS' };
+        map[r.partCode] = { partCode: r.partCode, description: r.itemDescription, rx: 0, iss: 0, currentStock: 0, unit: r.unit, unitMissing: r.unitMissing };
+      } else if (!map[r.partCode].unit && r.unit) {
+        map[r.partCode].unit = r.unit;
+        map[r.partCode].unitMissing = false;
       }
       map[r.partCode].rx += Number(r.quantity) || 0;
     });
-    issuances.forEach(i => {
+    resolvedIssuances.forEach(i => {
       if (!map[i.partCode]) {
-        map[i.partCode] = { partCode: i.partCode, description: i.description, rx: 0, iss: 0, currentStock: 0, unit: 'PCS' };
+        map[i.partCode] = { partCode: i.partCode, description: i.description, rx: 0, iss: 0, currentStock: 0, unit: i.unit, unitMissing: i.unitMissing };
+      } else if (!map[i.partCode].unit && i.unit) {
+        map[i.partCode].unit = i.unit;
+        map[i.partCode].unitMissing = false;
       }
       map[i.partCode].iss += Number(i.quantityIssued) || 0;
     });
     stocks.forEach(s => {
       if (s.status === 'APPROVED' && map[s.partCode]) {
         map[s.partCode].currentStock += Number(s.quantity) || 0;
-        if (s.unit) map[s.partCode].unit = s.unit;
+        const stockUnit = resolveMasterDataUnit(s, registries, stocks);
+        if (!stockUnit.isMissing) {
+          map[s.partCode].unit = stockUnit.unit;
+          map[s.partCode].unitMissing = false;
+        }
       }
     });
     return Object.values(map)
       .sort((a, b) => (b.rx + b.iss) - (a.rx + a.iss))
       .slice(0, 5);
-  }, [receiving, issuances, stocks]);
+  }, [resolvedReceiving, resolvedIssuances, stocks, registries]);
 
   const handleDirectExportPDF = async () => {
     if (isExportingPDF) return;
@@ -182,6 +255,7 @@ export default function DashboardOverview({
     try {
       const { pages, filename } = await generateReceivingVsIssuanceReportPages(receiving, issuances, stocks, {
         dateRange: 'all',
+        registries,
         generatedBy: currentUser,
         employeeId: 'JPMP-002',
         userRole: isSuperAdmin ? 'Super Administrator' : 'Warehouse Manager'
@@ -222,16 +296,27 @@ export default function DashboardOverview({
   const quarantineCount = stocks.filter(item => item.status === 'QUARANTINE' || item.status === 'HOLD').length;
   const pendingIqcCount = receiving.filter(item => item.iqcStatus === 'PENDING_IQC').length;
 
-  // Compute Low-Stock and Shelf-Life (<= 30 days) alerts from existing stock data
+  // Compute Low-Stock, Shelf-Life (<= 30 days), and Missing-Unit alerts from stock + master data
   const {
     todayStr,
     lowStockSkus,
     nearExpiryItems,
     unifiedAlerts,
+    missingUnitItems,
+    missingUnitCount,
     totalCount: totalAlertCount,
     lowStockCount,
     shelfLifeCount
-  } = React.useMemo(() => computeStockAlerts(stocks), [stocks]);
+  } = React.useMemo(() => computeStockAlerts(stocks, undefined, registries), [stocks, registries]);
+
+  const operationalMissingUnitCount = React.useMemo(
+    () =>
+      missingUnitCount +
+      resolvedReceiving.filter(r => r.unitMissing).length +
+      resolvedIssuances.filter(i => i.unitMissing).length +
+      resolvedDeliveries.filter(d => d.unitMissing).length,
+    [missingUnitCount, resolvedReceiving, resolvedIssuances, resolvedDeliveries]
+  );
 
   // Broken Resin Sacks Risk
   const brokenResinSacks = stocks.filter(item => item.resinSackRisk && item.status === 'QUARANTINE');
@@ -241,26 +326,26 @@ export default function DashboardOverview({
 
   // Recent transactions timeline combining receiving, issuance, and delivery logs
   const timelineEvents = [
-    ...receiving.map((r, idx) => ({
+    ...resolvedReceiving.map((r, idx) => ({
       id: r.id ? `rec-${r.id}` : `rec-${r.partCode || 'item'}-${r.date || 'nodate'}-${idx}`,
       type: 'RECEIVING',
-      title: `Received ${r.quantity} ${(r.unit || 'PCS').toUpperCase()} of ${r.itemDescription || 'Item'}`,
+      title: `Received ${formatQuantityWithUnit(r.quantity, r.unit)} of ${r.itemDescription || 'Item'}`,
       meta: `Lot: ${r.lotNumber || 'N/A'} | Arrival Classification: ${r.supplierOrDept || 'N/A'} (${r.source === 'INTERNAL' || r.source === 'WIP/BOM/FG(Internal)' ? 'INTERNAL' : 'EXTERNAL'})${r.vendorSupplier ? ' [' + r.vendorSupplier + ']' : ''}`,
       date: r.date,
       badgeColor: 'bg-emerald-50 text-emerald-700 border-emerald-200'
     })),
-    ...issuances.map((i, idx) => ({
+    ...resolvedIssuances.map((i, idx) => ({
       id: i.id ? `iss-${i.id}` : `iss-${i.partCode || 'item'}-${i.date || 'nodate'}-${idx}`,
       type: 'ISSUANCE',
-      title: `Issued ${i.quantityIssued} to ${i.department}`,
+      title: `Issued ${formatQuantityWithUnit(i.quantityIssued, i.unit)} to ${i.department}`,
       meta: `Part: ${i.partCode} | Req: ${i.requisitionNumber}`,
       date: i.date,
       badgeColor: 'bg-blue-50 text-blue-700 border-blue-200'
     })),
-    ...deliveries.map((d, idx) => ({
+    ...resolvedDeliveries.map((d, idx) => ({
       id: d.id ? `del-${d.id}` : `del-${d.gatePassNumber || 'gp'}-${d.date || 'nodate'}-${idx}`,
       type: 'DELIVERY',
-      title: `Dispatched ${d.quantity} units (${d.modelName})`,
+      title: `Dispatched ${formatQuantityWithUnit(d.quantity, d.unit)} (${d.modelName})`,
       meta: `Gate Pass: ${d.gatePassNumber} | Status: ${d.status}`,
       date: d.date,
       badgeColor: 'bg-purple-50 text-purple-700 border-purple-200'
@@ -273,41 +358,107 @@ export default function DashboardOverview({
     return unifiedAlerts;
   }, [unifiedAlerts, alertsFilter]);
 
-  // Top Active SKUs for 7-Day Stock Level Trend Chart (Recharts)
-  const topActiveSkus = React.useMemo(() => {
-    const activityMap: Record<string, { partCode: string; description: string; currentQty: number; activityCount: number }> = {};
+  // Group Active SKUs by Unit for 7-Day Stock Level Trend Chart (never mix KG + PCS on the same chart)
+  const trendUnitBuckets = React.useMemo(() => {
+    const activityMap: Record<
+      string,
+      { partCode: string; description: string; currentQty: number; activityCount: number; unit: string; unitKey: string }
+    > = {};
 
     stocks.forEach(s => {
+      const res = resolveMasterDataUnit(s, registries, stocks);
+      const uKey = res.unit || MISSING_UNIT_KEY;
       if (!activityMap[s.partCode]) {
-        activityMap[s.partCode] = { partCode: s.partCode, description: s.description, currentQty: 0, activityCount: 0 };
+        activityMap[s.partCode] = {
+          partCode: s.partCode,
+          description: s.description,
+          currentQty: 0,
+          activityCount: 0,
+          unit: res.unit,
+          unitKey: uKey
+        };
+      } else if (!activityMap[s.partCode].unit && res.unit) {
+        activityMap[s.partCode].unit = res.unit;
+        activityMap[s.partCode].unitKey = res.unit;
       }
-      activityMap[s.partCode].currentQty += (s.status === 'APPROVED' ? s.quantity : 0);
+      activityMap[s.partCode].currentQty += s.status === 'APPROVED' ? Number(s.quantity) || 0 : 0;
     });
 
-    receiving.forEach(r => {
+    resolvedReceiving.forEach(r => {
+      const uKey = r.unit || MISSING_UNIT_KEY;
       if (!activityMap[r.partCode]) {
-        activityMap[r.partCode] = { partCode: r.partCode, description: r.itemDescription, currentQty: 0, activityCount: 0 };
+        activityMap[r.partCode] = {
+          partCode: r.partCode,
+          description: r.itemDescription,
+          currentQty: 0,
+          activityCount: 0,
+          unit: r.unit,
+          unitKey: uKey
+        };
       }
       activityMap[r.partCode].activityCount += 1;
     });
 
-    issuances.forEach(i => {
+    resolvedIssuances.forEach(i => {
+      const uKey = i.unit || MISSING_UNIT_KEY;
       if (!activityMap[i.partCode]) {
-        activityMap[i.partCode] = { partCode: i.partCode, description: i.description, currentQty: 0, activityCount: 0 };
+        activityMap[i.partCode] = {
+          partCode: i.partCode,
+          description: i.description,
+          currentQty: 0,
+          activityCount: 0,
+          unit: i.unit,
+          unitKey: uKey
+        };
       }
       activityMap[i.partCode].activityCount += 1;
     });
 
-    return Object.values(activityMap)
-      .sort((a, b) => (b.activityCount * 1000 + b.currentQty) - (a.activityCount * 1000 + a.currentQty))
-      .slice(0, 4);
-  }, [stocks, receiving, issuances]);
+    const grouped = new Map<
+      string,
+      { key: string; displayUnit: string; isMissing: boolean; skus: typeof activityMap[string][] }
+    >();
+    Object.values(activityMap).forEach(entry => {
+      const existing = grouped.get(entry.unitKey);
+      if (existing) {
+        existing.skus.push(entry);
+      } else {
+        grouped.set(entry.unitKey, {
+          key: entry.unitKey,
+          displayUnit: entry.unitKey === MISSING_UNIT_KEY ? MISSING_UNIT_LABEL : entry.unitKey,
+          isMissing: entry.unitKey === MISSING_UNIT_KEY,
+          skus: [entry]
+        });
+      }
+    });
+
+    return Array.from(grouped.values())
+      .sort((a, b) => compareUnitKeys(a.key, b.key))
+      .map(group => ({
+        ...group,
+        skus: group.skus
+          .sort((a, b) => (b.activityCount * 1000 + b.currentQty) - (a.activityCount * 1000 + a.currentQty))
+          .slice(0, 4)
+      }));
+  }, [stocks, registries, resolvedReceiving, resolvedIssuances]);
+
+  const activeTrendGroup = React.useMemo(() => {
+    if (trendUnitBuckets.length === 0) return null;
+    if (selectedTrendUnit) {
+      const match = trendUnitBuckets.find(g => g.key === selectedTrendUnit);
+      if (match) return match;
+    }
+    return trendUnitBuckets[0];
+  }, [trendUnitBuckets, selectedTrendUnit]);
+
+  const topActiveSkus = activeTrendGroup?.skus || [];
+  const activeTrendUnitDisplay = activeTrendGroup?.displayUnit || '';
 
   const skuLineColors = ['#4f46e5', '#0891b2', '#e11d48', '#d97706'];
 
-  // 7-day stock level trend dataset calculation
+  // 7-day stock level trend dataset calculation (single-unit consistent)
   const stockTrendData = React.useMemo(() => {
-    const endDate = new Date('2026-07-22');
+    const endDate = new Date();
     const days = Array.from({ length: 7 }).map((_, idx) => {
       const d = new Date(endDate);
       d.setDate(d.getDate() - (6 - idx));
@@ -320,19 +471,18 @@ export default function DashboardOverview({
       const dataPoint: Record<string, any> = { date: label, rawDate: isoDate };
 
       topActiveSkus.forEach((sku, skuIdx) => {
-        const rxAfter = receiving
-          .filter(r => r.partCode === sku.partCode && r.date > isoDate)
-          .reduce((sum, r) => sum + r.quantity, 0);
-        const issAfter = issuances
-          .filter(i => i.partCode === sku.partCode && i.date > isoDate)
-          .reduce((sum, i) => sum + i.quantityIssued, 0);
+        const rxAfter = resolvedReceiving
+          .filter(r => r.partCode === sku.partCode && (r.date || '') > isoDate)
+          .reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
+        const issAfter = resolvedIssuances
+          .filter(i => i.partCode === sku.partCode && (i.date || '') > isoDate)
+          .reduce((sum, i) => sum + (Number(i.quantityIssued) || 0), 0);
 
         let historicalQty = sku.currentQty - rxAfter + issAfter;
 
-        // Smooth 7-day trend variations for active SKUs
-        if (daysAgo > 0) {
-          const pseudoVar = Math.round((sku.currentQty || 500) * 0.025 * daysAgo * (skuIdx % 2 === 0 ? -1 : 1));
-          historicalQty = Math.max(20, historicalQty + pseudoVar);
+        if (daysAgo > 0 && historicalQty > 0) {
+          const pseudoVar = Math.round(historicalQty * 0.025 * daysAgo * (skuIdx % 2 === 0 ? -1 : 1));
+          historicalQty = Math.max(0, historicalQty + pseudoVar);
         }
 
         dataPoint[sku.partCode] = Math.max(0, historicalQty);
@@ -340,15 +490,17 @@ export default function DashboardOverview({
 
       return dataPoint;
     });
-  }, [topActiveSkus, receiving, issuances]);
+  }, [topActiveSkus, resolvedReceiving, resolvedIssuances]);
 
   const CustomChartTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
       return (
-        <div className="bg-slate-900 text-white p-3 rounded-xl shadow-xl border border-slate-700 text-xs font-mono space-y-1.5 min-w-[200px]">
-          <div className="font-sans font-bold text-slate-300 border-b border-slate-700 pb-1 flex justify-between items-center">
+        <div className="bg-slate-900 text-white p-3 rounded-xl shadow-xl border border-slate-700 text-xs font-mono space-y-1.5 min-w-[210px]">
+          <div className="font-sans font-bold text-slate-300 border-b border-slate-700 pb-1 flex justify-between items-center gap-2">
             <span>{label}</span>
-            <span className="text-[10px] text-indigo-400 font-mono font-bold">7-DAY TREND</span>
+            <span className="text-[10px] text-indigo-400 font-mono font-bold">
+              7-DAY ({activeTrendUnitDisplay || MISSING_UNIT_LABEL})
+            </span>
           </div>
           {payload.map((entry: any, index: number) => (
             <div key={`item-${index}`} className="flex justify-between items-center gap-4">
@@ -357,7 +509,10 @@ export default function DashboardOverview({
                 <span className="font-bold">{entry.name?.split(' - ')[0] || entry.name}:</span>
               </span>
               <span className="font-bold text-white font-mono tabular-nums">
-                {Number(entry.value).toLocaleString()} <span className="text-[10px] text-slate-400 font-normal">units</span>
+                {formatNumberForUnit(Number(entry.value))}{' '}
+                <span className="text-[10px] text-indigo-300 font-semibold">
+                  {activeTrendUnitDisplay || MISSING_UNIT_LABEL}
+                </span>
               </span>
             </div>
           ))}
@@ -365,6 +520,49 @@ export default function DashboardOverview({
       );
     }
     return null;
+  };
+
+  const renderKpiUnitBuckets = (buckets: UnitTotalBucket[], valueColorClass: string, unitColorClass: string) => {
+    if (!buckets || buckets.length === 0) {
+      return (
+        <div className="mt-1 flex items-baseline gap-1 min-w-0">
+          <span className={`text-[clamp(0.95rem,1.9vh,1.25rem)] font-extrabold font-mono tabular-nums leading-none ${valueColorClass}`}>
+            0
+          </span>
+          <span className={`text-[9px] font-bold font-mono shrink-0 ${unitColorClass}`}>RECORDS</span>
+        </div>
+      );
+    }
+    if (buckets.length === 1) {
+      const b = buckets[0];
+      return (
+        <div className="mt-1 flex items-baseline gap-1 min-w-0 flex-wrap">
+          <span className={`text-[clamp(0.95rem,1.9vh,1.25rem)] font-extrabold font-mono tabular-nums leading-none truncate ${b.isMissing ? 'text-rose-700' : valueColorClass}`}>
+            {formatNumberForUnit(b.total)}
+          </span>
+          <span className={`text-[9px] font-bold font-mono shrink-0 ${b.isMissing ? 'text-rose-700 bg-rose-100 px-1 py-0.5 rounded' : unitColorClass}`}>
+            {b.displayUnit}
+          </span>
+        </div>
+      );
+    }
+    return (
+      <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 min-w-0">
+        {buckets.slice(0, 3).map(b => (
+          <div key={b.key} className="flex items-baseline gap-0.5 font-mono tabular-nums">
+            <span className={`text-[clamp(0.8rem,1.55vh,1.05rem)] font-extrabold leading-none ${b.isMissing ? 'text-rose-700' : valueColorClass}`}>
+              {formatNumberForUnit(b.total)}
+            </span>
+            <span className={`text-[8px] font-bold ${b.isMissing ? 'text-rose-700' : unitColorClass}`}>
+              {b.displayUnit}
+            </span>
+          </div>
+        ))}
+        {buckets.length > 3 && (
+          <span className="text-[9px] font-mono text-slate-500">+{buckets.length - 3}</span>
+        )}
+      </div>
+    );
   };
 
   const displayedLowStock = lowStockSkus.slice(0, visibleAlertLimit);
@@ -399,6 +597,23 @@ export default function DashboardOverview({
         </div>
 
         <div className="flex flex-wrap lg:flex-nowrap items-center gap-1.5 xl:gap-2 shrink-0">
+          {operationalMissingUnitCount > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                setAlertsFilter('MISSING_UNIT');
+                setActivePopup('alerts');
+              }}
+              className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-rose-950 hover:bg-rose-900 text-rose-200 border border-rose-500/60 transition flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
+              title="Records missing a unit in both record and master data"
+            >
+              <AlertTriangle className="h-3.5 w-3.5 text-rose-400 shrink-0" />
+              <span>Missing Units</span>
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-extrabold bg-rose-600 text-white leading-none">
+                {operationalMissingUnitCount}
+              </span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => {
@@ -460,7 +675,7 @@ export default function DashboardOverview({
         className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-2 shrink-0"
         id="kpi-grid"
       >
-        {/* 1. Inbound Received */}
+        {/* 1. Inbound Received (Grouped by Unit) */}
         <button
           type="button"
           onClick={() => setView('receiving')}
@@ -473,18 +688,13 @@ export default function DashboardOverview({
             </span>
             <ArrowDownLeft className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
           </div>
-          <div className="mt-1 flex items-baseline gap-1 min-w-0">
-            <span className="text-[clamp(0.95rem,1.9vh,1.25rem)] font-extrabold font-mono tabular-nums text-emerald-700 leading-none truncate">
-              {totalReceivedQty.toLocaleString()}
-            </span>
-            <span className="text-[9px] font-bold font-mono text-emerald-600 shrink-0">PCS</span>
-          </div>
+          {renderKpiUnitBuckets(receivedGrouped.buckets, 'text-emerald-700', 'text-emerald-600')}
           <span className="text-[9px] text-slate-500 font-mono truncate mt-1">
-            {receiving.length} receipts
+            {receiving.length} receipts · grouped by unit
           </span>
         </button>
 
-        {/* 2. Outbound Issued */}
+        {/* 2. Outbound Issued (Grouped by Unit) */}
         <button
           type="button"
           onClick={() => setView('issuance')}
@@ -497,14 +707,9 @@ export default function DashboardOverview({
             </span>
             <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-blue-600" />
           </div>
-          <div className="mt-1 flex items-baseline gap-1 min-w-0">
-            <span className="text-[clamp(0.95rem,1.9vh,1.25rem)] font-extrabold font-mono tabular-nums text-blue-700 leading-none truncate">
-              {totalIssuedQty.toLocaleString()}
-            </span>
-            <span className="text-[9px] font-bold font-mono text-blue-600 shrink-0">PCS</span>
-          </div>
+          {renderKpiUnitBuckets(issuedGrouped.buckets, 'text-blue-700', 'text-blue-600')}
           <span className="text-[9px] text-slate-500 font-mono truncate mt-1">
-            {issuances.length} requisitions
+            {issuances.length} requisitions · grouped by unit
           </span>
         </button>
 
@@ -557,25 +762,57 @@ export default function DashboardOverview({
 
       {/* ROW C: 12-Column Single-Screen Workspace */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 lg:flex-1 lg:min-h-0">
-        {/* LEFT (col-span-5): 7-Day Stock Trends Chart */}
+        {/* LEFT (col-span-5): 7-Day Stock Trends Chart (Grouped by Unit) */}
         <div
           className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-[clamp(0.65rem,1.25vh,0.9rem)] shadow-2xs flex flex-col lg:min-h-0"
           id="stock-level-trends-chart"
         >
-          <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 shrink-0">
+          <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 shrink-0 flex-wrap">
             <div className="flex items-center gap-2 min-w-0">
               <TrendingUp className="h-4 w-4 text-indigo-600 shrink-0" />
               <h3 className="font-bold text-xs xl:text-sm text-slate-800 truncate">
                 7-Day Stock Trends
               </h3>
+              {activeTrendUnitDisplay && (
+                <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border ${
+                  activeTrendGroup?.isMissing
+                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                    : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                }`}>
+                  {activeTrendUnitDisplay}
+                </span>
+              )}
             </div>
-            <button
-              type="button"
-              onClick={() => setView('stock')}
-              className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 transition flex items-center gap-1 cursor-pointer shrink-0 whitespace-nowrap"
-            >
-              Inventory <ArrowUpRight className="h-3 w-3" />
-            </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {trendUnitBuckets.length > 1 && (
+                <div className="flex items-center gap-0.5 bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                  {trendUnitBuckets.map(group => {
+                    const isActive = activeTrendGroup?.key === group.key;
+                    return (
+                      <button
+                        key={`trend-unit-${group.key}`}
+                        type="button"
+                        onClick={() => setSelectedTrendUnit(group.key)}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition cursor-pointer ${
+                          isActive
+                            ? 'bg-indigo-600 text-white shadow-2xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {group.displayUnit}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => setView('stock')}
+                className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 transition flex items-center gap-1 cursor-pointer shrink-0 whitespace-nowrap"
+              >
+                Inventory <ArrowUpRight className="h-3 w-3" />
+              </button>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 text-[10px] font-mono text-slate-600 shrink-0">
@@ -589,13 +826,14 @@ export default function DashboardOverview({
                   style={{ backgroundColor: skuLineColors[idx % skuLineColors.length] }}
                 />
                 <span className="font-bold text-slate-800 truncate">{sku.partCode}</span>
+                <span className="text-[9px] text-slate-400">({sku.unit || MISSING_UNIT_LABEL})</span>
               </div>
             ))}
           </div>
 
           <div className="flex-1 min-h-[240px] lg:min-h-0 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={stockTrendData} margin={{ top: 8, right: 12, left: -12, bottom: 2 }}>
+              <LineChart data={stockTrendData} margin={{ top: 8, right: 12, left: -4, bottom: 2 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
                 <XAxis
                   dataKey="date"
@@ -607,6 +845,12 @@ export default function DashboardOverview({
                   tick={{ fill: '#64748b', fontSize: 10, fontWeight: 500 }}
                   axisLine={{ stroke: '#cbd5e1' }}
                   tickLine={false}
+                  tickFormatter={(val: number) =>
+                    activeTrendUnitDisplay && !activeTrendGroup?.isMissing
+                      ? `${val.toLocaleString()} ${activeTrendUnitDisplay}`
+                      : val.toLocaleString()
+                  }
+                  width={68}
                 />
                 <Tooltip content={<CustomChartTooltip />} />
                 <Legend
@@ -666,7 +910,12 @@ export default function DashboardOverview({
                     <span className="text-slate-500 truncate">{item.description}</span>
                   </div>
                   <span className="font-mono font-bold text-rose-700 tabular-nums shrink-0">
-                    {item.currentQty.toLocaleString()}/{item.reorderMin.toLocaleString()} {item.unit}
+                    {formatNumberForUnit(item.currentQty)}/{formatNumberForUnit(item.reorderMin)}{' '}
+                    {item.unitMissing ? (
+                      <span className="text-[9px] bg-rose-100 border border-rose-200 px-1 rounded">{MISSING_UNIT_LABEL}</span>
+                    ) : (
+                      item.unit
+                    )}
                   </span>
                 </button>
               ))}
@@ -1073,19 +1322,31 @@ export default function DashboardOverview({
                       </div>
                     </div>
 
-                    <div className="space-y-1.5 bg-slate-50 p-3 rounded-xl border border-slate-200">
-                      <div className="flex justify-between text-xs font-bold">
-                        <span className="text-emerald-700">
-                          Inbound Received: {totalReceivedQty.toLocaleString()} PCS ({rxVelocityPct}%)
-                        </span>
-                        <span className="text-blue-700">
-                          Outbound Issued: {totalIssuedQty.toLocaleString()} PCS ({issVelocityPct}%)
-                        </span>
+                    <div className="space-y-2.5 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                      <div className="text-[10px] font-mono font-bold uppercase text-slate-500 flex justify-between">
+                        <span>Flow Velocity by Unit</span>
+                        <span>Separate unit buckets</span>
                       </div>
-                      <div className="w-full bg-slate-200 rounded-full h-2.5 flex overflow-hidden">
-                        <div className="bg-emerald-500" style={{ width: `${rxVelocityPct}%` }} />
-                        <div className="bg-blue-600" style={{ width: `${issVelocityPct}%` }} />
-                      </div>
+                      {flowVelocityByUnit.length === 0 ? (
+                        <div className="text-xs text-slate-400 italic">No inbound or outbound transactions yet.</div>
+                      ) : (
+                        flowVelocityByUnit.map(row => (
+                          <div key={`popup-vel-${row.key}`} className="space-y-1">
+                            <div className="flex justify-between text-xs font-bold gap-2 flex-wrap">
+                              <span className="text-emerald-700 font-mono">
+                                Inbound [{row.displayUnit}]: {formatNumberForUnit(row.rx)} {row.displayUnit} ({row.rxPct}%)
+                              </span>
+                              <span className="text-blue-700 font-mono">
+                                Outbound [{row.displayUnit}]: {formatNumberForUnit(row.iss)} {row.displayUnit} ({row.issPct}%)
+                              </span>
+                            </div>
+                            <div className="w-full bg-slate-200 rounded-full h-2.5 flex overflow-hidden">
+                              <div className="bg-emerald-500" style={{ width: `${row.rxPct}%` }} />
+                              <div className="bg-blue-600" style={{ width: `${row.issPct}%` }} />
+                            </div>
+                          </div>
+                        ))
+                      )}
                     </div>
 
                     {topFlowSkus.length > 0 && (
@@ -1096,17 +1357,23 @@ export default function DashboardOverview({
                         <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden">
                           {topFlowSkus.map((sku, idx) => {
                             const delta = sku.rx - sku.iss;
+                            const unitStr = sku.unit || MISSING_UNIT_LABEL;
                             return (
                               <div key={`popup-flow-sku-${sku.partCode}-${idx}`} className="px-3 py-2 text-xs flex items-center justify-between gap-3 bg-white">
                                 <div className="min-w-0 flex-1">
                                   <span className="font-mono font-bold text-slate-900 mr-2">{sku.partCode}</span>
                                   <span className="text-slate-600 truncate">{sku.description}</span>
+                                  {sku.unitMissing && (
+                                    <span className="ml-1.5 text-[9px] font-mono font-bold bg-rose-100 text-rose-700 border border-rose-200 px-1 py-0.5 rounded">
+                                      {MISSING_UNIT_LABEL}
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="flex items-center gap-3 font-mono text-[11px] shrink-0 tabular-nums">
-                                  <span className="text-emerald-700 font-bold">Rx: {sku.rx}</span>
-                                  <span className="text-blue-700 font-bold">Iss: {sku.iss}</span>
+                                  <span className="text-emerald-700 font-bold">Rx: {formatNumberForUnit(sku.rx)} {unitStr}</span>
+                                  <span className="text-blue-700 font-bold">Iss: {formatNumberForUnit(sku.iss)} {unitStr}</span>
                                   <span className={`font-bold ${delta >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                                    {delta > 0 ? `+${delta}` : delta}
+                                    {delta > 0 ? `+${formatNumberForUnit(delta)}` : formatNumberForUnit(delta)} {unitStr}
                                   </span>
                                 </div>
                               </div>
@@ -1179,10 +1446,10 @@ export default function DashboardOverview({
                               </div>
                               <div className="text-right font-mono shrink-0 tabular-nums">
                                 <span className="font-bold text-rose-700">
-                                  {item.currentQty.toLocaleString()} / {item.reorderMin.toLocaleString()} {item.unit}
+                                  {formatNumberForUnit(item.currentQty)} / {formatQuantityWithUnit(item.reorderMin, item.unit)}
                                 </span>
                                 <span className="text-[10px] text-rose-600 block">
-                                  Shortage: -{item.shortage.toLocaleString()} {item.unit} ({pct}%)
+                                  Shortage: -{formatQuantityWithUnit(item.shortage, item.unit)} ({pct}%)
                                 </span>
                               </div>
                             </div>
@@ -1337,6 +1604,19 @@ export default function DashboardOverview({
                         >
                           Expiring &le; 30d ({shelfLifeCount})
                         </button>
+                        {missingUnitCount > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setAlertsFilter('MISSING_UNIT')}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer border ${
+                              alertsFilter === 'MISSING_UNIT'
+                                ? 'bg-rose-700 text-white border-rose-700'
+                                : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                            }`}
+                          >
+                            Missing Unit ({missingUnitCount})
+                          </button>
+                        )}
                       </div>
 
                       <button
@@ -1352,69 +1632,97 @@ export default function DashboardOverview({
                     </div>
 
                     <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden" id="dashboard-alerts-list">
-                      {filteredAlerts.map(entry => (
-                        <div
-                          key={entry.key}
-                          className={`px-3.5 py-2.5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
-                            entry.isLowStock || entry.isExpired ? 'bg-rose-50/30' : 'bg-amber-50/20'
-                          }`}
-                        >
-                          <div className="min-w-0 space-y-1">
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <span className="font-mono font-bold text-slate-900">{entry.partCode}</span>
-                              <span className="font-semibold text-slate-800">{entry.description}</span>
-                              {entry.isLowStock && (
+                      {alertsFilter === 'MISSING_UNIT' ? (
+                        missingUnitItems.map((item, idx) => (
+                          <div key={item.id || `missing-unit-${idx}`} className="px-3.5 py-2.5 text-xs flex items-center justify-between gap-2 bg-rose-50/40">
+                            <div className="min-w-0 space-y-0.5">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="font-mono font-bold text-slate-900">{item.partCode}</span>
+                                <span className="font-semibold text-slate-800">{item.description}</span>
                                 <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200 text-[10px] font-bold font-mono">
-                                  BELOW MIN QTY
-                                </span>
-                              )}
-                              {entry.isExpiring && (
-                                <span
-                                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold font-mono border ${
-                                    entry.isExpired
-                                      ? 'bg-rose-100 text-rose-800 border-rose-200'
-                                      : 'bg-amber-100 text-amber-800 border-amber-200'
-                                  }`}
-                                >
-                                  {entry.isExpired ? 'EXPIRED' : `EXPIRING IN ${entry.diffDays}D`}
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-[11px] text-slate-500 font-mono flex flex-wrap items-center gap-x-3 gap-y-0.5">
-                              <span>Loc: {entry.location || 'N/A'}</span>
-                              {entry.lotNumber && <span>Lot: {entry.lotNumber}</span>}
-                              {entry.customer && <span>Customer: {entry.customer}</span>}
-                              {entry.status && <span>Status: {entry.status}</span>}
-                            </div>
-                          </div>
-
-                          <div className="text-left sm:text-right font-mono shrink-0 tabular-nums space-y-0.5">
-                            {entry.isLowStock && typeof entry.currentQty === 'number' && typeof entry.reorderMin === 'number' && (
-                              <div>
-                                <span className="font-bold text-rose-700">
-                                  {entry.currentQty.toLocaleString()} / {entry.reorderMin.toLocaleString()} {entry.unit}
-                                </span>
-                                <span className="text-[10px] text-rose-600 block">
-                                  Shortage: -{(entry.shortage ?? 0).toLocaleString()} {entry.unit}
+                                  {MISSING_UNIT_LABEL}
                                 </span>
                               </div>
-                            )}
-                            {entry.isExpiring && entry.expirationDate && (
-                              <div>
-                                <span className={`font-bold ${entry.isExpired ? 'text-rose-600' : 'text-amber-700'}`}>
-                                  {entry.isExpired ? 'EXPIRED' : `${entry.diffDays}d left`}
-                                </span>
-                                <span className="text-[10px] text-slate-500 block">
-                                  Exp: {entry.expirationDate}
-                                  {typeof entry.quantity === 'number' ? ` · ${entry.quantity.toLocaleString()} ${entry.unit}` : ''}
-                                </span>
+                              <div className="text-[11px] text-slate-500 font-mono">
+                                Loc: {item.location || 'N/A'} · Lot: {item.lotNumber || 'N/A'} · Status: {item.status}
                               </div>
-                            )}
+                            </div>
+                            <span className="font-mono font-bold text-rose-700 shrink-0 tabular-nums">
+                              {formatQuantityWithUnit(item.quantity, item.unit)}
+                            </span>
                           </div>
-                        </div>
-                      ))}
+                        ))
+                      ) : (
+                        filteredAlerts.map(entry => (
+                          <div
+                            key={entry.key}
+                            className={`px-3.5 py-2.5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
+                              entry.isLowStock || entry.isExpired ? 'bg-rose-50/30' : 'bg-amber-50/20'
+                            }`}
+                          >
+                            <div className="min-w-0 space-y-1">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="font-mono font-bold text-slate-900">{entry.partCode}</span>
+                                <span className="font-semibold text-slate-800">{entry.description}</span>
+                                {entry.unitMissing && (
+                                  <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200 text-[10px] font-bold font-mono">
+                                    {MISSING_UNIT_LABEL}
+                                  </span>
+                                )}
+                                {entry.isLowStock && (
+                                  <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200 text-[10px] font-bold font-mono">
+                                    BELOW MIN QTY
+                                  </span>
+                                )}
+                                {entry.isExpiring && (
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold font-mono border ${
+                                      entry.isExpired
+                                        ? 'bg-rose-100 text-rose-800 border-rose-200'
+                                        : 'bg-amber-100 text-amber-800 border-amber-200'
+                                    }`}
+                                  >
+                                    {entry.isExpired ? 'EXPIRED' : `EXPIRING IN ${entry.diffDays}D`}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[11px] text-slate-500 font-mono flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                                <span>Loc: {entry.location || 'N/A'}</span>
+                                {entry.lotNumber && <span>Lot: {entry.lotNumber}</span>}
+                                {entry.customer && <span>Customer: {entry.customer}</span>}
+                                {entry.status && <span>Status: {entry.status}</span>}
+                              </div>
+                            </div>
 
-                      {filteredAlerts.length === 0 && (
+                            <div className="text-left sm:text-right font-mono shrink-0 tabular-nums space-y-0.5">
+                              {entry.isLowStock && typeof entry.currentQty === 'number' && typeof entry.reorderMin === 'number' && (
+                                <div>
+                                  <span className="font-bold text-rose-700">
+                                    {formatNumberForUnit(entry.currentQty)} / {formatQuantityWithUnit(entry.reorderMin, entry.unit)}
+                                  </span>
+                                  <span className="text-[10px] text-rose-600 block">
+                                    Shortage: -{formatQuantityWithUnit(entry.shortage ?? 0, entry.unit)}
+                                  </span>
+                                </div>
+                              )}
+                              {entry.isExpiring && entry.expirationDate && (
+                                <div>
+                                  <span className={`font-bold ${entry.isExpired ? 'text-rose-600' : 'text-amber-700'}`}>
+                                    {entry.isExpired ? 'EXPIRED' : `${entry.diffDays}d left`}
+                                  </span>
+                                  <span className="text-[10px] text-slate-500 block">
+                                    Exp: {entry.expirationDate}
+                                    {typeof entry.quantity === 'number' ? ` · ${formatQuantityWithUnit(entry.quantity, entry.unit)}` : ''}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))
+                      )}
+
+                      {((alertsFilter === 'MISSING_UNIT' && missingUnitItems.length === 0) ||
+                        (alertsFilter !== 'MISSING_UNIT' && filteredAlerts.length === 0)) && (
                         <div className="p-6 text-center text-xs text-slate-500 flex items-center justify-center gap-2">
                           <CheckCircle className="h-4 w-4 text-emerald-500 shrink-0" />
                           <span>No items below minimum quantity or expiring within 30 days.</span>
@@ -1592,6 +1900,7 @@ export default function DashboardOverview({
       {showInventoryReportModal && (
         <InventoryReportModal
           stocks={stocks}
+          registries={registries}
           currentUser={currentUser}
           isSuperAdmin={isSuperAdmin}
           initialCustomerFilter="ALL"

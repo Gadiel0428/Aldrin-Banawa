@@ -29,6 +29,11 @@ import { motion, AnimatePresence } from 'motion/react';
 import { generateAuthoritativeId } from '../lib/idGenerator';
 import { DEFAULT_RECEIVING_CATEGORIES } from './ReceivingModule';
 import { showPrintToast } from '../utils/printDocument';
+import {
+  MISSING_UNIT_LABEL,
+  getAllSelectUomOptions,
+  normalizeUnitCode,
+} from '../../shared/units';
 
 export const STARTER_BARCODE_PRESETS: MasterRegistryItem[] = [
   {
@@ -38,7 +43,7 @@ export const STARTER_BARCODE_PRESETS: MasterRegistryItem[] = [
     name: 'PC/ABS CYCOLOY RESIN PELLETS',
     description: 'High-impact flame retardant engineering plastic resin pellets for injection molding',
     category: 'RESIN/RAW MATERIALS',
-    unit: 'KGS',
+    unit: 'KG',
     vendorSupplier: 'SABIC INNOVATIVE PLASTICS',
     location: 'RAW-ZONE-A1',
     presetSource: 'EXTERNAL',
@@ -240,7 +245,7 @@ export default function MasterRegistryModule({
     setFormPresetSource(item.presetSource || 'EXTERNAL');
     setFormCategory(item.category || unifiedCategories[0] || 'RESIN/RAW MATERIALS');
     setFormVendorSupplier(item.vendorSupplier || '');
-    setFormUnit(item.unit || 'PCS');
+    setFormUnit(item.type === 'BARCODE_PRESET' ? normalizeUnitCode(item.unit) : normalizeUnitCode(item.unit) || 'PCS');
     setFormLocation(item.location || '');
     setShowRegisterModal(true);
   };
@@ -260,6 +265,11 @@ export default function MasterRegistryModule({
       showPrintToast('Please select a Category from the unified registry.', 'warning');
       return;
     }
+    const normalizedFormUnit = formType === 'BARCODE_PRESET' ? normalizeUnitCode(formUnit) : '';
+    if (formType === 'BARCODE_PRESET' && !normalizedFormUnit) {
+      showPrintToast('Please select a valid Unit of Measure (UOM) for this Barcode Preset.', 'warning');
+      return;
+    }
 
     const todayStr = new Date().toISOString().split('T')[0];
 
@@ -274,7 +284,7 @@ export default function MasterRegistryModule({
         presetSource: formType === 'BARCODE_PRESET' ? formPresetSource : undefined,
         category: formType === 'BARCODE_PRESET' ? (formCategory.trim() || undefined) : undefined,
         vendorSupplier: formType === 'BARCODE_PRESET' ? (formVendorSupplier.trim() || undefined) : undefined,
-        unit: formType === 'BARCODE_PRESET' ? formUnit : undefined,
+        unit: formType === 'BARCODE_PRESET' ? normalizedFormUnit : undefined,
         location: formType === 'BARCODE_PRESET' ? (formLocation.trim() || undefined) : undefined
       };
       onUpdateItem(updated);
@@ -291,7 +301,7 @@ export default function MasterRegistryModule({
         presetSource: formType === 'BARCODE_PRESET' ? formPresetSource : undefined,
         category: formType === 'BARCODE_PRESET' ? (formCategory.trim() || undefined) : undefined,
         vendorSupplier: formType === 'BARCODE_PRESET' ? (formVendorSupplier.trim() || undefined) : undefined,
-        unit: formType === 'BARCODE_PRESET' ? formUnit : undefined,
+        unit: formType === 'BARCODE_PRESET' ? normalizedFormUnit : undefined,
         location: formType === 'BARCODE_PRESET' ? (formLocation.trim() || undefined) : undefined
       };
       onRegisterItem(newItem);
@@ -613,11 +623,16 @@ export default function MasterRegistryModule({
                     </td>
                     <td className="p-3 text-slate-500 max-w-xs" title={item.description}>
                       <div className="truncate font-medium text-slate-700">{item.description || '-'}</div>
-                      {item.type === 'BARCODE_PRESET' && (item.unit || item.location) && (
-                        <div className="text-[10px] font-mono text-slate-400 mt-0.5">
-                          {item.unit && <span>UOM: <strong className="text-slate-600">{item.unit}</strong></span>}
-                          {item.unit && item.location && <span className="mx-1.5">|</span>}
-                          {item.location && <span>Loc: <strong className="text-slate-600">{item.location}</strong></span>}
+                      {item.type === 'BARCODE_PRESET' && (
+                        <div className="text-[10px] font-mono text-slate-400 mt-0.5 flex flex-wrap items-center gap-1.5">
+                          {normalizeUnitCode(item.unit) ? (
+                            <span>UOM: <strong className="text-slate-600">{normalizeUnitCode(item.unit)}</strong></span>
+                          ) : (
+                            <span className="inline-block px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 text-[9px] font-bold">
+                              {MISSING_UNIT_LABEL}
+                            </span>
+                          )}
+                          {item.location && <span>| Loc: <strong className="text-slate-600">{item.location}</strong></span>}
                         </div>
                       )}
                     </td>
@@ -856,21 +871,15 @@ export default function MasterRegistryModule({
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">Unit of Measure (UOM) *</label>
                       <select
+                        required
                         value={formUnit}
-                        onChange={e => setFormUnit(e.target.value)}
+                        onChange={e => setFormUnit(normalizeUnitCode(e.target.value))}
                         className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono font-bold focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer bg-white"
                       >
-                        <option value="PCS">PCS</option>
-                        <option value="KGS">KGS</option>
-                        <option value="ROLLS">ROLLS</option>
-                        <option value="BOXES">BOXES</option>
-                        <option value="BAGS">BAGS</option>
-                        <option value="SETS">SETS</option>
-                        <option value="PACKS">PACKS</option>
-                        <option value="TUBES">TUBES</option>
-                        <option value="MTRS">MTRS</option>
-                        <option value="LTRS">LTRS</option>
-                        <option value="LOT">LOT</option>
+                        <option value="" disabled>-- Select UOM --</option>
+                        {getAllSelectUomOptions(formUnit).map(uom => (
+                          <option key={uom} value={uom}>{uom}</option>
+                        ))}
                       </select>
                     </div>
 

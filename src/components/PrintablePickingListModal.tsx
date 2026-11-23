@@ -20,6 +20,12 @@ import {
   formatPrintErrorMessage
 } from '../utils/printDocument';
 import { DeliveryRecord, IssuanceRecord, MaterialStockItem, MasterRegistryItem } from '../types';
+import {
+  MISSING_UNIT_LABEL,
+  formatGroupedTotals,
+  groupQuantitiesByUnit,
+  resolveMasterDataUnit,
+} from '../../shared/units';
 
 export type DocViewMode = 'OFFICIAL_DOC' | 'PICKING_LIST' | 'SUMMARY_LOG';
 
@@ -151,7 +157,11 @@ export default function PrintablePickingListModal({
   const matchedStock = stocks.find(s => (s.partCode || '').toLowerCase() === (partCode || '').toLowerCase());
   const matchedRegistry = registries.find(r => (r.code || '').toLowerCase() === (partCode || '').toLowerCase());
   const binLocation = matchedStock?.location || matchedRegistry?.location || 'Zone A - Rack 02 - Bin B14';
-  const uom = matchedRegistry?.unit || 'PCS';
+  const activeRecordForUnit = isDeliveryMode
+    ? { unit: targetDelivery?.unit, partCode: targetDelivery?.partCode }
+    : { unit: targetIssuance?.unit, partCode: targetIssuance?.partCode, lotNumber: targetIssuance?.lotNumber };
+  const resolvedDocUnit = resolveMasterDataUnit(activeRecordForUnit, registries, stocks);
+  const uom = resolvedDocUnit.unit || MISSING_UNIT_LABEL;
 
   // Live editable signatories state with defaults
   const todayIso = new Date().toISOString().split('T')[0];
@@ -969,7 +979,7 @@ export default function PrintablePickingListModal({
 
                 {/* Delivery Summary Table */}
                 {isDeliveryMode && (
-                  <div>
+                  <div className="space-y-3">
                     <table className="w-full text-left border-collapse text-[11px] border border-slate-300">
                       <thead>
                         <tr className="bg-slate-100 text-slate-900 font-bold border-b border-slate-300 uppercase">
@@ -984,7 +994,9 @@ export default function PrintablePickingListModal({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200 font-medium">
-                        {deliveriesList.map((d) => (
+                        {deliveriesList.map((d) => {
+                          const rowUnit = resolveMasterDataUnit(d, registries, stocks);
+                          return (
                           <tr key={d.id} className="hover:bg-slate-50">
                             <td className="p-2 border-r border-slate-200 font-mono font-bold text-slate-900">{d.gatePassNumber}</td>
                             <td className="p-2 border-r border-slate-200 font-mono text-slate-700">{d.date}</td>
@@ -995,7 +1007,11 @@ export default function PrintablePickingListModal({
                               <div className="text-[10px] text-slate-600 truncate max-w-[180px]">{d.modelName}</div>
                             </td>
                             <td className="p-2 border-r border-slate-200 text-right font-mono font-bold text-slate-950">
-                              {d.quantity.toLocaleString()}
+                              {d.quantity.toLocaleString()} {rowUnit.isMissing ? (
+                                <span className="ml-1 px-1 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-300 text-[9px] font-bold">
+                                  {MISSING_UNIT_LABEL}
+                                </span>
+                              ) : rowUnit.unit}
                             </td>
                             <td className="p-2 border-r border-slate-200 font-mono text-[10px]">
                               <div>DR: {d.drNumber || 'N/A'}</div>
@@ -1007,15 +1023,30 @@ export default function PrintablePickingListModal({
                               </span>
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
+                    {deliveriesList.length > 0 && (
+                      <div className="bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-[11px] flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-bold text-slate-700 uppercase tracking-wider">Dispatched Totals by Unit:</span>
+                        <span className="font-mono font-bold text-slate-950">
+                          {formatGroupedTotals(
+                            groupQuantitiesByUnit(
+                              deliveriesList,
+                              (d) => d.quantity,
+                              (d) => resolveMasterDataUnit(d, registries, stocks).unit
+                            ).buckets
+                          )}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
 
                 {/* Issuance Summary Table */}
                 {isIssuanceMode && (
-                  <div>
+                  <div className="space-y-3">
                     <table className="w-full text-left border-collapse text-[11px] border border-slate-300">
                       <thead>
                         <tr className="bg-slate-100 text-slate-900 font-bold border-b border-slate-300 uppercase">
@@ -1031,7 +1062,9 @@ export default function PrintablePickingListModal({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200 font-medium">
-                        {issuancesList.map((iss) => (
+                        {issuancesList.map((iss) => {
+                          const rowUnit = resolveMasterDataUnit(iss, registries, stocks);
+                          return (
                           <tr key={iss.id} className="hover:bg-slate-50">
                             <td className="p-2 border-r border-slate-200 font-mono text-slate-600">{iss.id}</td>
                             <td className="p-2 border-r border-slate-200 font-mono text-slate-700">{iss.date}</td>
@@ -1043,7 +1076,11 @@ export default function PrintablePickingListModal({
                             </td>
                             <td className="p-2 border-r border-slate-200 font-mono text-slate-800">{iss.lotNumber}</td>
                             <td className="p-2 border-r border-slate-200 text-right font-mono font-bold text-slate-950">
-                              {iss.quantityIssued.toLocaleString()}
+                              {iss.quantityIssued.toLocaleString()} {rowUnit.isMissing ? (
+                                <span className="ml-1 px-1 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-300 text-[9px] font-bold">
+                                  {MISSING_UNIT_LABEL}
+                                </span>
+                              ) : rowUnit.unit}
                             </td>
                             <td className="p-2 border-r border-slate-200 text-center font-bold text-[10px]">
                               {iss.fifoVerified ? (
@@ -1057,9 +1094,24 @@ export default function PrintablePickingListModal({
                               <div className="text-slate-500">Rec: {iss.receivedBy}</div>
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
+                    {issuancesList.length > 0 && (
+                      <div className="bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-[11px] flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-bold text-slate-700 uppercase tracking-wider">Issued Totals by Unit:</span>
+                        <span className="font-mono font-bold text-slate-950">
+                          {formatGroupedTotals(
+                            groupQuantitiesByUnit(
+                              issuancesList,
+                              (iss) => iss.quantityIssued,
+                              (iss) => resolveMasterDataUnit(iss, registries, stocks).unit
+                            ).buckets
+                          )}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
 

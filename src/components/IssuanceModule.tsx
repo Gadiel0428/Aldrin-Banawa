@@ -31,6 +31,13 @@ import { showPrintToast } from '../utils/printDocument';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAuthoritativeId } from '../lib/idGenerator';
+import {
+  MISSING_UNIT_LABEL,
+  formatNumberForUnit,
+  getAllSelectUomOptions,
+  normalizeUnitCode,
+  resolveMasterDataUnit,
+} from '../../shared/units';
 
 interface IssuanceModuleProps {
   stocks: MaterialStockItem[];
@@ -175,13 +182,14 @@ export default function IssuanceModule({
     );
 
     if (matchedStock) {
+      const stockUnit = resolveMasterDataUnit(matchedStock, registries);
       return {
         code: cleanCode,
         itemName: matchedStock.description || matchedStock.partCode,
         lot: matchedStock.lotNumber || 'Unassigned Lot',
         location: matchedStock.location || 'Unassigned',
         partCode: matchedStock.partCode,
-        quantityLabel: `${matchedStock.quantity.toLocaleString()} ${(matchedStock.unit || 'PCS').toUpperCase()}`,
+        quantityLabel: `${formatNumberForUnit(matchedStock.quantity)} ${stockUnit.unit || MISSING_UNIT_LABEL}`,
         matchedSource: 'STOCK'
       };
     }
@@ -309,6 +317,11 @@ export default function IssuanceModule({
     // Retrieve full item details
     const selectedItem = approvedStocks.find(item => item.partCode === selectedPartCode && item.lotNumber === selectedLotNumber);
     const itemDesc = selectedItem ? selectedItem.description : 'Unknown Item';
+    const resolvedUnit = resolveMasterDataUnit(
+      { unit: selectedItem?.unit, partCode: selectedPartCode, description: itemDesc, lotNumber: selectedLotNumber },
+      registries,
+      stocks
+    );
 
     const newIssuance: IssuanceRecord = {
       id: generateAuthoritativeId('ISS'),
@@ -319,6 +332,8 @@ export default function IssuanceModule({
       description: itemDesc,
       quantityRequested,
       quantityIssued,
+      unit: resolvedUnit.unit,
+      unitMissing: resolvedUnit.isMissing,
       lotNumber: selectedLotNumber,
       fifoVerified: fifoAlert === null,
       issuedBy,
@@ -545,11 +560,14 @@ export default function IssuanceModule({
                     required
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono bg-white focus:outline-none"
                   >
-                    {availableLots.map(lot => (
-                      <option key={lot.id} value={lot.lotNumber}>
-                        {lot.lotNumber} ({lot.quantity.toLocaleString()} {lot.unit.toUpperCase()} available)
-                      </option>
-                    ))}
+                    {availableLots.map(lot => {
+                      const lotUnit = resolveMasterDataUnit(lot, registries).unit || MISSING_UNIT_LABEL;
+                      return (
+                        <option key={lot.id} value={lot.lotNumber}>
+                          {lot.lotNumber} ({formatNumberForUnit(lot.quantity)} {lotUnit} available)
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
 
@@ -689,6 +707,14 @@ export default function IssuanceModule({
                 const registryItem = registries.find(r => 
                   (r.code || '').trim().toLowerCase() === (iss.partCode || '').trim().toLowerCase()
                 );
+                const issUnitRes = resolveMasterDataUnit(
+                  { unit: iss.unit, partCode: iss.partCode, description: iss.description, lotNumber: iss.lotNumber },
+                  registries,
+                  stocks
+                );
+                const matchedStockUnitRes = matchedStock
+                  ? resolveMasterDataUnit(matchedStock, registries)
+                  : null;
 
                 return (
                   <React.Fragment key={iss.id}>
@@ -748,7 +774,14 @@ export default function IssuanceModule({
                         <div className="text-slate-500 text-[11px] truncate max-w-[200px]">{iss.description}</div>
                       </td>
                       <td className="p-4 text-right font-mono font-bold text-slate-850">
-                        {iss.quantityIssued.toLocaleString()}
+                        <span>{formatNumberForUnit(iss.quantityIssued)}</span>{' '}
+                        {issUnitRes.isMissing ? (
+                          <span className="inline-block px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 text-[9px] font-bold">
+                            {MISSING_UNIT_LABEL}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] font-bold text-slate-600">{issUnitRes.unit}</span>
+                        )}
                       </td>
                       <td className="p-4 font-mono text-slate-700">{iss.lotNumber}</td>
                       <td className="p-4">
@@ -851,12 +884,16 @@ export default function IssuanceModule({
                                     <span className="bg-slate-100 text-slate-700 font-mono font-semibold px-2.5 py-1 rounded-lg border border-slate-200">
                                       Date: {iss.date}
                                     </span>
-                                    <span className="bg-indigo-50 text-indigo-800 font-bold px-2.5 py-1 rounded-lg border border-indigo-200 font-mono">
-                                      Issued: {iss.quantityIssued.toLocaleString()} PCS
+                                    <span className={`font-bold px-2.5 py-1 rounded-lg border font-mono ${
+                                      issUnitRes.isMissing
+                                        ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                        : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                                    }`}>
+                                      Issued: {formatNumberForUnit(iss.quantityIssued)} {issUnitRes.isMissing ? MISSING_UNIT_LABEL : issUnitRes.unit}
                                     </span>
-                                    {matchedStock && (
+                                    {matchedStock && matchedStockUnitRes && (
                                       <span className="bg-emerald-50 text-emerald-800 font-bold px-2.5 py-1 rounded-lg border border-emerald-200 font-mono">
-                                        Current Stock: {matchedStock.quantity.toLocaleString()} {matchedStock.unit}
+                                        Current Stock: {formatNumberForUnit(matchedStock.quantity)} {matchedStockUnitRes.isMissing ? MISSING_UNIT_LABEL : matchedStockUnitRes.unit}
                                       </span>
                                     )}
                                   </div>
@@ -889,7 +926,13 @@ export default function IssuanceModule({
                                       </div>
                                       <div className="col-span-2 pt-1 border-t border-slate-100 flex justify-between items-center text-slate-500 text-[11px]">
                                         <span>Unit of Measure:</span>
-                                        <span className="font-mono font-bold text-slate-700">{matchedStock?.unit || registryItem?.unit || 'PCS'}</span>
+                                        {issUnitRes.isMissing ? (
+                                          <span className="inline-block px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-bold">
+                                            {MISSING_UNIT_LABEL}
+                                          </span>
+                                        ) : (
+                                          <span className="font-mono font-bold text-slate-700">{issUnitRes.unit}</span>
+                                        )}
                                       </div>
                                     </div>
                                   </div>
@@ -1126,6 +1169,23 @@ export default function IssuanceModule({
                 </div>
 
                 <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Unit of Measure</label>
+                  <select
+                    value={normalizeUnitCode(editingIssuance.unit)}
+                    onChange={e => {
+                      const norm = normalizeUnitCode(e.target.value);
+                      setEditingIssuance({ ...editingIssuance, unit: norm, unitMissing: !norm });
+                    }}
+                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono font-bold bg-white"
+                  >
+                    <option value="">-- Select UOM --</option>
+                    {getAllSelectUomOptions(editingIssuance.unit).map(u => (
+                      <option key={u} value={u}>{u}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
                   <label className="block text-[10px] font-bold text-slate-500 mb-1">Issued By</label>
                   <input 
                     type="text" 
@@ -1135,7 +1195,7 @@ export default function IssuanceModule({
                   />
                 </div>
 
-                <div className="col-span-2">
+                <div>
                   <label className="block text-[10px] font-bold text-slate-500 mb-1">Received By</label>
                   <input 
                     type="text" 
@@ -1155,7 +1215,12 @@ export default function IssuanceModule({
                 </button>
                 <button 
                   onClick={() => {
-                    onEditIssuance?.(editingIssuance);
+                    const resolved = resolveMasterDataUnit(editingIssuance, registries, stocks);
+                    onEditIssuance?.({
+                      ...editingIssuance,
+                      unit: resolved.unit,
+                      unitMissing: resolved.isMissing,
+                    });
                     setEditingIssuance(null);
                   }}
                   className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold"

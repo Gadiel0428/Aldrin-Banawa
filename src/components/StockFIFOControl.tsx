@@ -35,11 +35,20 @@ import {
   FileText,
   Loader2
 } from 'lucide-react';
-import { MaterialStockItem, MaterialType, getCustomerForPart, UOM_OPTIONS, ReceivingRecord, IssuanceRecord, ReturnRecord, MasterRegistryItem, FifoColorsMap, FifoMonthColor } from '../types';
+import { MaterialStockItem, MaterialType, getCustomerForPart, ReceivingRecord, IssuanceRecord, ReturnRecord, MasterRegistryItem, FifoColorsMap, FifoMonthColor } from '../types';
 import { FIFO_COLORS_BY_MONTH, DEFAULT_FIFO_COLORS_BY_MONTH, FIFO_COLOR_PRESETS, resolveFifoColor, getFifoColorForDate, normalizeFifoColor } from '../data';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { generateAuthoritativeId } from '../lib/idGenerator';
 import { showPrintToast } from '../utils/printDocument';
+import {
+  MISSING_UNIT_LABEL,
+  findMasterPresetUnit,
+  getAllSelectUomOptions,
+  groupQuantitiesByUnit,
+  normalizeUnitCode,
+  resolveMasterDataUnit,
+} from '../../shared/units';
+import { computeStockAlerts } from '../utils/stockAlerts';
 
 interface StockFIFOControlProps {
   stocks: MaterialStockItem[];
@@ -86,7 +95,7 @@ export default function StockFIFOControl({
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedType, setSelectedType] = useState<MaterialType | 'ALL'>('ALL');
-  const [selectedStatus, setSelectedStatus] = useState<MaterialStockItem['status'] | 'ALL'>('ALL');
+  const [selectedStatus, setSelectedStatus] = useState<MaterialStockItem['status'] | 'ALL' | 'MISSING_UNIT'>('ALL');
   const [selectedCustomer, setSelectedCustomer] = useState<string>('ALL');
   
   // Column Sorting States
@@ -134,11 +143,27 @@ export default function StockFIFOControl({
 
   const systemDateStr = new Date().toISOString().split('T')[0];
 
+  // Auto-resolve UOM from Master Data preset when part code changes in Add Stock form
+  const handleNewPartCodeChange = (val: string) => {
+    setNewPartCode(val);
+    const presetUnit = findMasterPresetUnit({ partCode: val, description: newDesc }, registries);
+    if (presetUnit) {
+      setNewUnit(presetUnit);
+    }
+  };
+
   // Submit manual stock addition
   const handleAddStockSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newPartCode || !newDesc || newQty <= 0 || !newLot || !newLocation) {
       showPrintToast('Please fill out all required fields.', 'warning');
+      return;
+    }
+
+    const masterUnit = findMasterPresetUnit({ partCode: newPartCode, description: newDesc }, registries);
+    const cleanUnit = normalizeUnitCode(newUnit) || masterUnit;
+    if (!cleanUnit) {
+      showPrintToast('Please select a valid Unit of Measure (UOM).', 'warning');
       return;
     }
 
@@ -152,7 +177,8 @@ export default function StockFIFOControl({
       type: newType,
       location: newLocation,
       quantity: newQty,
-      unit: newUnit,
+      unit: cleanUnit,
+      unitMissing: false,
       lotNumber: newLot,
       receivedDate: systemDateStr,
       expirationDate: newExpDate || undefined,
@@ -171,7 +197,7 @@ export default function StockFIFOControl({
     setNewType('RAW');
     setNewLocation('');
     setNewQty(0);
-    setNewUnit('kg');
+    setNewUnit('KG');
     setNewLot('');
     setNewExpDate('');
     setNewResinRisk(false);
@@ -219,13 +245,34 @@ export default function StockFIFOControl({
                           (item.lotNumber || '').toLowerCase().includes(q) ||
                           (item.location || '').toLowerCase().includes(q);
     const matchesType = selectedType === 'ALL' || item.type === selectedType;
-    const matchesStatus = selectedStatus === 'ALL' || item.status === selectedStatus;
+    const unitInfo = resolveMasterDataUnit(item, registries, stocks);
+    const matchesStatus =
+      selectedStatus === 'ALL'
+        ? true
+        : selectedStatus === 'MISSING_UNIT'
+        ? unitInfo.isMissing
+        : item.status === selectedStatus;
     
     const itemCustomer = item.customer || getCustomerForPart(item.partCode, item.description);
     const matchesCustomer = selectedCustomer === 'ALL' || itemCustomer === selectedCustomer;
     
     return matchesSearch && matchesType && matchesStatus && matchesCustomer;
   });
+
+  const stockAlertsSummary = useMemo(
+    () => computeStockAlerts(stocks, undefined, registries),
+    [stocks, registries]
+  );
+
+  const groupedViewTotals = useMemo(
+    () =>
+      groupQuantitiesByUnit(
+        filteredStocks,
+        (s) => s.quantity,
+        (s) => resolveMasterDataUnit(s, registries, stocks).unit
+      ),
+    [filteredStocks, registries, stocks]
+  );
 
   // Sorted stocks based on active column sort
   const sortedStocks = useMemo(() => {
@@ -306,7 +353,9 @@ export default function StockFIFOControl({
       'Resin Sack Hazard Risk'
     ];
 
-    const rows = sortedStocks.map(item => [
+    const rows = sortedStocks.map(item => {
+      const unitInfo = resolveMasterDataUnit(item, registries, stocks);
+      return [
       `"${(item.id || '').replace(/"/g, '""')}"`,
       `"${(item.partCode || '').replace(/"/g, '""')}"`,
       `"${(item.description || '').replace(/"/g, '""')}"`,
@@ -314,14 +363,15 @@ export default function StockFIFOControl({
       `"${(item.customer || getCustomerForPart(item.partCode, item.description) || '').replace(/"/g, '""')}"`,
       `"${(item.location || '').replace(/"/g, '""')}"`,
       item.quantity,
-      `"${(item.unit || '').replace(/"/g, '""')}"`,
+      `"${(unitInfo.unit || MISSING_UNIT_LABEL).replace(/"/g, '""')}"`,
       `"${(item.lotNumber || '').replace(/"/g, '""')}"`,
       `"${(item.fifoColor || '').replace(/"/g, '""')}"`,
       `"${(item.receivedDate || '').replace(/"/g, '""')}"`,
       `"${(item.expirationDate || 'N/A').replace(/"/g, '""')}"`,
       `"${(item.status || '').replace(/"/g, '""')}"`,
       item.resinSackRisk ? 'YES (Risk)' : 'NO'
-    ]);
+    ];
+    });
 
     const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -519,6 +569,7 @@ export default function StockFIFOControl({
               <option value="APPROVED">Approved</option>
               <option value="QUARANTINE">Quarantine</option>
               <option value="HOLD">Hold</option>
+              <option value="MISSING_UNIT">Missing Unit</option>
             </select>
           </div>
 
@@ -576,7 +627,7 @@ export default function StockFIFOControl({
               <label className="block text-[10px] font-semibold text-slate-500 mb-1">Part Code *</label>
               <input 
                 type="text" required placeholder="RM-RE-XXX" value={newPartCode}
-                onChange={e => setNewPartCode(e.target.value)}
+                onChange={e => handleNewPartCodeChange(e.target.value)}
                 className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs font-mono"
               />
             </div>
@@ -636,9 +687,11 @@ export default function StockFIFOControl({
               <select 
                 value={newUnit} 
                 onChange={e => setNewUnit(e.target.value)}
+                required
                 className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs font-semibold"
               >
-                {UOM_OPTIONS.map(u => (
+                <option value="">-- Select UOM --</option>
+                {getAllSelectUomOptions(newUnit).map(u => (
                   <option key={u} value={u}>{u}</option>
                 ))}
               </select>
@@ -690,6 +743,52 @@ export default function StockFIFOControl({
             </button>
           </div>
         </form>
+      )}
+
+      {/* Missing-Unit Alert & Unit-Grouped Totals Bar */}
+      {(stockAlertsSummary.missingUnitCount > 0 || groupedViewTotals.buckets.length > 0) && (
+        <div className="space-y-2.5">
+          {stockAlertsSummary.missingUnitCount > 0 && (
+            <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-rose-900">
+              <div className="flex items-center gap-2">
+                <AlertOctagon className="h-4 w-4 text-rose-600 shrink-0" />
+                <span>
+                  <strong>{stockAlertsSummary.missingUnitCount}</strong> stock record(s) have no unit in Master Data or batch record and are flagged as <span className="font-mono font-bold">{MISSING_UNIT_LABEL}</span>.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedStatus(selectedStatus === 'MISSING_UNIT' ? 'ALL' : 'MISSING_UNIT')}
+                className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold text-[11px] transition cursor-pointer"
+              >
+                {selectedStatus === 'MISSING_UNIT' ? 'Show All Statuses' : 'Filter Missing Unit'}
+              </button>
+            </div>
+          )}
+
+          {groupedViewTotals.buckets.length > 0 && (
+            <div className="bg-white border border-slate-200 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 shadow-2xs">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                Total On-Hand by Unit ({filteredStocks.length} records)
+              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                {groupedViewTotals.buckets.map((bucket) => (
+                  <span
+                    key={bucket.key}
+                    className={`px-2.5 py-1 rounded-lg font-mono text-xs font-bold border ${
+                      bucket.isMissing
+                        ? 'bg-rose-50 text-rose-700 border-rose-200'
+                        : 'bg-slate-50 text-slate-800 border-slate-200'
+                    }`}
+                  >
+                    {bucket.total.toLocaleString()} {bucket.displayUnit}
+                    <span className="ml-1 text-[10px] font-normal text-slate-500">({bucket.count})</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       {/* Stock Grid List */}
@@ -883,40 +982,51 @@ export default function StockFIFOControl({
                   return matchCode && matchLot;
                 });
 
+                const itemUnitInfo = resolveMasterDataUnit(item, registries, stocks);
+
                 const historyEvents = [
-                  ...matchedReceivings.map(r => ({
-                    id: r.id,
-                    type: 'RECEIVING' as const,
-                    date: r.receivedDate || r.date,
-                    refNumber: r.rrNumber || r.poNumber || r.id,
-                    qty: r.quantity,
-                    unit: r.unit || item.unit,
-                    party: r.supplierOrDept || r.vendorSupplier || 'External Supplier',
-                    status: r.iqcStatus === 'APPROVED_IQC' ? 'IQC APPROVED' : r.iqcStatus === 'REJECTED_IQC' ? 'IQC REJECTED' : (r.iqcStatus || 'RECEIVED'),
-                    details: `Lot: ${r.lotNumber || item.lotNumber} • Loc: ${r.location || item.location}`
-                  })),
-                  ...matchedIssuances.map(i => ({
-                    id: i.id,
-                    type: 'ISSUANCE' as const,
-                    date: i.date,
-                    refNumber: i.requisitionNumber || i.id,
-                    qty: i.quantityIssued,
-                    unit: item.unit,
-                    party: i.department || 'Production Line',
-                    status: i.fifoVerified ? 'FIFO COMPLIANT' : 'FIFO OVERRIDE',
-                    details: `Staff: ${i.issuedBy || 'Operator'} → Recv: ${i.receivedBy || 'Dept'}`
-                  })),
-                  ...matchedReturns.map(ret => ({
-                    id: ret.id,
-                    type: 'RETURN' as const,
-                    date: ret.date,
-                    refNumber: ret.returnSlipFormNumber || ret.id,
-                    qty: ret.quantity,
-                    unit: ret.unit || item.unit,
-                    party: ret.department || 'Department Return',
-                    status: ret.status,
-                    details: `Cond: ${ret.condition} • Reason: ${ret.reason || 'Excess Return'}`
-                  }))
+                  ...matchedReceivings.map(r => {
+                    const rUnit = resolveMasterDataUnit(r, registries, stocks);
+                    return {
+                      id: r.id,
+                      type: 'RECEIVING' as const,
+                      date: r.receivedDate || r.date,
+                      refNumber: r.rrNumber || r.poNumber || r.id,
+                      qty: r.quantity,
+                      unit: rUnit.unit || itemUnitInfo.unit,
+                      party: r.supplierOrDept || r.vendorSupplier || 'External Supplier',
+                      status: r.iqcStatus === 'APPROVED_IQC' ? 'IQC APPROVED' : r.iqcStatus === 'REJECTED_IQC' ? 'IQC REJECTED' : (r.iqcStatus || 'RECEIVED'),
+                      details: `Lot: ${r.lotNumber || item.lotNumber} • Loc: ${r.location || item.location}`
+                    };
+                  }),
+                  ...matchedIssuances.map(i => {
+                    const iUnit = resolveMasterDataUnit(i, registries, stocks);
+                    return {
+                      id: i.id,
+                      type: 'ISSUANCE' as const,
+                      date: i.date,
+                      refNumber: i.requisitionNumber || i.id,
+                      qty: i.quantityIssued,
+                      unit: iUnit.unit || itemUnitInfo.unit,
+                      party: i.department || 'Production Line',
+                      status: i.fifoVerified ? 'FIFO COMPLIANT' : 'FIFO OVERRIDE',
+                      details: `Staff: ${i.issuedBy || 'Operator'} → Recv: ${i.receivedBy || 'Dept'}`
+                    };
+                  }),
+                  ...matchedReturns.map(ret => {
+                    const retUnit = resolveMasterDataUnit(ret, registries, stocks);
+                    return {
+                      id: ret.id,
+                      type: 'RETURN' as const,
+                      date: ret.date,
+                      refNumber: ret.returnSlipFormNumber || ret.id,
+                      qty: ret.quantity,
+                      unit: retUnit.unit || itemUnitInfo.unit,
+                      party: ret.department || 'Department Return',
+                      status: ret.status,
+                      details: `Cond: ${ret.condition} • Reason: ${ret.reason || 'Excess Return'}`
+                    };
+                  })
                 ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
                 const filteredEvents = historyEvents.filter(ev => {
@@ -985,21 +1095,33 @@ export default function StockFIFOControl({
                           <div className="mt-2 bg-slate-50 border border-slate-200 p-2 rounded-lg max-w-[200px]">
                             <span className="text-[9px] font-bold text-indigo-700 uppercase block mb-1">BOM Components ({item.bom.length})</span>
                             <div className="space-y-1 max-h-[80px] overflow-y-auto pr-1">
-                              {item.bom.map((b: any, idx: number) => (
-                                <div key={idx} className="flex justify-between items-center text-[9px] font-mono text-slate-600 leading-tight">
-                                  <span className="truncate max-w-[110px]" title={`${b.partCode}: ${b.description}`}>{b.partCode}</span>
-                                  <span className="font-bold text-slate-800">{b.quantityRequired} {b.unit}</span>
-                                </div>
-                              ))}
+                              {item.bom.map((b: any, idx: number) => {
+                                const bUnit = normalizeUnitCode(b.unit) || MISSING_UNIT_LABEL;
+                                return (
+                                  <div key={idx} className="flex justify-between items-center text-[9px] font-mono text-slate-600 leading-tight">
+                                    <span className="truncate max-w-[110px]" title={`${b.partCode}: ${b.description}`}>{b.partCode}</span>
+                                    <span className="font-bold text-slate-800">{b.quantityRequired} {bUnit}</span>
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
                         )}
                       </td>
                       <td className="p-4 text-right font-mono font-bold text-slate-900">
-                        <div>{item.quantity.toLocaleString()} {(item.unit || 'PCS').toUpperCase()}</div>
+                        <div>
+                          {item.quantity.toLocaleString()}{' '}
+                          {itemUnitInfo.isMissing ? (
+                            <span className="inline-block px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 text-[9px] font-bold">
+                              {MISSING_UNIT_LABEL}
+                            </span>
+                          ) : (
+                            itemUnitInfo.unit
+                          )}
+                        </div>
                         {typeof item.reorderMin === 'number' && item.reorderMin > 0 && item.quantity <= item.reorderMin && (
                           <span className="inline-block bg-rose-100 text-rose-800 text-[9px] font-bold px-1.5 py-0.5 rounded border border-rose-200 mt-1 font-sans">
-                            ⚠️ LOW STOCK (Min: {item.reorderMin})
+                            ⚠️ LOW STOCK (Min: {item.reorderMin} {itemUnitInfo.unit || MISSING_UNIT_LABEL})
                           </span>
                         )}
                       </td>
@@ -1237,17 +1359,23 @@ export default function StockFIFOControl({
                                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Current Physical Balance</span>
                                 <div className="flex items-baseline gap-1.5">
                                   <span className="text-xl font-mono font-bold text-slate-900">{item.quantity.toLocaleString()}</span>
-                                  <span className="text-xs font-mono font-semibold text-slate-500">{(item.unit || 'PCS').toUpperCase()}</span>
+                                  {itemUnitInfo.isMissing ? (
+                                    <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-mono font-bold">
+                                      {MISSING_UNIT_LABEL}
+                                    </span>
+                                  ) : (
+                                    <span className="text-xs font-mono font-semibold text-slate-500">{itemUnitInfo.unit}</span>
+                                  )}
                                 </div>
                                 <div className="text-[11px] text-slate-500 flex items-center gap-1 pt-1 border-t border-slate-100">
                                   {typeof item.reorderMin === 'number' && item.reorderMin > 0 ? (
                                     item.quantity <= item.reorderMin ? (
                                       <span className="text-rose-600 font-bold flex items-center gap-1">
-                                        <AlertTriangle className="h-3 w-3" /> Below safety min ({item.reorderMin})
+                                        <AlertTriangle className="h-3 w-3" /> Below safety min ({item.reorderMin} {itemUnitInfo.unit || MISSING_UNIT_LABEL})
                                       </span>
                                     ) : (
                                       <span className="text-emerald-600 font-medium flex items-center gap-1">
-                                        <CheckCircle2 className="h-3 w-3" /> Safe level (Min: {item.reorderMin})
+                                        <CheckCircle2 className="h-3 w-3" /> Safe level (Min: {item.reorderMin} {itemUnitInfo.unit || MISSING_UNIT_LABEL})
                                       </span>
                                     )
                                   ) : (
@@ -1303,15 +1431,15 @@ export default function StockFIFOControl({
                                 <div className="grid grid-cols-3 gap-1 text-center font-mono">
                                   <div className="bg-emerald-50/70 p-1 rounded border border-emerald-100">
                                     <div className="text-[9px] text-emerald-700 font-semibold">IN (Recv)</div>
-                                    <div className="text-xs font-bold text-emerald-800">+{totalReceivedQty}</div>
+                                    <div className="text-xs font-bold text-emerald-800">+{totalReceivedQty} {itemUnitInfo.unit || MISSING_UNIT_LABEL}</div>
                                   </div>
                                   <div className="bg-blue-50/70 p-1 rounded border border-blue-100">
                                     <div className="text-[9px] text-blue-700 font-semibold">OUT (Issue)</div>
-                                    <div className="text-xs font-bold text-blue-800">-{totalIssuedQty}</div>
+                                    <div className="text-xs font-bold text-blue-800">-{totalIssuedQty} {itemUnitInfo.unit || MISSING_UNIT_LABEL}</div>
                                   </div>
                                   <div className="bg-amber-50/70 p-1 rounded border border-amber-100">
                                     <div className="text-[9px] text-amber-700 font-semibold">RET</div>
-                                    <div className="text-xs font-bold text-amber-800">+{totalReturnedQty}</div>
+                                    <div className="text-xs font-bold text-amber-800">+{totalReturnedQty} {itemUnitInfo.unit || MISSING_UNIT_LABEL}</div>
                                   </div>
                                 </div>
                                 <div className="text-[10px] text-slate-400 text-right pt-0.5">{historyEvents.length} log transactions</div>
@@ -1329,17 +1457,20 @@ export default function StockFIFOControl({
                                   <span className="text-[10px] font-mono text-slate-400">Required per finished unit</span>
                                 </div>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
-                                  {item.bom.map((b: any, idx: number) => (
-                                    <div key={idx} className="p-2 bg-slate-50/80 border border-slate-200 rounded-lg text-xs flex justify-between items-center">
-                                      <div>
-                                        <div className="font-mono font-bold text-slate-800">{b.partCode}</div>
-                                        <div className="text-[10px] text-slate-500 truncate max-w-[140px]">{b.description}</div>
+                                  {item.bom.map((b: any, idx: number) => {
+                                    const bUnit = normalizeUnitCode(b.unit) || MISSING_UNIT_LABEL;
+                                    return (
+                                      <div key={idx} className="p-2 bg-slate-50/80 border border-slate-200 rounded-lg text-xs flex justify-between items-center">
+                                        <div>
+                                          <div className="font-mono font-bold text-slate-800">{b.partCode}</div>
+                                          <div className="text-[10px] text-slate-500 truncate max-w-[140px]">{b.description}</div>
+                                        </div>
+                                        <div className="text-right font-mono font-bold text-indigo-700 shrink-0 ml-2">
+                                          {b.quantityRequired} {bUnit}
+                                        </div>
                                       </div>
-                                      <div className="text-right font-mono font-bold text-indigo-700 shrink-0 ml-2">
-                                        {b.quantityRequired} {b.unit}
-                                      </div>
-                                    </div>
-                                  ))}
+                                    );
+                                  })}
                                 </div>
                               </div>
                             )}
@@ -1416,7 +1547,7 @@ export default function StockFIFOControl({
                                           <td className={`p-2.5 text-right font-mono font-bold ${
                                             ev.type === 'RECEIVING' ? 'text-emerald-700' : ev.type === 'ISSUANCE' ? 'text-blue-700' : 'text-amber-700'
                                           }`}>
-                                            {ev.type === 'RECEIVING' || ev.type === 'RETURN' ? '+' : '-'}{ev.qty.toLocaleString()} {ev.unit}
+                                            {ev.type === 'RECEIVING' || ev.type === 'RETURN' ? '+' : '-'}{ev.qty.toLocaleString()} {ev.unit || MISSING_UNIT_LABEL}
                                           </td>
                                           <td className="p-2.5 text-slate-700 font-medium">{ev.party}</td>
                                           <td className="p-2.5">
@@ -1601,11 +1732,15 @@ export default function StockFIFOControl({
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 mb-1">Unit of Measure (UOM)</label>
                   <select 
-                    value={editingStockItem.unit}
-                    onChange={e => setEditingStockItem({ ...editingStockItem, unit: e.target.value })}
+                    value={normalizeUnitCode(editingStockItem.unit)}
+                    onChange={e => {
+                      const clean = normalizeUnitCode(e.target.value);
+                      setEditingStockItem({ ...editingStockItem, unit: clean, unitMissing: !clean });
+                    }}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono font-semibold"
                   >
-                    {UOM_OPTIONS.map(u => (
+                    <option value="">-- Select UOM --</option>
+                    {getAllSelectUomOptions(editingStockItem.unit).map(u => (
                       <option key={u} value={u}>{u}</option>
                     ))}
                   </select>
@@ -1691,7 +1826,16 @@ export default function StockFIFOControl({
                 </button>
                 <button 
                   onClick={() => {
-                    onEditStock?.(editingStockItem);
+                    const resolved = resolveMasterDataUnit(editingStockItem, registries, stocks);
+                    if (!resolved.unit) {
+                      showPrintToast('Please assign a Unit of Measure (UOM) or set a Master Data unit.', 'warning');
+                      return;
+                    }
+                    onEditStock?.({
+                      ...editingStockItem,
+                      unit: resolved.unit,
+                      unitMissing: false,
+                    });
                     setEditingStockItem(null);
                   }}
                   className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold cursor-pointer"
@@ -1736,6 +1880,9 @@ export default function StockFIFOControl({
           const totalIssuedQty = matchedIssuances.reduce((sum, i) => sum + (Number(i.quantityIssued) || 0), 0);
           const totalReturnedQty = matchedReturns.reduce((sum, ret) => sum + (Number(ret.quantity) || 0), 0);
 
+          const historyStockUnitInfo = resolveMasterDataUnit(historyStockItem, registries, stocks);
+          const historyStockUnitLabel = historyStockUnitInfo.unit || MISSING_UNIT_LABEL;
+
           // Combine into unified history timeline
           const historyEvents: Array<{
             id: string;
@@ -1754,7 +1901,7 @@ export default function StockFIFOControl({
               date: r.receivedDate || r.date,
               refNumber: r.rrNumber || r.poNumber || r.id,
               qty: r.quantity,
-              unit: r.unit,
+              unit: resolveMasterDataUnit(r, registries, stocks).unit || historyStockUnitLabel,
               party: r.supplierOrDept || r.vendorSupplier || 'External Supplier',
               status: r.iqcStatus === 'APPROVED_IQC' ? 'IQC APPROVED' : r.iqcStatus === 'REJECTED_IQC' ? 'IQC REJECTED' : r.iqcStatus,
               details: `Lot: ${r.lotNumber} • Location: ${r.location || 'Warehouse'}`
@@ -1765,7 +1912,7 @@ export default function StockFIFOControl({
               date: i.date,
               refNumber: i.requisitionNumber || i.id,
               qty: i.quantityIssued,
-              unit: historyStockItem.unit,
+              unit: resolveMasterDataUnit(i, registries, stocks).unit || historyStockUnitLabel,
               party: i.department || 'Production Line',
               status: i.fifoVerified ? 'FIFO VERIFIED' : 'ISSUED',
               details: `Issued By: ${i.issuedBy || 'Operator'} → Received By: ${i.receivedBy || 'Dept'}`
@@ -1776,7 +1923,7 @@ export default function StockFIFOControl({
               date: ret.date,
               refNumber: ret.returnSlipFormNumber || ret.id,
               qty: ret.quantity,
-              unit: ret.unit,
+              unit: resolveMasterDataUnit(ret, registries, stocks).unit || historyStockUnitLabel,
               party: ret.department || 'Department Return',
               status: ret.status,
               details: `Condition: ${ret.condition} • Reason: ${ret.reason}`
@@ -1802,7 +1949,7 @@ export default function StockFIFOControl({
               `"Part Code","${historyStockItem.partCode}"`,
               `"Description","${historyStockItem.description}"`,
               `"Lot Number","${historyStockItem.lotNumber}"`,
-              `"Current Quantity","${historyStockItem.quantity} ${historyStockItem.unit}"`,
+              `"Current Quantity","${historyStockItem.quantity} ${historyStockUnitLabel}"`,
               [],
               csvHeaders.join(','),
               ...csvRows.map(r => r.join(','))
@@ -1870,22 +2017,22 @@ export default function StockFIFOControl({
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
                       <span className="text-[10px] font-bold text-slate-400 font-mono uppercase block">Current On-Hand</span>
-                      <span className="text-xl font-bold text-indigo-950">{historyStockItem.quantity} {historyStockItem.unit}</span>
+                      <span className="text-xl font-bold text-indigo-950">{historyStockItem.quantity} {historyStockUnitLabel}</span>
                       <span className="text-[10px] text-slate-500 block">Bin Location: {historyStockItem.location}</span>
                     </div>
                     <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl">
                       <span className="text-[10px] font-bold text-emerald-600 font-mono uppercase block">Total Received</span>
-                      <span className="text-xl font-bold">{totalReceivedQty} {historyStockItem.unit}</span>
+                      <span className="text-xl font-bold">{totalReceivedQty} {historyStockUnitLabel}</span>
                       <span className="text-[10px] text-emerald-700 block">{matchedReceivings.length} receiving logs</span>
                     </div>
                     <div className="p-3 bg-blue-50 border border-blue-200 text-blue-900 rounded-xl">
                       <span className="text-[10px] font-bold text-blue-600 font-mono uppercase block">Total Issued</span>
-                      <span className="text-xl font-bold">{totalIssuedQty} {historyStockItem.unit}</span>
+                      <span className="text-xl font-bold">{totalIssuedQty} {historyStockUnitLabel}</span>
                       <span className="text-[10px] text-blue-700 block">{matchedIssuances.length} issuance logs</span>
                     </div>
                     <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl">
                       <span className="text-[10px] font-bold text-amber-600 font-mono uppercase block">Total Returned</span>
-                      <span className="text-xl font-bold">{totalReturnedQty} {historyStockItem.unit}</span>
+                      <span className="text-xl font-bold">{totalReturnedQty} {historyStockUnitLabel}</span>
                       <span className="text-[10px] text-amber-700 block">{matchedReturns.length} return logs</span>
                     </div>
                   </div>
