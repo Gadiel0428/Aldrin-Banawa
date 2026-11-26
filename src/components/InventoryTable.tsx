@@ -16,12 +16,14 @@ import { InventoryItem, Warehouse } from '../types/inventory';
 import { fetchInventory, fetchWarehouses } from '../database/inventory';
 import { subscribeToInventory } from '../database/realtime';
 import { MISSING_UNIT_LABEL, normalizeUnitCode } from '../../shared/units';
+import { useI18n } from '../i18n';
 
 interface InventoryTableProps {
   onSelectProduct?: (productId: string) => void;
 }
 
 export const InventoryTable: React.FC<InventoryTableProps> = ({ onSelectProduct }) => {
+  const { t } = useI18n();
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [selectedWarehouse, setSelectedWarehouse] = useState<string>('ALL');
@@ -77,7 +79,7 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({ onSelectProduct 
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
           <input
             type="text"
-            placeholder="Search by SKU, product name, lot number or bin location..."
+            placeholder={t('inventoryTable.searchPlaceholder')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-10 pr-4 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
@@ -91,7 +93,7 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({ onSelectProduct 
             onChange={(e) => setSelectedWarehouse(e.target.value)}
             className="px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 focus:outline-none"
           >
-            <option value="ALL">All Warehouses / Bays</option>
+            <option value="ALL">{t('inventoryTable.allWarehouses')}</option>
             {warehouses.map((wh) => (
               <option key={wh.id} value={wh.id}>
                 {wh.name}
@@ -103,7 +105,7 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({ onSelectProduct 
             onClick={loadData}
             disabled={loading}
             className="p-2 rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
-            title="Refresh Inventory"
+            title={t('inventoryTable.refreshTitle')}
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
@@ -116,19 +118,19 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({ onSelectProduct 
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 text-slate-500 dark:text-slate-400 uppercase tracking-wider font-semibold">
-                <th className="py-3 px-4">Item & SKU</th>
-                <th className="py-3 px-4">Warehouse</th>
-                <th className="py-3 px-4">Location / Lot</th>
-                <th className="py-3 px-4 text-right">Available Qty</th>
-                <th className="py-3 px-4 text-center">Stock Status</th>
-                <th className="py-3 px-4 text-right">Last Movement</th>
+                <th className="py-3 px-4">{t('inventoryTable.colItemSku')}</th>
+                <th className="py-3 px-4">{t('inventoryTable.colWarehouse')}</th>
+                <th className="py-3 px-4">{t('inventoryTable.colLocationLot')}</th>
+                <th className="py-3 px-4 text-right">{t('inventoryTable.colAvailableQty')}</th>
+                <th className="py-3 px-4 text-center">{t('inventoryTable.colStockStatus')}</th>
+                <th className="py-3 px-4 text-right">{t('inventoryTable.colLastMovement')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
               {filteredItems.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="py-8 text-center text-slate-400">
-                    {loading ? 'Fetching current stock balances...' : 'No inventory records found.'}
+                    {loading ? t('inventoryTable.loading') : t('inventoryTable.empty')}
                   </td>
                 </tr>
               ) : (
@@ -180,15 +182,15 @@ export const InventoryTable: React.FC<InventoryTableProps> = ({ onSelectProduct 
                       <td className="py-3 px-4 text-center">
                         {isOut ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/10 text-rose-600 border border-rose-500/20">
-                            <AlertTriangle className="w-3 h-3" /> Out of Stock
+                            <AlertTriangle className="w-3 h-3" /> {t('inventoryTable.statusOutOfStock')}
                           </span>
                         ) : isLow ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20">
-                            <AlertTriangle className="w-3 h-3" /> Low Stock
+                            <AlertTriangle className="w-3 h-3" /> {t('inventoryTable.statusLowStock')}
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
-                            <CheckCircle className="w-3 h-3" /> Optimal
+                            <CheckCircle className="w-3 h-3" /> {t('inventoryTable.statusOptimal')}
                           </span>
                         )}
                       </td>

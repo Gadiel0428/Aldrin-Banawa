@@ -8,6 +8,7 @@ import { MaterialStockItem } from '../../types';
 import { syncManager } from '../../sync/syncManager';
 import { showPrintToast } from '../../utils/printDocument';
 import { formatQuantityWithUnit, normalizeUnitCode } from '../../../shared/units';
+import { translate } from '../../i18n';
 
 export interface UseStockActionsParams {
   stocks: MaterialStockItem[];
@@ -39,7 +40,7 @@ export function useStockActions({
 }: UseStockActionsParams) {
   const handleAddStock = (item: MaterialStockItem) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
+      showPrintToast(translate('toasts.viewOnlyDenied'), 'error');
       return;
     }
     const normUnit = normalizeUnitCode(item.unit);
@@ -73,7 +74,7 @@ export function useStockActions({
 
   const handleUpdateStockQty = (id: string, qty: number) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
+      showPrintToast(translate('toasts.viewOnlyDenied'), 'error');
       return;
     }
     const existingItem = stocks.find(s => s.id === id);
@@ -105,7 +106,7 @@ export function useStockActions({
 
   const handleUpdateStockStatus = (id: string, status: MaterialStockItem['status']) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
+      showPrintToast(translate('toasts.viewOnlyDenied'), 'error');
       return;
     }
     let updatedItem: MaterialStockItem | null = null;
@@ -125,7 +126,7 @@ export function useStockActions({
 
   const handleEditStock = (item: MaterialStockItem) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: OPERATORS IN VIEW ONLY MODE CANNOT EDIT STOCK ITEMS.", 'error');
+      showPrintToast(translate('toasts.viewOnlyEditStockDenied'), 'error');
       return;
     }
     const existingItem = stocks.find(s => s.id === item.id);
@@ -167,7 +168,7 @@ export function useStockActions({
 
   const handleDeleteStock = (id: string) => {
     if (currentPermission !== 'FULL_ACCESS') {
-      showPrintToast("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE STOCK TRANSACTIONS.", 'error');
+      showPrintToast(translate('toasts.superAdminDeleteStockDenied'), 'error');
       return;
     }
     deleteRecordLocallyAndRemotely('stocks', id);

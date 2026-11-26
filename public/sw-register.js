@@ -45,8 +45,18 @@
       });
     }
 
-    var isDev = window.location.hostname === 'localhost';
+    var host = window.location.hostname || '';
+    var isDev = host === 'localhost' || host === '127.0.0.1' || host.indexOf('ais-dev-') === 0;
     if (isDev) {
+      if ('caches' in window) {
+        caches.keys().then(function (keys) {
+          keys.forEach(function (k) {
+            if (k.startsWith('juwei-wms-')) {
+              caches.delete(k);
+            }
+          });
+        });
+      }
       navigator.serviceWorker.getRegistrations().then(function (registrations) {
         registrations.forEach(function (reg) {
           reg.unregister();

@@ -39,6 +39,13 @@ import {
   broadcastInventoryEvent,
   closeDeviceSockets,
 } from "./realtimeService.ts";
+import {
+  validateDeliveryRecord,
+  validateIssuanceRecord,
+  validateReceivingRecord,
+  validateStockRecord,
+  type ValidationResult,
+} from "../../shared/validation.ts";
 
 export const INVENTORY_COLLECTIONS = new Set<string>([
   "stocks",
@@ -176,7 +183,6 @@ export function executeRecordUpsert(
       device_id: effectiveDeviceId,
       version: nextVersion,
     };
-    currentList[existingIndex] = confirmedRecord;
   } else {
     if (
       ctx.deletedRecordTombstones.has(recordId) &&
@@ -208,6 +214,43 @@ export function executeRecordUpsert(
       device_id: effectiveDeviceId,
       version: Number(normalizedInputRecord.version) || 1,
     };
+  }
+
+  let validationResult: ValidationResult | null = null;
+  if (collection === "receiving") {
+    validationResult = validateReceivingRecord(
+      confirmedRecord,
+      ctx.state.receiving || []
+    );
+  } else if (collection === "issuances") {
+    validationResult = validateIssuanceRecord(confirmedRecord);
+  } else if (collection === "deliveries") {
+    validationResult = validateDeliveryRecord(
+      confirmedRecord,
+      ctx.state.deliveries || []
+    );
+  } else if (collection === "stocks") {
+    validationResult = validateStockRecord(confirmedRecord);
+  }
+
+  if (validationResult && !validationResult.valid) {
+    logger.warn(
+      `[VALIDATION] Rejected ${collection} id=${recordId}: ${validationResult.message}`
+    );
+    return {
+      success: false,
+      status: 400,
+      error: validationResult.message,
+      fieldErrors: validationResult.fieldErrors,
+      currentRecord: existingRecord,
+      confirmedRecord: existingRecord,
+      systemResetVersion: ctx.systemResetVersion,
+    };
+  }
+
+  if (existingRecord) {
+    currentList[existingIndex] = confirmedRecord;
+  } else {
     currentList.unshift(confirmedRecord);
   }
 

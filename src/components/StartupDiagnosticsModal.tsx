@@ -26,6 +26,7 @@ import {
   getCentralServerHost,
   getCentralWebSocketUrl,
 } from '../config/serverConfig';
+import { useI18n } from '../i18n';
 
 export interface DiagnosticItem {
   id: string;
@@ -60,6 +61,7 @@ export default function StartupDiagnosticsModal({
   onForceSync,
   onReconnectWs,
 }: StartupDiagnosticsModalProps) {
+  const { t } = useI18n();
   const [isRunning, setIsRunning] = useState(false);
   const [diagnostics, setDiagnostics] = useState<DiagnosticItem[]>([]);
   const [logs, setLogs] = useState<Array<{ timestamp: string; message: string; type: 'info' | 'success' | 'warn' | 'error' }>>([]);
@@ -477,13 +479,13 @@ export default function StartupDiagnosticsModal({
                 </div>
                 <div>
                   <h3 className="text-base font-extrabold text-white flex items-center gap-2">
-                    Central Synchronization Diagnostics
+                    {t('modals.diagnostics.title')}
                     <span className="text-[10px] px-2 py-0.5 rounded-full font-mono bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                      MULTI-PC CLOUD
+                      {t('modals.diagnostics.cloudBadge')}
                     </span>
                   </h3>
                   <p className="text-xs text-slate-400">
-                    Real-time verification of API, WebSocket, Database, and Multi-Client Sync
+                    {t('modals.diagnostics.subtitle')}
                   </p>
                 </div>
               </div>
@@ -497,7 +499,7 @@ export default function StartupDiagnosticsModal({
                   title="Rerun Diagnostics"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isRunning ? 'animate-spin' : ''}`} />
-                  <span className="hidden sm:inline">Rerun</span>
+                  <span className="hidden sm:inline">{t('modals.diagnostics.rerunBtn')}</span>
                 </button>
                 <button
                   type="button"
@@ -513,7 +515,7 @@ export default function StartupDiagnosticsModal({
             <div className="bg-slate-950/40 border-b border-slate-800/80 px-5 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
               <div className="flex items-center gap-2 min-w-0">
                 <Globe className="w-4 h-4 text-indigo-400 shrink-0" />
-                <span className="text-slate-400 shrink-0 font-mono">Central Server URL:</span>
+                <span className="text-slate-400 shrink-0 font-mono">{t('modals.diagnostics.centralUrlLabel')}</span>
                 <span className="font-mono font-bold text-emerald-400 truncate max-w-xs sm:max-w-md" title={getCentralServerUrl()}>
                   {getCentralServerUrl()}
                 </span>
@@ -525,11 +527,11 @@ export default function StartupDiagnosticsModal({
                   className="flex items-center gap-1 text-[11px] font-mono px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
                 >
                   {copiedUrl ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                  {copiedUrl ? 'Copied' : 'Copy URL'}
+                  {copiedUrl ? t('modals.diagnostics.copiedUrlBtn') : t('modals.diagnostics.copyUrlBtn')}
                 </button>
                 <div className={`flex items-center gap-1.5 px-2 py-1 rounded text-[11px] font-bold font-mono ${wsConnected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'}`}>
                   <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
-                  {wsConnected ? 'WS CONNECTED' : 'WS DISCONNECTED'}
+                  {wsConnected ? t('modals.diagnostics.wsConnectedBadge') : t('modals.diagnostics.wsDisconnectedBadge')}
                 </div>
               </div>
             </div>
@@ -541,7 +543,7 @@ export default function StartupDiagnosticsModal({
                 onClick={() => setActiveTab('overview')}
                 className={`pb-2.5 font-bold transition border-b-2 whitespace-nowrap ${activeTab === 'overview' ? 'text-indigo-400 border-indigo-500' : 'text-slate-400 border-transparent hover:text-slate-200'}`}
               >
-                Diagnostic Tests ({diagnostics.filter(d => d.status === 'success').length}/{diagnostics.length})
+                {t('modals.diagnostics.tabOverview')} ({diagnostics.filter(d => d.status === 'success').length}/{diagnostics.length})
               </button>
               <button
                 type="button"
@@ -549,7 +551,7 @@ export default function StartupDiagnosticsModal({
                 className={`pb-2.5 font-bold transition border-b-2 flex items-center gap-1.5 whitespace-nowrap ${activeTab === 'multi_pc_test' ? 'text-indigo-400 border-indigo-500' : 'text-slate-400 border-transparent hover:text-slate-200'}`}
               >
                 <Laptop className="w-3.5 h-3.5" />
-                Dual PC Sync Verifier (PC-1 ⇋ PC-2)
+                {t('modals.diagnostics.tabMultiPc')}
                 {pcTestEvents.length > 0 && (
                   <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-500/20 text-emerald-300 font-mono">
                     {pcTestEvents.length}
@@ -561,7 +563,7 @@ export default function StartupDiagnosticsModal({
                 onClick={() => setActiveTab('logs')}
                 className={`pb-2.5 font-bold transition border-b-2 flex items-center gap-1.5 whitespace-nowrap ${activeTab === 'logs' ? 'text-indigo-400 border-indigo-500' : 'text-slate-400 border-transparent hover:text-slate-200'}`}
               >
-                Event Log ({logs.length})
+                {t('modals.diagnostics.tabLogs')} ({logs.length})
                 {hasErrors && <span className="w-2 h-2 rounded-full bg-rose-500" />}
               </button>
             </div>
@@ -590,17 +592,17 @@ export default function StartupDiagnosticsModal({
                     <div>
                       <h4 className="font-extrabold text-sm tracking-wide">
                         {allPassed
-                          ? 'All Workstations Synchronized with Central Cloud Database'
+                          ? t('modals.diagnostics.allSyncedTitle')
                           : hasErrors
-                          ? 'Central Server Synchronization Encountered Issues'
-                          : 'Synchronization In Progress'}
+                          ? t('modals.diagnostics.issuesTitle')
+                          : t('modals.diagnostics.inProgressTitle')}
                       </h4>
                       <p className="text-xs mt-1 text-slate-300 leading-relaxed">
                         {allPassed
-                          ? 'The application on this machine is communicating directly with the authoritative Central Server. All transactions committed here are saved to the central database and broadcast instantly to all other workstations.'
+                          ? t('modals.diagnostics.allSyncedDesc')
                           : hasErrors
-                          ? 'Please check network connectivity or firewall rules. Ensure this terminal can reach port 443/3000 on the central server.'
-                          : 'Running diagnostic probes...'}
+                          ? t('modals.diagnostics.issuesDesc')
+                          : t('modals.diagnostics.inProgressDesc')}
                       </p>
                     </div>
                   </div>
@@ -882,7 +884,7 @@ export default function StartupDiagnosticsModal({
                     className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
                   >
                     <Radio className="w-3.5 h-3.5 text-indigo-400" />
-                    Reconnect WebSocket
+                    {t('modals.diagnostics.reconnectWsBtn')}
                   </button>
                 )}
                 {onForceSync && (
@@ -895,7 +897,7 @@ export default function StartupDiagnosticsModal({
                     className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
-                    Force Central Resync
+                    {t('modals.diagnostics.forceResyncBtn')}
                   </button>
                 )}
               </div>
@@ -905,7 +907,7 @@ export default function StartupDiagnosticsModal({
                 onClick={onClose}
                 className="px-4 py-1.5 text-xs font-bold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
               >
-                Close
+                {t('common.close')}
               </button>
             </div>
           </motion.div>

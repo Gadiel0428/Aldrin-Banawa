@@ -48,6 +48,9 @@ import {
   normalizeUnitCode,
   resolveMasterDataUnit,
 } from '../../shared/units';
+import { validateReceivingRecord } from '../../shared/validation';
+import { getManilaTodayString } from '../lib/businessDate';
+import { useI18n } from '../i18n';
 
 // Default Receiving and Return Categories
 export const DEFAULT_RECEIVING_CATEGORIES: string[] = [
@@ -102,6 +105,7 @@ export default function ReceivingModule({
   onUpdateReceivingCategories,
   fifoColorsByMonth
 }: ReceivingModuleProps) {
+  const { t, localizeValidation } = useI18n();
   const effectiveCanEdit = canEdit || isSuperAdmin;
   const [activeTab, setActiveTab] = useState<'external-internal' | 'returns'>('external-internal');
   const [searchQuery, setSearchQuery] = useState('');
@@ -112,6 +116,25 @@ export default function ReceivingModule({
   // States for Editing Modals
   const [editingReceiving, setEditingReceiving] = useState<ReceivingRecord | null>(null);
   const [editingReturn, setEditingReturn] = useState<ReturnRecord | null>(null);
+  const [receivingFieldErrors, setReceivingFieldErrors] = useState<Record<string, string>>({});
+  const [editReceivingFieldErrors, setEditReceivingFieldErrors] = useState<Record<string, string>>({});
+  const [editReceivingQtyInput, setEditReceivingQtyInput] = useState<string>('');
+
+  const clearRecErr = (field: string) => {
+    setReceivingFieldErrors(prev => {
+      if (!prev[field]) return prev;
+      const { [field]: _removed, ...rest } = prev;
+      return rest;
+    });
+  };
+
+  const clearEditRecErr = (field: string) => {
+    setEditReceivingFieldErrors(prev => {
+      if (!prev[field]) return prev;
+      const { [field]: _removed, ...rest } = prev;
+      return rest;
+    });
+  };
 
   // States for Row-Hover Expansion
   const [expandedReceivingId, setExpandedReceivingId] = useState<string | null>(null);
@@ -176,11 +199,11 @@ export default function ReceivingModule({
   const handleAddCategory = (catToAdd?: string): string | false => {
     const candidate = String(catToAdd !== undefined ? catToAdd : newCategoryInput).trim().toUpperCase();
     if (!candidate) {
-      setCategoryModalError("Please enter a valid category name.");
+      setCategoryModalError(t('receiving.catErrEmpty'));
       return false;
     }
     if (managedCategories.some(c => c.toUpperCase() === candidate)) {
-      setCategoryModalError(`Category "${candidate}" already exists.`);
+      setCategoryModalError(t('receiving.catErrExists', { cat: candidate }));
       return false;
     }
 
@@ -190,7 +213,7 @@ export default function ReceivingModule({
     }
     setNewCategoryInput('');
     setCategoryModalError('');
-    setCategoryModalSuccess(`Category "${candidate}" added successfully.`);
+    setCategoryModalSuccess(t('receiving.catSuccessAdd', { cat: candidate }));
     setTimeout(() => setCategoryModalSuccess(''), 3000);
     return candidate;
   };
@@ -199,11 +222,11 @@ export default function ReceivingModule({
     const cleanOld = oldCat.trim().toUpperCase();
     const cleanNew = newCat.trim().toUpperCase();
     if (!cleanNew) {
-      setCategoryModalError("Category name cannot be empty.");
+      setCategoryModalError(t('receiving.catErrNameEmpty'));
       return;
     }
     if (cleanNew !== cleanOld && managedCategories.some(c => c.toUpperCase() === cleanNew)) {
-      setCategoryModalError(`Category "${cleanNew}" already exists.`);
+      setCategoryModalError(t('receiving.catErrExists', { cat: cleanNew }));
       return;
     }
 
@@ -226,7 +249,7 @@ export default function ReceivingModule({
     setEditingCategoryOriginal(null);
     setEditingCategoryNewValue('');
     setCategoryModalError('');
-    setCategoryModalSuccess(`Renamed "${cleanOld}" to "${cleanNew}" across all records.`);
+    setCategoryModalSuccess(t('receiving.catSuccessRename', { oldCat: cleanOld, newCat: cleanNew }));
     setTimeout(() => setCategoryModalSuccess(''), 3000);
   };
 
@@ -240,21 +263,21 @@ export default function ReceivingModule({
     const inUseCount = recCount + retCount + stockCount;
 
     if (inUseCount > 0) {
-      setCategoryModalError(`Cannot delete category "${clean}": It is currently assigned to ${inUseCount} active record(s) (${recCount} receiving, ${retCount} returns${stockCount > 0 ? `, ${stockCount} stock` : ''}). You must reassign or remove these records first.`);
+      setCategoryModalError(t('receiving.catErrInUse', { cat: clean, total: inUseCount }));
       return;
     }
 
     setConfirmAction({
-      title: `DELETE CATEGORY: ${clean}`,
-      message: `Are you sure you want to delete the category "${clean}"? This will remove it from the managed category list.`,
+      title: t('receiving.confirmDeleteCatTitle', { cat: clean }),
+      message: t('receiving.confirmDeleteCatMsg', { cat: clean }),
       confirmVariant: "danger",
-      confirmLabel: "YES, DELETE",
+      confirmLabel: t('receiving.confirmYesDelete'),
       onConfirm: () => {
         const updated = managedCategories.filter(c => c.toUpperCase() !== clean);
         if (onUpdateReceivingCategories) {
           onUpdateReceivingCategories(updated);
         }
-        setCategoryModalSuccess(`Category "${clean}" deleted successfully.`);
+        setCategoryModalSuccess(t('receiving.catSuccessDelete', { cat: clean }));
         setTimeout(() => setCategoryModalSuccess(''), 3000);
       }
     });
@@ -262,15 +285,15 @@ export default function ReceivingModule({
 
   const handleResetCategoriesToDefaults = () => {
     setConfirmAction({
-      title: "RESET CATEGORIES TO DEFAULTS",
-      message: "Are you sure you want to restore the 8 factory default categories? Any records using other categories will retain their data.",
+      title: t('receiving.confirmResetCatsTitle'),
+      message: t('receiving.confirmResetCatsMsg'),
       confirmVariant: "danger",
-      confirmLabel: "YES, RESET",
+      confirmLabel: t('receiving.confirmYesReset'),
       onConfirm: () => {
         if (onUpdateReceivingCategories) {
           onUpdateReceivingCategories([...DEFAULT_RECEIVING_CATEGORIES]);
         }
-        setCategoryModalSuccess("Reset categories to standard defaults.");
+        setCategoryModalSuccess(t('receiving.catSuccessReset'));
         setTimeout(() => setCategoryModalSuccess(''), 3000);
       }
     });
@@ -454,6 +477,11 @@ export default function ReceivingModule({
   const [itemDescription, setItemDescription] = useState(initialReceivingDraft?.itemDescription || '');
   const [partCode, setPartCode] = useState(initialReceivingDraft?.partCode || '');
   const [quantity, setQuantity] = useState<number>(initialReceivingDraft?.quantity || 0);
+  const [quantityInput, setQuantityInput] = useState<string>(
+    initialReceivingDraft?.quantity !== undefined && initialReceivingDraft?.quantity !== 0
+      ? String(initialReceivingDraft.quantity)
+      : ''
+  );
   const [unit, setUnit] = useState(initialReceivingDraft?.unit || 'KG');
   const [lotNumber, setLotNumber] = useState(initialReceivingDraft?.lotNumber || '');
   const [supplierOrDept, setSupplierOrDept] = useState(initialReceivingDraft?.supplierOrDept || '');
@@ -465,7 +493,8 @@ export default function ReceivingModule({
   const [transferFormNumber, setTransferFormNumber] = useState(initialReceivingDraft?.transferFormNumber || '');
   const [customer, setCustomer] = useState(initialReceivingDraft?.customer || '');
   const [color, setColor] = useState(initialReceivingDraft?.color || '');
-  const [receivedDate, setReceivedDate] = useState(initialReceivingDraft?.receivedDate || new Date().toISOString().split('T')[0]);
+  const [receivedDate, setReceivedDate] = useState(initialReceivingDraft?.receivedDate || getManilaTodayString());
+  const [expirationDate, setExpirationDate] = useState(initialReceivingDraft?.expirationDate || '');
   const [location, setLocation] = useState(initialReceivingDraft?.location || '');
   const [vendorSupplier, setVendorSupplier] = useState(initialReceivingDraft?.vendorSupplier || '');
   const [reorderMin, setReorderMin] = useState<number>(initialReceivingDraft?.reorderMin || 0);
@@ -532,6 +561,7 @@ export default function ReceivingModule({
       transferFormNumber ||
       customer ||
       color ||
+      expirationDate ||
       location ||
       vendorSupplier ||
       remarks ||
@@ -558,6 +588,7 @@ export default function ReceivingModule({
         customer,
         color,
         receivedDate,
+        expirationDate,
         location,
         vendorSupplier,
         reorderMin,
@@ -578,7 +609,7 @@ export default function ReceivingModule({
   }, [
     showAddForm, source, modelName, itemDescription, partCode, quantity, unit,
     lotNumber, supplierOrDept, poNumber, rrNumber, drNumber, siNumber,
-    wayBill, transferFormNumber, customer, color, receivedDate, location,
+    wayBill, transferFormNumber, customer, color, receivedDate, expirationDate, location,
     vendorSupplier, reorderMin, remarks, bomItems, autoDeductBom,
     sopReceivingInspection, sopMaterialTraceability, sopQuantityAccuracy,
     sopMaterialCondition, sopSystemRecording
@@ -636,9 +667,11 @@ export default function ReceivingModule({
     setCustomer('');
     setColor('');
     setQuantity(0);
+    setQuantityInput('');
     setLotNumber('');
     setSupplierOrDept('');
-    setReceivedDate(new Date().toISOString().split('T')[0]);
+    setReceivedDate(getManilaTodayString());
+    setExpirationDate('');
     setLocation('');
     setVendorSupplier('');
     setReorderMin(0);
@@ -657,6 +690,7 @@ export default function ReceivingModule({
     setBomItems([]);
     setAutoDeductBom(true);
     setConfirmedScanInfo(null);
+    setReceivingFieldErrors({});
     setShowAddForm(false);
   };
 
@@ -685,27 +719,8 @@ export default function ReceivingModule({
   const handleSubmitReceiving = (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!supplierOrDept) {
-      showPrintToast('Please select a Category first.', 'warning');
-      return;
-    }
-
-    if (quantity <= 0) {
-      showPrintToast('Please enter a valid Quantity greater than 0.', 'warning');
-      return;
-    }
-
-    if (!partCode.trim() || !location.trim()) {
-      showPrintToast('Please fill in all required fields.', 'warning');
-      return;
-    }
-
     const masterUnit = findMasterPresetUnit({ partCode, description: itemDescription }, registries);
-    const cleanUnit = normalizeUnitCode(unit) || masterUnit;
-    if (!cleanUnit) {
-      showPrintToast('Please select a valid Unit of Measure (UOM).', 'warning');
-      return;
-    }
+    const cleanUnit = normalizeUnitCode(unit) || masterUnit || '';
 
     // Determine FIFO color code based on received date from synced calendar
     const fifoColor = getFifoColorForDate(receivedDate, fifoColorsByMonth);
@@ -718,26 +733,32 @@ export default function ReceivingModule({
       !sopMaterialCondition || 
       !sopSystemRecording;
 
-    const generatedRrId = rrNumber.trim() || generateAuthoritativeId('RR');
+    const cleanRr = rrNumber.trim() || undefined;
+    const cleanPo = poNumber.trim() || undefined;
+    const cleanDr = drNumber.trim() || undefined;
+    const cleanSi = siNumber.trim() || undefined;
+    const cleanExp = expirationDate.trim() || undefined;
+    const rawQty = quantityInput.trim() === '' ? NaN : Number(quantityInput.trim());
 
     const newRecord: ReceivingRecord = {
-      id: generatedRrId,
-      rrNumber: generatedRrId,
-      date: new Date().toISOString().split('T')[0],
+      id: generateAuthoritativeId('RCV'),
+      ...(cleanRr ? { rrNumber: cleanRr } : {}),
+      date: getManilaTodayString(),
       receivedDate,
-      location,
-      vendorSupplier: vendorSupplier || 'N/A',
+      ...(cleanExp ? { expirationDate: cleanExp } : {}),
+      location: location.trim(),
+      vendorSupplier: vendorSupplier.trim() || 'N/A',
       reorderMin,
       remarks,
       source: (isDirectBomCategory || isWipCategory) ? 'INTERNAL' : ((isIndirectBomCategory || isConsumableCategory || isOfficeSuppliesCategory) ? 'EXTERNAL' : source as any),
       itemDescription: itemDescription || lotNumber || partCode,
-      partCode: partCode.toUpperCase(),
+      partCode: partCode.trim().toUpperCase(),
       modelName: modelName.trim() || undefined,
       color: isRawCategory ? color.trim() || undefined : undefined,
-      quantity,
+      quantity: Number.isNaN(rawQty) ? 0 : rawQty,
       unit: cleanUnit,
-      unitMissing: false,
-      lotNumber: lotNumber || generateAuthoritativeId('LOT'),
+      unitMissing: !cleanUnit,
+      lotNumber: lotNumber.trim() || generateAuthoritativeId('LOT'),
       physicalCondition: {
         receivingInspection: sopReceivingInspection,
         materialTraceability: sopMaterialTraceability,
@@ -749,9 +770,9 @@ export default function ReceivingModule({
         noPestSign: sopMaterialCondition,
         noContamination: sopMaterialCondition
       },
-      poNumber: poNumber.trim() || undefined,
-      drNumber: drNumber.trim() || undefined,
-      siNumber: siNumber.trim() || undefined,
+      ...(cleanPo ? { poNumber: cleanPo } : {}),
+      ...(cleanDr ? { drNumber: cleanDr } : {}),
+      ...(cleanSi ? { siNumber: cleanSi } : {}),
       wayBill: wayBill.trim() || undefined,
       transferFormNumber: (isWipCategory || isDirectBomCategory) ? (transferFormNumber.trim() || undefined) : undefined,
       supplierOrDept,
@@ -763,6 +784,22 @@ export default function ReceivingModule({
       customer: customer || getCustomerForPart(partCode, itemDescription)
     };
 
+    const validation = validateReceivingRecord(
+      {
+        ...newRecord,
+        quantity: quantityInput.trim() === '' ? '' : rawQty,
+      } as any,
+      receiving,
+      { requireOperationalFields: true }
+    );
+
+    if (!validation.valid) {
+      setReceivingFieldErrors(validation.fieldErrors);
+      showPrintToast(localizeValidation(validation.message) || t('receiving.validationWarning'), 'warning');
+      return;
+    }
+
+    setReceivingFieldErrors({});
     onAddReceiving(newRecord);
     clearReceivingDraft();
     
@@ -773,9 +810,11 @@ export default function ReceivingModule({
     setCustomer('');
     setColor('');
     setQuantity(0);
+    setQuantityInput('');
     setLotNumber('');
     setSupplierOrDept('');
-    setReceivedDate(new Date().toISOString().split('T')[0]);
+    setReceivedDate(getManilaTodayString());
+    setExpirationDate('');
     setLocation('');
     setVendorSupplier('');
     setReorderMin(0);
@@ -801,18 +840,18 @@ export default function ReceivingModule({
   const handleSubmitReturn = (e: React.FormEvent) => {
     e.preventDefault();
     if (!retCategory) {
-      showPrintToast('Please select a Category first.', 'warning');
+      showPrintToast(t('receiving.selectCategoryWarning'), 'warning');
       return;
     }
     if (!retDesc || !retPartCode || retQty <= 0 || !retLot || !retDept || !retSlip) {
-      showPrintToast('Please fill in all required fields.', 'warning');
+      showPrintToast(t('receiving.fillRequiredWarning'), 'warning');
       return;
     }
 
     const masterUnit = findMasterPresetUnit({ partCode: retPartCode, description: retDesc }, registries);
     const cleanRetUnit = normalizeUnitCode(retUnit) || masterUnit;
     if (!cleanRetUnit) {
-      showPrintToast('Please select a valid Unit of Measure (UOM).', 'warning');
+      showPrintToast(t('receiving.selectValidUomWarning'), 'warning');
       return;
     }
 
@@ -1016,15 +1055,15 @@ export default function ReceivingModule({
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded border border-indigo-500/30">
-              RECEIVING & INBOUND LOGISTICS
+              {t('receiving.bannerBadge')}
             </span>
             <span className="text-emerald-400 text-[10px] font-bold flex items-center gap-1 font-mono">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse inline-block" /> ACTIVE
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse inline-block" /> {t('receiving.activeBadge')}
             </span>
           </div>
-          <h2 className="text-xl font-bold text-white tracking-tight">Material Receiving & Returns</h2>
+          <h2 className="text-xl font-bold text-white tracking-tight">{t('receiving.moduleTitle')}</h2>
           <p className="text-xs text-slate-300 mt-1">
-            Perform physical condition checks, stamp Transfer Slips, control hold statuses, and process returns.
+            {t('receiving.moduleSubtitle')}
           </p>
         </div>
         
@@ -1036,7 +1075,7 @@ export default function ReceivingModule({
               activeTab === 'external-internal' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
             }`}
           >
-            <Truck className="h-4 w-4" /> External & Internal Arrivals
+            <Truck className="h-4 w-4" /> {t('receiving.tabArrivals')}
           </button>
           <button 
             onClick={() => { setActiveTab('returns'); setSearchQuery(''); }}
@@ -1044,7 +1083,7 @@ export default function ReceivingModule({
               activeTab === 'returns' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
             }`}
           >
-            <RotateCcw className="h-4 w-4" /> Material Excess Returns
+            <RotateCcw className="h-4 w-4" /> {t('receiving.tabExcessReturns')}
           </button>
         </div>
       </div>
@@ -1060,7 +1099,7 @@ export default function ReceivingModule({
                 </span>
                 <input 
                   type="text" 
-                  placeholder="Search description, part code, PO..." 
+                  placeholder={t('receiving.searchArrivalsPlaceholder')} 
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                   className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-slate-400 focus:outline-none"
@@ -1074,7 +1113,7 @@ export default function ReceivingModule({
                   onChange={e => setClassificationFilter(e.target.value)}
                   className="w-full sm:w-auto px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-700 focus:ring-1 focus:ring-slate-400 focus:outline-none cursor-pointer"
                 >
-                  <option value="ALL">ALL CATEGORIES ({managedCategories.length})</option>
+                  <option value="ALL">{t('receiving.allCategoriesOption', { count: managedCategories.length })}</option>
                   {managedCategories.map(cat => (
                     <option key={cat} value={cat}>{cat}</option>
                   ))}
@@ -1089,7 +1128,7 @@ export default function ReceivingModule({
                 className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 px-3.5 rounded-lg flex items-center justify-center gap-2 shadow-sm transition shrink-0"
                 id="btn-scan-receiving-barcode"
               >
-                <ScanLine className="h-4 w-4" /> Scan
+                <ScanLine className="h-4 w-4" /> {t('receiving.scanBtn')}
               </button>
 
               {effectiveCanEdit ? (
@@ -1098,11 +1137,11 @@ export default function ReceivingModule({
                   className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-2 px-4 rounded-lg flex items-center justify-center gap-1.5 shrink-0"
                   id="btn-log-arrival"
                 >
-                  <Plus className="h-4 w-4" /> Log New Material Arrival
+                  <Plus className="h-4 w-4" /> {t('receiving.logNewArrivalBtn')}
                 </button>
               ) : (
                 <span className="text-[10px] font-mono text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded font-bold uppercase">
-                  🔒 View-Only Mode
+                  {t('receiving.viewOnlyNotice')}
                 </span>
               )}
             </div>
@@ -1111,6 +1150,7 @@ export default function ReceivingModule({
           {/* Form Modal/Collapsible */}
           {showAddForm && (
             <form 
+              noValidate
               onSubmit={handleSubmitReceiving}
               className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm space-y-6 transition-all"
               id="arrival-form"
@@ -1118,10 +1158,10 @@ export default function ReceivingModule({
               <div className="border-b border-slate-100 pb-3 flex justify-between items-center">
                 <div className="flex items-center gap-2.5">
                   <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
-                    <Sparkles className="h-4 w-4 text-slate-500" /> Receiving Information Entry Form
+                    <Sparkles className="h-4 w-4 text-slate-500" /> {t('receiving.entryFormTitle')}
                   </h3>
                   <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                    <CheckCircle2 className="h-3 w-3 text-emerald-600" /> Auto-saved draft
+                    <CheckCircle2 className="h-3 w-3 text-emerald-600" /> {t('receiving.autoSavedDraft')}
                   </span>
                 </div>
                 <button 
@@ -1129,7 +1169,7 @@ export default function ReceivingModule({
                   onClick={handleDiscardReceiving}
                   className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer"
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </button>
               </div>
 
@@ -1138,11 +1178,11 @@ export default function ReceivingModule({
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
                     <span className="inline-flex items-center gap-1.5 font-bold text-emerald-800">
                       <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-                      Scan Confirmed:
+                      {t('receiving.scanConfirmed')}
                     </span>
-                    <span><strong>Item:</strong> {confirmedScanInfo.itemName}</span>
-                    <span className="font-mono"><strong>Lot:</strong> {confirmedScanInfo.lot}</span>
-                    <span><strong>Location:</strong> {confirmedScanInfo.location}</span>
+                    <span><strong>{t('receiving.scanItemLabel')}</strong> {confirmedScanInfo.itemName}</span>
+                    <span className="font-mono"><strong>{t('receiving.scanLotLabel')}</strong> {confirmedScanInfo.lot}</span>
+                    <span><strong>{t('receiving.scanLocationLabel')}</strong> {confirmedScanInfo.location}</span>
                   </div>
                 </div>
               )}
@@ -1151,17 +1191,17 @@ export default function ReceivingModule({
               <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="block text-xs font-bold text-indigo-900 uppercase tracking-wider">
-                    Select Category *
+                    {t('receiving.selectCategoryRequired')}
                   </label>
                   {isSuperAdmin && (
                     <button
                       type="button"
                       onClick={() => setShowCategoriesModal(true)}
                       className="text-[11px] font-mono font-bold text-indigo-700 hover:text-indigo-950 bg-indigo-100/90 hover:bg-indigo-200 border border-indigo-200/80 px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                      title="Manage categories list (Super Admin)"
+                      title={t('receiving.tooltipManageCats')}
                     >
                       <Tag className="h-3.5 w-3.5 text-indigo-600" />
-                      <span>Manage Categories</span>
+                      <span>{t('receiving.manageCategoriesBtn')}</span>
                     </button>
                   )}
                 </div>
@@ -1175,19 +1215,29 @@ export default function ReceivingModule({
                       return;
                     }
                     setSupplierOrDept(cat);
+                    clearRecErr('supplierOrDept');
                   }}
-                  className="w-full px-3.5 py-2.5 bg-white border border-indigo-200 rounded-lg text-xs font-bold text-indigo-950 focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer shadow-2xs"
+                  className={`w-full px-3.5 py-2.5 bg-white border rounded-lg text-xs font-bold text-indigo-950 focus:ring-2 focus:outline-none cursor-pointer shadow-2xs ${
+                    receivingFieldErrors.supplierOrDept
+                      ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                      : 'border-indigo-200 focus:ring-indigo-500'
+                  }`}
                 >
-                  <option value="">-- Select Category --</option>
+                  <option value="">{t('receiving.selectCategoryOption')}</option>
                   {managedCategories.map(cat => (
                     <option key={cat} value={cat}>{cat}</option>
                   ))}
                   {isSuperAdmin && (
-                    <option value="__ADD_NEW__" className="text-indigo-600 font-bold bg-indigo-50/60">+ Add new category...</option>
+                    <option value="__ADD_NEW__" className="text-indigo-600 font-bold bg-indigo-50/60">{t('receiving.addNewCategoryOption')}</option>
                   )}
                 </select>
+                {receivingFieldErrors.supplierOrDept && (
+                  <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                    {localizeValidation(receivingFieldErrors.supplierOrDept)}
+                  </p>
+                )}
                 <p className="text-[11px] text-indigo-600 font-medium">
-                  {supplierOrDept ? `Form details tailored for category: "${supplierOrDept}"` : 'Selecting a category will automatically customize required arrival fields.'}
+                  {supplierOrDept ? t('receiving.categoryTailoredHint', { category: supplierOrDept }) : t('receiving.categorySelectHint')}
                 </p>
               </div>
 
@@ -1195,7 +1245,7 @@ export default function ReceivingModule({
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">
-                      {(isDirectBomCategory || isIndirectBomCategory || isWipCategory) ? 'PART CODE *' : (isPackagingCategory || isConsumableCategory || isOfficeSuppliesCategory) ? 'INTERNAL CODE *' : isRawCategory ? 'RESIN INTERNAL CODE *' : 'ITEM DESCRIPTION / CODE *'}
+                      {(isDirectBomCategory || isIndirectBomCategory || isWipCategory) ? t('receiving.labelPartCodeReq') : (isPackagingCategory || isConsumableCategory || isOfficeSuppliesCategory) ? t('receiving.labelInternalCodeReq') : isRawCategory ? t('receiving.labelResinInternalCodeReq') : t('receiving.labelItemDescCodeReq')}
                     </label>
                     <input 
                       type="text"
@@ -1214,7 +1264,7 @@ export default function ReceivingModule({
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">
-                      {(isDirectBomCategory || isIndirectBomCategory || isWipCategory) ? 'MODEL *' : (isConsumableCategory || isOfficeSuppliesCategory) ? 'ITEM NAME *' : isRawCategory ? 'RESIN SACK / ITEM NAME *' : isPackagingCategory ? 'PACKAGING NAME *' : 'PART NAME *'}
+                      {(isDirectBomCategory || isIndirectBomCategory || isWipCategory) ? t('receiving.labelModelReq') : (isConsumableCategory || isOfficeSuppliesCategory) ? t('receiving.labelItemNameReq') : isRawCategory ? t('receiving.labelResinSackNameReq') : isPackagingCategory ? t('receiving.labelPackagingNameReq') : t('receiving.labelPartNameReq')}
                     </label>
                     <input 
                       type="text"
@@ -1228,7 +1278,7 @@ export default function ReceivingModule({
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">
-                      {(isDirectBomCategory || isIndirectBomCategory || isWipCategory) ? 'PART NAME *' : (isConsumableCategory || isOfficeSuppliesCategory) ? 'ITEM SPECIFICATION *' : isRawCategory ? 'ITEM CODE / RESIN GRADE *' : isPackagingCategory ? 'PACKAGING SPECIFICATION *' : 'PART CODE / SPEC *'}
+                      {(isDirectBomCategory || isIndirectBomCategory || isWipCategory) ? t('receiving.labelPartNameReq') : (isConsumableCategory || isOfficeSuppliesCategory) ? t('receiving.labelItemSpecReq') : isRawCategory ? t('receiving.labelResinGradeReq') : isPackagingCategory ? t('receiving.labelPackagingSpecReq') : t('receiving.labelPartCodeSpecReq')}
                     </label>
                     <input 
                       type="text"
@@ -1238,17 +1288,30 @@ export default function ReceivingModule({
                       onChange={e => {
                         const val = e.target.value;
                         setPartCode(val);
+                        clearRecErr('partCode');
                         const presetUnit = findMasterPresetUnit({ partCode: val, description: itemDescription }, registries);
-                        if (presetUnit) setUnit(presetUnit);
+                        if (presetUnit) {
+                          setUnit(presetUnit);
+                          clearRecErr('unit');
+                        }
                       }}
-                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono focus:ring-1 focus:ring-slate-400 focus:outline-none"
+                      className={`w-full px-3 py-2 border rounded-lg text-xs font-mono focus:ring-1 focus:outline-none ${
+                        receivingFieldErrors.partCode
+                          ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                          : 'border-slate-200 focus:ring-slate-400'
+                      }`}
                     />
+                    {receivingFieldErrors.partCode && (
+                      <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                        {localizeValidation(receivingFieldErrors.partCode)}
+                      </p>
+                    )}
                   </div>
 
                   {isRawCategory && !isIndirectBomCategory && (
                     <div>
                       <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">
-                        RESIN / MASTERBATCH COLOR
+                        {t('receiving.labelResinColor')}
                       </label>
                       <input 
                         type="text"
@@ -1261,64 +1324,120 @@ export default function ReceivingModule({
                   )}
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">QUANTITY *</label>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">{t('receiving.labelQuantityReq')}</label>
                     <input 
                       type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
+                      inputMode="decimal"
                       required
-                      placeholder="ENTER QUANTITY"
-                      value={quantity || ''}
-                      onKeyDown={(e) => {
-                        if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
-                          e.preventDefault();
-                        }
-                      }}
+                      placeholder={t('receiving.labelQuantityReq')}
+                      value={quantityInput}
                       onChange={e => {
-                        const sanitized = e.target.value.replace(/\D/g, '');
-                        setQuantity(sanitized ? parseInt(sanitized, 10) : 0);
+                        const raw = e.target.value.replace(/[^0-9.-]/g, '');
+                        setQuantityInput(raw);
+                        const num = Number(raw);
+                        setQuantity(raw.trim() === '' || Number.isNaN(num) ? 0 : num);
+                        clearRecErr('quantity');
                       }}
-                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono focus:ring-1 focus:ring-slate-400 focus:outline-none"
+                      className={`w-full px-3 py-2 border rounded-lg text-xs font-mono focus:ring-1 focus:outline-none ${
+                        receivingFieldErrors.quantity
+                          ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                          : 'border-slate-200 focus:ring-slate-400'
+                      }`}
                     />
+                    {receivingFieldErrors.quantity && (
+                      <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                        {localizeValidation(receivingFieldErrors.quantity)}
+                      </p>
+                    )}
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">UNIT OF MEASURE *</label>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">{t('receiving.labelUnitOfMeasureReq')}</label>
                     <select 
                       value={unit}
-                      onChange={e => setUnit(e.target.value)}
+                      onChange={e => {
+                        setUnit(e.target.value);
+                        clearRecErr('unit');
+                      }}
                       required
-                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-slate-400 focus:outline-none font-semibold"
+                      className={`w-full px-3 py-2 border rounded-lg text-xs focus:ring-1 focus:outline-none font-semibold ${
+                        receivingFieldErrors.unit
+                          ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                          : 'border-slate-200 focus:ring-slate-400'
+                      }`}
                     >
-                      <option value="">-- Select UOM --</option>
+                      <option value="">{t('receiving.selectUomOption')}</option>
                       {getAllSelectUomOptions(unit).map(u => (
                         <option key={u} value={u}>{u}</option>
                       ))}
                     </select>
+                    {receivingFieldErrors.unit && (
+                      <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                        {localizeValidation(receivingFieldErrors.unit)}
+                      </p>
+                    )}
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">DATE RECEIVED *</label>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">{t('receiving.labelDateReceivedReq')}</label>
                     <input 
                       type="date"
                       required
                       value={receivedDate}
-                      onChange={e => setReceivedDate(e.target.value)}
+                      onChange={e => {
+                        setReceivedDate(e.target.value);
+                        clearRecErr('receivedDate');
+                        clearRecErr('expirationDate');
+                      }}
                       className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono focus:ring-1 focus:ring-slate-400 focus:outline-none"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">LOCATION *</label>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">{t('receiving.labelExpiryOpt')}</label>
+                    <input 
+                      type="date"
+                      value={expirationDate}
+                      onChange={e => {
+                        setExpirationDate(e.target.value);
+                        clearRecErr('expirationDate');
+                      }}
+                      className={`w-full px-3 py-2 border rounded-lg text-xs font-mono focus:ring-1 focus:outline-none ${
+                        receivingFieldErrors.expirationDate
+                          ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                          : 'border-slate-200 focus:ring-slate-400'
+                      }`}
+                    />
+                    {receivingFieldErrors.expirationDate && (
+                      <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                        {localizeValidation(receivingFieldErrors.expirationDate)}
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">{t('receiving.labelLocationReq')}</label>
                     <input 
                       type="text"
                       required
                       list="registered-locations-list"
                       placeholder="E.G. ZONE A - RACK 04"
                       value={location}
-                      onChange={e => setLocation(e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-slate-400 focus:outline-none"
+                      onChange={e => {
+                        setLocation(e.target.value);
+                        clearRecErr('location');
+                      }}
+                      className={`w-full px-3 py-2 border rounded-lg text-xs focus:ring-1 focus:outline-none ${
+                        receivingFieldErrors.location
+                          ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                          : 'border-slate-200 focus:ring-slate-400'
+                      }`}
                     />
+                    {receivingFieldErrors.location && (
+                      <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                        {localizeValidation(receivingFieldErrors.location)}
+                      </p>
+                    )}
                     <datalist id="registered-locations-list">
                       {registries.filter(r => r.type === 'LOCATION' && r.status === 'ACTIVE').map(loc => (
                         <option key={loc.id} value={loc.name} />
@@ -1328,7 +1447,7 @@ export default function ReceivingModule({
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">
-                      {isWipCategory || isDirectBomCategory ? 'DEPARTMENT *' : 'SUPPLIER / VENDOR *'}
+                      {isWipCategory || isDirectBomCategory ? t('receiving.labelDepartmentReq') : t('receiving.labelSupplierVendorReq')}
                     </label>
                     <input 
                       type="text"
@@ -1347,7 +1466,7 @@ export default function ReceivingModule({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">REORDER MIN (MIN THRESHOLD)</label>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">{t('receiving.labelReorderMin')}</label>
                     <input 
                       type="text"
                       inputMode="numeric"
@@ -1372,12 +1491,12 @@ export default function ReceivingModule({
               {/* VERIFICATION DOCUMENTS SECTION */}
               <div className="bg-slate-50/80 p-4 rounded-xl border border-slate-200 space-y-3">
                 <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                  VERIFICATION DOCUMENTS
+                  {t('receiving.verificationDocsHeader')}
                 </h4>
                 {isDirectBomCategory || isWipCategory ? (
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-600 mb-1 uppercase tracking-tight">
-                      {isFgCategory ? 'FINISHED GOOD TRANSFER FORM (FGTF) #' : 'PRODUCTION TRANSFER SLIP (PTS) #'}
+                      {isFgCategory ? t('receiving.labelTransferFgtf') : t('receiving.labelTransferPts')}
                     </label>
                     <input 
                       type="text"
@@ -1391,51 +1510,99 @@ export default function ReceivingModule({
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-600 mb-1 uppercase tracking-tight">
-                        RECEIVING REPORT (RR) #
+                        {t('receiving.rrHeaderLabel')}
                       </label>
                       <input 
                         type="text"
-                        placeholder="RR-2026-XXXX"
+                        placeholder="RR-2026-0001"
                         value={rrNumber}
-                        onChange={e => setRrNumber(e.target.value)}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                        onChange={e => {
+                          setRrNumber(e.target.value);
+                          clearRecErr('rrNumber');
+                        }}
+                        className={`w-full px-3 py-2 bg-white border rounded-lg text-xs font-mono focus:ring-1 focus:outline-none ${
+                          receivingFieldErrors.rrNumber
+                            ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                            : 'border-slate-200 focus:ring-indigo-500'
+                        }`}
                       />
+                      {receivingFieldErrors.rrNumber && (
+                        <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                          {localizeValidation(receivingFieldErrors.rrNumber)}
+                        </p>
+                      )}
                     </div>
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-600 mb-1 uppercase tracking-tight">
-                        PURCHASE ORDER (PO) #
+                        {t('receiving.poHeaderLabel')}
                       </label>
                       <input 
                         type="text"
-                        placeholder="PO-2026-XXXX"
+                        placeholder="PO-2026-0001"
                         value={poNumber}
-                        onChange={e => setPoNumber(e.target.value)}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                        onChange={e => {
+                          setPoNumber(e.target.value);
+                          clearRecErr('poNumber');
+                        }}
+                        className={`w-full px-3 py-2 bg-white border rounded-lg text-xs font-mono focus:ring-1 focus:outline-none ${
+                          receivingFieldErrors.poNumber
+                            ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                            : 'border-slate-200 focus:ring-indigo-500'
+                        }`}
                       />
+                      {receivingFieldErrors.poNumber && (
+                        <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                          {localizeValidation(receivingFieldErrors.poNumber)}
+                        </p>
+                      )}
                     </div>
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-600 mb-1 uppercase tracking-tight">
-                        DELIVERY RECEIPT (DR) #
+                        {t('receiving.drHeaderLabel')}
                       </label>
                       <input 
                         type="text"
-                        placeholder="DR-XXXXX"
+                        placeholder="DR-00001"
                         value={drNumber}
-                        onChange={e => setDrNumber(e.target.value)}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                        onChange={e => {
+                          setDrNumber(e.target.value);
+                          clearRecErr('drNumber');
+                        }}
+                        className={`w-full px-3 py-2 bg-white border rounded-lg text-xs font-mono focus:ring-1 focus:outline-none ${
+                          receivingFieldErrors.drNumber
+                            ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                            : 'border-slate-200 focus:ring-indigo-500'
+                        }`}
                       />
+                      {receivingFieldErrors.drNumber && (
+                        <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                          {localizeValidation(receivingFieldErrors.drNumber)}
+                        </p>
+                      )}
                     </div>
                     <div>
                       <label className="block text-[11px] font-semibold text-slate-600 mb-1 uppercase tracking-tight">
-                        SALES INVOICE (SI) #
+                        {t('receiving.siHeaderLabel')}
                       </label>
                       <input 
                         type="text"
-                        placeholder="SI-XXXXX"
+                        placeholder="SI-00001"
                         value={siNumber}
-                        onChange={e => setSiNumber(e.target.value)}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                        onChange={e => {
+                          setSiNumber(e.target.value);
+                          clearRecErr('siNumber');
+                        }}
+                        className={`w-full px-3 py-2 bg-white border rounded-lg text-xs font-mono focus:ring-1 focus:outline-none ${
+                          receivingFieldErrors.siNumber
+                            ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                            : 'border-slate-200 focus:ring-indigo-500'
+                        }`}
                       />
+                      {receivingFieldErrors.siNumber && (
+                        <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                          {localizeValidation(receivingFieldErrors.siNumber)}
+                        </p>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1524,10 +1691,10 @@ export default function ReceivingModule({
 
                 {/* Remarks Below Checklist */}
                 <div className="pt-2">
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Remarks</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{t('receiving.remarksLabel')}</label>
                   <textarea 
                     rows={2}
-                    placeholder="Enter any additional SOP verification findings, handling notes, or receiving remarks..."
+                    placeholder={t('receiving.remarksPlaceholder')}
                     value={remarks}
                     onChange={e => setRemarks(e.target.value)}
                     className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none"
@@ -1542,13 +1709,13 @@ export default function ReceivingModule({
                   onClick={handleDiscardReceiving}
                   className="px-4 py-2 border border-slate-200 text-slate-600 text-xs font-semibold rounded-lg hover:bg-slate-50 cursor-pointer"
                 >
-                  Discard
+                  {t('receiving.discardBtn')}
                 </button>
                 <button 
                   type="submit"
                   className="px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 cursor-pointer"
                 >
-                  Verify and Log Into System
+                  {t('receiving.verifyLogBtn')}
                 </button>
               </div>
             </form>
@@ -1558,17 +1725,17 @@ export default function ReceivingModule({
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
             <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 bg-slate-50/50">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Arrival and Verification Records Log</span>
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">{t('receiving.tableLogTitle')}</span>
                 <span className="bg-slate-200/80 text-slate-700 text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full">
-                  {filteredReceiving.length} logs found
+                  {t('receiving.logsFound', { count: filteredReceiving.length })}
                 </span>
                 <span className="text-[11px] text-slate-500 font-medium hidden md:inline">
-                  &bull; Sorted by <strong className="text-indigo-700 font-semibold">{recSortField}</strong> ({recSortDirection === 'asc' ? 'Ascending' : 'Descending'})
+                  &bull; {t('receiving.sortedByLabel')} <strong className="text-indigo-700 font-semibold">{recSortField}</strong> ({recSortDirection === 'asc' ? t('receiving.ascLabel') : t('receiving.descLabel')})
                 </span>
               </div>
               {filteredReceiving.length > 0 && (
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Totals:</span>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{t('receiving.totalsLabel')}</span>
                   {groupQuantitiesByUnit(
                     filteredReceiving,
                     (rec) => rec.quantity,
@@ -1599,10 +1766,10 @@ export default function ReceivingModule({
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                         recSortField === 'rrNumber' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                       }`}
-                      title="Sort by RR Number"
+                      title={t('receiving.sortByPrefix', { col: t('receiving.colRr') })}
                     >
                       <div className="flex items-center gap-1">
-                        <span>RR #</span>
+                        <span>{t('receiving.colRr')}</span>
                         <span className="text-slate-400 group-hover:text-slate-700">
                           {recSortField === 'rrNumber' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                         </span>
@@ -1615,10 +1782,10 @@ export default function ReceivingModule({
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                         recSortField === 'date' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                       }`}
-                      title="Sort by Date Received"
+                      title={t('receiving.sortByPrefix', { col: t('receiving.colDateReceived') })}
                     >
                       <div className="flex items-center gap-1">
-                        <span>Date Received</span>
+                        <span>{t('receiving.colDateReceived')}</span>
                         <span className="text-slate-400 group-hover:text-slate-700">
                           {recSortField === 'date' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                         </span>
@@ -1631,10 +1798,10 @@ export default function ReceivingModule({
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                         recSortField === 'supplierOrDept' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                       }`}
-                      title="Sort by Item Type"
+                      title={t('receiving.sortByPrefix', { col: t('receiving.colItemType') })}
                     >
                       <div className="flex items-center gap-1">
-                        <span>Item Type</span>
+                        <span>{t('receiving.colItemType')}</span>
                         <span className="text-slate-400 group-hover:text-slate-700">
                           {recSortField === 'supplierOrDept' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                         </span>
@@ -1647,10 +1814,10 @@ export default function ReceivingModule({
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                         recSortField === 'partCode' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                       }`}
-                      title="Sort by Item / Part Code"
+                      title={t('receiving.sortByPrefix', { col: t('receiving.colPartCode') })}
                     >
                       <div className="flex items-center gap-1">
-                        <span>Item/Part Code</span>
+                        <span>{t('receiving.colPartCode')}</span>
                         <span className="text-slate-400 group-hover:text-slate-700">
                           {recSortField === 'partCode' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                         </span>
@@ -1663,10 +1830,10 @@ export default function ReceivingModule({
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group text-right ${
                         recSortField === 'quantity' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                       }`}
-                      title="Sort by Quantity"
+                      title={t('receiving.sortByPrefix', { col: t('receiving.colQuantity') })}
                     >
                       <div className="flex items-center justify-end gap-1">
-                        <span>Quantity</span>
+                        <span>{t('receiving.colQuantity')}</span>
                         <span className="text-slate-400 group-hover:text-slate-700">
                           {recSortField === 'quantity' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                         </span>
@@ -1679,10 +1846,10 @@ export default function ReceivingModule({
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                         recSortField === 'fifoColor' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                       }`}
-                      title="Sort by FIFO Tag Color"
+                      title={t('receiving.sortByPrefix', { col: t('receiving.colFifoColor') })}
                     >
                       <div className="flex items-center gap-1">
-                        <span>FIFO Tag Color</span>
+                        <span>{t('receiving.colFifoColor')}</span>
                         <span className="text-slate-400 group-hover:text-slate-700">
                           {recSortField === 'fifoColor' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                         </span>
@@ -1690,7 +1857,7 @@ export default function ReceivingModule({
                     </th>
 
                     {/* 7. SOP Compliance */}
-                    <th className="p-3 font-semibold text-slate-600">SOP Compliance</th>
+                    <th className="p-3 font-semibold text-slate-600">{t('receiving.colSopCompliance')}</th>
 
                     {/* 8. IQC Status */}
                     <th 
@@ -1698,10 +1865,10 @@ export default function ReceivingModule({
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                         recSortField === 'iqcStatus' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                       }`}
-                      title="Sort by IQC Inspection Status"
+                      title={t('receiving.sortByPrefix', { col: t('receiving.colIqcStatus') })}
                     >
                       <div className="flex items-center gap-1">
-                        <span>IQC Status</span>
+                        <span>{t('receiving.colIqcStatus')}</span>
                         <span className="text-slate-400 group-hover:text-slate-700">
                           {recSortField === 'iqcStatus' ? (recSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                         </span>
@@ -1709,7 +1876,7 @@ export default function ReceivingModule({
                     </th>
 
                     {/* 9. Action */}
-                    <th className="p-3 font-semibold text-slate-600">Action</th>
+                    <th className="p-3 font-semibold text-slate-600">{t('receiving.colAction')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -1749,7 +1916,7 @@ export default function ReceivingModule({
                               ? 'bg-indigo-50/70 border-l-4 border-l-indigo-600 shadow-2xs' 
                               : 'hover:bg-indigo-50/30 hover:border-l-4 hover:border-l-indigo-300'
                           }`}
-                          title="Click row to expand receiving details & SOP metadata"
+                          title={t('receiving.rowExpandTooltip')}
                         >
                           {/* 1. RR # */}
                           <td className="p-4 font-mono font-semibold text-slate-900">
@@ -1763,7 +1930,7 @@ export default function ReceivingModule({
                                 className={`p-1 rounded-md transition-colors ${
                                   isExpanded ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
                                 }`}
-                                title={isExpanded ? 'Collapse row' : 'Expand row details'}
+                                title={isExpanded ? t('receiving.collapseRowBtn') : t('receiving.expandRowBtn')}
                               >
                                 {isExpanded ? (
                                   <ChevronDown className="h-3.5 w-3.5" />
@@ -1781,7 +1948,7 @@ export default function ReceivingModule({
                           {/* 3. Item Type */}
                           <td className="p-4">
                             <span className="bg-slate-100 text-slate-800 border border-slate-200 text-[10px] font-extrabold px-2 py-1 rounded font-sans uppercase tracking-tight inline-block whitespace-nowrap">
-                              {r.supplierOrDept || 'N/A'}
+                              {r.supplierOrDept || t('common.na')}
                             </span>
                           </td>
 
@@ -1801,7 +1968,7 @@ export default function ReceivingModule({
                                   {r.quantity.toLocaleString()}{' '}
                                   {recUnit.isMissing ? (
                                     <span className="inline-block px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 text-[9px] font-bold">
-                                      {MISSING_UNIT_LABEL}
+                                      {t('common.missingUnit')}
                                     </span>
                                   ) : (
                                     recUnit.unit
@@ -1832,11 +1999,11 @@ export default function ReceivingModule({
                           <td className="p-4">
                             {isPassed ? (
                               <span className="text-emerald-600 font-medium flex items-center gap-1 text-xs whitespace-nowrap">
-                                <ShieldCheck className="h-4 w-4 shrink-0" /> Passed {totalSopCount}/{totalSopCount} Checklist
+                                <ShieldCheck className="h-4 w-4 shrink-0" /> {t('receiving.passedChecklist', { count: totalSopCount })}
                               </span>
                             ) : (
                               <div className="text-rose-600 font-medium space-y-0.5">
-                                <div className="flex items-center gap-1 text-xs whitespace-nowrap"><AlertOctagon className="h-3.5 w-3.5 shrink-0" /> Discrepancy spotted</div>
+                                <div className="flex items-center gap-1 text-xs whitespace-nowrap"><AlertOctagon className="h-3.5 w-3.5 shrink-0" /> {t('receiving.discrepancySpotted')}</div>
                                 <div className="text-[10px] text-slate-400">
                                   {isNewSop ? (
                                     [
@@ -1862,18 +2029,18 @@ export default function ReceivingModule({
                           {/* 8. IQC Status */}
                           <td className="p-4 whitespace-nowrap">
                             {r.iqcStatus === 'NA' ? (
-                              <span className="text-slate-400 italic">N/A (Internal)</span>
+                              <span className="text-slate-400 italic">{t('receiving.iqcNa')}</span>
                             ) : r.iqcStatus === 'PENDING_IQC' ? (
                               <span className="bg-amber-50 border border-amber-100 text-amber-700 px-2 py-1 rounded font-semibold text-[10px]">
-                                AWAITING IQC
+                                {t('receiving.awaitingIqcBadge')}
                               </span>
                             ) : r.iqcStatus === 'APPROVED_IQC' ? (
                               <span className="bg-emerald-50 border border-emerald-100 text-emerald-700 px-2 py-1 rounded font-semibold text-[10px]">
-                                IQC APPROVED
+                                {t('receiving.iqcApprovedBadge')}
                               </span>
                             ) : (
                               <span className="bg-rose-50 border border-rose-100 text-rose-700 px-2 py-1 rounded font-semibold text-[10px]">
-                                IQC REJECTED (QUARANTINE)
+                                {t('receiving.iqcRejectedBadge')}
                               </span>
                             )}
                           </td>
@@ -1887,28 +2054,30 @@ export default function ReceivingModule({
                                   const val = e.target.value;
                                   if (val === 'APPROVE') {
                                     setConfirmAction({
-                                      title: 'Approve IQC Inspection',
-                                      message: `Are you sure you want to APPROVE IQC inspection for record ${r.rrNumber || r.id} (${r.partCode})?`,
-                                      confirmLabel: 'YES, APPROVE IQC',
+                                      title: t('receiving.confirmApproveIqcTitle'),
+                                      message: t('receiving.confirmApproveIqcMsg', { id: r.rrNumber || r.id, partCode: r.partCode }),
+                                      confirmLabel: t('receiving.confirmYesApproveIqc'),
                                       confirmVariant: 'primary',
                                       onConfirm: () => onUpdateIqc(r.id, 'APPROVED_IQC')
                                     });
                                   } else if (val === 'REJECT') {
                                     setConfirmAction({
-                                      title: 'Reject IQC Inspection',
-                                      message: `Are you sure you want to REJECT IQC inspection and route record ${r.rrNumber || r.id} (${r.partCode}) to Quarantine?`,
-                                      confirmLabel: 'YES, REJECT IQC',
+                                      title: t('receiving.confirmRejectIqcTitle'),
+                                      message: t('receiving.confirmRejectIqcMsg', { id: r.rrNumber || r.id, partCode: r.partCode }),
+                                      confirmLabel: t('receiving.confirmYesRejectIqc'),
                                       confirmVariant: 'danger',
                                       onConfirm: () => onUpdateIqc(r.id, 'REJECTED_IQC')
                                     });
                                   } else if (val === 'EDIT') {
+                                    setEditReceivingFieldErrors({});
+                                    setEditReceivingQtyInput(String(r.quantity ?? ''));
                                     setEditingReceiving({ ...r });
                                   } else if (val === 'DELETE') {
                                     if (!isSuperAdmin) return;
                                     setConfirmAction({
-                                      title: 'Delete Receiving Record',
-                                      message: `Are you sure you want to delete receiving record ${r.rrNumber || r.id} (${r.partCode})?`,
-                                      confirmLabel: 'YES, DELETE',
+                                      title: t('receiving.confirmDeleteTitle'),
+                                      message: t('receiving.confirmDeleteMsg', { id: r.rrNumber || r.id, partCode: r.partCode }),
+                                      confirmLabel: t('receiving.confirmYesDelete'),
                                       confirmVariant: 'danger',
                                       onConfirm: () => onDeleteReceiving?.(r.id)
                                     });
@@ -1918,20 +2087,20 @@ export default function ReceivingModule({
                                 className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
                                 id={`action-select-rec-${r.id}`}
                               >
-                                <option value="" disabled>Actions...</option>
+                                <option value="" disabled>{t('receiving.actionsPlaceholder')}</option>
                                 {r.iqcStatus === 'PENDING_IQC' && (
                                   <>
-                                    <option value="APPROVE">✅ Approve IQC</option>
-                                    <option value="REJECT">❌ Reject IQC</option>
+                                    <option value="APPROVE">✅ {t('receiving.actionApproveIqc')}</option>
+                                    <option value="REJECT">❌ {t('receiving.actionRejectIqc')}</option>
                                   </>
                                 )}
-                                <option value="EDIT">📝 Edit Record</option>
+                                <option value="EDIT">📝 {t('receiving.actionEditRecord')}</option>
                                 {isSuperAdmin && (
-                                  <option value="DELETE">🗑️ Delete Record</option>
+                                  <option value="DELETE">🗑️ {t('receiving.actionDeleteRecord')}</option>
                                 )}
                               </select>
                             ) : (
-                              <span className="text-slate-400 italic font-semibold text-[10px]">Read-Only</span>
+                              <span className="text-slate-400 italic font-semibold text-[10px]">{t('receiving.readOnlyTag')}</span>
                             )}
                           </td>
                         </tr>
@@ -1958,35 +2127,35 @@ export default function ReceivingModule({
                                         <div>
                                           <div className="flex items-center gap-2">
                                             <span className="text-sm font-bold text-slate-900">
-                                              Receiving Report: <span className="font-mono text-indigo-600">{r.rrNumber || r.id}</span>
+                                              {t('receiving.receivingReportPrefix')} <span className="font-mono text-indigo-600">{r.rrNumber || r.id}</span>
                                             </span>
                                             <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                                               r.source === 'INTERNAL' 
                                                 ? 'bg-blue-50 text-blue-700 border border-blue-200' 
                                                 : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                                             }`}>
-                                              {r.source === 'INTERNAL' ? 'INTERNAL TRANSFER' : 'EXTERNAL SUPPLIER'}
+                                              {r.source === 'INTERNAL' ? t('receiving.internalTransferBadge') : t('receiving.externalSupplierBadge')}
                                             </span>
                                           </div>
                                           <p className="text-xs text-slate-500 mt-0.5">
-                                            Item Code: <strong className="font-mono text-slate-700">{r.itemDescription || r.partCode}</strong> &bull; Part: <strong className="font-mono text-slate-700">{r.partCode}</strong>
+                                            {t('receiving.scanItemLabel')} <strong className="font-mono text-slate-700">{r.itemDescription || r.partCode}</strong> &bull; {t('receiving.cardPartLabel')} <strong className="font-mono text-slate-700">{r.partCode}</strong>
                                           </p>
                                         </div>
                                       </div>
 
                                       <div className="flex flex-wrap items-center gap-2 text-xs">
                                         <span className="bg-slate-100 text-slate-700 font-mono font-semibold px-2.5 py-1 rounded-lg border border-slate-200">
-                                          Received: {r.date}
+                                          {t('receiving.cardReceivedLabel')} {r.date}
                                         </span>
                                         <span className="bg-indigo-50 text-indigo-800 font-bold px-2.5 py-1 rounded-lg border border-indigo-200 font-mono">
                                           {(() => {
                                             const recUnit = resolveMasterDataUnit(r, registries, stocks);
-                                            return `Qty: ${r.quantity.toLocaleString()} ${recUnit.unit || MISSING_UNIT_LABEL}`;
+                                            return `${t('receiving.cardQtyLabel')} ${r.quantity.toLocaleString()} ${recUnit.unit || MISSING_UNIT_LABEL}`;
                                           })()}
                                         </span>
                                         {matchedStock && (
                                           <span className="bg-emerald-50 text-emerald-800 font-bold px-2.5 py-1 rounded-lg border border-emerald-200 font-mono">
-                                            Active Stock: {matchedStock.quantity.toLocaleString()} {resolveMasterDataUnit(matchedStock, registries, stocks).unit || MISSING_UNIT_LABEL}
+                                            {t('receiving.activeStockLabel')} {matchedStock.quantity.toLocaleString()} {resolveMasterDataUnit(matchedStock, registries, stocks).unit || MISSING_UNIT_LABEL}
                                           </span>
                                         )}
                                       </div>
@@ -1998,23 +2167,23 @@ export default function ReceivingModule({
                                       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
                                         <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
                                           <FileText className="h-4 w-4 text-indigo-500" />
-                                          <span>Traceability & Shipping Documents</span>
+                                          <span>{t('receiving.traceabilitySection')}</span>
                                         </div>
                                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
                                           <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
-                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">Color:</span>
+                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">{t('receiving.colorLabelCard')}</span>
                                             {r.color ? (
                                               <span className="bg-purple-50 text-purple-700 text-xs font-bold px-2 py-0.5 rounded border border-purple-200 inline-block font-sans">
                                                 {r.color}
                                               </span>
                                             ) : (
-                                              <span className="text-slate-400 font-medium">None / N/A</span>
+                                              <span className="text-slate-400 font-medium">{t('receiving.noneNa')}</span>
                                             )}
                                           </div>
                                           <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
-                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">Supplier:</span>
-                                            <span className="font-semibold text-slate-800 truncate block" title={r.vendorSupplier && r.vendorSupplier !== 'N/A' ? r.vendorSupplier : (r.supplierOrDept || 'N/A')}>
-                                              {r.vendorSupplier && r.vendorSupplier !== 'N/A' ? r.vendorSupplier : (r.supplierOrDept || 'N/A')}
+                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">{t('receiving.supplierLabel')}</span>
+                                            <span className="font-semibold text-slate-800 truncate block" title={r.vendorSupplier && r.vendorSupplier !== 'N/A' ? r.vendorSupplier : (r.supplierOrDept || t('common.na'))}>
+                                              {r.vendorSupplier && r.vendorSupplier !== 'N/A' ? r.vendorSupplier : (r.supplierOrDept || t('common.na'))}
                                             </span>
                                           </div>
                                           <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
@@ -2023,32 +2192,32 @@ export default function ReceivingModule({
                                               {r.poNumber ? (
                                                 r.poNumber
                                               ) : r.source === 'INTERNAL' && r.transferFormNumber ? (
-                                                `Slip: ${r.transferFormNumber}`
+                                                `${t('receiving.cardSlipPrefix')} ${r.transferFormNumber}`
                                               ) : (
-                                                'N/A'
+                                                t('common.na')
                                               )}
                                             </span>
                                           </div>
                                           <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
                                             <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">DR #:</span>
-                                            <span className="font-mono font-semibold text-slate-800">{r.drNumber || 'N/A'}</span>
+                                            <span className="font-mono font-semibold text-slate-800">{r.drNumber || t('common.na')}</span>
                                           </div>
                                           <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
                                             <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">SI #:</span>
-                                            <span className="font-mono font-semibold text-slate-800">{r.siNumber || 'N/A'}</span>
+                                            <span className="font-mono font-semibold text-slate-800">{r.siNumber || t('common.na')}</span>
                                           </div>
                                           <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
-                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">Internal Code:</span>
-                                            <span className="font-mono font-semibold text-slate-800 truncate block" title={r.itemDescription || 'N/A'}>
-                                              {r.itemDescription || 'N/A'}
+                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">{t('receiving.cardInternalCodeLabel')}</span>
+                                            <span className="font-mono font-semibold text-slate-800 truncate block" title={r.itemDescription || t('common.na')}>
+                                              {r.itemDescription || t('common.na')}
                                             </span>
                                           </div>
                                           <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
-                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">Lot / Batch #:</span>
-                                            <span className="font-mono font-bold text-indigo-700">{r.lotNumber || 'N/A'}</span>
+                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">{t('receiving.lotBatchLabel')}</span>
+                                            <span className="font-mono font-bold text-indigo-700">{r.lotNumber || t('common.na')}</span>
                                           </div>
                                           <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
-                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">Location / Aisle:</span>
+                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">{t('receiving.locationAisleLabel')}</span>
                                             <span className="font-mono font-semibold text-slate-800">{r.location || (matchedStock?.location) || 'Main Storage'}</span>
                                           </div>
                                         </div>
@@ -2073,12 +2242,12 @@ export default function ReceivingModule({
                                         <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                                           <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider">
                                             <ShieldCheck className="h-4 w-4 text-emerald-600" />
-                                            <span>SOP Quality Verification</span>
+                                            <span>{t('receiving.sopVerificationSection')}</span>
                                           </div>
                                           <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
                                             isPassed ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
                                           }`}>
-                                            {isPassed ? 'ALL PASSED' : 'DISCREPANCY'}
+                                            {isPassed ? t('receiving.allPassedBadge') : t('receiving.discrepancyBadge')}
                                           </span>
                                         </div>
                                         
@@ -2086,54 +2255,54 @@ export default function ReceivingModule({
                                           {isNewSop ? (
                                             <>
                                               <div className="flex items-center justify-between">
-                                                <span className="text-slate-600">1. Receiving Inspection:</span>
+                                                <span className="text-slate-600">1. {t('receiving.discrepancyInspection')}</span>
                                                 <span className={pc.receivingInspection !== false ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
-                                                  {pc.receivingInspection !== false ? '✓ Verified' : '✗ Failed'}
+                                                  {pc.receivingInspection !== false ? t('receiving.sopVerifiedTick') : t('receiving.sopFailedTick')}
                                                 </span>
                                               </div>
                                               <div className="flex items-center justify-between">
-                                                <span className="text-slate-600">2. Material Traceability:</span>
+                                                <span className="text-slate-600">2. {t('receiving.discrepancyTraceability')}</span>
                                                 <span className={pc.materialTraceability !== false ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
-                                                  {pc.materialTraceability !== false ? '✓ Lot Recorded' : '✗ Unverified'}
+                                                  {pc.materialTraceability !== false ? t('receiving.sopLotRecorded') : t('receiving.sopUnverified')}
                                                 </span>
                                               </div>
                                               <div className="flex items-center justify-between">
-                                                <span className="text-slate-600">3. Quantity Accuracy:</span>
+                                                <span className="text-slate-600">3. {t('receiving.discrepancyQty')}</span>
                                                 <span className={pc.quantityAccuracy !== false ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
-                                                  {pc.quantityAccuracy !== false ? '✓ 100% Match' : '✗ Discrepancy'}
+                                                  {pc.quantityAccuracy !== false ? t('receiving.sop100Match') : t('receiving.sopDiscrepancy')}
                                                 </span>
                                               </div>
                                               <div className="flex items-center justify-between">
-                                                <span className="text-slate-600">4. Material Condition:</span>
+                                                <span className="text-slate-600">4. {t('receiving.discrepancyCondition')}</span>
                                                 <span className={pc.materialConditionCheck !== false ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
-                                                  {pc.materialConditionCheck !== false ? '✓ Good Condition' : '✗ Defect / Wet'}
+                                                  {pc.materialConditionCheck !== false ? t('receiving.sopGoodCond') : t('receiving.sopDefectWet')}
                                                 </span>
                                               </div>
                                               <div className="flex items-center justify-between">
-                                                <span className="text-slate-600">5. System Recording:</span>
+                                                <span className="text-slate-600">5. {t('receiving.discrepancySystem')}</span>
                                                 <span className={pc.systemRecording !== false ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
-                                                  {pc.systemRecording !== false ? '✓ Logged' : '✗ Missing'}
+                                                  {pc.systemRecording !== false ? t('receiving.sopLogged') : t('receiving.sopMissing')}
                                                 </span>
                                               </div>
                                             </>
                                           ) : (
                                             <>
                                               <div className="flex items-center justify-between">
-                                                <span className="text-slate-600">Packaging Intact:</span>
+                                                <span className="text-slate-600">{t('receiving.discrepancyBox')}</span>
                                                 <span className={pc.boxIntact ?? true ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
-                                                  {pc.boxIntact ?? true ? '✓ Passed' : '✗ Damaged'}
+                                                  {pc.boxIntact ?? true ? t('receiving.sopIntactPassed') : t('receiving.sopIntactDamaged')}
                                                 </span>
                                               </div>
                                               <div className="flex items-center justify-between">
-                                                <span className="text-slate-600">Moisture / Water Free:</span>
+                                                <span className="text-slate-600">{t('receiving.discrepancyWater')}</span>
                                                 <span className={pc.noWaterDamage ?? true ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
-                                                  {pc.noWaterDamage ?? true ? '✓ Clean' : '✗ Water Spotted'}
+                                                  {pc.noWaterDamage ?? true ? t('receiving.sopMoistureClean') : t('receiving.sopMoistureWater')}
                                                 </span>
                                               </div>
                                               <div className="flex items-center justify-between">
-                                                <span className="text-slate-600">Pest / Contamination:</span>
+                                                <span className="text-slate-600">{t('receiving.discrepancyPest')} / {t('receiving.discrepancyContam')}</span>
                                                 <span className={(pc.noPestSign ?? true) && (pc.noContamination ?? true) ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>
-                                                  {(pc.noPestSign ?? true) && (pc.noContamination ?? true) ? '✓ Free' : '✗ Issue Found'}
+                                                  {(pc.noPestSign ?? true) && (pc.noContamination ?? true) ? t('receiving.sopPestFree') : t('receiving.sopPestIssue')}
                                                 </span>
                                               </div>
                                             </>
@@ -2145,33 +2314,33 @@ export default function ReceivingModule({
                                       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
                                         <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
                                           <Activity className="h-4 w-4 text-purple-500" />
-                                          <span>IQC & Warehouse Staging</span>
+                                          <span>{t('receiving.iqcStagingSection')}</span>
                                         </div>
 
                                         <div className="space-y-2 text-xs">
                                           <div>
-                                            <span className="text-slate-400 text-[11px] block">IQC Inspection Status:</span>
+                                            <span className="text-slate-400 text-[11px] block">{t('receiving.iqcStatusCardLabel')}</span>
                                             <div className="mt-0.5">
                                               {r.iqcStatus === 'NA' ? (
-                                                <span className="text-slate-500 font-semibold">N/A (Internal Production)</span>
+                                                <span className="text-slate-500 font-semibold">{t('receiving.iqcNa')}</span>
                                               ) : r.iqcStatus === 'PENDING_IQC' ? (
                                                 <span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-bold text-[10px]">
-                                                  AWAITING IQC INSPECTION
+                                                  {t('receiving.awaitingIqcLong')}
                                                 </span>
                                               ) : r.iqcStatus === 'APPROVED_IQC' ? (
                                                 <span className="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-bold text-[10px]">
-                                                  PASSED IQC & ACCEPTED
+                                                  {t('receiving.passedIqcLong')}
                                                 </span>
                                               ) : (
                                                 <span className="bg-rose-100 text-rose-800 px-2 py-0.5 rounded font-bold text-[10px]">
-                                                  REJECTED (IN QUARANTINE)
+                                                  {t('receiving.rejectedIqcLong')}
                                                 </span>
                                               )}
                                             </div>
                                           </div>
 
                                           <div className="pt-1">
-                                            <span className="text-slate-400 text-[11px] block">Assigned FIFO Tag:</span>
+                                            <span className="text-slate-400 text-[11px] block">{t('receiving.assignedFifoTagLabel')}</span>
                                             {(() => {
                                               const displayColor = normalizeFifoColor(r.fifoColorCode || (r as any).fifoColor, r.receivedDate || r.date, fifoColorsByMonth);
                                               const meta = resolveFifoColor(displayColor, undefined, undefined, fifoColorsByMonth);
@@ -2193,31 +2362,31 @@ export default function ReceivingModule({
                                                 type="button"
                                                 onClick={() => {
                                                   setConfirmAction({
-                                                    title: 'Approve IQC Inspection',
-                                                    message: `Are you sure you want to APPROVE IQC inspection for record ${r.rrNumber || r.id} (${r.partCode})?`,
-                                                    confirmLabel: 'YES, APPROVE IQC',
+                                                    title: t('receiving.confirmApproveIqcTitle'),
+                                                    message: t('receiving.confirmApproveIqcMsg', { id: r.rrNumber || r.id, partCode: r.partCode }),
+                                                    confirmLabel: t('receiving.confirmYesApproveIqc'),
                                                     confirmVariant: 'primary',
                                                     onConfirm: () => onUpdateIqc(r.id, 'APPROVED_IQC')
                                                   });
                                                 }}
                                                 className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold transition-colors cursor-pointer"
                                               >
-                                                Approve IQC
+                                                {t('receiving.approveIqcBtn')}
                                               </button>
                                               <button
                                                 type="button"
                                                 onClick={() => {
                                                   setConfirmAction({
-                                                    title: 'Reject IQC Inspection',
-                                                    message: `Are you sure you want to REJECT IQC inspection and route record ${r.rrNumber || r.id} (${r.partCode}) to Quarantine?`,
-                                                    confirmLabel: 'YES, REJECT IQC',
+                                                    title: t('receiving.confirmRejectIqcTitle'),
+                                                    message: t('receiving.confirmRejectIqcMsg', { id: r.rrNumber || r.id, partCode: r.partCode }),
+                                                    confirmLabel: t('receiving.confirmYesRejectIqc'),
                                                     confirmVariant: 'danger',
                                                     onConfirm: () => onUpdateIqc(r.id, 'REJECTED_IQC')
                                                   });
                                                 }}
                                                 className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-[10px] font-bold transition-colors cursor-pointer"
                                               >
-                                                Reject to Quarantine
+                                                {t('receiving.rejectToQuarantineBtn')}
                                               </button>
                                             </div>
                                           )}
@@ -2248,7 +2417,7 @@ export default function ReceivingModule({
               </span>
               <input 
                 type="text" 
-                placeholder="Search returned materials..." 
+                placeholder={t('receiving.searchReturnsPlaceholder')} 
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-slate-400 focus:outline-none"
@@ -2261,11 +2430,11 @@ export default function ReceivingModule({
                 className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-2 px-4 rounded-lg flex items-center justify-center gap-1.5"
                 id="btn-log-return"
               >
-                <Plus className="h-4 w-4" /> Log Production Excess Return (MRS)
+                <Plus className="h-4 w-4" /> {t('receiving.logReturnBtn')}
               </button>
             ) : (
               <span className="text-[10px] font-mono text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded font-bold uppercase">
-                🔒 View-Only Mode
+                {t('receiving.viewOnlyNotice')}
               </span>
             )}
           </div>
@@ -2279,10 +2448,10 @@ export default function ReceivingModule({
               <div className="border-b border-slate-100 pb-3 flex justify-between items-center">
                 <div className="flex items-center gap-2.5">
                   <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
-                    <RotateCcw className="h-4 w-4 text-slate-500" /> Return Requisition Entry Form
+                    <RotateCcw className="h-4 w-4 text-slate-500" /> {t('receiving.returnFormTitle')}
                   </h3>
                   <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                    <CheckCircle2 className="h-3 w-3 text-emerald-600" /> Auto-saved draft
+                    <CheckCircle2 className="h-3 w-3 text-emerald-600" /> {t('receiving.autoSavedDraft')}
                   </span>
                 </div>
                 <button 
@@ -2290,7 +2459,7 @@ export default function ReceivingModule({
                   onClick={handleDiscardReturn}
                   className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer"
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </button>
               </div>
 
@@ -2299,11 +2468,11 @@ export default function ReceivingModule({
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
                     <span className="inline-flex items-center gap-1.5 font-bold text-emerald-800">
                       <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-                      Scan Confirmed:
+                      {t('receiving.scanConfirmed')}
                     </span>
-                    <span><strong>Item:</strong> {confirmedScanInfo.itemName}</span>
-                    <span className="font-mono"><strong>Lot:</strong> {confirmedScanInfo.lot}</span>
-                    <span><strong>Location:</strong> {confirmedScanInfo.location}</span>
+                    <span><strong>{t('receiving.scanItemLabel')}</strong> {confirmedScanInfo.itemName}</span>
+                    <span className="font-mono"><strong>{t('receiving.scanLotLabel')}</strong> {confirmedScanInfo.lot}</span>
+                    <span><strong>{t('receiving.scanLocationLabel')}</strong> {confirmedScanInfo.location}</span>
                   </div>
                 </div>
               )}
@@ -2313,17 +2482,17 @@ export default function ReceivingModule({
                 <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 space-y-2 col-span-1 md:col-span-3">
                   <div className="flex items-center justify-between">
                     <label className="block text-xs font-bold text-indigo-900 uppercase tracking-wider">
-                      Select Category *
+                      {t('receiving.selectCategoryRequired')}
                     </label>
                     {isSuperAdmin && (
                       <button
                         type="button"
                         onClick={() => setShowCategoriesModal(true)}
                         className="text-[11px] font-mono font-bold text-indigo-700 hover:text-indigo-950 bg-indigo-100/90 hover:bg-indigo-200 border border-indigo-200/80 px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                        title="Manage categories list (Super Admin)"
+                        title={t('receiving.tooltipManageCats')}
                       >
                         <Tag className="h-3.5 w-3.5 text-indigo-600" />
-                        <span>Manage Categories</span>
+                        <span>{t('receiving.manageCategoriesBtn')}</span>
                       </button>
                     )}
                   </div>
@@ -2340,21 +2509,21 @@ export default function ReceivingModule({
                     }}
                     className="w-full px-3.5 py-2.5 bg-white border border-indigo-200 rounded-lg text-xs font-bold text-indigo-950 focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer shadow-2xs"
                   >
-                    <option value="">-- Select Category --</option>
+                    <option value="">{t('receiving.selectCategoryOption')}</option>
                     {managedCategories.map(cat => (
                       <option key={cat} value={cat}>{cat}</option>
                     ))}
                     {isSuperAdmin && (
-                      <option value="__ADD_NEW__" className="text-indigo-600 font-bold bg-indigo-50/60">+ Add new category...</option>
+                      <option value="__ADD_NEW__" className="text-indigo-600 font-bold bg-indigo-50/60">{t('receiving.addNewCategoryOption')}</option>
                     )}
                   </select>
                   <p className="text-[11px] text-indigo-600 font-medium">
-                    {retCategory ? `Return category set to: "${retCategory}"` : 'Selecting a category specifies the material classification for shop-floor return.'}
+                    {retCategory ? t('receiving.returnCategoryTailoredHint', { category: retCategory }) : t('receiving.returnCategorySelectHint')}
                   </p>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Return Slip (MRS) Form # *</label>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">{t('receiving.returnSlipFormReq')}</label>
                   <input 
                     type="text"
                     required
@@ -2366,7 +2535,7 @@ export default function ReceivingModule({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Material Description *</label>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">{t('receiving.returnMaterialDescReq')}</label>
                   <input 
                     type="text"
                     required
@@ -2378,7 +2547,7 @@ export default function ReceivingModule({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Part Code *</label>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">{t('receiving.returnPartCodeReq')}</label>
                   <input 
                     type="text"
                     required
@@ -2395,7 +2564,7 @@ export default function ReceivingModule({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Returned Lot / Batch *</label>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">{t('receiving.returnLotBatchReq')}</label>
                   <input 
                     type="text"
                     required
@@ -2407,7 +2576,7 @@ export default function ReceivingModule({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Quantity *</label>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">{t('receiving.quantityLabel')} *</label>
                   <input 
                     type="number"
                     required
@@ -2419,14 +2588,14 @@ export default function ReceivingModule({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Unit of Measure *</label>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">{t('receiving.labelUnitOfMeasureReq')}</label>
                   <select 
                     value={retUnit}
                     onChange={e => setRetUnit(e.target.value)}
                     required
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-slate-400 focus:outline-none font-semibold"
                   >
-                    <option value="">-- Select UOM --</option>
+                    <option value="">{t('receiving.selectUomOption')}</option>
                     {getAllSelectUomOptions(retUnit).map(u => (
                       <option key={u} value={u}>{u}</option>
                     ))}
@@ -2434,7 +2603,7 @@ export default function ReceivingModule({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Returning Department *</label>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">{t('receiving.returnDepartmentReq')}</label>
                   <input 
                     type="text"
                     required
@@ -2446,26 +2615,26 @@ export default function ReceivingModule({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Physical Condition *</label>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">{t('receiving.returnConditionReq')}</label>
                   <select 
                     value={retCondition}
                     onChange={e => setRetCondition(e.target.value as any)}
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-slate-400 focus:outline-none"
                   >
-                    <option value="Good">Good/Clean (Re-add to FIFO inventory)</option>
-                    <option value="Damaged">Damaged (Requires Quarantine Hold)</option>
-                    <option value="Contaminated">Contaminated (Requires Quarantine Hold)</option>
-                    <option value="Unidentified">Unidentified (Requires Quality Evaluation)</option>
+                    <option value="Good">{t('receiving.condGoodOpt')}</option>
+                    <option value="Damaged">{t('receiving.condDamagedOpt')}</option>
+                    <option value="Contaminated">{t('receiving.condContaminatedOpt')}</option>
+                    <option value="Unidentified">{t('receiving.condUnidentifiedOpt')}</option>
                   </select>
                 </div>
 
                 <div className="md:col-span-3">
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Return Reason / Detailed Log Remarks</label>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">{t('receiving.returnReasonLabelFull')}</label>
                   <textarea 
                     value={retReason}
                     onChange={e => setRetReason(e.target.value)}
                     rows={2}
-                    placeholder="Describe batch completion details or any discrepancy seen on the plant floor."
+                    placeholder={t('receiving.editReturnReasonPlaceholder')}
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-slate-400 focus:outline-none"
                   />
                 </div>
@@ -2477,13 +2646,13 @@ export default function ReceivingModule({
                   onClick={handleDiscardReturn}
                   className="px-4 py-2 border border-slate-200 text-slate-600 text-xs font-semibold rounded-lg hover:bg-slate-50 cursor-pointer"
                 >
-                  Discard
+                  {t('receiving.discardBtn')}
                 </button>
                 <button 
                   type="submit"
                   className="px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 cursor-pointer"
                 >
-                  Process and Register Return Slip
+                  {t('receiving.processReturnBtn')}
                 </button>
               </div>
             </form>
@@ -2493,17 +2662,17 @@ export default function ReceivingModule({
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
             <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 bg-slate-50/50">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Excess Materials Returns Log</span>
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">{t('receiving.returnsTableTitle')}</span>
                 <span className="bg-slate-200/80 text-slate-700 text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full">
-                  {filteredReturns.length} returns logged
+                  {t('receiving.returnsLogged', { count: filteredReturns.length })}
                 </span>
                 <span className="text-[11px] text-slate-500 font-medium hidden md:inline">
-                  &bull; Sorted by <strong className="text-indigo-700 font-semibold">{retSortField}</strong> ({retSortDirection === 'asc' ? 'Ascending' : 'Descending'})
+                  &bull; {t('receiving.sortedByLabel')} <strong className="text-indigo-700 font-semibold">{retSortField}</strong> ({retSortDirection === 'asc' ? t('receiving.ascLabel') : t('receiving.descLabel')})
                 </span>
               </div>
               {filteredReturns.length > 0 && (
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Totals:</span>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{t('receiving.totalsLabel')}</span>
                   {groupQuantitiesByUnit(
                     filteredReturns,
                     (ret) => ret.quantity,
@@ -2533,10 +2702,10 @@ export default function ReceivingModule({
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                         retSortField === 'returnSlipFormNumber' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                       }`}
-                      title="Sort by Return Slip Form Number"
+                      title={t('receiving.sortByPrefix', { col: t('receiving.colSlipForm') })}
                     >
                       <div className="flex items-center gap-1">
-                        <span>Slip Form</span>
+                        <span>{t('receiving.colSlipForm')}</span>
                         <span className="text-slate-400 group-hover:text-slate-700">
                           {retSortField === 'returnSlipFormNumber' ? (retSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                         </span>
@@ -2547,10 +2716,10 @@ export default function ReceivingModule({
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                         retSortField === 'category' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                       }`}
-                      title="Sort by Category"
+                      title={t('receiving.sortByPrefix', { col: t('receiving.colCategory') })}
                     >
                       <div className="flex items-center gap-1">
-                        <span>Category</span>
+                        <span>{t('receiving.colCategory')}</span>
                         <span className="text-slate-400 group-hover:text-slate-700">
                           {retSortField === 'category' ? (retSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                         </span>
@@ -2561,10 +2730,10 @@ export default function ReceivingModule({
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                         retSortField === 'date' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                       }`}
-                      title="Sort by Date Returned"
+                      title={t('receiving.sortByPrefix', { col: t('receiving.colDateReturned') })}
                     >
                       <div className="flex items-center gap-1">
-                        <span>Date Returned</span>
+                        <span>{t('receiving.colDateReturned')}</span>
                         <span className="text-slate-400 group-hover:text-slate-700">
                           {retSortField === 'date' ? (retSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                         </span>
@@ -2575,10 +2744,10 @@ export default function ReceivingModule({
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                         retSortField === 'department' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                       }`}
-                      title="Sort by Returning Department"
+                      title={t('receiving.sortByPrefix', { col: t('receiving.colDepartment') })}
                     >
                       <div className="flex items-center gap-1">
-                        <span>Department</span>
+                        <span>{t('receiving.colDepartment')}</span>
                         <span className="text-slate-400 group-hover:text-slate-700">
                           {retSortField === 'department' ? (retSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                         </span>
@@ -2589,10 +2758,10 @@ export default function ReceivingModule({
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                         retSortField === 'partCode' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                       }`}
-                      title="Sort by Material / Part Code"
+                      title={t('receiving.sortByPrefix', { col: t('receiving.colMaterialDetails') })}
                     >
                       <div className="flex items-center gap-1">
-                        <span>Material Details</span>
+                        <span>{t('receiving.colMaterialDetails')}</span>
                         <span className="text-slate-400 group-hover:text-slate-700">
                           {retSortField === 'partCode' ? (retSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                         </span>
@@ -2603,10 +2772,10 @@ export default function ReceivingModule({
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group text-right ${
                         retSortField === 'quantity' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                       }`}
-                      title="Sort by Quantity"
+                      title={t('receiving.sortByPrefix', { col: t('receiving.colQty') })}
                     >
                       <div className="flex items-center justify-end gap-1">
-                        <span>Qty</span>
+                        <span>{t('receiving.colQty')}</span>
                         <span className="text-slate-400 group-hover:text-slate-700">
                           {retSortField === 'quantity' ? (retSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                         </span>
@@ -2617,10 +2786,10 @@ export default function ReceivingModule({
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                         retSortField === 'condition' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                       }`}
-                      title="Sort by Physical Condition"
+                      title={t('receiving.sortByPrefix', { col: t('receiving.colPhysicalCondition') })}
                     >
                       <div className="flex items-center gap-1">
-                        <span>Physical Condition</span>
+                        <span>{t('receiving.colPhysicalCondition')}</span>
                         <span className="text-slate-400 group-hover:text-slate-700">
                           {retSortField === 'condition' ? (retSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                         </span>
@@ -2631,17 +2800,17 @@ export default function ReceivingModule({
                       className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                         retSortField === 'status' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                       }`}
-                      title="Sort by Evaluation Status"
+                      title={t('receiving.sortByPrefix', { col: t('receiving.colEvaluationStatus') })}
                     >
                       <div className="flex items-center gap-1">
-                        <span>Evaluation Status</span>
+                        <span>{t('receiving.colEvaluationStatus')}</span>
                         <span className="text-slate-400 group-hover:text-slate-700">
                           {retSortField === 'status' ? (retSortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                         </span>
                       </div>
                     </th>
-                    <th className="p-3 font-semibold text-slate-600">Remarks / Reason</th>
-                    <th className="p-3 font-semibold text-slate-600">Action</th>
+                    <th className="p-3 font-semibold text-slate-600">{t('receiving.colRemarksReason')}</th>
+                    <th className="p-3 font-semibold text-slate-600">{t('receiving.colAction')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -2651,6 +2820,13 @@ export default function ReceivingModule({
                       (s.partCode || '').trim().toLowerCase() === (r.partCode || '').trim().toLowerCase() && 
                       (!r.lotNumber || (s.lotNumber || '').trim().toLowerCase() === (r.lotNumber || '').trim().toLowerCase())
                     );
+                    const condLabel = r.condition === 'Good'
+                      ? t('receiving.condGood')
+                      : r.condition === 'Damaged'
+                        ? t('receiving.condDamaged')
+                        : r.condition === 'Contaminated'
+                          ? t('receiving.condContaminated')
+                          : t('receiving.condUnidentified');
 
                     return (
                       <React.Fragment key={r.id}>
@@ -2665,7 +2841,7 @@ export default function ReceivingModule({
                               ? 'bg-indigo-50/70 border-l-4 border-l-indigo-600 shadow-2xs' 
                               : 'hover:bg-indigo-50/30 hover:border-l-4 hover:border-l-indigo-300'
                           }`}
-                          title="Click row to expand return metadata & quality details"
+                          title={t('receiving.rowExpandTooltip')}
                         >
                           <td className="p-4 font-mono font-bold text-slate-900">
                             <div className="flex items-center gap-1.5">
@@ -2678,7 +2854,7 @@ export default function ReceivingModule({
                                 className={`p-1 rounded-md transition-colors ${
                                   isExpanded ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
                                 }`}
-                                title={isExpanded ? 'Collapse row' : 'Expand row details'}
+                                title={isExpanded ? t('receiving.collapseRowBtn') : t('receiving.expandRowBtn')}
                               >
                                 {isExpanded ? (
                                   <ChevronDown className="h-3.5 w-3.5" />
@@ -2691,7 +2867,7 @@ export default function ReceivingModule({
                           </td>
                           <td className="p-4 font-medium text-slate-700">
                             <span className="px-2 py-1 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100 uppercase tracking-wider">
-                              {r.category || 'N/A'}
+                              {r.category || t('common.na')}
                             </span>
                           </td>
                           <td className="p-4 text-slate-600 font-mono">{r.date}</td>
@@ -2699,7 +2875,7 @@ export default function ReceivingModule({
                           <td className="p-4">
                             <div className="font-mono font-semibold text-slate-800">{r.partCode}</div>
                             <div className="text-slate-500 text-[11px]">{r.materialDescription}</div>
-                            <div className="text-[10px] text-slate-400 mt-1">Lot: {r.lotNumber}</div>
+                            <div className="text-[10px] text-slate-400 mt-1">{t('receiving.scanLotLabel')} {r.lotNumber}</div>
                           </td>
                           <td className="p-4 text-right font-mono font-bold text-slate-800">
                             {(() => {
@@ -2709,7 +2885,7 @@ export default function ReceivingModule({
                                   {r.quantity.toLocaleString()}{' '}
                                   {retUnitInfo.isMissing ? (
                                     <span className="inline-block px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 text-[9px] font-bold">
-                                      {MISSING_UNIT_LABEL}
+                                      {t('common.missingUnit')}
                                     </span>
                                   ) : (
                                     retUnitInfo.unit
@@ -2723,17 +2899,17 @@ export default function ReceivingModule({
                               r.condition === 'Good' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
                               r.condition === 'Damaged' ? 'bg-rose-50 text-rose-700 border border-rose-100' : 'bg-amber-50 text-amber-700 border border-amber-100'
                             }`}>
-                              {r.condition}
+                              {condLabel}
                             </span>
                           </td>
                           <td className="p-4">
                             {r.status === 'APPROVED' ? (
                               <span className="bg-emerald-50 text-emerald-700 px-2 py-1 rounded font-semibold text-[10px] border border-emerald-100">
-                                ACCEPTED TO STOCKS
+                                {t('receiving.acceptedToStocksBadge')}
                               </span>
                             ) : (
                               <span className="bg-rose-50 text-rose-700 px-2 py-1 rounded font-semibold text-[10px] border border-rose-100">
-                                QUARANTINE / RESTRICTED
+                                {t('receiving.quarantineRestrictedBadge')}
                               </span>
                             )}
                           </td>
@@ -2741,7 +2917,7 @@ export default function ReceivingModule({
                             {r.reason ? (
                               <span className="text-[11px] text-slate-700 font-medium">{r.reason}</span>
                             ) : (
-                              <span className="text-[10px] text-slate-400 italic">No remarks</span>
+                              <span className="text-[10px] text-slate-400 italic">{t('receiving.noRemarks')}</span>
                             )}
                           </td>
                           <td className="p-4" data-no-expand="true">
@@ -2752,9 +2928,9 @@ export default function ReceivingModule({
                                   const val = e.target.value;
                                   if (val === 'APPROVE') {
                                     setConfirmAction({
-                                      title: 'Pass Quality & Approve Return',
-                                      message: `Are you sure you want to pass quality inspection and approve return record ${r.returnSlipFormNumber} (${r.partCode}) into stocks?`,
-                                      confirmLabel: 'YES, APPROVE RETURN',
+                                      title: t('receiving.confirmApproveReturnTitle'),
+                                      message: t('receiving.confirmApproveReturnMsg', { id: r.returnSlipFormNumber, partCode: r.partCode }),
+                                      confirmLabel: t('receiving.confirmYesApproveReturn'),
                                       confirmVariant: 'primary',
                                       onConfirm: () => onUpdateReturnStatus(r.id, 'APPROVED')
                                     });
@@ -2763,9 +2939,9 @@ export default function ReceivingModule({
                                   } else if (val === 'DELETE') {
                                     if (!isSuperAdmin) return;
                                     setConfirmAction({
-                                      title: 'Delete Return Record',
-                                      message: `Are you sure you want to delete return record ${r.returnSlipFormNumber} (${r.partCode})?`,
-                                      confirmLabel: 'YES, DELETE',
+                                      title: t('receiving.confirmDeleteReturnTitle'),
+                                      message: t('receiving.confirmDeleteReturnMsg', { id: r.returnSlipFormNumber, partCode: r.partCode }),
+                                      confirmLabel: t('receiving.confirmYesDelete'),
                                       confirmVariant: 'danger',
                                       onConfirm: () => onDeleteReturn?.(r.id)
                                     });
@@ -2775,17 +2951,17 @@ export default function ReceivingModule({
                                 className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
                                 id={`action-select-ret-${r.id}`}
                               >
-                                <option value="" disabled>Actions...</option>
+                                <option value="" disabled>{t('receiving.actionsPlaceholder')}</option>
                                 {r.status === 'QUARANTINED' && (
-                                  <option value="APPROVE">✅ Pass Quality & Approve</option>
+                                  <option value="APPROVE">✅ {t('receiving.actionPassQualityApprove')}</option>
                                 )}
-                                <option value="EDIT">📝 Edit Record</option>
+                                <option value="EDIT">📝 {t('receiving.actionEditRecord')}</option>
                                 {isSuperAdmin && (
-                                  <option value="DELETE">🗑️ Delete Record</option>
+                                  <option value="DELETE">🗑️ {t('receiving.actionDeleteRecord')}</option>
                                 )}
                               </select>
                             ) : (
-                              <span className="text-slate-400 italic font-semibold text-[10px]">Read-Only</span>
+                              <span className="text-slate-400 italic font-semibold text-[10px]">{t('receiving.readOnlyTag')}</span>
                             )}
                           </td>
                         </tr>
@@ -2812,35 +2988,35 @@ export default function ReceivingModule({
                                         <div>
                                           <div className="flex items-center gap-2">
                                             <span className="text-sm font-bold text-slate-900">
-                                              Return Slip: <span className="font-mono text-indigo-600">{r.returnSlipFormNumber}</span>
+                                              {t('receiving.cardSlipPrefix')} <span className="font-mono text-indigo-600">{r.returnSlipFormNumber}</span>
                                             </span>
                                             <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                                               r.status === 'APPROVED' 
                                                 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
                                                 : 'bg-rose-50 text-rose-700 border border-rose-200'
                                             }`}>
-                                              {r.status === 'APPROVED' ? 'ACCEPTED IN STOCKS' : 'QUARANTINED / RESTRICTED'}
+                                              {r.status === 'APPROVED' ? t('receiving.acceptedToStocksBadge') : t('receiving.quarantineRestrictedBadge')}
                                             </span>
                                           </div>
                                           <p className="text-xs text-slate-500 mt-0.5">
-                                            Origin: <strong className="text-slate-700">{r.department}</strong> &bull; Part: <strong className="font-mono text-slate-700">{r.partCode}</strong>
+                                            {t('receiving.cardOriginLabel')} <strong className="text-slate-700">{r.department}</strong> &bull; {t('receiving.cardPartLabel')} <strong className="font-mono text-slate-700">{r.partCode}</strong>
                                           </p>
                                         </div>
                                       </div>
 
                                       <div className="flex flex-wrap items-center gap-2 text-xs">
                                         <span className="bg-slate-100 text-slate-700 font-mono font-semibold px-2.5 py-1 rounded-lg border border-slate-200">
-                                          Date: {r.date}
+                                          {t('receiving.cardDateLabel')} {r.date}
                                         </span>
                                         <span className="bg-purple-50 text-purple-800 font-bold px-2.5 py-1 rounded-lg border border-purple-200 font-mono">
                                           {(() => {
                                             const retUnitInfo = resolveMasterDataUnit(r, registries, stocks);
-                                            return `Return Qty: ${r.quantity.toLocaleString()} ${retUnitInfo.unit || MISSING_UNIT_LABEL}`;
+                                            return `${t('receiving.cardReturnQtyLabel')} ${r.quantity.toLocaleString()} ${retUnitInfo.unit || MISSING_UNIT_LABEL}`;
                                           })()}
                                         </span>
                                         {matchedStock && (
                                           <span className="bg-emerald-50 text-emerald-800 font-bold px-2.5 py-1 rounded-lg border border-emerald-200 font-mono">
-                                            Active Stock: {matchedStock.quantity.toLocaleString()} {resolveMasterDataUnit(matchedStock, registries, stocks).unit || MISSING_UNIT_LABEL}
+                                            {t('receiving.activeStockLabel')} {matchedStock.quantity.toLocaleString()} {resolveMasterDataUnit(matchedStock, registries, stocks).unit || MISSING_UNIT_LABEL}
                                           </span>
                                         )}
                                       </div>
@@ -2852,24 +3028,24 @@ export default function ReceivingModule({
                                       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
                                         <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
                                           <Factory className="h-4 w-4 text-indigo-500" />
-                                          <span>Origin & Batch Info</span>
+                                          <span>{t('receiving.cardOriginBatchSection')}</span>
                                         </div>
                                         <div className="grid grid-cols-2 gap-2 text-xs">
                                           <div>
-                                            <span className="text-slate-400 text-[11px] block">Department:</span>
+                                            <span className="text-slate-400 text-[11px] block">{t('receiving.colDepartment')}:</span>
                                             <span className="font-semibold text-slate-800">{r.department}</span>
                                           </div>
                                           <div>
-                                            <span className="text-slate-400 text-[11px] block">Category:</span>
-                                            <span className="font-semibold text-indigo-700">{r.category || 'N/A'}</span>
+                                            <span className="text-slate-400 text-[11px] block">{t('receiving.colCategory')}:</span>
+                                            <span className="font-semibold text-indigo-700">{r.category || t('common.na')}</span>
                                           </div>
                                           <div>
-                                            <span className="text-slate-400 text-[11px] block">Lot / Batch #:</span>
-                                            <span className="font-mono font-bold text-slate-800">{r.lotNumber || 'N/A'}</span>
+                                            <span className="text-slate-400 text-[11px] block">{t('receiving.lotBatchLabel')}</span>
+                                            <span className="font-mono font-bold text-slate-800">{r.lotNumber || t('common.na')}</span>
                                           </div>
                                           <div>
-                                            <span className="text-slate-400 text-[11px] block">Location:</span>
-                                            <span className="font-mono font-semibold text-slate-800">{matchedStock?.location || 'Returns Bay / Shelf'}</span>
+                                            <span className="text-slate-400 text-[11px] block">{t('receiving.cardLocationLabel')}</span>
+                                            <span className="font-mono font-semibold text-slate-800">{matchedStock?.location || t('receiving.cardReturnsBay')}</span>
                                           </div>
                                         </div>
                                       </div>
@@ -2878,22 +3054,22 @@ export default function ReceivingModule({
                                       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
                                         <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
                                           <ShieldCheck className="h-4 w-4 text-emerald-600" />
-                                          <span>Material Condition & Reason</span>
+                                          <span>{t('receiving.cardConditionReasonSection')}</span>
                                         </div>
                                         <div className="space-y-2 text-xs">
                                           <div>
-                                            <span className="text-slate-400 text-[11px] block">Condition:</span>
+                                            <span className="text-slate-400 text-[11px] block">{t('receiving.cardConditionLabel')}</span>
                                             <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold mt-0.5 ${
                                               r.condition === 'Good' ? 'bg-emerald-100 text-emerald-800' :
                                               r.condition === 'Damaged' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
                                             }`}>
-                                              {r.condition}
+                                              {condLabel}
                                             </span>
                                           </div>
                                           <div>
-                                            <span className="text-slate-400 text-[11px] block">Reason for Return:</span>
+                                            <span className="text-slate-400 text-[11px] block">{t('receiving.cardReasonLabel')}</span>
                                             <p className="text-slate-700 bg-slate-50 p-2 rounded-lg border border-slate-150 mt-0.5 text-[11px] leading-relaxed">
-                                              {r.reason || 'Excess production material returned to warehouse.'}
+                                              {r.reason || t('receiving.cardDefaultReason')}
                                             </p>
                                           </div>
                                         </div>
@@ -2903,20 +3079,20 @@ export default function ReceivingModule({
                                       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
                                         <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
                                           <Activity className="h-4 w-4 text-purple-500" />
-                                          <span>Quality Disposition</span>
+                                          <span>{t('receiving.cardQualityDispSection')}</span>
                                         </div>
 
                                         <div className="space-y-2 text-xs">
                                           <div>
-                                            <span className="text-slate-400 text-[11px] block">Current Disposition:</span>
+                                            <span className="text-slate-400 text-[11px] block">{t('receiving.cardCurrentDispLabel')}</span>
                                             <div className="mt-0.5">
                                               {r.status === 'APPROVED' ? (
                                                 <span className="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-bold text-[10px]">
-                                                  PASSED QUALITY & MERGED TO STOCK
+                                                  {t('receiving.cardPassedQualityMerged')}
                                                 </span>
                                               ) : (
                                                 <span className="bg-rose-100 text-rose-800 px-2 py-0.5 rounded font-bold text-[10px]">
-                                                  HELD IN QUARANTINE / RESTRICTED
+                                                  {t('receiving.cardHeldQuarantine')}
                                                 </span>
                                               )}
                                             </div>
@@ -2928,16 +3104,16 @@ export default function ReceivingModule({
                                                 type="button"
                                                 onClick={() => {
                                                   setConfirmAction({
-                                                    title: 'Pass Quality & Approve Return',
-                                                    message: `Are you sure you want to pass quality inspection and approve return record ${r.returnSlipFormNumber} (${r.partCode}) into stocks?`,
-                                                    confirmLabel: 'YES, APPROVE RETURN',
+                                                    title: t('receiving.confirmApproveReturnTitle'),
+                                                    message: t('receiving.confirmApproveReturnMsg', { id: r.returnSlipFormNumber, partCode: r.partCode }),
+                                                    confirmLabel: t('receiving.confirmYesApproveReturn'),
                                                     confirmVariant: 'primary',
                                                     onConfirm: () => onUpdateReturnStatus(r.id, 'APPROVED')
                                                   });
                                                 }}
                                                 className="w-full px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer shadow-2xs flex items-center justify-center gap-1.5"
                                               >
-                                                <Check className="h-3.5 w-3.5" /> Pass Quality & Merge to Stocks
+                                                <Check className="h-3.5 w-3.5" /> {t('receiving.passQualityMergeBtn')}
                                               </button>
                                             </div>
                                           )}
@@ -2982,9 +3158,9 @@ export default function ReceivingModule({
               <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                 <div>
                   <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-                    <Edit className="h-4 w-4 text-indigo-600" /> Edit Registered Material Arrival ({editingReceiving.id})
+                    <Edit className="h-4 w-4 text-indigo-600" /> {t('receiving.editRecModalTitle', { id: editingReceiving.id })}
                   </h4>
-                  <p className="text-[11px] text-slate-500">Super Admin Record Overwrite</p>
+                  <p className="text-[11px] text-slate-500">{t('receiving.superAdminOverwrite')}</p>
                 </div>
                 <button 
                   onClick={() => setEditingReceiving(null)}
@@ -2996,27 +3172,42 @@ export default function ReceivingModule({
 
               <div className="grid grid-cols-2 gap-3 text-xs">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Model</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.editModalModelLabel')}</label>
                   <input 
                     type="text" 
                     value={editingReceiving.partCode}
-                    onChange={e => setEditingReceiving({ ...editingReceiving, partCode: e.target.value.toUpperCase() })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                    onChange={e => {
+                      setEditingReceiving({ ...editingReceiving, partCode: e.target.value.toUpperCase() });
+                      clearEditRecErr('partCode');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editReceivingFieldErrors.partCode
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editReceivingFieldErrors.partCode && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editReceivingFieldErrors.partCode)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Date</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('common.date')}</label>
                   <input 
                     type="date" 
                     value={editingReceiving.date}
-                    onChange={e => setEditingReceiving({ ...editingReceiving, date: e.target.value })}
+                    onChange={e => {
+                      setEditingReceiving({ ...editingReceiving, date: e.target.value });
+                      clearEditRecErr('expirationDate');
+                    }}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
                   />
                 </div>
 
                 <div className="col-span-2">
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Part Code / Item Code</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.editModalPartCodeDescLabel')}</label>
                   <input 
                     type="text" 
                     value={editingReceiving.itemDescription}
@@ -3026,44 +3217,60 @@ export default function ReceivingModule({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.quantityLabel')}</label>
                   <input 
                     type="text" 
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    value={editingReceiving.quantity || ''}
-                    onKeyDown={(e) => {
-                      if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
-                        e.preventDefault();
-                      }
-                    }}
+                    inputMode="decimal"
+                    value={editReceivingQtyInput}
                     onChange={e => {
-                      const val = e.target.value.replace(/\D/g, '');
-                      setEditingReceiving({ ...editingReceiving, quantity: val ? parseInt(val, 10) : 0 });
+                      const raw = e.target.value.replace(/[^0-9.-]/g, '');
+                      setEditReceivingQtyInput(raw);
+                      const num = Number(raw);
+                      setEditingReceiving({ ...editingReceiving, quantity: raw.trim() === '' || Number.isNaN(num) ? 0 : num });
+                      clearEditRecErr('quantity');
                     }}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editReceivingFieldErrors.quantity
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editReceivingFieldErrors.quantity && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editReceivingFieldErrors.quantity)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Unit of Measure (UOM)</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.unitLabel')}</label>
                   <select 
                     value={normalizeUnitCode(editingReceiving.unit)}
                     onChange={e => {
                       const clean = normalizeUnitCode(e.target.value);
                       setEditingReceiving({ ...editingReceiving, unit: clean, unitMissing: !clean });
+                      clearEditRecErr('unit');
                     }}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono font-semibold"
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono font-semibold ${
+                      editReceivingFieldErrors.unit
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   >
-                    <option value="">-- Select UOM --</option>
+                    <option value="">{t('receiving.selectUomOption')}</option>
                     {getAllSelectUomOptions(editingReceiving.unit).map(u => (
                       <option key={u} value={u}>{u}</option>
                     ))}
                   </select>
+                  {editReceivingFieldErrors.unit && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editReceivingFieldErrors.unit)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Part Name</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.editModalPartNameLabel')}</label>
                   <input 
                     type="text" 
                     value={editingReceiving.lotNumber}
@@ -3073,55 +3280,104 @@ export default function ReceivingModule({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Category</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.colCategory')}</label>
                   <select 
                     value={editingReceiving.supplierOrDept}
-                    onChange={e => setEditingReceiving({ ...editingReceiving, supplierOrDept: e.target.value })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded text-xs focus:ring-1 focus:ring-indigo-500 font-medium text-slate-700 cursor-pointer"
+                    onChange={e => {
+                      setEditingReceiving({ ...editingReceiving, supplierOrDept: e.target.value });
+                      clearEditRecErr('supplierOrDept');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded text-xs focus:ring-1 font-medium text-slate-700 cursor-pointer ${
+                      editReceivingFieldErrors.supplierOrDept
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   >
-                    <option value="">Select Category...</option>
+                    <option value="">{t('receiving.selectCategoryOption')}</option>
                     {managedCategories.map(cat => (
                       <option key={cat} value={cat}>{cat}</option>
                     ))}
                   </select>
+                  {editReceivingFieldErrors.supplierOrDept && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editReceivingFieldErrors.supplierOrDept)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">IQC Status</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.colIqcStatus')}</label>
                   <select 
                     value={editingReceiving.iqcStatus}
                     onChange={e => setEditingReceiving({ ...editingReceiving, iqcStatus: e.target.value as any })}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-bold"
                   >
-                    <option value="PENDING_IQC">PENDING IQC</option>
-                    <option value="APPROVED_IQC">APPROVED IQC</option>
-                    <option value="REJECTED_IQC">REJECTED IQC</option>
-                    <option value="NA">NA (Internal)</option>
+                    <option value="PENDING_IQC">{t('receiving.editModalIqcPendingOpt')}</option>
+                    <option value="APPROVED_IQC">{t('receiving.editModalIqcApprovedOpt')}</option>
+                    <option value="REJECTED_IQC">{t('receiving.editModalIqcRejectedOpt')}</option>
+                    <option value="NA">{t('receiving.editModalIqcNaOpt')}</option>
                   </select>
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Date Received</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.editModalDateLabel')}</label>
                   <input 
                     type="date" 
                     value={editingReceiving.receivedDate || editingReceiving.date}
-                    onChange={e => setEditingReceiving({ ...editingReceiving, receivedDate: e.target.value })}
+                    onChange={e => {
+                      setEditingReceiving({ ...editingReceiving, receivedDate: e.target.value });
+                      clearEditRecErr('expirationDate');
+                    }}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Location</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.expirationDateLabel')}</label>
                   <input 
-                    type="text" 
-                    value={editingReceiving.location || ''}
-                    onChange={e => setEditingReceiving({ ...editingReceiving, location: e.target.value })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                    type="date" 
+                    value={editingReceiving.expirationDate || ''}
+                    onChange={e => {
+                      setEditingReceiving({ ...editingReceiving, expirationDate: e.target.value });
+                      clearEditRecErr('expirationDate');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editReceivingFieldErrors.expirationDate
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editReceivingFieldErrors.expirationDate && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editReceivingFieldErrors.expirationDate)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Vendor / Supplier / Dept</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.editModalLocationLabel')}</label>
+                  <input 
+                    type="text" 
+                    value={editingReceiving.location || ''}
+                    onChange={e => {
+                      setEditingReceiving({ ...editingReceiving, location: e.target.value });
+                      clearEditRecErr('location');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 ${
+                      editReceivingFieldErrors.location
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
+                  />
+                  {editReceivingFieldErrors.location && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editReceivingFieldErrors.location)}
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.editModalVendorLabel')}</label>
                   <input 
                     type="text" 
                     value={editingReceiving.vendorSupplier || ''}
@@ -3131,37 +3387,99 @@ export default function ReceivingModule({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Purchase Order (PO) #</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.rrNumberLabel')}</label>
                   <input 
                     type="text" 
+                    placeholder="RR-2026-0001"
+                    value={editingReceiving.rrNumber || ''}
+                    onChange={e => {
+                      setEditingReceiving({ ...editingReceiving, rrNumber: e.target.value });
+                      clearEditRecErr('rrNumber');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editReceivingFieldErrors.rrNumber
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
+                  />
+                  {editReceivingFieldErrors.rrNumber && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editReceivingFieldErrors.rrNumber)}
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.poNumberLabel')}</label>
+                  <input 
+                    type="text" 
+                    placeholder="PO-2026-0001"
                     value={editingReceiving.poNumber || ''}
-                    onChange={e => setEditingReceiving({ ...editingReceiving, poNumber: e.target.value })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                    onChange={e => {
+                      setEditingReceiving({ ...editingReceiving, poNumber: e.target.value });
+                      clearEditRecErr('poNumber');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editReceivingFieldErrors.poNumber
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editReceivingFieldErrors.poNumber && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editReceivingFieldErrors.poNumber)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Delivery Receipt (DR) #</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.drNumberLabel')}</label>
                   <input 
                     type="text" 
+                    placeholder="DR-00001"
                     value={editingReceiving.drNumber || ''}
-                    onChange={e => setEditingReceiving({ ...editingReceiving, drNumber: e.target.value })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                    onChange={e => {
+                      setEditingReceiving({ ...editingReceiving, drNumber: e.target.value });
+                      clearEditRecErr('drNumber');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editReceivingFieldErrors.drNumber
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editReceivingFieldErrors.drNumber && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editReceivingFieldErrors.drNumber)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Sales Invoice (SI) #</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.siNumberLabel')}</label>
                   <input 
                     type="text" 
+                    placeholder="SI-00001"
                     value={editingReceiving.siNumber || ''}
-                    onChange={e => setEditingReceiving({ ...editingReceiving, siNumber: e.target.value })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                    onChange={e => {
+                      setEditingReceiving({ ...editingReceiving, siNumber: e.target.value });
+                      clearEditRecErr('siNumber');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editReceivingFieldErrors.siNumber
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editReceivingFieldErrors.siNumber && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editReceivingFieldErrors.siNumber)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Reorder Min</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.editModalReorderMinLabel')}</label>
                   <input 
                     type="number" 
                     value={editingReceiving.reorderMin || ''}
@@ -3171,7 +3489,7 @@ export default function ReceivingModule({
                 </div>
 
                 <div className="col-span-2">
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Remarks</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.remarksLabel')}</label>
                   <input 
                     type="text" 
                     value={editingReceiving.remarks || ''}
@@ -3183,28 +3501,49 @@ export default function ReceivingModule({
 
               <div className="flex justify-end gap-2 text-xs font-semibold pt-3 border-t border-slate-100">
                 <button 
-                  onClick={() => setEditingReceiving(null)}
+                  onClick={() => {
+                    setEditReceivingFieldErrors({});
+                    setEditingReceiving(null);
+                  }}
                   className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50"
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </button>
                 <button 
                   onClick={() => {
                     const resolved = resolveMasterDataUnit(editingReceiving, registries, stocks);
-                    if (!resolved.unit) {
-                      showPrintToast('Please assign a Unit of Measure (UOM) or configure it in Master Data.', 'warning');
+                    const rawQty = editReceivingQtyInput.trim() === '' ? NaN : Number(editReceivingQtyInput.trim());
+                    const candidate: ReceivingRecord = {
+                      ...editingReceiving,
+                      quantity: Number.isNaN(rawQty) ? 0 : rawQty,
+                      unit: resolved.unit,
+                      unitMissing: !resolved.unit,
+                      rrNumber: editingReceiving.rrNumber?.trim() || undefined,
+                      poNumber: editingReceiving.poNumber?.trim() || undefined,
+                      drNumber: editingReceiving.drNumber?.trim() || undefined,
+                      siNumber: editingReceiving.siNumber?.trim() || undefined,
+                      expirationDate: editingReceiving.expirationDate?.trim() || undefined,
+                    };
+                    const validation = validateReceivingRecord(
+                      {
+                        ...candidate,
+                        quantity: editReceivingQtyInput.trim() === '' ? '' : rawQty,
+                      } as any,
+                      receiving,
+                      { requireOperationalFields: true }
+                    );
+                    if (!validation.valid) {
+                      setEditReceivingFieldErrors(validation.fieldErrors);
+                      showPrintToast(localizeValidation(validation.message) || t('receiving.validationWarning'), 'warning');
                       return;
                     }
-                    onEditReceiving?.({
-                      ...editingReceiving,
-                      unit: resolved.unit,
-                      unitMissing: false,
-                    });
+                    setEditReceivingFieldErrors({});
+                    onEditReceiving?.(candidate);
                     setEditingReceiving(null);
                   }}
                   className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold"
                 >
-                  Save Record Changes
+                  {t('receiving.saveRecordChanges')}
                 </button>
               </div>
             </motion.div>
@@ -3235,9 +3574,9 @@ export default function ReceivingModule({
               <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                 <div>
                   <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-                    <Edit className="h-4 w-4 text-indigo-600" /> Edit Registered Return ({editingReturn.returnSlipFormNumber})
+                    <Edit className="h-4 w-4 text-indigo-600" /> {t('receiving.editRetModalTitle', { id: editingReturn.returnSlipFormNumber })}
                   </h4>
-                  <p className="text-[11px] text-slate-500">Super Admin Record Overwrite</p>
+                  <p className="text-[11px] text-slate-500">{t('receiving.superAdminOverwrite')}</p>
                 </div>
                 <button 
                   onClick={() => setEditingReturn(null)}
@@ -3249,7 +3588,7 @@ export default function ReceivingModule({
 
               <div className="grid grid-cols-2 gap-3 text-xs">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Slip Form Number</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.editReturnSlipLabel')}</label>
                   <input 
                     type="text" 
                     value={editingReturn.returnSlipFormNumber}
@@ -3259,7 +3598,7 @@ export default function ReceivingModule({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Date</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('common.date')}</label>
                   <input 
                     type="date" 
                     value={editingReturn.date}
@@ -3269,7 +3608,7 @@ export default function ReceivingModule({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Department</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.colDepartment')}</label>
                   <input 
                     type="text" 
                     value={editingReturn.department}
@@ -3279,7 +3618,7 @@ export default function ReceivingModule({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Part Code</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.partCodeLabel')}</label>
                   <input 
                     type="text" 
                     value={editingReturn.partCode}
@@ -3289,7 +3628,7 @@ export default function ReceivingModule({
                 </div>
 
                 <div className="col-span-2">
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Material Description</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.itemDescriptionLabel')}</label>
                   <input 
                     type="text" 
                     value={editingReturn.materialDescription}
@@ -3299,24 +3638,24 @@ export default function ReceivingModule({
                 </div>
 
                 <div className="col-span-2">
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Return Reason / Detailed Log Remarks</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.editReturnReasonLabel')}</label>
                   <input 
                     type="text" 
                     value={editingReturn.reason || ''}
                     onChange={e => setEditingReturn({ ...editingReturn, reason: e.target.value })}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                    placeholder="Describe return reason or log remarks"
+                    placeholder={t('receiving.editReturnReasonPlaceholder')}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Category</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.colCategory')}</label>
                   <select 
                     value={editingReturn.category || ''}
                     onChange={e => setEditingReturn({ ...editingReturn, category: e.target.value })}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-bold text-xs cursor-pointer"
                   >
-                    <option value="">Select Category...</option>
+                    <option value="">{t('receiving.selectCategoryOption')}</option>
                     {managedCategories.map(cat => (
                       <option key={cat} value={cat}>{cat}</option>
                     ))}
@@ -3324,7 +3663,7 @@ export default function ReceivingModule({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.quantityLabel')}</label>
                   <input 
                     type="number" 
                     value={editingReturn.quantity}
@@ -3334,7 +3673,7 @@ export default function ReceivingModule({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Unit of Measure (UOM)</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.unitLabel')}</label>
                   <select
                     value={normalizeUnitCode(editingReturn.unit)}
                     onChange={e => {
@@ -3343,7 +3682,7 @@ export default function ReceivingModule({
                     }}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono font-semibold"
                   >
-                    <option value="">-- Select UOM --</option>
+                    <option value="">{t('receiving.selectUomOption')}</option>
                     {getAllSelectUomOptions(editingReturn.unit).map(u => (
                       <option key={u} value={u}>{u}</option>
                     ))}
@@ -3351,7 +3690,7 @@ export default function ReceivingModule({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Lot Number</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.lotNumberLabel')}</label>
                   <input 
                     type="text" 
                     value={editingReturn.lotNumber}
@@ -3361,29 +3700,29 @@ export default function ReceivingModule({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Condition</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.returnConditionLabel')}</label>
                   <select 
                     value={editingReturn.condition}
                     onChange={e => setEditingReturn({ ...editingReturn, condition: e.target.value as any })}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
                   >
-                    <option value="Good">Good</option>
-                    <option value="Damaged">Damaged</option>
-                    <option value="Contaminated">Contaminated</option>
-                    <option value="Unidentified">Unidentified</option>
+                    <option value="Good">{t('receiving.condGood')}</option>
+                    <option value="Damaged">{t('receiving.condDamaged')}</option>
+                    <option value="Contaminated">{t('receiving.condContaminated')}</option>
+                    <option value="Unidentified">{t('receiving.condUnidentified')}</option>
                   </select>
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Status</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('common.status')}</label>
                   <select 
                     value={editingReturn.status}
                     onChange={e => setEditingReturn({ ...editingReturn, status: e.target.value as any })}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-bold"
                   >
-                    <option value="PENDING">PENDING</option>
-                    <option value="APPROVED">APPROVED</option>
-                    <option value="QUARANTINED">QUARANTINED</option>
+                    <option value="PENDING">{t('receiving.editReturnStatusPending')}</option>
+                    <option value="APPROVED">{t('receiving.editReturnStatusApproved')}</option>
+                    <option value="QUARANTINED">{t('receiving.editReturnStatusQuarantined')}</option>
                   </select>
                 </div>
               </div>
@@ -3393,13 +3732,13 @@ export default function ReceivingModule({
                   onClick={() => setEditingReturn(null)}
                   className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50"
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </button>
                 <button 
                   onClick={() => {
                     const resolved = resolveMasterDataUnit(editingReturn, registries, stocks);
                     if (!resolved.unit) {
-                      showPrintToast('Please assign a Unit of Measure (UOM) or configure it in Master Data.', 'warning');
+                      showPrintToast(t('receiving.configureUomWarning'), 'warning');
                       return;
                     }
                     onEditReturn?.({
@@ -3411,7 +3750,7 @@ export default function ReceivingModule({
                   }}
                   className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold"
                 >
-                  Save Return Changes
+                  {t('receiving.saveReturnChanges')}
                 </button>
               </div>
             </motion.div>
@@ -3425,8 +3764,8 @@ export default function ReceivingModule({
         onClose={() => setShowScannerModal(false)}
         onScanResult={handleScanResult}
         resolveScanDetails={resolveReceivingScanDetails}
-        title="Receiving Material Barcode Scanner"
-        subtitle="Use handheld barcode scanner or enter barcode manually"
+        title={t('receiving.scannerTitle')}
+        subtitle={t('receiving.scannerSubtitle')}
       />
       {/* Yes / No Action Confirmation Modal */}
       {typeof document !== 'undefined' && confirmAction && createPortal(
@@ -3467,7 +3806,7 @@ export default function ReceivingModule({
 
                 <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg flex items-center gap-2 text-amber-800 text-[11px] font-semibold">
                   <AlertOctagon className="h-4 w-4 text-amber-600 shrink-0" />
-                  <span>Please select YES to confirm or NO to cancel this action.</span>
+                  <span>{t('receiving.selectYesNoHint')}</span>
                 </div>
 
                 <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
@@ -3477,7 +3816,7 @@ export default function ReceivingModule({
                     className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
                   >
                     <XCircle className="h-4 w-4 text-slate-500" />
-                    NO
+                    {t('receiving.noLabel')}
                   </button>
                   <button
                     type="button"
@@ -3492,7 +3831,7 @@ export default function ReceivingModule({
                     }`}
                   >
                     <CheckCircle2 className="h-4 w-4 text-white" />
-                    {confirmAction.confirmLabel || 'YES'}
+                    {confirmAction.confirmLabel || t('receiving.yesLabel')}
                   </button>
                 </div>
               </div>
@@ -3514,13 +3853,13 @@ export default function ReceivingModule({
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <h3 className="text-base font-bold tracking-tight">MANAGE RECEIVING & RETURN CATEGORIES</h3>
+                    <h3 className="text-base font-bold tracking-tight">{t('receiving.manageCatsModalTitle')}</h3>
                     <span className="bg-indigo-500/30 text-indigo-200 text-[10px] font-mono font-bold px-2 py-0.5 rounded-md border border-indigo-400/30">
-                      {managedCategories.length} CATEGORIES
+                      {t('receiving.catsCountBadge', { count: managedCategories.length })}
                     </span>
                   </div>
                   <p className="text-xs text-slate-300 mt-0.5">
-                    Centralized category definitions synced across all workstations and operator forms
+                    {t('receiving.manageCatsModalSubtitle')}
                   </p>
                 </div>
               </div>
@@ -3534,7 +3873,7 @@ export default function ReceivingModule({
                   setCategorySearchQuery('');
                 }}
                 className="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-white/10 transition cursor-pointer"
-                title="Close"
+                title={t('common.close')}
               >
                 <X className="h-5 w-5" />
               </button>
@@ -3559,12 +3898,12 @@ export default function ReceivingModule({
               {/* Add New Category Form */}
               <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-xl">
                 <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
-                  Create New Category
+                  {t('receiving.createNewCategory')}
                 </label>
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
-                    placeholder="E.G. PACKAGING ACCESSORIES, SUB-ASSEMBLY..."
+                    placeholder={t('receiving.catPlaceholderExample')}
                     value={newCategoryInput}
                     onChange={e => {
                       setNewCategoryInput(e.target.value.toUpperCase());
@@ -3584,7 +3923,7 @@ export default function ReceivingModule({
                     className="bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 shadow-xs cursor-pointer uppercase font-mono"
                   >
                     <Plus className="h-4 w-4" />
-                    <span>Add Category</span>
+                    <span>{t('receiving.addCategoryBtn')}</span>
                   </button>
                 </div>
               </div>
@@ -3594,7 +3933,7 @@ export default function ReceivingModule({
                 <Search className="h-4 w-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                 <input
                   type="text"
-                  placeholder="FILTER CATEGORIES LIST..."
+                  placeholder={t('receiving.filterCatsPlaceholder')}
                   value={categorySearchQuery}
                   onChange={e => setCategorySearchQuery(e.target.value)}
                   className="w-full pl-9 pr-3.5 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 text-xs font-mono uppercase bg-slate-50/50"
@@ -3636,7 +3975,7 @@ export default function ReceivingModule({
                               type="button"
                               onClick={() => handleRenameCategory(cat, editingCategoryNewValue)}
                               className="bg-emerald-600 hover:bg-emerald-700 text-white p-1.5 rounded-lg text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
-                              title="Save rename"
+                              title={t('receiving.saveCatRenameTitle')}
                             >
                               <Check className="h-4 w-4" />
                             </button>
@@ -3644,7 +3983,7 @@ export default function ReceivingModule({
                               type="button"
                               onClick={() => setEditingCategoryOriginal(null)}
                               className="bg-slate-200 hover:bg-slate-300 text-slate-700 p-1.5 rounded-lg text-xs font-bold transition cursor-pointer shrink-0"
-                              title="Cancel"
+                              title={t('common.cancel')}
                             >
                               <X className="h-4 w-4" />
                             </button>
@@ -3661,7 +4000,7 @@ export default function ReceivingModule({
                                   ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' 
                                   : 'bg-slate-100 text-slate-500'
                               }`}>
-                                {inUseCount} {inUseCount === 1 ? 'record' : 'records'}
+                                {inUseCount} {inUseCount === 1 ? t('receiving.recordWord') : t('receiving.recordsWord')}
                               </span>
                             </div>
 
@@ -3674,7 +4013,7 @@ export default function ReceivingModule({
                                   setCategoryModalError('');
                                 }}
                                 className="text-slate-500 hover:text-indigo-600 p-1.5 rounded-lg hover:bg-indigo-50 transition cursor-pointer"
-                                title={`Rename ${cat}`}
+                                title={t('receiving.catRenameTitle')}
                               >
                                 <Pencil className="h-3.5 w-3.5" />
                               </button>
@@ -3686,7 +4025,7 @@ export default function ReceivingModule({
                                     ? 'text-slate-300 hover:text-slate-400 hover:bg-slate-100' 
                                     : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
                                 }`}
-                                title={inUseCount > 0 ? `Cannot delete: in use by ${inUseCount} records` : `Delete ${cat}`}
+                                title={inUseCount > 0 ? t('receiving.catDeleteInUseTitle', { count: inUseCount }) : t('receiving.catDeleteTitle')}
                               >
                                 <Trash2 className="h-3.5 w-3.5" />
                               </button>
@@ -3699,7 +4038,7 @@ export default function ReceivingModule({
 
                 {managedCategories.filter(c => !categorySearchQuery || c.toLowerCase().includes(categorySearchQuery.toLowerCase())).length === 0 && (
                   <div className="p-6 text-center text-slate-400 text-xs font-mono">
-                    No matching categories found.
+                    {t('receiving.noMatchingCategories')}
                   </div>
                 )}
               </div>
@@ -3711,9 +4050,9 @@ export default function ReceivingModule({
                 type="button"
                 onClick={handleResetCategoriesToDefaults}
                 className="text-xs text-slate-500 hover:text-slate-800 font-mono font-bold flex items-center gap-1.5 hover:underline cursor-pointer"
-                title="Restore default factory categories list"
+                title={t('receiving.catConfirmResetTooltip')}
               >
-                <RotateCcw className="h-3.5 w-3.5" /> Reset Defaults
+                <RotateCcw className="h-3.5 w-3.5" /> {t('receiving.resetDefaultsBtn')}
               </button>
               <button
                 type="button"
@@ -3726,7 +4065,7 @@ export default function ReceivingModule({
                 }}
                 className="bg-slate-800 hover:bg-slate-900 text-white px-5 py-2 rounded-xl text-xs font-bold transition font-mono uppercase cursor-pointer"
               >
-                Done
+                {t('receiving.doneBtn')}
               </button>
             </div>
           </div>

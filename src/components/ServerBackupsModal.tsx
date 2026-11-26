@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { getApiBaseUrl, getAuthHeaders } from '../config/serverConfig';
 import type { BackupAuditEntry, BackupItemRecord } from '../types';
+import { useI18n } from '../i18n';
 
 interface ServerBackupsModalProps {
   isOpen: boolean;
@@ -30,6 +31,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
   currentUser = 'ALDRIN BANAWA',
   currentEmployeeId = 'JPMP-002'
 }) => {
+  const { t } = useI18n();
   const [backups, setBackups] = useState<BackupItemRecord[]>([]);
   const [auditLogs, setAuditLogs] = useState<BackupAuditEntry[]>([]);
   const [backupsDir, setBackupsDir] = useState<string>('');
@@ -193,14 +195,14 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm sm:text-base font-bold text-white tracking-tight">
-                  Server Automated Backups & Disaster Recovery
+                  {t('modals.serverBackups.title')}
                 </h2>
                 <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full uppercase">
-                  Super Admin
+                  {t('modals.serverBackups.superAdminBadge')}
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                Automatic 1-hour snapshots & startup backups. Retains every single backup permanently without deletion inside JUWEI_DATA_DIR.
+                {t('modals.serverBackups.subtitle')}
               </p>
             </div>
           </div>
@@ -216,7 +218,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
         <div className="px-5 py-3 bg-slate-800/40 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2 text-slate-300">
             <FolderOpen className="h-4 w-4 text-amber-400 shrink-0" />
-            <span className="text-slate-400">Storage Location:</span>
+            <span className="text-slate-400">{t('modals.serverBackups.storageLocation')}</span>
             <span className="font-mono bg-slate-950/80 px-2 py-0.5 rounded border border-slate-700 text-amber-300 text-[11px] select-all">
               {backupsDir || 'JUWEI_DATA_DIR/backups'}
             </span>
@@ -224,7 +226,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
 
           <div className="flex items-center gap-3">
             <span className="text-[11px] text-slate-400 flex items-center gap-1">
-              <Clock className="h-3.5 w-3.5 text-indigo-400" /> Interval: <strong>Every 1 Hour</strong> • Retention: <strong>Permanent (All Kept)</strong>
+              <Clock className="h-3.5 w-3.5 text-indigo-400" /> {t('modals.serverBackups.intervalNotice')}
             </span>
             <button
               onClick={handleCreateBackup}
@@ -232,7 +234,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
               className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition shadow-sm cursor-pointer"
             >
               {isCreating ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <PlusCircle className="h-3.5 w-3.5" />}
-              Create Backup Now
+              {isCreating ? t('modals.serverBackups.creatingBackup') : t('modals.serverBackups.createBackupNowBtn')}
             </button>
           </div>
         </div>
@@ -263,7 +265,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
                   : 'border-transparent text-slate-400 hover:text-slate-200'
               }`}
             >
-              Available Snapshots ({backups.length})
+              {t('modals.serverBackups.tabSnapshots')} ({backups.length})
             </button>
             <button
               onClick={() => setActiveTab('audit')}
@@ -273,7 +275,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
                   : 'border-transparent text-slate-400 hover:text-slate-200'
               }`}
             >
-              Backup & Restore History Log
+              {t('modals.serverBackups.tabHistory')}
             </button>
           </div>
 
@@ -284,7 +286,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
             title="Refresh backups list"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-            Refresh
+            {t('modals.serverBackups.refreshBtn')}
           </button>
         </div>
 
@@ -294,23 +296,23 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
             backups.length === 0 ? (
               <div className="py-14 text-center space-y-3">
                 <Archive className="h-10 w-10 text-slate-600 mx-auto" />
-                <p className="text-sm font-medium text-slate-400">No backup snapshots found in backups directory.</p>
-                <p className="text-xs text-slate-500">Backups are automatically created on server startup and every 1 hour (non-blocking, permanently kept).</p>
+                <p className="text-sm font-medium text-slate-400">{t('modals.serverBackups.noSnapshotsFound')}</p>
+                <p className="text-xs text-slate-500">{t('modals.serverBackups.noSnapshotsSub')}</p>
                 <button
                   onClick={handleCreateBackup}
                   disabled={isCreating}
                   className="mt-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-4 py-2 rounded-lg inline-flex items-center gap-1.5 transition cursor-pointer"
                 >
-                  <PlusCircle className="h-4 w-4" /> Trigger First Backup Now
+                  <PlusCircle className="h-4 w-4" /> {t('modals.serverBackups.triggerFirstBackupBtn')}
                 </button>
               </div>
             ) : (
               <div className="space-y-2">
                 <div className="grid grid-cols-12 text-[11px] font-mono uppercase tracking-wider text-slate-400 px-3 py-1.5 border-b border-slate-800">
-                  <div className="col-span-6 sm:col-span-5">Snapshot Filename</div>
-                  <div className="col-span-3 sm:col-span-3">Created Timestamp</div>
-                  <div className="col-span-3 sm:col-span-2 text-right">Size</div>
-                  <div className="col-span-12 sm:col-span-2 text-right mt-1 sm:mt-0">Actions</div>
+                  <div className="col-span-6 sm:col-span-5">{t('modals.serverBackups.colFilename')}</div>
+                  <div className="col-span-3 sm:col-span-3">{t('modals.serverBackups.colTimestamp')}</div>
+                  <div className="col-span-3 sm:col-span-2 text-right">{t('modals.serverBackups.colSize')}</div>
+                  <div className="col-span-12 sm:col-span-2 text-right mt-1 sm:mt-0">{t('modals.serverBackups.colActions')}</div>
                 </div>
 
                 {backups.map((item, idx) => (
@@ -338,7 +340,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
                       <button
                         onClick={() => handleDownload(item.filename)}
                         className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
-                        title="Download backup file"
+                        title={t('modals.serverBackups.downloadBtn')}
                       >
                         <Download className="h-3.5 w-3.5" />
                       </button>
@@ -351,7 +353,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
                         className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[11px] font-semibold flex items-center gap-1 transition cursor-pointer"
                         title="Restore this backup to live database"
                       >
-                        <RotateCcw className="h-3 w-3" /> Restore
+                        <RotateCcw className="h-3 w-3" /> {t('modals.serverBackups.restoreBtn')}
                       </button>
                     </div>
                   </div>
@@ -362,7 +364,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
             <div className="space-y-2">
               {auditLogs.length === 0 ? (
                 <div className="py-12 text-center text-slate-500 text-xs">
-                  No backup or restore events logged yet.
+                  {t('modals.serverBackups.noAuditEvents')}
                 </div>
               ) : (
                 <div className="space-y-1.5">
@@ -402,13 +404,13 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
         {/* Modal Footer */}
         <div className="px-5 py-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
           <div>
-            ISO 9001:2015 & IATF 16949 Audit Trail: All automated snapshots and manual restores are committed to immutable disk logs.
+            {t('modals.serverBackups.footerNotice')}
           </div>
           <button 
             onClick={onClose}
             className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg transition font-medium cursor-pointer"
           >
-            Close
+            {t('common.close')}
           </button>
         </div>
 
@@ -424,37 +426,36 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
               </div>
               <div>
                 <h3 className="text-base font-bold text-white uppercase tracking-tight">
-                  Restore Live Central Database?
+                  {t('modals.serverBackups.restoreModalTitle')}
                 </h3>
                 <p className="text-xs text-amber-300">
-                  Destructive Action: Overwrites live warehouse database
+                  {t('modals.serverBackups.restoreModalSubtitle')}
                 </p>
               </div>
             </div>
 
             <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2 text-xs">
               <div className="text-slate-300">
-                Selected Snapshot: <strong className="font-mono text-amber-300">{backupToRestore.filename}</strong>
+                {t('modals.serverBackups.selectedSnapshotLabel')} <strong className="font-mono text-amber-300">{backupToRestore.filename}</strong>
               </div>
               <div className="text-slate-400 text-[11px]">
                 Created: {new Date(backupToRestore.createdAt).toLocaleString()} • Size: {backupToRestore.sizeFormatted}
               </div>
               <p className="text-slate-300 pt-1 border-t border-slate-800/80 leading-relaxed">
-                Overwrites the live database file (<code className="text-amber-200">central-database.sqlite</code>).
-                All connected workstation terminals and mobile devices will be updated immediately via real-time WebSocket broadcast.
+                {t('modals.serverBackups.restoreWarningText')}
               </p>
             </div>
 
             {/* Super Admin PIN Confirmation */}
             <div className="space-y-1.5">
               <label className="text-xs text-slate-300 font-semibold flex items-center gap-1.5">
-                <Lock className="h-3.5 w-3.5 text-emerald-400" /> Super Admin Security PIN
+                <Lock className="h-3.5 w-3.5 text-emerald-400" /> {t('modals.serverBackups.superAdminPinLabel')}
               </label>
               <input
                 type="password"
                 value={adminPin}
                 onChange={(e) => setAdminPin(e.target.value)}
-                placeholder="Enter Super Admin PIN"
+                placeholder={t('modals.serverBackups.pinPlaceholder')}
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm font-mono text-white focus:outline-none focus:border-amber-400"
               />
             </div>
@@ -467,7 +468,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
                 onChange={(e) => setIsConfirmChecked(e.target.checked)}
                 className="mt-0.5 rounded border-slate-700 text-amber-500 focus:ring-amber-500 cursor-pointer"
               />
-              <span>I confirm that I want to overwrite the current live database with this snapshot.</span>
+              <span>{t('modals.serverBackups.confirmCheckboxText')}</span>
             </label>
 
             {/* Action Buttons */}
@@ -480,7 +481,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
                 disabled={isRestoring}
                 className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
               >
-                Cancel
+                {t('modals.serverBackups.cancelBtn')}
               </button>
               <button
                 onClick={handleExecuteRestore}
@@ -488,7 +489,7 @@ export const ServerBackupsModal: React.FC<ServerBackupsModalProps> = ({
                 className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-lg shadow-amber-600/20"
               >
                 {isRestoring ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-                {isRestoring ? 'Restoring Database...' : 'CONFIRM & OVERWRITE LIVE DATABASE'}
+                {isRestoring ? t('modals.serverBackups.restoringBtn') : t('modals.serverBackups.confirmOverwriteBtn')}
               </button>
             </div>
           </div>

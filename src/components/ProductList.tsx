@@ -15,8 +15,10 @@ import { Product } from '../types/product';
 import { fetchProducts, upsertProduct } from '../database/products';
 import { subscribeToProducts } from '../database/realtime';
 import { getAllSelectUomOptions, MISSING_UNIT_LABEL, normalizeUnitCode } from '../../shared/units';
+import { useI18n } from '../i18n';
 
 export const ProductList: React.FC = () => {
+  const { t } = useI18n();
   const [products, setProducts] = useState<Product[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -90,7 +92,7 @@ export const ProductList: React.FC = () => {
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
           <input
             type="text"
-            placeholder="Search by SKU, part name, or barcode..."
+            placeholder={t('products.searchPlaceholder')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-10 pr-4 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
@@ -110,7 +112,7 @@ export const ProductList: React.FC = () => {
             className="flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs transition-all cursor-pointer"
           >
             <Plus className="w-4 h-4" />
-            Add Master SKU
+            {t('products.addMasterSku')}
           </button>
         </div>
       </div>
@@ -142,7 +144,7 @@ export const ProductList: React.FC = () => {
 
             <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 grid grid-cols-2 gap-2 text-xs">
               <div>
-                <span className="text-slate-400 text-[10px] uppercase">Unit</span>
+                <span className="text-slate-400 text-[10px] uppercase">{t('products.labelUnit')}</span>
                 <div className="font-semibold text-slate-700 dark:text-slate-300">
                   {resolvedUnit || (
                     <span className="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-500 border border-rose-500/30 text-[10px] font-mono">
@@ -152,7 +154,7 @@ export const ProductList: React.FC = () => {
                 </div>
               </div>
               <div>
-                <span className="text-slate-400 text-[10px] uppercase">Min Safety Stock</span>
+                <span className="text-slate-400 text-[10px] uppercase">{t('products.minSafetyStock')}</span>
                 <div className="font-semibold text-slate-700 dark:text-slate-300">
                   {prod.min_stock} {resolvedUnit || MISSING_UNIT_LABEL}
                 </div>
@@ -167,14 +169,14 @@ export const ProductList: React.FC = () => {
       {typeof document !== 'undefined' && isModalOpen && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-3 sm:p-4 overflow-y-auto">
           <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 my-auto max-h-[calc(100vh-2rem)] overflow-y-auto">
-            <h3 className="text-base font-bold text-slate-900 dark:text-white mb-4">Register Master Product SKU</h3>
+            <h3 className="text-base font-bold text-slate-900 dark:text-white mb-4">{t('products.modalTitle')}</h3>
             <form onSubmit={handleSave} className="space-y-3 text-xs">
               <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Part SKU / Code</label>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">{t('products.labelSku')}</label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. RAW-RESIN-001"
+                  placeholder={t('products.skuPlaceholder')}
                   value={sku}
                   onChange={(e) => setSku(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800"
@@ -182,11 +184,11 @@ export const ProductList: React.FC = () => {
               </div>
 
               <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Material Name</label>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">{t('products.labelMaterialName')}</label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Polypropylene Granules"
+                  placeholder={t('products.namePlaceholder')}
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800"
@@ -195,24 +197,24 @@ export const ProductList: React.FC = () => {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Barcode</label>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">{t('products.labelBarcode')}</label>
                   <input
                     type="text"
-                    placeholder="Barcode string"
+                    placeholder={t('products.barcodePlaceholder')}
                     value={barcode}
                     onChange={(e) => setBarcode(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800"
                   />
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Unit</label>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">{t('products.labelUnit')}</label>
                   <select
                     value={unit}
                     onChange={(e) => setUnit(e.target.value)}
                     required
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800"
                   >
-                    <option value="">-- Select Unit --</option>
+                    <option value="">{t('products.selectUnitOption')}</option>
                     {getAllSelectUomOptions(unit).map((u) => (
                       <option key={u} value={u}>{u}</option>
                     ))}
@@ -222,7 +224,7 @@ export const ProductList: React.FC = () => {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Category</label>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">{t('products.labelCategory')}</label>
                   <select
                     value={category}
                     onChange={(e) => setCategory(e.target.value)}
@@ -236,7 +238,7 @@ export const ProductList: React.FC = () => {
                   </select>
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Min Safety Stock</label>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">{t('products.minSafetyStock')}</label>
                   <input
                     type="number"
                     value={minStock}
@@ -252,14 +254,14 @@ export const ProductList: React.FC = () => {
                   onClick={() => setIsModalOpen(false)}
                   className="px-4 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-800 cursor-pointer"
                 >
-                  Cancel
+                  {t('products.cancelBtn')}
                 </button>
                 <button
                   type="submit"
                   disabled={saving}
                   className="px-5 py-2 text-xs font-bold rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer"
                 >
-                  {saving ? 'Saving...' : 'Save Product'}
+                  {saving ? t('products.savingBtn') : t('products.saveBtn')}
                 </button>
               </div>
             </form>

@@ -8,6 +8,7 @@ import { createPortal } from 'react-dom';
 import { Database, RefreshCw, CheckCircle2, Activity } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { getApiBaseUrl, getCentralServerUrl } from '../config/serverConfig';
+import { useI18n } from '../i18n';
 
 interface CentralDatabaseModalProps {
   isOpen: boolean;
@@ -32,6 +33,7 @@ export default function CentralDatabaseModal({
   totalRecordsCount = 0,
   totalUsersCount = 1,
 }: CentralDatabaseModalProps) {
+  const { t } = useI18n();
   const [isChecking, setIsChecking] = useState(false);
 
   const checkServerHealth = async () => {
@@ -79,10 +81,10 @@ export default function CentralDatabaseModal({
                 </div>
                 <div>
                   <h3 className="font-extrabold text-base text-white tracking-wide">
-                    Central Database & Realtime Engine
+                    {t('modals.centralDb.title')}
                   </h3>
                   <p className="text-xs text-slate-400">
-                    Self-hosted authoritative single source of truth for all terminals
+                    {t('modals.centralDb.subtitle')}
                   </p>
                 </div>
               </div>
@@ -104,10 +106,10 @@ export default function CentralDatabaseModal({
                 </div>
                 <div>
                   <h4 className="font-bold text-slate-200 text-xs uppercase tracking-wider">
-                    Pure Centralized Architecture Active
+                    {t('modals.centralDb.archBannerTitle')}
                   </h4>
                   <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-                    All operator accounts, PINs, inventory stocks, and transactions are committed directly to the central backend database on the server before WebSocket events are broadcast. No third-party cloud services, Supabase, or unauthoritative client caches are used.
+                    {t('modals.centralDb.archBannerDesc')}
                   </p>
                 </div>
               </div>
@@ -116,7 +118,7 @@ export default function CentralDatabaseModal({
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="p-3 bg-slate-950/60 border border-slate-800 rounded-xl">
                   <span className="text-[10px] font-mono uppercase text-slate-400 font-bold block">
-                    WebSocket Status
+                    {t('modals.centralDb.wsStatusLabel')}
                   </span>
                   <div className="flex items-center gap-1.5 mt-1.5">
                     <span
@@ -136,7 +138,7 @@ export default function CentralDatabaseModal({
 
                 <div className="p-3 bg-slate-950/60 border border-slate-800 rounded-xl">
                   <span className="text-[10px] font-mono uppercase text-slate-400 font-bold block">
-                    Reset Version
+                    {t('modals.centralDb.resetVersionLabel')}
                   </span>
                   <span className="font-mono font-bold text-xs text-indigo-400 mt-1.5 block">
                     v{systemResetVersion}
@@ -145,7 +147,7 @@ export default function CentralDatabaseModal({
 
                 <div className="p-3 bg-slate-950/60 border border-slate-800 rounded-xl">
                   <span className="text-[10px] font-mono uppercase text-slate-400 font-bold block">
-                    Total Records
+                    {t('modals.centralDb.totalRecordsLabel')}
                   </span>
                   <span className="font-mono font-bold text-xs text-white mt-1.5 block">
                     {totalRecordsCount} Items
@@ -154,7 +156,7 @@ export default function CentralDatabaseModal({
 
                 <div className="p-3 bg-slate-950/60 border border-slate-800 rounded-xl">
                   <span className="text-[10px] font-mono uppercase text-slate-400 font-bold block">
-                    Authorized Users
+                    {t('modals.centralDb.authorizedUsersLabel')}
                   </span>
                   <span className="font-mono font-bold text-xs text-white mt-1.5 block">
                     {totalUsersCount} Operators
@@ -165,24 +167,24 @@ export default function CentralDatabaseModal({
               {/* Server Details */}
               <div className="space-y-2">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                  Backend Server Identity
+                  {t('modals.centralDb.serverIdentityTitle')}
                 </h4>
                 <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-3 space-y-2 font-mono text-xs text-slate-300">
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-500">Central Endpoint:</span>
+                    <span className="text-slate-500">{t('modals.centralDb.centralEndpointLabel')}</span>
                     <span className="text-emerald-400 font-bold truncate max-w-[280px]" title={getCentralServerUrl()}>{getCentralServerUrl()}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-500">Service:</span>
+                    <span className="text-slate-500">{t('modals.centralDb.serviceLabel')}</span>
                     <span className="text-slate-200">Express REST + WS Server</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-500">System Reset ID:</span>
+                    <span className="text-slate-500">{t('modals.centralDb.resetIdLabel')}</span>
                     <span className="text-slate-200 truncate max-w-[200px]">{systemResetId || 'RESET-INIT'}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-500">Durability Mode:</span>
-                    <span className="text-emerald-400">Synchronous Disk Commit Before Broadcast</span>
+                    <span className="text-slate-500">{t('modals.centralDb.durabilityModeLabel')}</span>
+                    <span className="text-emerald-400">{t('modals.centralDb.durabilityModeValue')}</span>
                   </div>
                 </div>
               </div>
@@ -197,7 +199,7 @@ export default function CentralDatabaseModal({
                 className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition px-3 py-2 rounded-lg hover:bg-slate-800"
               >
                 <Activity className={`w-3.5 h-3.5 ${isChecking ? 'animate-spin' : ''}`} />
-                Check Server Health
+                {t('modals.centralDb.checkHealthBtn')}
               </button>
               <div className="flex items-center gap-2">
                 <button
@@ -207,14 +209,14 @@ export default function CentralDatabaseModal({
                   className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white transition disabled:opacity-50"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isManualSyncing ? 'animate-spin' : ''}`} />
-                  Resync from Central DB
+                  {t('modals.centralDb.resyncBtn')}
                 </button>
                 <button
                   type="button"
                   onClick={onClose}
                   className="px-4 py-2 text-xs font-bold rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
                 >
-                  Close
+                  {t('common.close')}
                 </button>
               </div>
             </div>

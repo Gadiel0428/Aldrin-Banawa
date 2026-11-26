@@ -9,6 +9,7 @@ import { syncManager, getMutationQueue } from '../sync/syncManager';
 import { SyncStatusInfo } from '../types/sync';
 import { QueuedMutation } from '../types';
 import { getCentralServerUrl } from '../config/serverConfig';
+import { useI18n } from '../i18n';
 
 interface SyncStatusProps {
   onOpenSettings?: () => void;
@@ -21,6 +22,7 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
   onOpenDiagnostics,
   onOpenConflicts,
 }) => {
+  const { t, dateLocale } = useI18n();
   const [status, setStatus] = useState<SyncStatusInfo>(syncManager.getStatus());
   const [isOpen, setIsOpen] = useState(false);
   const [queueItems, setQueueItems] = useState<QueuedMutation[]>(() => getMutationQueue());
@@ -55,7 +57,7 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
         bg: 'bg-rose-600/15 text-rose-700 border-rose-500/40 dark:bg-rose-950/60 dark:text-rose-300',
         dot: 'bg-rose-600',
         icon: <Ban className="w-3.5 h-3.5" />,
-        label: 'This computer was removed from the system',
+        label: t('auth.deviceRevoked'),
       };
     }
     if (status.state === 'SYNCING' || isRefreshing) {
@@ -63,7 +65,7 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
         bg: 'bg-amber-500/10 text-amber-600 border-amber-500/30 dark:bg-amber-500/20 dark:text-amber-400',
         dot: 'bg-amber-500 animate-spin',
         icon: <RefreshCw className="w-3.5 h-3.5 animate-spin" />,
-        label: pendingCount > 0 ? `${pendingCount} changes waiting` : 'Synchronizing...',
+        label: pendingCount > 0 ? t('sync.changesWaiting', { count: pendingCount }) : t('sync.synchronizing'),
       };
     }
     if (!status.isOnline || status.state === 'OFFLINE') {
@@ -71,7 +73,7 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
         bg: 'bg-orange-500/10 text-orange-600 border-orange-500/30 dark:bg-orange-500/20 dark:text-orange-400',
         dot: 'bg-orange-500',
         icon: <WifiOff className="w-3.5 h-3.5" />,
-        label: pendingCount > 0 ? `Offline (${pendingCount} changes waiting)` : 'Offline Mode',
+        label: pendingCount > 0 ? t('sync.offlineWaiting', { count: pendingCount }) : t('sync.offlineMode'),
       };
     }
     if (status.state === 'ERROR' || conflictCount > 0) {
@@ -79,14 +81,17 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
         bg: 'bg-rose-500/10 text-rose-600 border-rose-500/30 dark:bg-rose-500/20 dark:text-rose-400',
         dot: 'bg-rose-500',
         icon: <AlertCircle className="w-3.5 h-3.5" />,
-        label: `${pendingCount} changes waiting (${conflictCount} conflict${conflictCount === 1 ? '' : 's'})`,
+        label:
+          conflictCount === 1
+            ? t('sync.conflictsWaiting', { count: pendingCount, conflicts: conflictCount })
+            : t('sync.conflictsWaitingPlural', { count: pendingCount, conflicts: conflictCount }),
       };
     }
     return {
       bg: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/30 dark:bg-emerald-500/20 dark:text-emerald-300',
       dot: 'bg-emerald-500 animate-pulse',
       icon: <Wifi className="w-3.5 h-3.5" />,
-      label: pendingCount > 0 ? `${pendingCount} changes waiting` : 'Online • Live Sync',
+      label: pendingCount > 0 ? t('sync.changesWaiting', { count: pendingCount }) : t('sync.onlineLive'),
     };
   };
 
@@ -99,8 +104,8 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
         type="button"
         onClick={() => setIsOpen(!isOpen)}
         className={`inline-flex items-center justify-center w-8 h-8 rounded-xl border transition-all shadow-xs hover:shadow-md cursor-pointer relative shrink-0 ${badge.bg}`}
-        title={`Sync Status: ${badge.label} • Central Server: ${getCentralServerUrl()} (Click for details & diagnostics)`}
-        aria-label={`Sync Status: ${badge.label}`}
+        title={t('sync.statusTooltip', { label: badge.label, server: getCentralServerUrl() })}
+        aria-label={badge.label}
       >
         <span className="relative flex items-center justify-center shrink-0">
           {badge.icon}
@@ -118,7 +123,7 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
           <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-100 dark:border-slate-800">
             <div className="flex items-center gap-2">
               <Database className="w-4 h-4 text-indigo-500" />
-              <span className="font-bold text-sm">Centralized Sync Engine</span>
+              <span className="font-bold text-sm">{t('sync.engineTitle')}</span>
             </div>
             <button
               onClick={handleForceSync}
@@ -126,14 +131,14 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
               className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:hover:bg-indigo-900 dark:text-indigo-300 transition-colors disabled:opacity-50"
             >
               <RefreshCw className={`w-3 h-3 ${isRefreshing ? 'animate-spin' : ''}`} />
-              Sync Now
+              {t('sync.syncNow')}
             </button>
           </div>
 
           {status.isRevoked && (
             <div className="mb-3 p-2.5 rounded-lg bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-semibold flex items-center gap-2">
               <Ban className="w-4 h-4 shrink-0" />
-              <span>This computer was removed from the system</span>
+              <span>{t('auth.deviceRevoked')}</span>
             </div>
           )}
 
@@ -141,7 +146,7 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
             <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 dark:bg-slate-800/60">
               <div className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
                 <Globe className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Central Endpoint</span>
+                <span>{t('sync.endpoint')}</span>
               </div>
               <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400 truncate max-w-[180px]" title={getCentralServerUrl()}>
                 {getCentralServerUrl()}
@@ -151,7 +156,7 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
             <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 dark:bg-slate-800/60">
               <div className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
                 <Laptop className="w-3.5 h-3.5 text-slate-400" />
-                <span>Device ID</span>
+                <span>{t('sync.deviceId')}</span>
               </div>
               <span className="font-mono font-bold text-slate-900 dark:text-slate-200">{status.deviceId}</span>
             </div>
@@ -159,18 +164,18 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
             <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 dark:bg-slate-800/60">
               <div className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-                <span>Single Source of Truth</span>
+                <span>{t('sync.singleSource')}</span>
               </div>
-              <span className="font-semibold text-emerald-600 dark:text-emerald-400">Central Backend Database</span>
+              <span className="font-semibold text-emerald-600 dark:text-emerald-400">{t('sync.centralDb')}</span>
             </div>
 
             <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 dark:bg-slate-800/60">
               <div className="flex items-center gap-2 text-slate-600 dark:text-slate-400">
                 <Clock className="w-3.5 h-3.5 text-slate-400" />
-                <span>Last Synchronized</span>
+                <span>{t('sync.lastSynced')}</span>
               </div>
               <span className="text-slate-700 dark:text-slate-300">
-                {status.lastSyncTimestamp ? new Date(status.lastSyncTimestamp).toLocaleTimeString() : 'Never'}
+                {status.lastSyncTimestamp ? new Date(status.lastSyncTimestamp).toLocaleTimeString(dateLocale) : t('sync.never')}
               </span>
             </div>
           </div>
@@ -179,7 +184,7 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
           <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800">
             <div className="flex items-center justify-between mb-2">
               <span className="font-bold text-xs uppercase tracking-wider text-slate-500">
-                {pendingCount > 0 ? `${pendingCount} changes waiting` : '0 changes waiting'}
+                {t('sync.changesWaiting', { count: pendingCount })}
               </span>
               {conflictCount > 0 && onOpenConflicts && (
                 <button
@@ -190,7 +195,9 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
                   }}
                   className="text-[10px] font-bold text-rose-600 hover:text-rose-500 dark:text-rose-400 cursor-pointer"
                 >
-                  Review {conflictCount} Conflict{conflictCount === 1 ? '' : 's'}
+                  {conflictCount === 1
+                    ? t('sync.reviewConflicts', { count: conflictCount })
+                    : t('sync.reviewConflictsPlural', { count: conflictCount })}
                 </button>
               )}
             </div>
@@ -198,7 +205,7 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
             {queueItems.length === 0 ? (
               <div className="flex items-center gap-2 py-3 px-2 text-xs text-slate-400 dark:text-slate-500 italic">
                 <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                <span>All changes confirmed by central server.</span>
+                <span>{t('sync.allConfirmed')}</span>
               </div>
             ) : (
               <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
@@ -229,12 +236,12 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
                         </span>
                       </div>
                       <div className="text-slate-500 dark:text-slate-400 mt-1 truncate">
-                        Record: <span className="font-mono">{String(targetRecordId).slice(0, 20)}</span>
-                        {item.retryCount ? ` • Retries: ${item.retryCount}` : ''}
+                        {t('sync.record')} <span className="font-mono">{String(targetRecordId).slice(0, 20)}</span>
+                        {item.retryCount ? t('sync.retries', { count: item.retryCount }) : ''}
                       </div>
                       {item.lastError && (
                         <div className="text-rose-600 dark:text-rose-400 mt-1 text-[10px] truncate" title={item.lastError}>
-                          Err: {item.lastError}
+                          {t('sync.errorPrefix', { error: item.lastError })}
                         </div>
                       )}
                     </div>
@@ -255,7 +262,7 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
                 className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-600 hover:text-emerald-500 dark:text-emerald-400 dark:hover:text-emerald-300 transition-colors cursor-pointer"
               >
                 <Activity className="w-3.5 h-3.5" />
-                Startup Diagnostics
+                {t('sync.startupDiagnostics')}
               </button>
             )}
             {onOpenSettings && (
@@ -268,7 +275,7 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
                 className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 transition-colors cursor-pointer ml-auto"
               >
                 <Settings2 className="w-3.5 h-3.5" />
-                Central Database
+                {t('sync.centralDatabase')}
               </button>
             )}
           </div>

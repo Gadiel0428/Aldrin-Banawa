@@ -7,7 +7,14 @@
 
 import fs from "fs";
 import type { Express, Request, Response } from "express";
-import type { AuthorizedDevice, ChatMessage, RegisteredAccount } from "../../shared/types.ts";
+import type {
+  AuthorizedDevice,
+  ChatMessage,
+  PrintCheckDocVerification,
+  PrintCheckDocumentType,
+  PrintCheckLogEntry,
+  RegisteredAccount,
+} from "../../shared/types.ts";
 import logger from "../../src/lib/logger.ts";
 import {
   mapAccountToApi,
@@ -25,13 +32,14 @@ import {
 } from "../config.ts";
 import type { ServerContext } from "../services/context.ts";
 import { MAX_AUDIT_TRAIL_ENTRIES } from "../services/context.ts";
-import { recordAuditTrail } from "../services/auditService.ts";
+import { appendPrintCheckLog, recordAuditTrail } from "../services/auditService.ts";
 import {
   ensureSuperAdminSeed,
   extractDeviceIdFromHttp,
   isAuthorizedSuperAdmin,
   isDeviceRevoked,
   rejectIfDeviceRevokedHttp,
+  resolveRequestAuthContext,
 } from "../services/authService.ts";
 import { commitDatabase } from "../services/backupService.ts";
 import {
@@ -701,5 +709,155 @@ export function registerAdminRoutes(app: Express, ctx: ServerContext): void {
     } catch (err: any) {
       return res.status(500).json({ error: err?.message || "Failed to rebuild stock movements" });
     }
+  });
+
+  // Print Check Calibration & Verification Logs
+  app.get("/api/print-check-logs", (req: Request, res: Response) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
+    return res.json({
+      success: true,
+      total: ctx.printCheckLogs.length,
+      logs: ctx.printCheckLogs,
+    });
+  });
+
+  app.post("/api/print-check-logs", (req: Request, res: Response) => {
+    if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
+    const auth = resolveRequestAuthContext(ctx, req);
+    if (auth.permission === "VIEW_ONLY") {
+      return res.status(403).json({
+        error: "PERMISSION_DENIED: Accounts with VIEW_ONLY privileges cannot log print checks.",
+      });
+    }
+
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const printer = String(body.printer || "").trim().slice(0, 120);
+    if (!printer) {
+      return res.status(400).json({ error: "Printer name is required." });
+    }
+
+    const validDocTypes = new Set<PrintCheckDocumentType>([
+      "REQUISITION",
+      "PICKING_LIST",
+      "GATE_PASS",
+      "QR_BADGE",
+    ]);
+
+    const rawDocs: unknown[] = Array.isArray(body.documents) ? body.documents : [];
+    if (rawDocs.length === 0 || rawDocs.length > 4) {
+      return res.status(400).json({ error: "Document verification records are required." });
+    }
+
+    const sanitizedDocs: PrintCheckDocVerification[] = [];
+    const seenDocTypes = new Set<PrintCheckDocumentType>();
+
+    for (const item of rawDocs) {
+      if (!item || typeof item !== "object") {
+        return res.status(400).json({ error: "Invalid document verification entry." });
+      }
+      const d = item as Record<string, unknown>;
+      const docType = String(d.docType || "").trim().toUpperCase() as PrintCheckDocumentType;
+      if (!validDocTypes.has(docType) || seenDocTypes.has(docType)) {
+        return res.status(400).json({ error: `Invalid or duplicate document type: ${docType}` });
+      }
+      seenDocTypes.add(docType);
+
+      const expectedCode = String(d.expectedCode || "").trim().slice(0, 120);
+      const scannedCode = String(d.scannedCode || "").trim().slice(0, 120);
+      if (!expectedCode) {
+        return res.status(400).json({ error: `Missing expected sample code for ${docType}.` });
+      }
+      const exactMatch =
+        scannedCode.length > 0 &&
+        scannedCode.toUpperCase() === expectedCode.toUpperCase();
+      const confirmedMatch = Boolean(d.confirmedMatch) && exactMatch;
+
+      sanitizedDocs.push({
+        docType,
+        expectedCode,
+        scannedCode,
+        confirmedMatch,
+        ...(d.scannedAt ? { scannedAt: String(d.scannedAt).slice(0, 64) } : {}),
+      });
+    }
+
+    const matchedCount = sanitizedDocs.filter((d) => d.confirmedMatch).length;
+    const totalCount = sanitizedDocs.length;
+    const overallStatus: "PASS" | "FAIL" =
+      totalCount === 4 && matchedCount === 4 ? "PASS" : "FAIL";
+
+    const checkedAt = new Date().toISOString();
+    const rawDate = String(body.checkedDate || "").trim();
+    const checkedDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
+      ? rawDate
+      : new Intl.DateTimeFormat("en-CA", {
+          timeZone: "Asia/Manila",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }).format(new Date());
+
+    const meta = mapRequestMetaFromApi(req);
+    const operatorName = String(
+      auth.account?.username || body.operatorName || meta.author || "OPERATOR"
+    )
+      .trim()
+      .slice(0, 80);
+    const operatorEmployeeId = String(
+      auth.employeeId || body.operatorEmployeeId || meta.employeeId || ""
+    )
+      .trim()
+      .toUpperCase()
+      .slice(0, 32);
+    const stationId = body.stationId ? String(body.stationId).trim().slice(0, 64) : undefined;
+    const notes = body.notes ? String(body.notes).trim().slice(0, 280) : undefined;
+
+    const entry: PrintCheckLogEntry = {
+      id: `PCHK-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+      checkedDate,
+      checkedAt,
+      printer,
+      operatorName,
+      operatorEmployeeId,
+      ...(stationId ? { stationId } : {}),
+      ...(meta.deviceId ? { deviceId: meta.deviceId } : {}),
+      overallStatus,
+      matchedCount,
+      totalCount,
+      documents: sanitizedDocs,
+      ...(notes ? { notes } : {}),
+    };
+
+    appendPrintCheckLog(ctx, entry);
+
+    recordAuditTrail(ctx, {
+      timestamp: checkedAt,
+      actor: operatorName,
+      actorId: operatorEmployeeId || operatorName,
+      action: "PRINT_CHECK",
+      recordType: "printCheck",
+      recordId: entry.id,
+      summary: `Print check ${overallStatus} on "${printer}" (${matchedCount}/${totalCount} documents confirmed)`,
+      details: sanitizedDocs
+        .map(
+          (d) =>
+            `${d.docType}: expected=${d.expectedCode}, scanned=${d.scannedCode || "NONE"}, confirmed=${d.confirmedMatch}`
+        )
+        .join(" | "),
+      deviceId: meta.deviceId || undefined,
+    });
+
+    broadcast(ctx, {
+      type: "PRINT_CHECK_LOGGED",
+      entry,
+      systemResetVersion: ctx.systemResetVersion,
+    });
+
+    return res.json({
+      success: true,
+      entry,
+      logs: ctx.printCheckLogs,
+    });
   });
 }

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { Monitor, Download, X, ShieldCheck, Cpu, FileCode2, CheckCircle2 } from 'lucide-react';
 import { getPublicAppUrl } from '../config/serverConfig';
+import { useI18n } from '../i18n';
 
 interface DesktopInstallModalProps {
   isOpen: boolean;
@@ -10,6 +11,7 @@ interface DesktopInstallModalProps {
 }
 
 export default function DesktopInstallModal({ isOpen, onClose }: DesktopInstallModalProps) {
+  const { t } = useI18n();
   const [copiedCmd, setCopiedCmd] = useState(false);
 
   const getAppUrl = () => {
@@ -456,13 +458,13 @@ $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <h2 className="text-lg font-extrabold tracking-tight text-white">JUWEI WMS Desktop Installer</h2>
+                    <h2 className="text-lg font-extrabold tracking-tight text-white">{t('modals.desktopInstall.title')}</h2>
                     <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-mono font-bold rounded-full">
-                      Windows 10/11 Verified
+                      {t('modals.desktopInstall.winVerifiedBadge')}
                     </span>
                   </div>
                   <p className="text-xs text-slate-300 mt-0.5">
-                    Install JUWEI Warehouse Management System as a Standalone Windows Application
+                    {t('modals.desktopInstall.subtitle')}
                   </p>
                 </div>
               </div>
@@ -482,7 +484,7 @@ $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
               <div className="p-3 bg-emerald-950/60 border border-emerald-500/40 rounded-xl flex items-center gap-2.5 text-emerald-300">
                 <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
                 <span className="text-[11px] font-medium leading-snug">
-                  <strong>Standalone Direct Access:</strong> No Gmail or Google account login is required on fresh install, launch, or update. Operators sign in directly with internal credentials.
+                  {t('modals.desktopInstall.directAccessNotice')}
                 </span>
               </div>
 
@@ -490,22 +492,22 @@ $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
               <div className="p-4 bg-blue-950 border-2 border-emerald-500/80 rounded-xl space-y-3 shadow-lg">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-emerald-300 font-bold text-sm">
-                    <FileCode2 className="h-4 w-4 text-emerald-400" /> Option 1: 1-Click .BAT Windows Installer
+                    <FileCode2 className="h-4 w-4 text-emerald-400" /> {t('modals.desktopInstall.opt1Title')}
                   </div>
                   <span className="px-2 py-0.5 bg-emerald-800 text-emerald-100 border border-emerald-500 rounded text-[10px] font-mono font-bold">
-                    RECOMMENDED &bull; 100% WORKS
+                    {t('modals.desktopInstall.opt1Recommended')}
                   </span>
                 </div>
 
                 <p className="text-blue-100 leading-relaxed text-[11px]">
-                  Downloads <code>Install-JUWEI-WMS-Desktop.bat</code>. Simply <strong>double-click</strong> the downloaded file to automatically compile <code>JUWEI-WMS-Desktop.exe</code> and create the desktop shortcut! No PowerShell security warnings or execution policy issues.
+                  {t('modals.desktopInstall.opt1Desc')}
                 </p>
 
                 <button
                   onClick={downloadBatInstaller}
                   className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 text-xs transition cursor-pointer"
                 >
-                  <Download className="h-4 w-4" /> Download Install-JUWEI-WMS-Desktop.bat (1-Click)
+                  <Download className="h-4 w-4" /> {t('modals.desktopInstall.opt1DownloadBtn')}
                 </button>
               </div>
 
@@ -513,15 +515,15 @@ $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
               <div className="p-4 bg-blue-950 border border-blue-700 rounded-xl space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-white font-bold text-sm">
-                    <Cpu className="h-4 w-4 text-blue-300" /> Option 2: Generate JUWEI-WMS-Desktop.exe (PowerShell)
+                    <Cpu className="h-4 w-4 text-blue-300" /> {t('modals.desktopInstall.opt2Title')}
                   </div>
                   <span className="px-2 py-0.5 bg-blue-800 text-blue-100 border border-blue-600 rounded text-[10px] font-mono font-bold">
-                    FIXED .PS1
+                    {t('modals.desktopInstall.opt2Badge')}
                   </span>
                 </div>
 
                 <p className="text-blue-100 leading-relaxed text-[11px]">
-                  Downloads the updated <code>Build-JUWEI-WMS-EXE.ps1</code> script with fixed assembly bindings and C# GUI output types.
+                  {t('modals.desktopInstall.opt2Desc')}
                 </p>
 
                 <div className="flex gap-2">
@@ -529,14 +531,14 @@ $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
                     onClick={downloadExeCompilerScript}
                     className="flex-1 py-2.5 px-3 bg-blue-800 hover:bg-blue-700 text-white border border-blue-600 font-bold rounded-xl flex items-center justify-center gap-2 text-xs transition cursor-pointer"
                   >
-                    <Download className="h-4 w-4 text-blue-200" /> Download Build-JUWEI-WMS-EXE.ps1
+                    <Download className="h-4 w-4 text-blue-200" /> {t('modals.desktopInstall.opt2DownloadBtn')}
                   </button>
                   <button
                     onClick={copyPowerShellBypassCommand}
                     className="px-3 py-2.5 bg-blue-900 hover:bg-blue-800 text-blue-200 border border-blue-700 font-mono text-[11px] rounded-xl transition cursor-pointer"
                     title="Copy PowerShell Bypass Command"
                   >
-                    {copiedCmd ? 'Copied!' : 'Copy PS Command'}
+                    {copiedCmd ? t('modals.desktopInstall.opt2CopiedCmdBtn') : t('modals.desktopInstall.opt2CopyCmdBtn')}
                   </button>
                 </div>
               </div>
@@ -552,7 +554,7 @@ $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
                 onClick={onClose}
                 className="px-4 py-2 bg-blue-800 hover:bg-blue-700 text-white border border-blue-600 rounded-xl text-xs font-bold transition cursor-pointer"
               >
-                Close
+                {t('common.close')}
               </button>
             </div>
 

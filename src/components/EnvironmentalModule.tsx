@@ -26,6 +26,7 @@ import { EnvironmentalLog, StorageZone, MasterRegistryItem } from '../types';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { generateAuthoritativeId } from '../lib/idGenerator';
 import { showPrintToast } from '../utils/printDocument';
+import { useI18n } from '../i18n';
 
 interface EnvironmentalModuleProps {
   envLogs: EnvironmentalLog[];
@@ -66,6 +67,7 @@ export default function EnvironmentalModule({
   currentUserRole = '',
   currentUser = ''
 }: EnvironmentalModuleProps) {
+  const { t } = useI18n();
   const effectiveCanEdit = canEdit || isSuperAdmin;
   const [activeTab, setActiveTab] = useState<'audits' | 'locations'>('audits');
   const [showForm, setShowForm] = useState(false);
@@ -250,17 +252,17 @@ export default function EnvironmentalModule({
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded border border-indigo-500/30">
-              FACILITY & SLOTS UTILIZATION
+              {t('environmental.bannerBadge')}
             </span>
             <span className="text-emerald-400 text-[10px] font-bold flex items-center gap-1 font-mono">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse inline-block" /> MONITORED
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse inline-block" /> {t('environmental.monitoredTag')}
             </span>
           </div>
           <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
-            <Boxes className="h-6 w-6 text-indigo-400" /> Storage Space & Slot Utilization
+            <Boxes className="h-6 w-6 text-indigo-400" /> {t('environmental.bannerTitle')}
           </h2>
           <p className="text-xs text-slate-300 mt-1">
-            Monitor density across active storage zones, audit pallet slot allocation limits, and verify core warehouse safety rules.
+            {t('environmental.bannerSubtitle')}
           </p>
         </div>
       </div>
@@ -268,21 +270,21 @@ export default function EnvironmentalModule({
       {/* Overview Analytics row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" id="space-overview-cards">
         <div className="p-4 bg-white border border-slate-200 rounded-xl shadow-sm space-y-1">
-          <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Warehouse Capacity</span>
+          <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">{t('environmental.whCapacity')}</span>
           <div className="flex items-baseline gap-2">
             <span className="text-2xl font-bold font-mono text-slate-800">{overallOccupied}</span>
-            <span className="text-xs text-slate-400 font-semibold">/ {overallTotal} Slots</span>
+            <span className="text-xs text-slate-400 font-semibold">{t('environmental.slotsUnit', { total: overallTotal })}</span>
           </div>
-          <p className="text-[10px] text-slate-500">Live active slot occupation</p>
+          <p className="text-[10px] text-slate-500">{t('environmental.liveSlotOccupation')}</p>
         </div>
 
         <div className="p-4 bg-white border border-slate-200 rounded-xl shadow-sm space-y-1">
-          <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Utilization Rate</span>
+          <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">{t('environmental.utilizationRate')}</span>
           <div className="flex items-baseline gap-2">
             <span className={`text-2xl font-bold font-mono ${overallPercent > 90 ? 'text-rose-600' : 'text-indigo-600'}`}>
               {overallPercent.toFixed(1)}%
             </span>
-            <span className="text-xs text-slate-400 font-semibold">Avg density</span>
+            <span className="text-xs text-slate-400 font-semibold">{t('environmental.avgDensity')}</span>
           </div>
           <div className="w-full bg-slate-100 rounded-full h-1.5 mt-2">
             <div 
@@ -300,30 +302,30 @@ export default function EnvironmentalModule({
           title="Click to view & manage registered storage locations"
         >
           <div className="flex justify-between items-center">
-            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Registered Locations</span>
+            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">{t('environmental.regLocations')}</span>
             <MapPin className="h-4 w-4 text-indigo-500" />
           </div>
           <div className="flex items-baseline gap-2">
             <span className="text-2xl font-bold font-mono text-indigo-600">{locationRegistries.length}</span>
-            <span className="text-xs text-slate-400 font-semibold">Racks / Bins</span>
+            <span className="text-xs text-slate-400 font-semibold">{t('environmental.racksBins')}</span>
           </div>
-          <p className="text-[10px] text-indigo-600 font-medium">Manage Storage Locations →</p>
+          <p className="text-[10px] text-indigo-600 font-medium">{t('environmental.manageLocsLink')}</p>
         </div>
 
         <div className="p-4 bg-white border border-slate-200 rounded-xl shadow-sm space-y-1">
-          <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Safety Compliance</span>
+          <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">{t('environmental.safetyCompliance')}</span>
           <div className="flex items-center gap-1.5 mt-0.5">
             {anyBlockedAisles ? (
               <span className="text-xs bg-rose-50 border border-rose-100 text-rose-700 font-bold px-2 py-1 rounded flex items-center gap-1">
-                <AlertTriangle className="h-3.5 w-3.5" /> Aisle Warning
+                <AlertTriangle className="h-3.5 w-3.5" /> {t('environmental.aisleWarning')}
               </span>
             ) : (
               <span className="text-xs bg-emerald-50 border border-emerald-100 text-emerald-700 font-bold px-2 py-1 rounded flex items-center gap-1">
-                <CheckCircle className="h-3.5 w-3.5" /> All Aisles Clear
+                <CheckCircle className="h-3.5 w-3.5" /> {t('environmental.allAislesClear')}
               </span>
             )}
           </div>
-          <p className="text-[10px] text-slate-400 mt-1">Emergency pathways clear.</p>
+          <p className="text-[10px] text-slate-400 mt-1">{t('environmental.emergencyClear')}</p>
         </div>
       </div>
 
@@ -337,7 +339,7 @@ export default function EnvironmentalModule({
               : 'border-transparent text-slate-500 hover:text-slate-800'
           }`}
         >
-          <Boxes className="h-4 w-4" /> Space & Capacity Audits
+          <Boxes className="h-4 w-4" /> {t('environmental.tabAudits')}
         </button>
 
         <button
@@ -348,7 +350,7 @@ export default function EnvironmentalModule({
               : 'border-transparent text-slate-500 hover:text-slate-800'
           }`}
         >
-          <MapPin className="h-4 w-4" /> Registered Storage Locations & Bins ({locationRegistries.length})
+          <MapPin className="h-4 w-4" /> {t('environmental.tabLocations')} ({locationRegistries.length})
         </button>
       </div>
 
@@ -649,7 +651,7 @@ export default function EnvironmentalModule({
                           <td className="p-4 font-sans">
                             {!hasSafetyViolation && !isOverloaded ? (
                               <span className="text-emerald-600 font-semibold flex items-center gap-1 text-xs">
-                                <CheckCircle className="h-4 w-4" /> Optimal & Safe
+                                <CheckCircle className="h-4 w-4" /> {t('environmental.optimalSafe')}
                               </span>
                             ) : (
                               <span className="text-rose-600 font-bold flex items-center gap-1 text-xs" title="Blocked aisles or excessive density">
@@ -664,9 +666,9 @@ export default function EnvironmentalModule({
                                 type="button"
                                 onClick={() => {
                                   setConfirmAction({
-                                    title: 'Delete Space Audit Log Record',
-                                    message: `Are you sure you want to delete space audit record ${log.id} (${log.zone})?`,
-                                    confirmLabel: 'YES, DELETE LOG',
+                                    title: t('environmental.deleteLogConfirmTitle'),
+                                    message: t('environmental.deleteLogConfirmMsg', { id: log.id, zone: log.zone }),
+                                    confirmLabel: t('environmental.deleteLogConfirmBtn'),
                                     confirmVariant: 'danger',
                                     onConfirm: () => onDeleteEnvLog?.(log.id)
                                   });
@@ -675,7 +677,7 @@ export default function EnvironmentalModule({
                                 title="Delete this audit record"
                               >
                                 <Trash2 className="h-3.5 w-3.5" />
-                                Delete
+                                {t('common.delete')}
                               </button>
                             ) : (
                               <span className="text-[10px] text-slate-400 font-mono inline-flex items-center gap-1" title="Only Super Admin and System Admin can delete logs">

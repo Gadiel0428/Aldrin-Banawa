@@ -793,6 +793,7 @@ export function mapBatchMutationResultToApi(params: {
   success: boolean;
   status: number;
   error?: string;
+  fieldErrors?: Record<string, string>;
   confirmedRecord?: any;
   currentRecord?: any;
 }): Record<string, any> {
@@ -814,6 +815,7 @@ export function mapBatchMutationResultToApi(params: {
     success: params.success,
     status: params.status,
     error: params.error,
+    ...(params.fieldErrors ? { fieldErrors: params.fieldErrors, errors: params.fieldErrors } : {}),
     ...(params.type === "upsert" ? { record } : {}),
     currentRecord,
   };

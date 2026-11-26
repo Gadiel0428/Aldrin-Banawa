@@ -18,6 +18,7 @@ import { RecyclingRecord, MasterRegistryItem } from '../types';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { generateAuthoritativeId } from '../lib/idGenerator';
 import { showPrintToast } from '../utils/printDocument';
+import { useI18n } from '../i18n';
 import {
   MISSING_UNIT_LABEL,
   formatNumberForUnit,
@@ -45,6 +46,7 @@ export default function RecyclingModule({
   canEdit = false,
   registries = []
 }: RecyclingModuleProps) {
+  const { t } = useI18n();
   const effectiveCanEdit = canEdit || isSuperAdmin;
   const [searchQuery, setSearchQuery] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -63,7 +65,7 @@ export default function RecyclingModule({
     e.preventDefault();
     const cleanUnit = normalizeUnitCode(unit);
     if (!logSheetNumber || quantity <= 0 || !cleanUnit) {
-      showPrintToast('Please fill out all fields including a valid Unit of Measure.', 'warning');
+      showPrintToast(t('recycling.fillAllFieldsWarning'), 'warning');
       return;
     }
 
@@ -146,15 +148,15 @@ export default function RecyclingModule({
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded border border-indigo-500/30">
-              SUSTAINABILITY & PACKAGING
+              {t('recycling.bannerBadge')}
             </span>
             <span className="text-emerald-400 text-[10px] font-bold flex items-center gap-1 font-mono">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse inline-block" /> RECYCLE
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse inline-block" /> {t('recycling.recycleTag')}
             </span>
           </div>
-          <h2 className="text-xl font-bold text-white tracking-tight">Packaging Materials Recycling Management</h2>
+          <h2 className="text-xl font-bold text-white tracking-tight">{t('recycling.moduleTitle')}</h2>
           <p className="text-xs text-slate-300 mt-1">
-            Monitor the condition, classification, reuse cycle count, and final disposition of reusable pallets and carton boxes.
+            {t('recycling.moduleSubtitle')}
           </p>
         </div>
       </div>
@@ -163,36 +165,36 @@ export default function RecyclingModule({
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4" id="recycling-stats-row">
         <div className="p-4 bg-white border border-slate-200 rounded-xl shadow-sm flex items-center justify-between gap-2">
           <div>
-            <span className="text-[10px] uppercase font-bold text-slate-400">Total In-Use / Reused</span>
+            <span className="text-[10px] uppercase font-bold text-slate-400">{t('recycling.totalInUse')}</span>
             {renderUnitBuckets(reusableGrouped.buckets, 'text-slate-800')}
-            <span className="text-[9px] text-slate-400">Active internal circulation</span>
+            <span className="text-[9px] text-slate-400">{t('recycling.activeCirculation')}</span>
           </div>
           <span className="p-2 bg-emerald-50 text-emerald-600 rounded-lg shrink-0"><CheckCircle className="h-4 w-4" /></span>
         </div>
 
         <div className="p-4 bg-white border border-slate-200 rounded-xl shadow-sm flex items-center justify-between gap-2">
           <div>
-            <span className="text-[10px] uppercase font-bold text-slate-400">Scrap / Condemned</span>
+            <span className="text-[10px] uppercase font-bold text-slate-400">{t('recycling.scrapCondemned')}</span>
             {renderUnitBuckets(scrappedGrouped.buckets, 'text-rose-600')}
-            <span className="text-[9px] text-slate-400">Sent for waste disposal</span>
+            <span className="text-[9px] text-slate-400">{t('recycling.wasteDisposal')}</span>
           </div>
           <span className="p-2 bg-rose-50 text-rose-600 rounded-lg shrink-0"><Trash2 className="h-4 w-4" /></span>
         </div>
 
         <div className="p-4 bg-white border border-slate-200 rounded-xl shadow-sm flex items-center justify-between gap-2">
           <div>
-            <span className="text-[10px] uppercase font-bold text-slate-400">Pending Re-sorting</span>
+            <span className="text-[10px] uppercase font-bold text-slate-400">{t('recycling.pendingResorting')}</span>
             {renderUnitBuckets(sortingGrouped.buckets, 'text-amber-600')}
-            <span className="text-[9px] text-slate-400">Requires washing or grading</span>
+            <span className="text-[9px] text-slate-400">{t('recycling.requiresWashing')}</span>
           </div>
           <span className="p-2 bg-amber-50 text-amber-600 rounded-lg shrink-0"><RefreshCcw className="h-4 w-4" /></span>
         </div>
 
         <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl shadow-sm text-white flex items-center justify-between">
           <div>
-            <span className="text-[10px] uppercase font-bold text-slate-400">Max Rotation Limit</span>
-            <div className="text-base font-bold text-white">5 Cycles Limit</div>
-            <span className="text-[9px] text-slate-300">Strict Mandate</span>
+            <span className="text-[10px] uppercase font-bold text-slate-400">{t('recycling.maxRotationLimit')}</span>
+            <div className="text-base font-bold text-white">{t('recycling.cyclesLimit')}</div>
+            <span className="text-[9px] text-slate-300">{t('recycling.strictMandate')}</span>
           </div>
           <span className="p-2 bg-slate-800 text-slate-400 rounded-lg"><BarChart3 className="h-4 w-4" /></span>
         </div>
@@ -202,7 +204,7 @@ export default function RecyclingModule({
         <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
           <span>
-            <strong>{missingUnitLogsCount}</strong> packaging recycling log{missingUnitLogsCount > 1 ? 's' : ''} are missing a unit of measure. Assign or update a defined UOM to preserve unit integrity.
+            {t('recycling.missingUnitWarning', { count: missingUnitLogsCount })}
           </span>
         </div>
       )}
@@ -215,7 +217,7 @@ export default function RecyclingModule({
           </span>
           <input 
             type="text" 
-            placeholder="Search recycling log sheet..." 
+            placeholder={t('recycling.searchPlaceholder')} 
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-slate-400 focus:outline-none"
@@ -228,11 +230,11 @@ export default function RecyclingModule({
             className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-2 px-4 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
             id="btn-add-recycling-log"
           >
-            <Plus className="h-4 w-4" /> Log Sorting Activity Sheet
+            <Plus className="h-4 w-4" /> {t('recycling.logActivityBtn')}
           </button>
         ) : (
           <span className="text-[10px] font-mono text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded font-bold uppercase">
-            🔒 View-Only Mode
+            {t('recycling.viewOnlyBadge')}
           </span>
         )}
       </div>
@@ -246,18 +248,18 @@ export default function RecyclingModule({
         >
           <div className="border-b border-slate-100 pb-2 flex justify-between items-center">
             <h3 className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
-              <Sparkles className="h-4 w-4 text-slate-500" /> Log sorting & reuse status
+              <Sparkles className="h-4 w-4 text-slate-500" /> {t('recycling.formTitle')}
             </h3>
-            <button type="button" onClick={() => setShowForm(false)} className="text-[10px] text-slate-400">Cancel</button>
+            <button type="button" onClick={() => setShowForm(false)} className="text-[10px] text-slate-400">{t('recycling.discardBtn')}</button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <label className="block text-[10px] font-semibold text-slate-500 mb-1">Sorting Sheet Number *</label>
+              <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('recycling.logSheetNumberLabel')}</label>
               <input 
                 type="text"
                 required
-                placeholder="e.g. RML-2026-105"
+                placeholder={t('recycling.sheetRefPlaceholder')}
                 value={logSheetNumber}
                 onChange={e => setLogSheetNumber(e.target.value)}
                 className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs font-mono focus:outline-none focus:ring-1 focus:ring-slate-400"
@@ -265,20 +267,20 @@ export default function RecyclingModule({
             </div>
 
             <div>
-              <label className="block text-[10px] font-semibold text-slate-500 mb-1">Item Type *</label>
+              <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('recycling.packagingTypeLabel')}</label>
               <select 
                 value={itemType}
                 onChange={e => setItemType(e.target.value as any)}
                 className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-slate-400"
               >
-                <option value="Carton Box">Carton Box</option>
-                <option value="Pallet">Pallet</option>
-                <option value="Partition">Partition</option>
+                <option value="Carton Box">{t('recycling.typeCartonBox')}</option>
+                <option value="Pallet">{t('recycling.typePallet')}</option>
+                <option value="Partition">{t('recycling.typePartition')}</option>
               </select>
             </div>
 
             <div>
-              <label className="block text-[10px] font-semibold text-slate-500 mb-1">Quantity *</label>
+              <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('recycling.quantityLabel')}</label>
               <div className="flex gap-2">
                 <input 
                   type="text"
@@ -312,7 +314,7 @@ export default function RecyclingModule({
             </div>
 
             <div>
-              <label className="block text-[10px] font-semibold text-slate-500 mb-1">Physical Condition *</label>
+              <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('recycling.physicalConditionLabel')}</label>
               <select 
                 value={condition}
                 onChange={e => {
@@ -327,15 +329,15 @@ export default function RecyclingModule({
                 }}
                 className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs focus:outline-none"
               >
-                <option value="Reusable">Reusable / Compliant</option>
-                <option value="Non-Reusable">One-Time Use (Non-Reusable)</option>
-                <option value="Contaminated">Contaminated</option>
-                <option value="Damaged">Damaged / Worn Out</option>
+                <option value="Reusable">{t('recycling.condReusable')}</option>
+                <option value="Non-Reusable">{t('recycling.condNonReusable')}</option>
+                <option value="Contaminated">{t('recycling.condContaminated')}</option>
+                <option value="Damaged">{t('recycling.condDamaged')}</option>
               </select>
             </div>
 
             <div>
-              <label className="block text-[10px] font-semibold text-slate-500 mb-1">Reuse Cycle Count (Max 5) *</label>
+              <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('recycling.cycleCountLabel')}</label>
               <input 
                 type="text"
                 inputMode="numeric"
@@ -362,15 +364,15 @@ export default function RecyclingModule({
             </div>
 
             <div>
-              <label className="block text-[10px] font-semibold text-slate-500 mb-1">Final Disposition *</label>
+              <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('recycling.finalDispositionLabel')}</label>
               <select 
                 value={disposition}
                 onChange={e => setDisposition(e.target.value as any)}
                 className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs focus:outline-none"
               >
-                <option value="Re-used">Re-used in Production Floor</option>
-                <option value="For Re-sorting">For Re-sorting / Washing</option>
-                <option value="Scrap Disposal">Scrap Disposal (Condemned)</option>
+                <option value="Re-used">{t('recycling.dispReused')}</option>
+                <option value="For Re-sorting">{t('recycling.dispResorting')}</option>
+                <option value="Scrap Disposal">{t('recycling.dispScrap')}</option>
               </select>
             </div>
           </div>
@@ -388,13 +390,13 @@ export default function RecyclingModule({
               onClick={() => setShowForm(false)} 
               className="px-3.5 py-1.5 border border-slate-200 text-slate-600 rounded text-xs font-semibold"
             >
-              Discard
+              {t('recycling.discardBtn')}
             </button>
             <button 
               type="submit" 
               className="px-3.5 py-1.5 bg-slate-900 text-white rounded text-xs font-semibold"
             >
-              Log To Sorting Sheets
+              {t('recycling.logToSortingSheetsBtn')}
             </button>
           </div>
         </form>
@@ -403,23 +405,23 @@ export default function RecyclingModule({
       {/* Recycling logs table */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm" id="recycling-grid-panel">
         <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-          <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Recyclable Materials Sorting Log Sheet</span>
-          <span className="text-xs font-mono text-slate-500 font-semibold">{filteredLogs.length} logs in database</span>
+          <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">{t('recycling.tableTitle')}</span>
+          <span className="text-xs font-mono text-slate-500 font-semibold">{t('recycling.logsInDb', { count: filteredLogs.length })}</span>
         </div>
 
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="bg-slate-100 text-slate-500 font-medium border-b border-slate-200">
-                <th className="p-4 font-semibold">Log ID</th>
-                <th className="p-4 font-semibold">Date Logged</th>
-                <th className="p-4 font-semibold">Sheet Ref</th>
-                <th className="p-4 font-semibold">Item Classification</th>
-                <th className="p-4 font-semibold text-right">Quantity</th>
-                <th className="p-4 font-semibold">Reported Condition</th>
-                <th className="p-4 font-semibold">Cycle Count</th>
-                <th className="p-4 font-semibold">SOP Dispo Status</th>
-                <th className="p-4 font-semibold">Action</th>
+                <th className="p-4 font-semibold">{t('recycling.colLogId')}</th>
+                <th className="p-4 font-semibold">{t('recycling.colDateLogged')}</th>
+                <th className="p-4 font-semibold">{t('recycling.colSheetRef')}</th>
+                <th className="p-4 font-semibold">{t('recycling.colItemClassification')}</th>
+                <th className="p-4 font-semibold text-right">{t('recycling.colQuantity')}</th>
+                <th className="p-4 font-semibold">{t('recycling.colReportedCondition')}</th>
+                <th className="p-4 font-semibold">{t('recycling.colCycleCount')}</th>
+                <th className="p-4 font-semibold">{t('recycling.colDisposition')}</th>
+                <th className="p-4 font-semibold">{t('recycling.colAction')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -479,9 +481,9 @@ export default function RecyclingModule({
                             const val = e.target.value;
                             if (val === 'DELETE') {
                               setConfirmAction({
-                                title: 'Delete Recycling Log',
-                                message: `Are you sure you want to delete recycling log ${log.id}?`,
-                                confirmLabel: 'YES, DELETE LOG',
+                                title: t('recycling.confirmDeleteTitle'),
+                                message: t('recycling.confirmDeleteMsg', { id: log.id }),
+                                confirmLabel: t('recycling.confirmYesDelete'),
                                 confirmVariant: 'danger',
                                 onConfirm: () => onDeleteRecycling(log.id)
                               });
@@ -491,8 +493,8 @@ export default function RecyclingModule({
                           className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
                           id={`action-select-recyc-${log.id}`}
                         >
-                          <option value="" disabled>Actions...</option>
-                          <option value="DELETE">🗑️ Delete Log</option>
+                          <option value="" disabled>{t('receiving.actionsPlaceholder')}</option>
+                          <option value="DELETE">🗑️ {t('recycling.deleteAction')}</option>
                         </select>
                       ) : (
                         <span className="text-slate-300 font-bold">—</span>

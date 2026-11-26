@@ -37,6 +37,7 @@ import {
   formatQuantityWithUnit,
   type UnitTotalBucket
 } from '../../shared/units';
+import { useI18n } from '../i18n';
 
 interface ReceivingVsIssuanceReportModalProps {
   receiving: ReceivingRecord[];
@@ -57,6 +58,7 @@ export default function ReceivingVsIssuanceReportModal({
   isSuperAdmin = true,
   onClose
 }: ReceivingVsIssuanceReportModalProps) {
+  const { t } = useI18n();
   const [dateRange, setDateRange] = useState<'today' | '7days' | '30days' | 'all' | 'custom'>('7days');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -796,7 +798,7 @@ export default function ReceivingVsIssuanceReportModal({
                 </span>
               </div>
               <h2 className="text-base font-bold text-white tracking-tight mt-0.5">
-                Receiving vs Issuance Summary Snapshot
+                {t('modals.printChrome.flowReportModalTitle')}
               </h2>
             </div>
           </div>
@@ -806,42 +808,42 @@ export default function ReceivingVsIssuanceReportModal({
               onClick={handleExportPDF}
               disabled={isExporting}
               className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition shadow-sm flex items-center gap-1.5 cursor-pointer"
-              title="Preview & save formatted vector PDF file"
+              title={t('modals.printChrome.btnPdfPreview')}
             >
               {isExporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-              {isExporting ? 'Rendering PDF...' : 'PDF Report Preview'}
+              {isExporting ? t('modals.printChrome.btnRenderingPdf') : t('modals.printChrome.btnPdfPreview')}
             </button>
             <button
               onClick={handleOpenPreview}
               disabled={isGeneratingPreview}
               className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-indigo-300 hover:text-white text-xs font-bold px-3.5 py-2 rounded-xl transition border border-slate-700 flex items-center gap-1.5 cursor-pointer"
-              title="Preview report in A4 layout before printing"
+              title={t('common.printPreview')}
             >
               {isGeneratingPreview ? <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" /> : <Eye className="h-3.5 w-3.5 text-indigo-400" />}
-              {isGeneratingPreview ? 'Rendering...' : 'Print Preview'}
+              {isGeneratingPreview ? t('modals.printChrome.btnRenderingPdf') : t('common.printPreview')}
             </button>
             <button
               onClick={handlePrint}
               disabled={isExportingPrintPDF}
               className={`bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold px-3.5 py-2 rounded-xl transition border border-slate-700 flex items-center gap-1.5 ${isExportingPrintPDF ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
-              title="Render A4 pages and open Print dialog (Ctrl+P)"
+              title={t('common.print')}
             >
               {isExportingPrintPDF ? (
                 <>
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300" />
-                  Preparing Print...
+                  {t('modals.printChrome.btnPreparingPrint')}
                 </>
               ) : (
                 <>
                   <Printer className="h-3.5 w-3.5" />
-                  Print Document
+                  {t('common.print')}
                 </>
               )}
             </button>
             <button
               onClick={onClose}
               className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition cursor-pointer"
-              title="Close report modal"
+              title={t('common.close')}
             >
               <X className="h-5 w-5" />
             </button>
@@ -854,7 +856,7 @@ export default function ReceivingVsIssuanceReportModal({
             {/* Date Range Selector */}
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1 mr-1">
-                <Calendar className="h-3.5 w-3.5 text-slate-400" /> Range:
+                <Calendar className="h-3.5 w-3.5 text-slate-400" /> {t('modals.printChrome.rangeLabel')}
               </span>
               {(['today', '7days', '30days', 'all', 'custom'] as const).map(range => (
                 <button
@@ -866,7 +868,15 @@ export default function ReceivingVsIssuanceReportModal({
                       : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
                   }`}
                 >
-                  {range === '7days' ? 'Past 7 Days' : range === '30days' ? 'Past 30 Days' : range === 'all' ? 'All Time' : range}
+                  {range === 'today'
+                    ? t('common.today')
+                    : range === '7days'
+                    ? t('common.past7Days')
+                    : range === '30days'
+                    ? t('common.past30Days')
+                    : range === 'all'
+                    ? t('common.allTime')
+                    : t('common.customRange')}
                 </button>
               ))}
             </div>
@@ -880,7 +890,7 @@ export default function ReceivingVsIssuanceReportModal({
                   onChange={e => setStartDate(e.target.value)}
                   className="bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs text-slate-700 font-mono focus:ring-1 focus:ring-indigo-500"
                 />
-                <span className="text-slate-400 font-bold">to</span>
+                <span className="text-slate-400 font-bold">{t('common.to')}</span>
                 <input
                   type="date"
                   value={endDate}
@@ -898,7 +908,7 @@ export default function ReceivingVsIssuanceReportModal({
                   onChange={e => setCustomerFilter(e.target.value)}
                   className="bg-white border border-slate-200 rounded-lg px-2.5 py-1 text-xs text-slate-700 focus:ring-1 focus:ring-indigo-500"
                 >
-                  <option value="">All Customers</option>
+                  <option value="">{t('modals.printChrome.allCustomers')}</option>
                   {customers.map(c => (
                     <option key={c} value={c}>{c}</option>
                   ))}
@@ -909,7 +919,7 @@ export default function ReceivingVsIssuanceReportModal({
                 <Search className="absolute left-2.5 top-1.5 h-3.5 w-3.5 text-slate-400" />
                 <input
                   type="text"
-                  placeholder="Filter SKU or item..."
+                  placeholder={`${t('common.filter')}...`}
                   value={partFilter}
                   onChange={e => setPartFilter(e.target.value)}
                   className="w-full bg-white border border-slate-200 rounded-lg pl-8 pr-2.5 py-1 text-xs text-slate-700 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-400"
@@ -927,7 +937,7 @@ export default function ReceivingVsIssuanceReportModal({
         {/* Modal Footer (Hidden in Print) */}
         <div className="bg-slate-50 border-t border-slate-200 px-5 py-3.5 flex justify-between items-center shrink-0 print:hidden">
           <p className="text-xs text-slate-500">
-            Document generated securely from live system state. ISO 9001:2015 Audit compliant.
+            {t('modals.printChrome.auditCompliantFooter')}
           </p>
           <div className="flex items-center gap-2">
             <button
@@ -936,7 +946,7 @@ export default function ReceivingVsIssuanceReportModal({
               className="bg-white hover:bg-slate-100 disabled:opacity-50 text-slate-700 text-xs font-bold px-4 py-2 rounded-xl transition border border-slate-300 flex items-center gap-1.5 cursor-pointer"
             >
               {isGeneratingPreview ? <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-600" /> : <Eye className="h-3.5 w-3.5 text-indigo-600" />}
-              {isGeneratingPreview ? 'Rendering...' : 'Print Preview'}
+              {isGeneratingPreview ? t('modals.printChrome.btnRenderingPdf') : t('common.printPreview')}
             </button>
             <button
               onClick={handlePrint}
@@ -946,12 +956,12 @@ export default function ReceivingVsIssuanceReportModal({
               {isExportingPrintPDF ? (
                 <>
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300" />
-                  Preparing Print...
+                  {t('modals.printChrome.btnPreparingPrint')}
                 </>
               ) : (
                 <>
                   <Printer className="h-3.5 w-3.5" />
-                  Print Document
+                  {t('common.print')}
                 </>
               )}
             </button>
@@ -961,7 +971,7 @@ export default function ReceivingVsIssuanceReportModal({
               className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold px-4 py-2 rounded-xl transition shadow-sm flex items-center gap-1.5 cursor-pointer"
             >
               {isExporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-              {isExporting ? 'Rendering PDF...' : 'Preview & Save PDF'}
+              {isExporting ? t('modals.printChrome.btnRenderingPdf') : t('modals.printChrome.btnPreviewSavePdf')}
             </button>
           </div>
         </div>

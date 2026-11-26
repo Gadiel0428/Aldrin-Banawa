@@ -36,6 +36,7 @@ import AccountQRBadgeModal from './AccountQRBadgeModal';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { RegisteredAccount } from '../types';
 import { updateCentralPin } from '../lib/centralApi';
+import { useI18n } from '../i18n';
 export type { RegisteredAccount };
 
 // Centralized default operational roles
@@ -98,6 +99,7 @@ export default function RegisteredAccountsModule({
   isSuperAdmin = false,
   canEdit: _canEdit = false
 }: RegisteredAccountsModuleProps) {
+  const { t } = useI18n();
   // Centralized managed operational roles list
   const managedRoles = useMemo(() => {
     if (Array.isArray(operationalRoles) && operationalRoles.length > 0) {
@@ -613,24 +615,24 @@ export default function RegisteredAccountsModule({
               </span>
             </div>
             <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
-              <Users className="h-5 w-5 text-indigo-400" /> JPMP Operator Accounts
+              <Users className="h-5 w-5 text-indigo-400" /> {t('accounts.title')}
             </h2>
             <p className="text-xs text-slate-300 mt-0.5">
-              Centralized operator registry, role assignment, active/pending status tracking, and QR PIN security.
+              {t('accounts.subtitle')}
             </p>
           </div>
 
           <div className="flex items-center gap-2.5 flex-wrap justify-start xl:justify-end shrink-0">
             {/* Total Badge */}
             <div className="bg-slate-950/70 border border-slate-700/80 px-3 py-1.5 rounded-xl text-center min-w-[70px]">
-              <span className="block text-[9px] font-bold text-slate-400 uppercase font-mono">Total</span>
+              <span className="block text-[9px] font-bold text-slate-400 uppercase font-mono">{t('common.total')}</span>
               <span className="text-base font-extrabold text-white font-mono">{accountStats.total}</span>
             </div>
 
             {/* Active Badge */}
             <div className="bg-emerald-950/60 border border-emerald-500/40 px-3 py-1.5 rounded-xl text-center min-w-[70px]">
               <span className="flex items-center justify-center gap-1 text-[9px] font-bold text-emerald-400 uppercase font-mono">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" /> Active
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" /> {t('accounts.statusActive')}
               </span>
               <span className="text-base font-extrabold text-emerald-300 font-mono">{accountStats.active}</span>
             </div>
@@ -638,14 +640,14 @@ export default function RegisteredAccountsModule({
             {/* Pending Badge */}
             <div className="bg-slate-950/70 border border-slate-700/80 px-3 py-1.5 rounded-xl text-center min-w-[70px]">
               <span className="flex items-center justify-center gap-1 text-[9px] font-bold text-slate-400 uppercase font-mono">
-                <span className="h-1.5 w-1.5 rounded-full bg-slate-400" /> Pending
+                <span className="h-1.5 w-1.5 rounded-full bg-slate-400" /> {t('accounts.statusPending')}
               </span>
               <span className="text-base font-extrabold text-slate-300 font-mono">{accountStats.pending}</span>
             </div>
 
             {/* Full Access Badge */}
             <div className="bg-indigo-950/60 border border-indigo-500/40 px-3 py-1.5 rounded-xl text-center min-w-[76px] hidden sm:block">
-              <span className="block text-[9px] font-bold text-indigo-300 uppercase font-mono">Full Access</span>
+              <span className="block text-[9px] font-bold text-indigo-300 uppercase font-mono">{t('permissions.fullAccess')}</span>
               <span className="text-base font-extrabold text-indigo-200 font-mono">{accountStats.fullAccess}</span>
             </div>
 
@@ -663,7 +665,7 @@ export default function RegisteredAccountsModule({
                   title="Manage operational role definitions"
                 >
                   <Tag className="h-3.5 w-3.5 text-indigo-400" />
-                  <span className="whitespace-nowrap">Manage Roles</span>
+                  <span className="whitespace-nowrap">{t('accounts.manageRolesBtn')}</span>
                 </button>
                 {onOpenBackups && (
                   <button
@@ -682,8 +684,8 @@ export default function RegisteredAccountsModule({
                     type="button"
                     onClick={() => {
                       setConfirmAction({
-                        title: "PURGE ALL OPERATOR ACCOUNTS",
-                        message: "WARNING: This will permanently remove all registered operator accounts from the system. Only the root Super Administrator (ALDRIN BANAWA / JPMP-002) will remain active. Are you sure?",
+                        title: t('accounts.clearAllTitle'),
+                        message: t('accounts.clearAllMsg'),
                         confirmVariant: "danger",
                         confirmLabel: "YES, CLEAR ALL",
                         onConfirm: () => {
@@ -696,7 +698,7 @@ export default function RegisteredAccountsModule({
                     id="btn-clear-all-accounts"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
-                    <span className="whitespace-nowrap">Clear All</span>
+                    <span className="whitespace-nowrap">{t('accounts.clearAllBtn')}</span>
                   </button>
                 )}
                 <button
@@ -708,7 +710,7 @@ export default function RegisteredAccountsModule({
                   id="btn-add-account"
                 >
                   <UserPlus className="h-4 w-4" />
-                  <span className="whitespace-nowrap">Register Operator</span>
+                  <span className="whitespace-nowrap">{t('accounts.registerBtn')}</span>
                 </button>
               </div>
             )}
@@ -765,7 +767,7 @@ export default function RegisteredAccountsModule({
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
             <input
               type="text"
-              placeholder="Search by operator name, JPMP ID, role, or phone..."
+              placeholder={t('accounts.searchPlaceholder')}
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               className="w-full pl-8.5 pr-8 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent font-medium"
@@ -792,7 +794,7 @@ export default function RegisteredAccountsModule({
                   statusFilter === 'ALL' ? 'bg-white text-slate-900 shadow-2xs font-bold' : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                ALL ({accountStats.total})
+                {t('common.all')} ({accountStats.total})
               </button>
               <button
                 type="button"
@@ -802,7 +804,7 @@ export default function RegisteredAccountsModule({
                 }`}
               >
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                ACTIVE ({accountStats.active})
+                {t('accounts.statusActive')} ({accountStats.active})
               </button>
               <button
                 type="button"
@@ -812,7 +814,7 @@ export default function RegisteredAccountsModule({
                 }`}
               >
                 <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
-                PENDING ({accountStats.pending})
+                {t('accounts.statusPending')} ({accountStats.pending})
               </button>
               {accountStats.inactive > 0 && (
                 <button
@@ -823,7 +825,7 @@ export default function RegisteredAccountsModule({
                   }`}
                 >
                   <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
-                  INACTIVE ({accountStats.inactive})
+                  {t('accounts.statusInactive')} ({accountStats.inactive})
                 </button>
               )}
             </div>
@@ -847,9 +849,9 @@ export default function RegisteredAccountsModule({
               className="bg-white border border-slate-200 text-slate-700 text-[11px] font-semibold py-1.5 px-2.5 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
             >
               <option value="ALL">All Permissions</option>
-              <option value="FULL_ACCESS">Full Access</option>
-              <option value="LIMITED_ACCESS">Limited (Edit)</option>
-              <option value="VIEW_ONLY">View Only</option>
+              <option value="FULL_ACCESS">{t('accounts.permFullAccess')}</option>
+              <option value="LIMITED_ACCESS">{t('accounts.permLimitedAccess')}</option>
+              <option value="VIEW_ONLY">{t('accounts.permViewOnly')}</option>
             </select>
 
             {/* Reset Filters */}

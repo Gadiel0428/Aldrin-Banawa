@@ -12,6 +12,7 @@ import {
   SUPER_ADMIN_ACCOUNT
 } from '../../hooks/useSync';
 import { showPrintToast } from '../../utils/printDocument';
+import { translate } from '../../i18n';
 
 export function canAccessAdminModules(
   currentPermission: string,
@@ -73,10 +74,7 @@ export function useAccountActions({
       currentRole === 'SUPER ADMINISTRATOR';
 
     if (!isSuperAdminOperating) {
-      showPrintToast(
-        'AUTHORIZATION RESTRICTION: Only accounts registered by Super Administrator (ALDRIN BANAWA - JPMP-002) in this computer will be authorized for use by other users and computers.',
-        'error'
-      );
+      showPrintToast(translate('accounts.adminOnlyRegister'), 'error');
       return null;
     }
 
@@ -88,7 +86,7 @@ export function useAccountActions({
     }
     const cleanRole = (role || '').toUpperCase();
     if (!cleanUsername || !cleanRole || !cleanEmployeeId) {
-      showPrintToast('ALL FIELDS ARE REQUIRED.', 'warning');
+      showPrintToast(translate('accounts.allFieldsRequired'), 'warning');
       return null;
     }
     const exists = registeredUsers.some(
@@ -96,7 +94,7 @@ export function useAccountActions({
            (u.username || '').toUpperCase() === cleanUsername
     );
     if (exists) {
-      showPrintToast('AN OPERATOR WITH THIS NAME OR REGISTER ID ALREADY EXISTS.', 'warning');
+      showPrintToast(translate('accounts.duplicateAccount'), 'warning');
       return null;
     }
 
@@ -212,7 +210,7 @@ export function useAccountActions({
     ));
 
     if (isAldrin) {
-      showPrintToast('PROTECTED ROOT ACCOUNT: ALDRIN BANAWA (JPMP-002) CANNOT BE DELETED.', 'error');
+      showPrintToast(translate('accounts.cannotDeleteRoot'), 'error');
       return;
     }
 
@@ -314,7 +312,7 @@ export function useAccountActions({
     }
 
     if (cleanNewId !== cleanOldId && registeredUsers.some(u => (u.employeeId || '').toUpperCase() === cleanNewId)) {
-      showPrintToast(`An operator account with ID "${cleanNewId}" already exists.`, 'warning');
+      showPrintToast(translate('accounts.duplicateEmpId', { id: cleanNewId }), 'warning');
       return;
     }
 

@@ -31,6 +31,7 @@ import {
   MasterRegistryItem 
 } from '../types';
 import { MISSING_UNIT_LABEL, resolveMasterDataUnit } from '../../shared/units';
+import { useI18n } from '../i18n';
 
 export interface QuickRecordLookupModalProps {
   isOpen: boolean;
@@ -65,6 +66,7 @@ export default function QuickRecordLookupModal({
   registries,
   onNavigateToModule
 }: QuickRecordLookupModalProps) {
+  const { t } = useI18n();
   const [activeCategory, setActiveCategory] = useState<LookupCategory>('ALL');
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -244,14 +246,14 @@ export default function QuickRecordLookupModal({
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <h3 className="font-bold text-base text-white tracking-tight">
-                      Quick Record Lookup
+                      {t('modals.quickLookup.title')}
                     </h3>
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                      {totalMatchesCount} {totalMatchesCount === 1 ? 'match' : 'matches'}
+                      {totalMatchesCount} {t('modals.quickLookup.matchesBadge')}
                     </span>
                   </div>
                   <p className="text-xs text-slate-400 truncate">
-                    Barcode, QR & Material Identification across all WMS operations
+                    {t('modals.quickLookup.subtitle')}
                   </p>
                 </div>
               </div>
@@ -264,7 +266,7 @@ export default function QuickRecordLookupModal({
                   title="Scan another Barcode or QR code"
                 >
                   <Barcode className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">Scan Again</span>
+                  <span className="hidden sm:inline">{t('modals.quickLookup.scanAgainBtn')}</span>
                 </button>
                 <button
                   type="button"
@@ -285,7 +287,7 @@ export default function QuickRecordLookupModal({
                   type="text"
                   value={searchTerm}
                   onChange={(e) => onSearchTermChange(e.target.value)}
-                  placeholder="Filter or type lot number, part code, PO#, requisition#, DR#..."
+                  placeholder={t('modals.quickLookup.searchPlaceholder')}
                   className="w-full bg-slate-900/90 border border-slate-700/80 rounded-xl pl-9 pr-8 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 font-mono"
                   autoFocus
                 />
@@ -302,7 +304,7 @@ export default function QuickRecordLookupModal({
 
               {searchTerm && (
                 <div className="flex items-center gap-2 text-xs font-mono text-slate-400 px-1 shrink-0">
-                  <span className="text-[11px] text-slate-500">Query:</span>
+                  <span className="text-[11px] text-slate-500">{t('modals.quickLookup.queryLabel')}</span>
                   <span className="font-bold text-indigo-300 bg-indigo-950/60 px-2 py-0.5 rounded border border-indigo-800/60 truncate max-w-[200px]">
                     {searchTerm}
                   </span>
@@ -321,7 +323,7 @@ export default function QuickRecordLookupModal({
                     : 'bg-slate-800/70 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                 }`}
               >
-                <span>All Results</span>
+                <span>{t('modals.quickLookup.allResultsTab')}</span>
                 <span className="text-[10px] opacity-75 font-mono">({totalMatchesCount})</span>
               </button>
 
@@ -335,7 +337,7 @@ export default function QuickRecordLookupModal({
                 }`}
               >
                 <Layers className="h-3 w-3" />
-                <span>Stock FIFO</span>
+                <span>{t('modals.quickLookup.stockFifoTab')}</span>
                 <span className="text-[10px] opacity-75 font-mono">({matchedStocks.length})</span>
               </button>
 
@@ -349,7 +351,7 @@ export default function QuickRecordLookupModal({
                 }`}
               >
                 <Package className="h-3 w-3" />
-                <span>Receiving</span>
+                <span>{t('modals.quickLookup.receivingTab')}</span>
                 <span className="text-[10px] opacity-75 font-mono">({matchedReceiving.length})</span>
               </button>
 
@@ -363,7 +365,7 @@ export default function QuickRecordLookupModal({
                 }`}
               >
                 <ArrowLeftRight className="h-3 w-3" />
-                <span>Issuances</span>
+                <span>{t('modals.quickLookup.issuanceTab')}</span>
                 <span className="text-[10px] opacity-75 font-mono">({matchedIssuances.length})</span>
               </button>
 
@@ -377,7 +379,7 @@ export default function QuickRecordLookupModal({
                 }`}
               >
                 <Truck className="h-3 w-3" />
-                <span>Deliveries</span>
+                <span>{t('modals.quickLookup.deliveryTab')}</span>
                 <span className="text-[10px] opacity-75 font-mono">({matchedDeliveries.length})</span>
               </button>
 
@@ -391,7 +393,7 @@ export default function QuickRecordLookupModal({
                 }`}
               >
                 <RotateCcw className="h-3 w-3" />
-                <span>Returns</span>
+                <span>{t('modals.quickLookup.returnsTab')}</span>
                 <span className="text-[10px] opacity-75 font-mono">({matchedReturns.length})</span>
               </button>
 
@@ -405,7 +407,7 @@ export default function QuickRecordLookupModal({
                 }`}
               >
                 <FolderOpen className="h-3 w-3" />
-                <span>Master Registry</span>
+                <span>{t('modals.quickLookup.registryTab')}</span>
                 <span className="text-[10px] opacity-75 font-mono">({matchedRegistries.length})</span>
               </button>
             </div>
@@ -418,12 +420,12 @@ export default function QuickRecordLookupModal({
                     <Search className="h-8 w-8" />
                   </div>
                   <h4 className="font-bold text-sm text-slate-200">
-                    {searchTerm.trim() ? `No Records Found for "${searchTerm}"` : 'Ready to Scan or Search'}
+                    {searchTerm.trim() ? `${t('modals.quickLookup.noRecordsTitle')} "${searchTerm}"` : t('modals.quickLookup.readyTitle')}
                   </h4>
                   <p className="text-xs text-slate-400 max-w-md mx-auto">
                     {searchTerm.trim()
-                      ? 'No inventory stock, receiving vouchers, issuances, delivery orders, returns, or master registry items match this code.'
-                      : 'Scan a lot tag, roll barcode, requisition QR code, or type a search string above.'}
+                      ? t('modals.quickLookup.noRecordsDesc')
+                      : t('modals.quickLookup.readyDesc')}
                   </p>
                   <div className="pt-2 flex items-center justify-center gap-2">
                     <button
@@ -432,7 +434,7 @@ export default function QuickRecordLookupModal({
                       className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition cursor-pointer flex items-center gap-2"
                     >
                       <Barcode className="h-4 w-4" />
-                      Open Scanner Modal
+                      {t('modals.quickLookup.openScannerBtn')}
                     </button>
                   </div>
                 </div>
@@ -973,7 +975,7 @@ export default function QuickRecordLookupModal({
             {/* Footer */}
             <div className="px-5 py-3 border-t border-slate-800 bg-slate-950/50 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-400">
               <span className="text-[11px] font-mono text-slate-500 text-center sm:text-left">
-                Use handheld scanner, camera, or QR codes to query across all warehouse tables.
+                {t('modals.quickLookup.footerNote')}
               </span>
               <div className="flex items-center gap-2">
                 <button
@@ -982,14 +984,14 @@ export default function QuickRecordLookupModal({
                   className="px-3 py-1.5 bg-indigo-600/30 hover:bg-indigo-600/50 border border-indigo-500/40 text-indigo-200 rounded-xl font-medium transition cursor-pointer flex items-center gap-1.5"
                 >
                   <Barcode className="h-3.5 w-3.5" />
-                  Scan Again
+                  {t('modals.quickLookup.scanAgainBtn')}
                 </button>
                 <button
                   type="button"
                   onClick={onClose}
                   className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl font-medium transition cursor-pointer"
                 >
-                  Close
+                  {t('common.close')}
                 </button>
               </div>
             </div>

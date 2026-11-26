@@ -13,6 +13,7 @@ import {
 import { syncManager } from '../../sync/syncManager';
 import { showPrintToast } from '../../utils/printDocument';
 import { formatQuantityWithUnit, normalizeUnitCode } from '../../../shared/units';
+import { translate } from '../../i18n';
 
 export interface UseDeliveryActionsParams {
   deliveries: DeliveryRecord[];
@@ -60,7 +61,7 @@ export function useDeliveryActions({
 }: UseDeliveryActionsParams) {
   const handleAddDelivery = (record: DeliveryRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
+      showPrintToast(translate('toasts.viewOnlyDenied'), 'error');
       return;
     }
     const matchedStock = stocks.find(s => s.partCode === record.partCode && s.status === 'APPROVED') || stocks.find(s => s.partCode === record.partCode);
@@ -83,7 +84,7 @@ export function useDeliveryActions({
     extDoc?: { drNumber?: string; salesInvoice?: string; wayBill?: string }
   ) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
+      showPrintToast(translate('toasts.viewOnlyDenied'), 'error');
       return;
     }
     const existingDel = deliveries.find(d => d.id === id);
@@ -158,7 +159,7 @@ export function useDeliveryActions({
 
   const handleEditDelivery = (record: DeliveryRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: OPERATORS IN VIEW ONLY MODE CANNOT EDIT DELIVERY RECORDS.", 'error');
+      showPrintToast(translate('toasts.viewOnlyEditDeliveryDenied'), 'error');
       return;
     }
     const next = deliveries.map(d => d.id === record.id ? record : d);
@@ -170,7 +171,7 @@ export function useDeliveryActions({
 
   const handleDeleteDelivery = (id: string) => {
     if (currentPermission !== 'FULL_ACCESS') {
-      showPrintToast("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE DELIVERY TRANSACTIONS.", 'error');
+      showPrintToast(translate('toasts.superAdminDeleteDeliveryDenied'), 'error');
       return;
     }
     deleteRecordLocallyAndRemotely('deliveries', id);
@@ -181,7 +182,7 @@ export function useDeliveryActions({
 
   const handleAddEnvLog = (log: EnvironmentalLog) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
+      showPrintToast(translate('toasts.viewOnlyDenied'), 'error');
       return;
     }
     const nextEnvLogs = [...envLogs, log];
@@ -198,7 +199,7 @@ export function useDeliveryActions({
     const isSuperOrSystem = normRole.includes('SUPER') || normRole.includes('SYSTEM') || normUser.includes('SUPER') || normUser.includes('SYSTEM') || currentPermission === 'FULL_ACCESS';
 
     if (!isSuperOrSystem) {
-      showPrintToast("PERMISSION DENIED: ONLY SUPER ADMIN AND SYSTEM ADMIN CAN CLEAR HISTORICAL SPACE AUDIT LOGS.", 'error');
+      showPrintToast(translate('toasts.superAdminClearEnvDenied'), 'error');
       return;
     }
     setEnvLogs([]);
@@ -212,7 +213,7 @@ export function useDeliveryActions({
     const isSuperOrSystem = normRole.includes('SUPER') || normRole.includes('SYSTEM') || normUser.includes('SUPER') || normUser.includes('SYSTEM') || currentPermission === 'FULL_ACCESS';
 
     if (!isSuperOrSystem) {
-      showPrintToast("PERMISSION DENIED: ONLY SUPER ADMIN AND SYSTEM ADMIN CAN DELETE SPACE AUDIT LOG RECORDS.", 'error');
+      showPrintToast(translate('toasts.superAdminDeleteEnvDenied'), 'error');
       return;
     }
     deleteRecordLocallyAndRemotely('envLogs', id);
@@ -223,7 +224,7 @@ export function useDeliveryActions({
 
   const handleAddForkliftCheck = (check: ForkliftChecklist) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
+      showPrintToast(translate('toasts.viewOnlyDenied'), 'error');
       return;
     }
     const nextForkliftChecks = [check, ...forkliftChecks];

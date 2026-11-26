@@ -38,16 +38,16 @@ import {
   Database,
   Archive,
   Phone,
-  Smartphone,
   Activity,
   AlertTriangle,
   Ban,
-  FileClock
+  FileClock,
+  Settings
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { motion, AnimatePresence } from 'motion/react';
 import { SyncStatus } from './components/SyncStatus';
-import VersionUpdateBanner from './components/VersionUpdateBanner';
+import { LanguageProvider, LanguageSwitch, useI18n } from './i18n';
 import { verifyCentralCredentials, updateCentralPin } from './lib/centralApi';
 import { getApiBaseUrl, getStoredSessionToken } from './config/serverConfig';
 import { RegisteredAccount } from './types';
@@ -79,11 +79,11 @@ import {
 import { useMasterDataActions, MasterDataFeature } from './features/master-data';
 import { ServerBackupsModal } from './components/ServerBackupsModal';
 import { ConfirmModal, ConfirmActionConfig } from './components/ConfirmModal';
-import MobileAppDownloadModal from './components/MobileAppDownloadModal';
 import DesktopInstallModal from './components/DesktopInstallModal';
 import CentralDatabaseModal from './components/CentralDatabaseModal';
 import StartupDiagnosticsModal from './components/StartupDiagnosticsModal';
 import ActiveUsersModal from './components/ActiveUsersModal';
+import SettingsView from './components/SettingsView';
 import {
   AccountQRBadgeModal,
   BarcodeScannerModal,
@@ -93,6 +93,7 @@ import {
 
 // Isolated real-time clock component to prevent full application re-render cycles every second
 function LiveClock() {
+  const { dateLocale } = useI18n();
   const [time, setTime] = useState<Date>(() => new Date());
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
@@ -103,16 +104,35 @@ function LiveClock() {
     <div className="hidden lg:inline-flex items-center gap-1.5 text-[11px] font-mono font-medium text-slate-600 bg-slate-100/80 px-2.5 h-8 rounded-lg border border-slate-200 shrink-0">
       <Clock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
       <span>
-        {time.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' })} • {time.toLocaleTimeString('en-US', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+        {time.toLocaleDateString(dateLocale, { year: 'numeric', month: 'short', day: '2-digit' })} • {time.toLocaleTimeString(dateLocale, { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
       </span>
     </div>
   );
 }
 
 export default function App() {
+  const [langUserKey, setLangUserKey] = useState<string>(() => {
+    try {
+      const stored = localStorage.getItem('juwei_wms_isLoggedIn');
+      const user = localStorage.getItem('juwei_wms_currentUser');
+      const empId = localStorage.getItem('juwei_wms_employeeId');
+      return stored === 'true' && Boolean(user) ? (empId || user || 'GUEST') : 'GUEST';
+    } catch {
+      return 'GUEST';
+    }
+  });
+
+  return (
+    <LanguageProvider userKey={langUserKey}>
+      <AppWorkspace onAuthUserChange={setLangUserKey} />
+    </LanguageProvider>
+  );
+}
+
+function AppWorkspace({ onAuthUserChange }: { onAuthUserChange: (userKey: string) => void }) {
+  const { t } = useI18n();
   const [view, setView] = useState<string>('dashboard');
   const [showDesktopInstallModal, setShowDesktopInstallModal] = useState<boolean>(false);
-  const [showMobileInstallModal, setShowMobileInstallModal] = useState<boolean>(false);
 
   // Quick Record Lookup via Header Barcode / QR Scanner
   const [showQuickLookupScanner, setShowQuickLookupScanner] = useState<boolean>(false);
@@ -181,6 +201,10 @@ export default function App() {
       return false;
     }
   });
+
+  useEffect(() => {
+    onAuthUserChange(isLoggedIn ? (currentEmployeeId || currentUser || 'GUEST') : 'GUEST');
+  }, [isLoggedIn, currentEmployeeId, currentUser, onAuthUserChange]);
 
   // Global Modal states
   const [showCentralDatabaseModal, setShowCentralDatabaseModal] = useState<boolean>(false);
@@ -279,9 +303,6 @@ export default function App() {
     lastSyncedTime,
     liveSyncToast,
     setLiveSyncToast,
-    updateAvailable,
-    bannerDismissed,
-    newVersionString,
     appVersion,
     markRecordMutatedLocally,
     markUserAsDeleted,
@@ -291,7 +312,6 @@ export default function App() {
     upsertRecordLocallyAndRemotely,
     deleteRecordLocallyAndRemotely,
     handleManualSync,
-    performFreshInstallAndSync,
     resetStateToDefaults,
     resetAccountsToDefaults,
     handleDeviceRevoked,
@@ -301,9 +321,7 @@ export default function App() {
     handleResolveConflictAcceptServer,
     handleUpdateOperationalRoles,
     handleUpdateReceivingCategories,
-    handleUpdateFifoColors,
-    acknowledgeUpdateReload,
-    dismissUpdateBanner
+    handleUpdateFifoColors
   } = sync;
 
   const dashboardAlertCount = useMemo(
@@ -451,9 +469,9 @@ export default function App() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      showPrintToast('Exported full warehouse data backup as JSON.', 'info');
+      showPrintToast(t('sidebar.exportBackupSuccess'), 'info');
     } catch (err: any) {
-      showPrintToast(`Failed to export data backup: ${err?.message || 'Unknown error'}`, 'error');
+      showPrintToast(t('sidebar.exportBackupError', { error: err?.message || t('common.unknownError') }), 'error');
     }
   };
 
@@ -478,12 +496,12 @@ export default function App() {
         if (Array.isArray(payload.registries)) { setRegistries(payload.registries); syncCollection('registries', payload.registries); restoredCount++; }
 
         if (restoredCount > 0) {
-          showPrintToast(`Restored ${restoredCount} collection(s) from backup file.`, 'info');
+          showPrintToast(t('sidebar.restoreSuccess', { count: restoredCount }), 'info');
         } else {
-          showPrintToast('No recognizable warehouse collections found in selected JSON file.', 'warning');
+          showPrintToast(t('sidebar.restoreEmpty'), 'warning');
         }
       } catch {
-        showPrintToast('Invalid JSON backup file. Could not parse database snapshot.', 'error');
+        showPrintToast(t('sidebar.restoreInvalid'), 'error');
       }
     };
     reader.readAsText(file);
@@ -656,19 +674,19 @@ export default function App() {
     const cleanNew = firstLoginNewPin.replace(/\D/g, '').slice(0, 4);
     const cleanConfirm = firstLoginConfirmPin.replace(/\D/g, '').slice(0, 4);
     if (cleanNew.length !== 4) {
-      setFirstLoginPinError('New PIN must be exactly 4 numeric digits.');
+      setFirstLoginPinError(t('auth.pin4Digits'));
       return;
     }
     if (cleanNew !== cleanConfirm) {
-      setFirstLoginPinError('Confirmation PIN does not match new PIN.');
+      setFirstLoginPinError(t('auth.pinMismatch'));
       return;
     }
     if (cleanNew === pendingFirstLoginPinChange.currentPin) {
-      setFirstLoginPinError('New PIN must be different from the initial setup PIN.');
+      setFirstLoginPinError(t('auth.pinSameAsOld'));
       return;
     }
     if (cleanNew === '1234' || /^(\d)\1+$/.test(cleanNew)) {
-      setFirstLoginPinError('SECURITY REJECTED: Weak or repetitive PINs are not allowed.');
+      setFirstLoginPinError(t('auth.pinWeakRejected'));
       return;
     }
 
@@ -686,7 +704,7 @@ export default function App() {
         }
       );
       if (!res.success) {
-        setFirstLoginPinError(res.error || 'Failed to update PIN. Please try again.');
+        setFirstLoginPinError(res.error || t('auth.pinUpdateFailed'));
         setIsSavingFirstLoginPin(false);
         return;
       }
@@ -698,7 +716,7 @@ export default function App() {
       setIsLoggingIn(true);
       completeAuthenticatedLogin(updatedUser);
     } catch (err: any) {
-      setFirstLoginPinError(err?.message || 'Network error updating PIN.');
+      setFirstLoginPinError(err?.message || t('auth.pinNetworkError'));
       setIsSavingFirstLoginPin(false);
     }
   };
@@ -707,14 +725,14 @@ export default function App() {
     e.preventDefault();
     setLoginError('');
     if (isDeviceRevokedRef.current) {
-      setLoginError('This computer was removed from the system');
+      setLoginError(t('auth.deviceRevoked'));
       return;
     }
 
     const rawInput = (loginEmployeeId || '').trim();
     const enteredPin = (loginPin || '').trim();
     if (!rawInput || !enteredPin) {
-      setLoginError('PLEASE ENTER YOUR EMPLOYEE ID AND 4-DIGIT PIN CODE.');
+      setLoginError(t('auth.missingCredsError'));
       return;
     }
 
@@ -730,19 +748,19 @@ export default function App() {
       if (authErr?.message === 'DEVICE_REVOKED') {
         handleDeviceRevoked(getPersistentDeviceId());
         setIsLoggingIn(false);
-        setLoginError('This computer was removed from the system');
+        setLoginError(t('auth.deviceRevoked'));
         return;
       }
       console.warn('Authoritative login verification error:', authErr);
     }
 
     setIsLoggingIn(false);
-    setLoginError('INVALID OPERATIONAL ID NUMBER OR INCORRECT PIN CODE.');
+    setLoginError(t('auth.invalidCredsError'));
   };
 
   const handleQrLoginScan = async (scannedText: string) => {
     if (isDeviceRevokedRef.current) {
-      setLoginError('This computer was removed from the system');
+      setLoginError(t('auth.deviceRevoked'));
       return;
     }
 
@@ -766,12 +784,12 @@ export default function App() {
     }
 
     if (!searchEmpId) {
-      setLoginError('INVALID QR CODE: NO OPERATOR ID DETECTED IN SCANNED CODE.');
+      setLoginError(t('auth.invalidQrNoId'));
       return;
     }
 
     if (!searchPin) {
-      setLoginError(`MISSING PIN IN QR CODE FOR OPERATOR ${searchEmpId}. ENTER PIN MANUALLY TO SIGN IN.`);
+      setLoginError(t('auth.invalidQrMissingPin', { id: searchEmpId }));
       return;
     }
 
@@ -792,30 +810,31 @@ export default function App() {
         handleDeviceRevoked(getPersistentDeviceId());
         setShowLoginQrScanner(false);
         setIsLoggingIn(false);
-        setLoginError('This computer was removed from the system');
+        setLoginError(t('auth.deviceRevoked'));
         return;
       }
     }
     setIsLoggingIn(false);
-    setLoginError(`INCORRECT OR MISSING PIN CODE FOR OPERATOR "${searchEmpId}". ONLY REGISTERED PIN IS AUTHORIZED.`);
+    setLoginError(t('auth.incorrectQrPin', { id: searchEmpId }));
   };
 
   const getPageTitle = () => {
     switch (view) {
-      case 'dashboard': return 'Operational Control Dashboard';
-      case 'receiving': return 'Material Receiving & Returns';
-      case 'stock': return 'Stock & FIFO Control';
-      case 'stock-movements': return 'Stock Movements Ledger (Atomic Sync)';
-      case 'products': return 'Products & Items Master Catalog';
-      case 'inventory-matrix': return 'Multi-Warehouse Inventory Matrix';
-      case 'recycling': return 'Packaging Recycling';
-      case 'issuance': return 'Material Issuance';
-      case 'delivery': return 'Outbound & Gate Pass';
-      case 'environmental': return 'Space Utilization Control';
-      case 'master-registry': return 'Master Data Register';
-      case 'accounts': return 'JPMP Accounts & Authorization Directory';
-      case 'audit': return 'Super Admin Audit Trail';
-      default: return 'JUWEI WAREHOUSE MANAGEMENT SYSTEM';
+      case 'dashboard': return t('pageTitles.dashboard');
+      case 'receiving': return t('pageTitles.receiving');
+      case 'stock': return t('pageTitles.stock');
+      case 'stock-movements': return t('pageTitles.stockMovements');
+      case 'products': return t('pageTitles.products');
+      case 'inventory-matrix': return t('pageTitles.inventoryMatrix');
+      case 'recycling': return t('pageTitles.recycling');
+      case 'issuance': return t('pageTitles.issuance');
+      case 'delivery': return t('pageTitles.delivery');
+      case 'environmental': return t('pageTitles.environmental');
+      case 'master-registry': return t('pageTitles.masterRegistry');
+      case 'accounts': return t('pageTitles.accounts');
+      case 'audit': return t('pageTitles.audit');
+      case 'settings': return t('pageTitles.settings');
+      default: return t('pageTitles.default');
     }
   };
 
@@ -829,16 +848,6 @@ export default function App() {
         <div className="glass-ambient-orb-1" />
         <div className="glass-ambient-orb-2" />
         <div className="glass-ambient-orb-3" />
-
-        {updateAvailable && !bannerDismissed && (
-          <div className="fixed top-0 left-0 right-0 z-50">
-            <VersionUpdateBanner
-              onReload={acknowledgeUpdateReload}
-              onLater={dismissUpdateBanner}
-              newVersion={newVersionString}
-            />
-          </div>
-        )}
 
         <div className="w-full flex items-center justify-center px-4 py-12 sm:px-6 lg:px-8">
           {newlyRegisteredUser && (
@@ -858,10 +867,10 @@ export default function App() {
 
                 <div>
                   <span className="text-emerald-700 font-semibold text-[10px] tracking-wider font-mono uppercase block">
-                    Registration Successful
+                    {t('auth.regSuccessBadge')}
                   </span>
                   <h3 className="text-lg font-bold text-slate-900 tracking-tight mt-1">
-                    Secure Operator ID Registered
+                    {t('auth.regSuccessTitle')}
                   </h3>
                   <p className="text-[11px] text-slate-500 mt-0.5">
                     Juwei Plastic Moulding Phils. Inc.
@@ -870,16 +879,16 @@ export default function App() {
 
                 <div className="bg-slate-50/80 backdrop-blur-md p-4 rounded-2xl border border-slate-200/80 text-left space-y-2 text-xs">
                   <div className="flex justify-between items-center border-b border-slate-200/80 pb-1.5">
-                    <span className="text-[10px] text-slate-500 font-semibold uppercase">Operator:</span>
+                    <span className="text-[10px] text-slate-500 font-semibold uppercase">{t('auth.regOperator')}</span>
                     <span className="font-semibold text-slate-900">{newlyRegisteredUser.username}</span>
                   </div>
                   <div className="flex justify-between items-center border-b border-slate-200/80 pb-1.5">
-                    <span className="text-[10px] text-slate-500 font-semibold uppercase">Employee ID:</span>
+                    <span className="text-[10px] text-slate-500 font-semibold uppercase">{t('auth.regEmpId')}</span>
                     <span className="font-semibold text-indigo-600 font-mono">{newlyRegisteredUser.employeeId}</span>
                   </div>
                   {newlyRegisteredUser.phoneNumber && (
                     <div className="flex justify-between items-center border-b border-slate-200/80 pb-1.5">
-                      <span className="text-[10px] text-slate-500 font-semibold uppercase">Verified Mobile:</span>
+                      <span className="text-[10px] text-slate-500 font-semibold uppercase">{t('auth.regPhone')}</span>
                       <span className="font-semibold text-emerald-600 font-mono flex items-center gap-1">
                         <Phone className="h-3 w-3 text-emerald-500" />
                         {newlyRegisteredUser.phoneNumber}
@@ -887,14 +896,14 @@ export default function App() {
                     </div>
                   )}
                   <div className="flex justify-between items-center">
-                    <span className="text-[10px] text-slate-500 font-semibold uppercase">Assigned Role:</span>
+                    <span className="text-[10px] text-slate-500 font-semibold uppercase">{t('auth.regRole')}</span>
                     <span className="font-semibold text-slate-800">{newlyRegisteredUser.role}</span>
                   </div>
                 </div>
 
                 <div className="bg-indigo-50/70 backdrop-blur-md p-5 rounded-2xl border border-indigo-100/80 relative space-y-3">
                   <div className="text-[10px] text-indigo-700 font-mono font-semibold uppercase tracking-wider">
-                    Unique Login PIN & QR Pass
+                    {t('auth.regPinQrTitle')}
                   </div>
 
                   <div className="flex items-center justify-center gap-2">
@@ -905,7 +914,7 @@ export default function App() {
                       type="button"
                       onClick={() => setShowNewlyRegisteredPin(!showNewlyRegisteredPin)}
                       className="text-slate-500 hover:text-emerald-700 p-1.5 rounded-lg transition cursor-pointer"
-                      title={showNewlyRegisteredPin ? 'Hide PIN' : 'Reveal PIN'}
+                      title={showNewlyRegisteredPin ? t('auth.hidePin') : t('auth.revealPin')}
                     >
                       {showNewlyRegisteredPin ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </button>
@@ -926,7 +935,7 @@ export default function App() {
                   </div>
 
                   <div className="text-[10px] text-slate-600 font-medium">
-                    Scan QR code at WMS Gateway to log in instantly.
+                    {t('auth.scanQrHint')}
                   </div>
 
                   <button
@@ -934,7 +943,7 @@ export default function App() {
                     onClick={() => setQrBadgeAccount(newlyRegisteredUser)}
                     className="w-full bg-white hover:bg-slate-50 text-indigo-700 border border-indigo-200 py-2 px-3 rounded-lg text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
                   >
-                    <Printer className="h-3.5 w-3.5 text-indigo-600" /> Print / Download QR Pass Badge
+                    <Printer className="h-3.5 w-3.5 text-indigo-600" /> {t('auth.printQrBtn')}
                   </button>
                 </div>
 
@@ -953,7 +962,7 @@ export default function App() {
                   }}
                   className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 px-4 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center gap-2 shadow-sm cursor-pointer"
                 >
-                  <Fingerprint className="h-4 w-4" /> Proceed to Verification & Log In
+                  <Fingerprint className="h-4 w-4" /> {t('auth.proceedLoginBtn')}
                 </button>
               </motion.div>
             </div>
@@ -969,14 +978,14 @@ export default function App() {
             {isDeviceRevoked && (
               <div className="bg-rose-950/90 border border-rose-500/60 text-rose-200 px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2 font-mono uppercase">
                 <Ban className="h-4 w-4 text-rose-400 shrink-0" />
-                <span>This computer was removed from the system</span>
+                <span>{t('auth.deviceRevoked')}</span>
               </div>
             )}
             {oneTimeSetupPinNotice && (
               <div className="bg-amber-950/85 border border-amber-500/60 text-amber-100 px-3.5 py-3 rounded-xl text-xs space-y-1.5" id="one-time-initial-pin-banner">
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-mono font-bold uppercase text-amber-300 text-[10px] tracking-wider">
-                    Fresh Install • One-Time Super Admin PIN
+                    {t('auth.freshInstallTitle')}
                   </span>
                   <button
                     type="button"
@@ -986,7 +995,7 @@ export default function App() {
                     }}
                     className="text-[10px] font-mono font-bold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-200 px-2 py-0.5 rounded cursor-pointer"
                   >
-                    Use PIN
+                    {t('auth.usePinBtn')}
                   </button>
                 </div>
                 <div className="flex items-center justify-between font-mono">
@@ -996,24 +1005,26 @@ export default function App() {
                   </span>
                 </div>
                 <p className="text-[10px] text-amber-200/90">
-                  Shown once on first setup. You will be required to set a new 4-digit PIN immediately upon first login.
+                  {t('auth.freshInstallNote')}
                 </p>
               </div>
             )}
 
-            <div className="flex justify-between items-center">
+            <div className="flex justify-between items-center gap-2">
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                <span className="text-[11px] text-slate-400 font-mono font-medium">SYSTEM READY</span>
+                <span className="text-[11px] text-slate-400 font-mono font-medium">{t('auth.systemReady')}</span>
               </div>
 
               <div className="flex items-center gap-1.5">
+                <LanguageSwitch compact dark />
+
                 <button
                   type="button"
                   onClick={() => setShowStartupDiagnosticsModal(true)}
                   className="flex items-center justify-center p-1.5 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white rounded-lg transition-colors cursor-pointer"
-                  title="Startup Diagnostics & Multi-PC Synchronization Verifier"
-                  aria-label="Startup Diagnostics"
+                  title={t('auth.diagnosticsTitle')}
+                  aria-label={t('auth.diagnosticsTitle')}
                   id="btn-login-diagnostics"
                 >
                   <Activity className="h-3.5 w-3.5 text-indigo-400" />
@@ -1023,8 +1034,8 @@ export default function App() {
                   type="button"
                   onClick={() => setShowCentralDatabaseModal(true)}
                   className="flex items-center justify-center p-1.5 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 hover:border-slate-600 text-slate-300 hover:text-white rounded-lg transition-colors cursor-pointer"
-                  title="Central Database • Single Source of Truth"
-                  aria-label="Central Database Status"
+                  title={t('auth.centralDbTitle')}
+                  aria-label={t('auth.centralDbTitle')}
                   id="btn-login-central-db-settings"
                 >
                   <Database className="h-3.5 w-3.5 text-emerald-400" />
@@ -1041,13 +1052,13 @@ export default function App() {
                 />
               </div>
               <span className="inline-block bg-indigo-500/10 text-indigo-300 font-mono font-semibold text-[10px] uppercase px-2.5 py-0.5 rounded-md mb-2 border border-indigo-500/20">
-                JUWEI WMS GATEWAY • v{appVersion}
+                {t('auth.gatewayBadge', { version: appVersion })}
               </span>
               <h2 className="text-xl font-bold tracking-tight text-white">
-                Operator Sign In
+                {t('auth.signInTitle')}
               </h2>
               <p className="mt-1 text-xs text-slate-400">
-                Enter your Employee ID and 4-digit PIN to begin
+                {t('auth.signInSubtitle')}
               </p>
             </div>
 
@@ -1055,10 +1066,10 @@ export default function App() {
               <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-700/80 flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <span className="text-xs font-semibold text-white flex items-center gap-1.5 truncate">
-                    <QrCode className="h-4 w-4 text-emerald-400 shrink-0" /> Instant QR Pass Login
+                    <QrCode className="h-4 w-4 text-emerald-400 shrink-0" /> {t('auth.qrPassTitle')}
                   </span>
                   <span className="text-[11px] text-slate-400 block truncate mt-0.5">
-                    Scan badge or upload pass image
+                    {t('auth.qrPassSubtitle')}
                   </span>
                 </div>
                 <button
@@ -1067,13 +1078,13 @@ export default function App() {
                   className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer"
                   id="btn-gateway-scan-qr"
                 >
-                  <ScanLine className="h-3.5 w-3.5" /> Scan QR
+                  <ScanLine className="h-3.5 w-3.5" /> {t('auth.scanQrBtn')}
                 </button>
               </div>
 
               <div className="flex items-center gap-2 my-2 text-slate-500 text-[10px] font-mono font-medium uppercase">
                 <div className="h-px bg-slate-800 flex-1" />
-                <span>Or enter manually</span>
+                <span>{t('auth.orEnterManually')}</span>
                 <div className="h-px bg-slate-800 flex-1" />
               </div>
 
@@ -1086,7 +1097,7 @@ export default function App() {
               >
                 <div>
                   <label className="block text-[11px] font-medium text-slate-300 mb-1">
-                    Employee ID
+                    {t('auth.employeeIdLabel')}
                   </label>
                   <div className="relative">
                     <input
@@ -1101,7 +1112,7 @@ export default function App() {
                         setLoginEmployeeId(e.target.value);
                         if (loginError) setLoginError('');
                       }}
-                      placeholder="e.g. JPMP-002"
+                      placeholder={t('auth.employeeIdPlaceholder')}
                       className="w-full bg-slate-800/80 border border-slate-700 focus:border-indigo-500 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none font-mono tracking-wide"
                     />
                   </div>
@@ -1109,7 +1120,7 @@ export default function App() {
 
                 <div>
                   <label className="block text-[11px] font-medium text-slate-300 mb-1">
-                    4-Digit PIN Code
+                    {t('auth.pinCodeLabel')}
                   </label>
                   <div className="relative">
                     <input
@@ -1128,7 +1139,7 @@ export default function App() {
                         setLoginPin(val);
                         if (loginError) setLoginError('');
                       }}
-                      placeholder="••••"
+                      placeholder={t('auth.pinCodePlaceholder')}
                       className="w-full bg-slate-800/80 border border-slate-700 focus:border-indigo-500 rounded-lg px-3 pr-10 py-2 text-xs text-white placeholder-slate-500 focus:outline-none font-mono tracking-widest"
                     />
                     <button
@@ -1149,7 +1160,7 @@ export default function App() {
                       onChange={(e) => setRememberLogin(e.target.checked)}
                       className="h-3.5 w-3.5 rounded border-slate-700 bg-slate-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-slate-900 cursor-pointer"
                     />
-                    <span>Remember my login</span>
+                    <span>{t('auth.rememberLogin')}</span>
                   </label>
                 </div>
 
@@ -1163,7 +1174,7 @@ export default function App() {
                   type="submit"
                   className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2.5 px-4 rounded-lg text-xs font-semibold transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs"
                 >
-                  <LogIn className="h-4 w-4" /> Sign In to WMS Session
+                  <LogIn className="h-4 w-4" /> {t('auth.signInBtn')}
                 </button>
               </form>
             </div>
@@ -1173,8 +1184,8 @@ export default function App() {
             <BarcodeScannerModal
               isOpen={showLoginQrScanner}
               onClose={() => setShowLoginQrScanner(false)}
-              title="Juwei WMS Gateway QR Login Scanner"
-              subtitle="Scan operator badge QR code or upload pass image containing Username & PIN"
+              title={t('auth.qrModalTitle')}
+              subtitle={t('auth.qrModalSubtitle')}
               onScanResult={handleQrLoginScan}
             />
           )}
@@ -1205,9 +1216,12 @@ export default function App() {
                     <Lock className="h-5 w-5" />
                   </div>
                   <div>
-                    <h3 className="text-sm font-bold text-slate-900 uppercase font-mono">PIN Change Required</h3>
+                    <h3 className="text-sm font-bold text-slate-900 uppercase font-mono">{t('auth.pinChangeRequired')}</h3>
                     <p className="text-[11px] text-slate-500">
-                      Set a new 4-digit PIN for {pendingFirstLoginPinChange.user.username} ({pendingFirstLoginPinChange.user.employeeId}) before continuing.
+                      {t('auth.pinChangeDesc', {
+                        username: pendingFirstLoginPinChange.user.username,
+                        employeeId: pendingFirstLoginPinChange.user.employeeId,
+                      })}
                     </p>
                   </div>
                 </div>
@@ -1221,7 +1235,7 @@ export default function App() {
                 <form onSubmit={handleSubmitFirstLoginPinChange} className="space-y-3">
                   <div>
                     <label className="block text-[11px] font-bold text-slate-700 uppercase font-mono mb-1">
-                      New 4-Digit PIN
+                      {t('auth.newPinLabel')}
                     </label>
                     <input
                       type="password"
@@ -1237,7 +1251,7 @@ export default function App() {
                   </div>
                   <div>
                     <label className="block text-[11px] font-bold text-slate-700 uppercase font-mono mb-1">
-                      Confirm New 4-Digit PIN
+                      {t('auth.confirmNewPinLabel')}
                     </label>
                     <input
                       type="password"
@@ -1260,14 +1274,14 @@ export default function App() {
                       }}
                       className="px-3.5 py-2 border border-slate-200 text-slate-600 rounded-lg text-xs font-bold hover:bg-slate-50 cursor-pointer"
                     >
-                      Cancel
+                      {t('common.cancel')}
                     </button>
                     <button
                       type="submit"
                       disabled={isSavingFirstLoginPin}
                       className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold uppercase cursor-pointer disabled:opacity-50"
                     >
-                      {isSavingFirstLoginPin ? 'Saving...' : 'Save PIN & Sign In'}
+                      {isSavingFirstLoginPin ? t('auth.saving') : t('auth.savePinSignIn')}
                     </button>
                   </div>
                 </form>
@@ -1283,14 +1297,14 @@ export default function App() {
                 </div>
                 <div className="space-y-1">
                   <h3 className="font-extrabold text-slate-900 text-base tracking-wide uppercase font-mono">
-                    VERIFYING CREDENTIALS
+                    {t('auth.verifyingTitle')}
                   </h3>
                   <p className="text-xs text-blue-700 font-bold font-mono">
-                    AUTHENTICATING OPERATOR LOG-IN...
+                    {t('auth.verifyingSubtitle')}
                   </p>
                 </div>
                 <p className="text-[11px] text-slate-600 font-sans font-medium">
-                  Establishing secure WMS operational session. Please wait a moment...
+                  {t('auth.verifyingDesc')}
                 </p>
               </div>
             </div>
@@ -1333,7 +1347,7 @@ export default function App() {
               </div>
               <button
                 onClick={() => setShowLogoutConfirmModal(true)}
-                title="Log Out / Switch Operator"
+                title={t('auth.logOutTooltip')}
                 className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800/90 border border-slate-700/60 rounded-xl transition-all cursor-pointer"
               >
                 <LogOut className="h-3.5 w-3.5" />
@@ -1341,19 +1355,19 @@ export default function App() {
             </div>
 
             {currentPermission === 'VIEW_ONLY' ? (
-              <div className="bg-amber-950/40 border border-amber-500/30 text-amber-300 px-2.5 py-1 rounded-lg text-[9px] font-semibold flex items-center justify-center gap-1 font-mono uppercase" title="VIEW ONLY MODE: ACTIONS ARE RESTRICTED">
+              <div className="bg-amber-950/40 border border-amber-500/30 text-amber-300 px-2.5 py-1 rounded-lg text-[9px] font-semibold flex items-center justify-center gap-1 font-mono uppercase" title={t('permissions.viewOnly')}>
                 <Lock className="h-3 w-3 text-amber-400 shrink-0" />
-                <span>VIEW ONLY ACCESS</span>
+                <span>{t('permissions.viewOnly')}</span>
               </div>
             ) : currentPermission === 'LIMITED_ACCESS' ? (
-              <div className="bg-blue-950/40 border border-blue-500/30 text-blue-300 px-2.5 py-1 rounded-lg text-[9px] font-semibold flex items-center justify-center gap-1 font-mono uppercase" title="LIMITED ACCESS MODE: CREATE & EDIT PERMITTED">
+              <div className="bg-blue-950/40 border border-blue-500/30 text-blue-300 px-2.5 py-1 rounded-lg text-[9px] font-semibold flex items-center justify-center gap-1 font-mono uppercase" title={t('permissions.limitedAccess')}>
                 <Edit3 className="h-3 w-3 text-blue-400 shrink-0" />
-                <span>LIMITED ACCESS (EDIT ALLOWED)</span>
+                <span>{t('permissions.limitedAccess')}</span>
               </div>
             ) : (
-              <div className="bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 px-2.5 py-1 rounded-lg text-[9px] font-semibold flex items-center justify-center gap-1 font-mono uppercase" title="FULL ACCESS MODE: ALL ACTIONS ENABLED">
+              <div className="bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 px-2.5 py-1 rounded-lg text-[9px] font-semibold flex items-center justify-center gap-1 font-mono uppercase" title={t('permissions.fullAccess')}>
                 <Unlock className="h-3 w-3 text-emerald-400 shrink-0" />
-                <span>FULL ACCESS</span>
+                <span>{t('permissions.fullAccess')}</span>
               </div>
             )}
           </div>
@@ -1368,7 +1382,7 @@ export default function App() {
               </div>
               <span className="text-[10px] text-slate-400 block mt-0.5">Juwei Plastic Moulding Phils. Inc.</span>
             </div>
-            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" title="System Live" />
+            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" title={t('sidebar.systemLive')} />
           </div>
 
           <nav className="p-3 space-y-1 flex-1 overflow-y-auto no-scrollbar" id="nav-list">
@@ -1383,7 +1397,7 @@ export default function App() {
                     : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
                 }`}
               >
-                <LayoutDashboard className="h-4 w-4 shrink-0" /> Dashboard Overview
+                <LayoutDashboard className="h-4 w-4 shrink-0" /> {t('nav.dashboard')}
               </button>
               {dashboardAlertCount > 0 && (
                 <button
@@ -1393,7 +1407,7 @@ export default function App() {
                     setOpenDashboardAlertsSignal(n => n + 1);
                   }}
                   id="nav-dashboard-alerts-badge"
-                  title="View low-stock and shelf-life alerts"
+                  title={t('nav.viewAlertsBadgeTitle')}
                   className="absolute right-2.5 px-1.5 py-0.5 rounded-full bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-mono font-extrabold tabular-nums leading-none shadow-xs cursor-pointer transition"
                 >
                   {dashboardAlertCount}
@@ -1409,7 +1423,7 @@ export default function App() {
                   : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
               }`}
             >
-              <ArrowLeftRight className="h-4 w-4 shrink-0" /> Receiving & Returns
+              <ArrowLeftRight className="h-4 w-4 shrink-0" /> {t('nav.receiving')}
             </button>
 
             <button
@@ -1420,7 +1434,7 @@ export default function App() {
                   : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
               }`}
             >
-              <PackageSearch className="h-4 w-4 shrink-0" /> Stock & FIFO Bins
+              <PackageSearch className="h-4 w-4 shrink-0" /> {t('nav.stock')}
             </button>
 
             <button
@@ -1431,7 +1445,7 @@ export default function App() {
                   : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
               }`}
             >
-              <RotateCcw className="h-4 w-4 shrink-0" /> Packaging Recycling
+              <RotateCcw className="h-4 w-4 shrink-0" /> {t('nav.recycling')}
             </button>
 
             <button
@@ -1442,7 +1456,7 @@ export default function App() {
                   : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
               }`}
             >
-              <Briefcase className="h-4 w-4 shrink-0" /> Production Issuance
+              <Briefcase className="h-4 w-4 shrink-0" /> {t('nav.issuance')}
             </button>
 
             <button
@@ -1453,7 +1467,7 @@ export default function App() {
                   : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
               }`}
             >
-              <Truck className="h-4 w-4 shrink-0" /> Outbound & Gate Pass
+              <Truck className="h-4 w-4 shrink-0" /> {t('nav.delivery')}
             </button>
 
             <button
@@ -1464,7 +1478,7 @@ export default function App() {
                   : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
               }`}
             >
-              <Boxes className="h-4 w-4 shrink-0" /> Space Utilization
+              <Boxes className="h-4 w-4 shrink-0" /> {t('nav.environmental')}
             </button>
 
             <button
@@ -1476,7 +1490,7 @@ export default function App() {
               }`}
               id="nav-stock-movements"
             >
-              <ArrowLeftRight className="h-4 w-4 shrink-0" /> Stock Movements Ledger
+              <ArrowLeftRight className="h-4 w-4 shrink-0" /> {t('nav.stockMovements')}
             </button>
 
             <button
@@ -1488,7 +1502,7 @@ export default function App() {
               }`}
               id="nav-products"
             >
-              <PackageSearch className="h-4 w-4 shrink-0" /> Products Catalog
+              <PackageSearch className="h-4 w-4 shrink-0" /> {t('nav.products')}
             </button>
 
             <button
@@ -1500,7 +1514,7 @@ export default function App() {
               }`}
               id="nav-inventory-matrix"
             >
-              <Boxes className="h-4 w-4 shrink-0" /> Multi-Warehouse Matrix
+              <Boxes className="h-4 w-4 shrink-0" /> {t('nav.inventoryMatrix')}
             </button>
 
             <button
@@ -1512,7 +1526,7 @@ export default function App() {
               }`}
               id="nav-master-registry"
             >
-              <FolderPlus className="h-4 w-4 shrink-0" /> Master Data Register
+              <FolderPlus className="h-4 w-4 shrink-0" /> {t('nav.masterRegistry')}
             </button>
 
             {isAdminSession && (
@@ -1526,7 +1540,7 @@ export default function App() {
                   }`}
                   id="nav-registered-accounts"
                 >
-                  <Users className="h-4 w-4 shrink-0" /> JPMP Accounts
+                  <Users className="h-4 w-4 shrink-0" /> {t('nav.accounts')}
                 </button>
                 <button
                   onClick={() => setView('audit')}
@@ -1537,10 +1551,22 @@ export default function App() {
                   }`}
                   id="nav-audit-viewer"
                 >
-                  <FileClock className="h-4 w-4 shrink-0" /> Audit Trail
+                  <FileClock className="h-4 w-4 shrink-0" /> {t('nav.audit')}
                 </button>
               </>
             )}
+
+            <button
+              onClick={() => setView('settings')}
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all duration-300 cursor-pointer ${
+                view === 'settings'
+                  ? 'bg-indigo-600/95 text-white font-semibold shadow-lg shadow-indigo-600/25 border border-indigo-400/30 backdrop-blur-md'
+                  : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
+              }`}
+              id="nav-settings"
+            >
+              <Settings className="h-4 w-4 shrink-0" /> {t('nav.settings')}
+            </button>
           </nav>
         </div>
 
@@ -1551,9 +1577,9 @@ export default function App() {
               onClick={backupActions.handleExportCurrentData}
               id="btn-sidebar-export-current-data"
               className="w-full bg-slate-800/90 hover:bg-slate-700 text-slate-200 hover:text-white py-2 px-3 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1.5 border border-slate-700/80 transition-colors cursor-pointer shadow-xs active:scale-95"
-              title="Download full current state (stocks, receiving, returns, etc.) as formatted JSON"
+              title={t('sidebar.exportCurrentDataTitle')}
             >
-              <Download className="h-3.5 w-3.5 text-indigo-400" /> Export Current Data
+              <Download className="h-3.5 w-3.5 text-indigo-400" /> {t('sidebar.exportCurrentData')}
             </button>
 
             {isSuperAdminFlag && (
@@ -1561,44 +1587,44 @@ export default function App() {
                 <button
                   onClick={() => setShowBackupsModal(true)}
                   className="w-full bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-300 hover:text-emerald-100 py-2 px-3 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1.5 border border-emerald-500/40 transition-colors cursor-pointer shadow-sm"
-                  title="Super Admin: Automated 24h backups & snapshot disaster recovery"
+                  title={t('sidebar.serverBackupsTitle')}
                 >
-                  <Archive className="h-3.5 w-3.5 text-emerald-400" /> Automated Server Backups
+                  <Archive className="h-3.5 w-3.5 text-emerald-400" /> {t('sidebar.serverBackups')}
                 </button>
 
                 <label className="w-full bg-slate-800/80 hover:bg-slate-800 text-slate-300 hover:text-white py-2 px-3 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer border border-slate-700/60 transition-colors">
-                  <Upload className="h-3.5 w-3.5 text-indigo-400" /> Import DB Restore
+                  <Upload className="h-3.5 w-3.5 text-indigo-400" /> {t('sidebar.importDbRestore')}
                   <input type="file" accept=".json" onChange={backupActions.handleImportBackup} className="hidden" />
                 </label>
 
                 <button
                   onClick={() => {
                     setConfirmActionApp({
-                      title: 'Reset Default Database',
-                      message: 'Are you sure you want to reset all inventory, receiving, stock, and delivery logs to initial default records?',
-                      confirmLabel: 'YES, RESET DATABASE',
+                      title: t('sidebar.resetDefaultDbTitle'),
+                      message: t('sidebar.resetDefaultDbMsg'),
+                      confirmLabel: t('sidebar.resetDefaultDbConfirm'),
                       confirmVariant: 'danger',
                       onConfirm: () => resetStateToDefaults()
                     });
                   }}
                   className="w-full text-rose-400/80 hover:text-rose-300 py-1 text-[10px] font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors"
                 >
-                  <Trash2 className="h-3 w-3" /> Reset default database
+                  <Trash2 className="h-3 w-3" /> {t('sidebar.resetDefaultDb')}
                 </button>
 
                 <button
                   onClick={() => {
                     setConfirmActionApp({
-                      title: 'Wipe Operator Accounts',
-                      message: "WARNING: THIS WILL REMOVE ALL OPERATOR ACCOUNTS AND LOG YOU OUT. ONLY 'SUPER ADMIN' (JPMP-002) WILL REMAIN ACTIVE. ARE YOU SURE?",
-                      confirmLabel: 'YES, WIPE ACCOUNTS',
+                      title: t('sidebar.wipeAccountsTitle'),
+                      message: t('sidebar.wipeAccountsMsg'),
+                      confirmLabel: t('sidebar.wipeAccountsConfirm'),
                       confirmVariant: 'danger',
                       onConfirm: () => resetAccountsToDefaults()
                     });
                   }}
                   className="w-full text-rose-400/70 hover:text-rose-300 py-1 text-[10px] font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors"
                 >
-                  <Trash2 className="h-3 w-3" /> Wipe operator accounts
+                  <Trash2 className="h-3 w-3" /> {t('sidebar.wipeAccounts')}
                 </button>
               </>
             )}
@@ -1608,14 +1634,6 @@ export default function App() {
 
       {/* Main Content Pane */}
       <main className="flex-1 flex flex-col h-full min-w-0 bg-slate-50/70 z-10 relative overflow-hidden">
-        {updateAvailable && !bannerDismissed && (
-          <VersionUpdateBanner
-            onReload={acknowledgeUpdateReload}
-            onLater={dismissUpdateBanner}
-            newVersion={newVersionString}
-          />
-        )}
-
         {/* Header Bar */}
         <header className="h-16 glass-header px-4 sm:px-6 lg:px-8 flex justify-between items-center shrink-0 z-20 sticky top-0">
           <div className="flex items-center gap-3 min-w-0">
@@ -1626,6 +1644,8 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2 text-xs font-medium shrink-0">
+            <LanguageSwitch compact />
+
             <SyncStatus
               onOpenSettings={() => setShowCentralDatabaseModal(true)}
               onOpenDiagnostics={() => setShowStartupDiagnosticsModal(true)}
@@ -1639,35 +1659,25 @@ export default function App() {
                 setShowQuickLookupScanner(true);
               }}
               className="inline-flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white px-2.5 sm:px-3 h-8 rounded-xl text-xs font-semibold transition-all cursor-pointer shrink-0 shadow-xs shadow-indigo-500/25 border border-indigo-500/40"
-              title="Quick Record Lookup: Scan lot number, part barcode, or QR tag (Alt+S or Ctrl+B)"
-              aria-label="Quick Record Lookup Barcode / QR Scanner"
+              title={t('header.quickScanTitle')}
+              aria-label={t('header.quickScanTitle')}
               id="header-barcode-scanner-button"
             >
               <Barcode className="h-4 w-4 shrink-0" />
-              <span className="hidden sm:inline font-medium">Quick Scan</span>
+              <span className="hidden sm:inline font-medium">{t('header.quickScan')}</span>
             </button>
 
             <button
               type="button"
               onClick={() => setShowActiveUsersModal(true)}
               className="inline-flex items-center justify-center bg-indigo-50/90 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/90 w-8 h-8 rounded-xl text-xs font-semibold transition-all cursor-pointer shrink-0 shadow-xs backdrop-blur-md relative"
-              title={`Active Workstations: ${Math.max(1, activePresence.length, activeUsers.length)} Online (Click to view)`}
-              aria-label="Active Workstation Terminals"
+              title={t('header.activeWorkstationsTitle', { count: Math.max(1, activePresence.length, activeUsers.length) })}
+              aria-label={t('header.activeWorkstations')}
             >
               <Users className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
               <span className="absolute -top-1.5 -right-1.5 bg-indigo-600 text-white text-[9px] font-bold rounded-full min-w-3.5 h-3.5 flex items-center justify-center px-0.5 font-mono">
                 {Math.max(1, activePresence.length, activeUsers.length)}
               </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setShowMobileInstallModal(true)}
-              className="inline-flex items-center justify-center bg-slate-100/90 hover:bg-slate-200 border border-slate-200 text-slate-700 hover:text-slate-900 w-8 h-8 rounded-xl text-xs transition-all cursor-pointer shrink-0 shadow-xs backdrop-blur-md"
-              title="Download Android APK / Install Mobile Web App"
-              aria-label="Download Android APK / Mobile App"
-            >
-              <Smartphone className="h-3.5 w-3.5 text-slate-600 shrink-0" />
             </button>
 
             <LiveClock />
@@ -1679,9 +1689,9 @@ export default function App() {
           <div className="bg-rose-600 text-white px-4 sm:px-6 lg:px-8 py-2.5 text-xs font-semibold flex items-center justify-between gap-4 border-b border-rose-700 font-mono uppercase shrink-0" id="device-revoked-banner">
             <div className="flex items-center gap-2">
               <Ban className="h-4 w-4 shrink-0" />
-              <span>This computer was removed from the system — Synchronization suspended</span>
+              <span>{t('permissions.deviceRevokedBanner')}</span>
             </div>
-            <span className="bg-rose-800 text-rose-50 px-2 py-0.5 rounded text-[10px] tracking-wider shrink-0">DEVICE REVOKED</span>
+            <span className="bg-rose-800 text-rose-50 px-2 py-0.5 rounded text-[10px] tracking-wider shrink-0">{t('permissions.deviceRevokedTag')}</span>
           </div>
         )}
 
@@ -1690,7 +1700,9 @@ export default function App() {
             <div className="flex items-center gap-2 min-w-0">
               <AlertTriangle className="h-4 w-4 shrink-0" />
               <span className="truncate">
-                {syncConflicts.length} {syncConflicts.length === 1 ? 'record has' : 'records have'} conflicting edits with the central server. Your changes were kept safely for review.
+                {syncConflicts.length === 1
+                  ? t('permissions.conflictBannerSingle', { count: syncConflicts.length })
+                  : t('permissions.conflictBannerPlural', { count: syncConflicts.length })}
               </span>
             </div>
             <button
@@ -1699,7 +1711,7 @@ export default function App() {
               className="bg-white text-amber-800 hover:bg-amber-50 px-3 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer shrink-0 shadow-xs"
               id="btn-review-sync-conflicts"
             >
-              Review Conflicts ({syncConflicts.length})
+              {t('permissions.reviewConflicts', { count: syncConflicts.length })}
             </button>
           </div>
         )}
@@ -1708,9 +1720,9 @@ export default function App() {
           <div className="bg-amber-500 text-white px-4 sm:px-6 lg:px-8 py-2 text-xs font-semibold flex items-center justify-between gap-4 border-b border-amber-600 font-mono uppercase shrink-0">
             <div className="flex items-center gap-2">
               <Lock className="h-4 w-4 shrink-0" />
-              <span>[READ-ONLY PRIVILEGES ACTIVE]: OPERATOR IS RESTRICTED FROM CREATION, DELETION, OR MODIFICATION OF ANY DATA.</span>
+              <span>{t('permissions.viewOnlyBanner')}</span>
             </div>
-            <span className="bg-amber-600 text-amber-50 px-2 py-0.5 rounded text-[10px] tracking-wider shrink-0">VIEW ONLY</span>
+            <span className="bg-amber-600 text-amber-50 px-2 py-0.5 rounded text-[10px] tracking-wider shrink-0">{t('permissions.viewOnlyTag')}</span>
           </div>
         )}
 
@@ -1911,6 +1923,19 @@ export default function App() {
                   currentEmployeeId={currentEmployeeId}
                 />
               )}
+
+              {view === 'settings' && (
+                <SettingsView
+                  currentUser={currentUser}
+                  currentEmployeeId={currentEmployeeId}
+                  currentRole={currentRole}
+                  canEdit={canEditFlag}
+                  isManualSyncing={isManualSyncing}
+                  onForceSync={handleManualSync}
+                  onOpenCentralDatabase={() => setShowCentralDatabaseModal(true)}
+                  onOpenDiagnostics={() => setShowStartupDiagnosticsModal(true)}
+                />
+              )}
             </motion.div>
           </AnimatePresence>
         </div>
@@ -1927,14 +1952,6 @@ export default function App() {
       <ConfirmModal
         config={confirmActionApp}
         onClose={() => setConfirmActionApp(null)}
-      />
-
-      <MobileAppDownloadModal
-        isOpen={showMobileInstallModal}
-        onClose={() => setShowMobileInstallModal(false)}
-        serverAddress={serverAddress}
-        onFreshInstallSync={() => performFreshInstallAndSync(true)}
-        appVersion={appVersion}
       />
 
       <DesktopInstallModal
@@ -2025,8 +2042,8 @@ export default function App() {
                   <AlertTriangle className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-white tracking-tight">Sync Version Conflicts ({syncConflicts.length})</h3>
-                  <p className="text-xs text-slate-400">Choose whether to accept the server revision or keep your local update.</p>
+                  <h3 className="text-sm font-bold text-white tracking-tight">{t('conflicts.title', { count: syncConflicts.length })}</h3>
+                  <p className="text-xs text-slate-400">{t('conflicts.subtitle')}</p>
                 </div>
               </div>
               <button
@@ -2039,7 +2056,7 @@ export default function App() {
             </div>
             <div className="flex-1 overflow-y-auto p-5 space-y-3">
               {syncConflicts.length === 0 ? (
-                <div className="py-10 text-center text-xs text-slate-400">No unresolved sync conflicts.</div>
+                <div className="py-10 text-center text-xs text-slate-400">{t('conflicts.empty')}</div>
               ) : (
                 syncConflicts.map((conflict) => (
                   <div key={conflict.id} className="p-3.5 rounded-xl bg-slate-800/40 border border-slate-700/80 space-y-2 text-xs">
@@ -2058,14 +2075,14 @@ export default function App() {
                         onClick={() => handleResolveConflictAcceptServer(conflict)}
                         className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-[11px] border border-slate-600 cursor-pointer transition"
                       >
-                        Accept Server
+                        {t('conflicts.acceptServer')}
                       </button>
                       <button
                         type="button"
                         onClick={() => handleResolveConflictKeepMine(conflict)}
                         className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-[11px] cursor-pointer transition"
                       >
-                        Keep Mine
+                        {t('conflicts.keepMine')}
                       </button>
                     </div>
                   </div>
@@ -2093,8 +2110,8 @@ export default function App() {
                   <LogOut className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-white tracking-tight">Confirm Sign Out</h3>
-                  <p className="text-xs text-slate-400">Are you sure you want to log out?</p>
+                  <h3 className="text-sm font-bold text-white tracking-tight">{t('auth.confirmSignOut')}</h3>
+                  <p className="text-xs text-slate-400">{t('auth.confirmSignOutDesc')}</p>
                 </div>
               </div>
               <button
@@ -2107,7 +2124,7 @@ export default function App() {
             </div>
 
             <div className="bg-slate-950/70 rounded-xl p-3 border border-slate-800 text-xs flex flex-col gap-0.5">
-              <span className="text-[10px] text-slate-400 uppercase tracking-wider font-mono">Active Operator Session:</span>
+              <span className="text-[10px] text-slate-400 uppercase tracking-wider font-mono">{t('auth.activeSession')}</span>
               <span className="font-bold text-white text-xs">{currentUser || 'OPERATOR'}</span>
               <span className="text-[11px] text-indigo-400 font-mono">({currentEmployeeId || 'JPMP-002'}) • {currentRole || 'WAREHOUSE CLERK'}</span>
             </div>
@@ -2118,7 +2135,7 @@ export default function App() {
                 onClick={() => setShowLogoutConfirmModal(false)}
                 className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700/80 border border-slate-700 transition cursor-pointer"
               >
-                No / Cancel
+                {t('auth.noCancel')}
               </button>
               <button
                 type="button"
@@ -2128,7 +2145,7 @@ export default function App() {
                 }}
                 className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-rose-600 hover:bg-rose-500 transition shadow-sm cursor-pointer flex items-center gap-1.5"
               >
-                <LogOut className="h-3.5 w-3.5" /> Yes, Log Out
+                <LogOut className="h-3.5 w-3.5" /> {t('auth.yesLogOut')}
               </button>
             </div>
           </div>

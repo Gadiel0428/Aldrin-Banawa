@@ -43,6 +43,13 @@ import {
   resolveAndApplyRecordUnit,
   roundStockQuantity,
 } from "../services/stockLedgerService.ts";
+import {
+  validateDeliveryRecord,
+  validateIssuanceRecord,
+  validateReceivingRecord,
+  validateStockRecord,
+  type ValidationResult,
+} from "../../shared/validation.ts";
 
 export function registerSyncRoutes(app: Express, ctx: ServerContext): void {
   // REST API: Live Connection & Active Terminals Registry
@@ -332,6 +339,27 @@ export function registerSyncRoutes(app: Express, ctx: ServerContext): void {
             if (existing.pinChangedBy) updatedRec.pinChangedBy = existing.pinChangedBy;
           }
 
+          const tempReceivingList = collection === "receiving" ? Array.from(listMap.values()) : undefined;
+          const tempDeliveriesList = collection === "deliveries" ? Array.from(listMap.values()) : undefined;
+          let valRes: ValidationResult | null = null;
+          if (collection === "receiving") {
+            valRes = validateReceivingRecord(updatedRec, tempReceivingList || []);
+          } else if (collection === "issuances") {
+            valRes = validateIssuanceRecord(updatedRec);
+          } else if (collection === "deliveries") {
+            valRes = validateDeliveryRecord(updatedRec, tempDeliveriesList || []);
+          } else if (collection === "stocks") {
+            valRes = validateStockRecord(updatedRec);
+          }
+          if (valRes && !valRes.valid) {
+            return res.status(400).json({
+              error: valRes.message,
+              fieldErrors: valRes.fieldErrors,
+              errors: valRes.fieldErrors,
+              recordId: recId,
+            });
+          }
+
           listMap.set(recId, updatedRec);
           modifiedCount++;
         } else {
@@ -357,6 +385,28 @@ export function registerSyncRoutes(app: Express, ctx: ServerContext): void {
             ensureMovementsForBusinessRecord(ctx, "stocks", newRec, true);
             newRec.quantity = savedQty;
           }
+
+          const tempReceivingList = collection === "receiving" ? Array.from(listMap.values()) : undefined;
+          const tempDeliveriesList = collection === "deliveries" ? Array.from(listMap.values()) : undefined;
+          let valRes: ValidationResult | null = null;
+          if (collection === "receiving") {
+            valRes = validateReceivingRecord(newRec, tempReceivingList || []);
+          } else if (collection === "issuances") {
+            valRes = validateIssuanceRecord(newRec);
+          } else if (collection === "deliveries") {
+            valRes = validateDeliveryRecord(newRec, tempDeliveriesList || []);
+          } else if (collection === "stocks") {
+            valRes = validateStockRecord(newRec);
+          }
+          if (valRes && !valRes.valid) {
+            return res.status(400).json({
+              error: valRes.message,
+              fieldErrors: valRes.fieldErrors,
+              errors: valRes.fieldErrors,
+              recordId: recId,
+            });
+          }
+
           listMap.set(recId, newRec);
           modifiedCount++;
         }
@@ -480,6 +530,7 @@ export function registerSyncRoutes(app: Express, ctx: ServerContext): void {
               success: r.success,
               status: r.status,
               error: r.error,
+              fieldErrors: r.fieldErrors,
               confirmedRecord: r.confirmedRecord,
               currentRecord: r.currentRecord,
             })
@@ -591,6 +642,7 @@ export function registerSyncRoutes(app: Express, ctx: ServerContext): void {
         );
         return res.status(result.status).json({
           error: result.error,
+          ...(result.fieldErrors ? { fieldErrors: result.fieldErrors, errors: result.fieldErrors } : {}),
           currentRecord: mappedConflict,
           confirmedRecord: mappedConflict,
           systemResetVersion: result.systemResetVersion,

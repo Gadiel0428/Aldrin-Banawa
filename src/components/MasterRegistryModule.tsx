@@ -34,6 +34,7 @@ import {
   getAllSelectUomOptions,
   normalizeUnitCode,
 } from '../../shared/units';
+import { useI18n } from '../i18n';
 
 export const STARTER_BARCODE_PRESETS: MasterRegistryItem[] = [
   {
@@ -175,6 +176,7 @@ export default function MasterRegistryModule({
   defaultType = 'ALL',
   categories
 }: MasterRegistryModuleProps) {
+  const { t } = useI18n();
   const [selectedType, setSelectedType] = useState<RegistryType | 'ALL'>(defaultType);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -254,20 +256,20 @@ export default function MasterRegistryModule({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formName.trim()) {
-      showPrintToast('Please provide a name for this registration entry.', 'warning');
+      showPrintToast(t('masterRegistry.nameRequired'), 'warning');
       return;
     }
     if (formType === 'BARCODE_PRESET' && !formCode.trim()) {
-      showPrintToast('Please provide an Item Code / Barcode for this preset.', 'warning');
+      showPrintToast(t('masterRegistry.codeRequired'), 'warning');
       return;
     }
     if (formType === 'BARCODE_PRESET' && !formCategory.trim()) {
-      showPrintToast('Please select a Category from the unified registry.', 'warning');
+      showPrintToast(t('masterRegistry.categoryRequired'), 'warning');
       return;
     }
     const normalizedFormUnit = formType === 'BARCODE_PRESET' ? normalizeUnitCode(formUnit) : '';
     if (formType === 'BARCODE_PRESET' && !normalizedFormUnit) {
-      showPrintToast('Please select a valid Unit of Measure (UOM) for this Barcode Preset.', 'warning');
+      showPrintToast(t('masterRegistry.unitRequired'), 'warning');
       return;
     }
 
@@ -358,10 +360,10 @@ export default function MasterRegistryModule({
             <span className="p-2 bg-indigo-600 rounded-lg text-white">
               <FolderPlus className="h-5 w-5" />
             </span>
-            <h1 className="text-xl font-bold tracking-tight">Master Data Register</h1>
+            <h1 className="text-xl font-bold tracking-tight">{t('masterRegistry.headerTitle')}</h1>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Register and manage master lists for Barcode Presets, Customers, and Suppliers across the WMS.
+            {t('masterRegistry.headerSubtitle')}
           </p>
         </div>
 
@@ -373,17 +375,17 @@ export default function MasterRegistryModule({
                   type="button"
                   onClick={() => {
                     setConfirmAction({
-                      title: 'Reset to Standard Master Defaults',
-                      message: 'Are you sure you want to reset master registries to starter defaults (8 standard barcode presets per category)?',
-                      confirmLabel: 'YES, RESET DEFAULTS',
+                      title: t('masterRegistry.resetConfirmTitle'),
+                      message: t('masterRegistry.resetConfirmMsg'),
+                      confirmLabel: t('masterRegistry.resetConfirmBtnLabel'),
                       confirmVariant: 'primary',
                       onConfirm: () => onResetDefaults()
                     });
                   }}
                   className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
-                  title="Reset to 8 standard starter presets"
+                  title={t('masterRegistry.resetStarterTooltip')}
                 >
-                  <RefreshCw className="h-3.5 w-3.5" /> Reset Starter Presets
+                  <RefreshCw className="h-3.5 w-3.5" /> {t('masterRegistry.resetStarterBtn')}
                 </button>
               )}
 
@@ -391,12 +393,12 @@ export default function MasterRegistryModule({
                 onClick={() => handleOpenNew('BARCODE_PRESET')}
                 className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold flex items-center gap-2 shadow-sm transition cursor-pointer"
               >
-                <Plus className="h-4 w-4" /> Register New Option
+                <Plus className="h-4 w-4" /> {t('masterRegistry.registerNewBtn')}
               </button>
             </>
           ) : (
             <span className="text-[10px] font-mono text-indigo-400 bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg font-bold uppercase">
-              🔒 View-Only Mode
+              {t('masterRegistry.viewOnlyBadge')}
             </span>
           )}
         </div>
@@ -407,8 +409,8 @@ export default function MasterRegistryModule({
         <div className="flex items-center gap-2.5">
           <Warehouse className="h-5 w-5 text-amber-600 shrink-0" />
           <div>
-            <strong className="font-bold block">Storage Location Registration Moved to Space Utilization</strong>
-            <span className="text-amber-800 text-[11px]">Storage locations, rack rows, and bins are now registered directly inside the Space Utilization module for integrated capacity management.</span>
+            <strong className="font-bold block">{t('masterRegistry.relocationTitle')}</strong>
+            <span className="text-amber-800 text-[11px]">{t('masterRegistry.relocationDesc')}</span>
           </div>
         </div>
       </div>
@@ -430,8 +432,8 @@ export default function MasterRegistryModule({
                 <Barcode className="h-3.5 w-3.5" />
               </span>
               <div className="min-w-0">
-                <span className="text-xs font-bold text-slate-700 block truncate">Barcode Preset</span>
-                <span className="text-[10px] text-slate-500 block truncate">Auto-Fill Items</span>
+                <span className="text-xs font-bold text-slate-700 block truncate">{t('masterRegistry.cardPresetTitle')}</span>
+                <span className="text-[10px] text-slate-500 block truncate">{t('masterRegistry.cardPresetSub')}</span>
               </div>
             </div>
             <span className="text-base font-mono font-bold text-slate-800 shrink-0">{countByType.BARCODE_PRESET}</span>
@@ -453,8 +455,8 @@ export default function MasterRegistryModule({
                 <Users className="h-3.5 w-3.5" />
               </span>
               <div className="min-w-0">
-                <span className="text-xs font-bold text-slate-700 block truncate">Customer</span>
-                <span className="text-[10px] text-slate-500 block truncate">Accounts</span>
+                <span className="text-xs font-bold text-slate-700 block truncate">{t('masterRegistry.cardCustomerTitle')}</span>
+                <span className="text-[10px] text-slate-500 block truncate">{t('masterRegistry.cardCustomerSub')}</span>
               </div>
             </div>
             <span className="text-base font-mono font-bold text-slate-800 shrink-0">{countByType.CUSTOMER}</span>
@@ -476,8 +478,8 @@ export default function MasterRegistryModule({
                 <Truck className="h-3.5 w-3.5" />
               </span>
               <div className="min-w-0">
-                <span className="text-xs font-bold text-slate-700 block truncate">Supplier / Vendor</span>
-                <span className="text-[10px] text-slate-500 block truncate">Vendors</span>
+                <span className="text-xs font-bold text-slate-700 block truncate">{t('masterRegistry.cardSupplierTitle')}</span>
+                <span className="text-[10px] text-slate-500 block truncate">{t('masterRegistry.cardSupplierSub')}</span>
               </div>
             </div>
             <span className="text-base font-mono font-bold text-slate-800 shrink-0">{countByType.SUPPLIER}</span>
@@ -499,8 +501,8 @@ export default function MasterRegistryModule({
                 <Building2 className="h-3.5 w-3.5" />
               </span>
               <div className="min-w-0">
-                <span className="text-xs font-bold text-slate-700 block truncate">Location</span>
-                <span className="text-[10px] text-slate-500 block truncate">Zones & Bins</span>
+                <span className="text-xs font-bold text-slate-700 block truncate">{t('masterRegistry.cardLocationTitle')}</span>
+                <span className="text-[10px] text-slate-500 block truncate">{t('masterRegistry.cardLocationSub')}</span>
               </div>
             </div>
             <span className="text-base font-mono font-bold text-slate-800 shrink-0">{countByType.LOCATION}</span>
@@ -514,7 +516,7 @@ export default function MasterRegistryModule({
           <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
           <input 
             type="text"
-            placeholder="Search registered presets, codes, names..."
+            placeholder={t('masterRegistry.searchPlaceholder')}
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
@@ -523,7 +525,7 @@ export default function MasterRegistryModule({
 
         <div className="flex items-center gap-2 w-full md:w-auto">
           <label htmlFor="filter-registry-type-select" className="text-xs font-bold text-slate-500 flex items-center gap-1.5 shrink-0">
-            <SlidersHorizontal className="h-3.5 w-3.5 text-indigo-600" /> Filter:
+            <SlidersHorizontal className="h-3.5 w-3.5 text-indigo-600" /> {t('masterRegistry.filterLabel')}
           </label>
           <select
             id="filter-registry-type-select"
@@ -531,11 +533,11 @@ export default function MasterRegistryModule({
             onChange={(e) => setSelectedType(e.target.value as 'ALL' | RegistryType)}
             className="w-full md:w-64 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 focus:ring-2 focus:ring-indigo-500 focus:bg-white focus:outline-none cursor-pointer shadow-sm transition"
           >
-            <option value="ALL">ALL REGISTERED ({registries.length})</option>
-            <option value="BARCODE_PRESET">BARCODE PRESETS ({countByType.BARCODE_PRESET})</option>
-            <option value="CUSTOMER">CUSTOMERS ({countByType.CUSTOMER})</option>
-            <option value="SUPPLIER">SUPPLIERS ({countByType.SUPPLIER})</option>
-            <option value="LOCATION">LOCATIONS ({countByType.LOCATION})</option>
+            <option value="ALL">{t('masterRegistry.filterAll', { count: registries.length })}</option>
+            <option value="BARCODE_PRESET">{t('masterRegistry.filterPresets', { count: countByType.BARCODE_PRESET })}</option>
+            <option value="CUSTOMER">{t('masterRegistry.filterCustomers', { count: countByType.CUSTOMER })}</option>
+            <option value="SUPPLIER">{t('masterRegistry.filterSuppliers', { count: countByType.SUPPLIER })}</option>
+            <option value="LOCATION">{t('masterRegistry.filterLocations', { count: countByType.LOCATION })}</option>
           </select>
         </div>
       </div>
@@ -546,20 +548,20 @@ export default function MasterRegistryModule({
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="bg-slate-900 text-slate-300 font-mono text-[11px] uppercase tracking-wider border-b border-slate-800">
-                <th className="p-3">Type</th>
-                <th className="p-3">Code / Barcode</th>
-                <th className="p-3">Name / Title</th>
-                <th className="p-3">Description</th>
-                <th className="p-3 text-center">Status</th>
-                <th className="p-3">Date Registered</th>
-                <th className="p-3 text-right">Actions</th>
+                <th className="p-3">{t('masterRegistry.colType')}</th>
+                <th className="p-3">{t('masterRegistry.colCode')}</th>
+                <th className="p-3">{t('masterRegistry.colName')}</th>
+                <th className="p-3">{t('masterRegistry.colDescription')}</th>
+                <th className="p-3 text-center">{t('masterRegistry.colStatus')}</th>
+                <th className="p-3">{t('masterRegistry.colDateRegistered')}</th>
+                <th className="p-3 text-right">{t('masterRegistry.colActions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="p-8 text-center text-slate-400 text-xs">
-                    No registered items found matching your filter criteria.
+                    {t('masterRegistry.emptyFiltered')}
                   </td>
                 </tr>
               ) : (
@@ -586,7 +588,7 @@ export default function MasterRegistryModule({
                                   : 'bg-indigo-50 text-indigo-800 border-indigo-200'
                               }`}>
                                 {item.presetSource === 'WIP/BOM/FG(Internal)' || item.presetSource === 'INTERNAL' ? <Building2 className="h-3 w-3" /> : <Truck className="h-3 w-3" />}
-                                {item.presetSource === 'WIP/BOM/FG(Internal)' || item.presetSource === 'INTERNAL' ? 'INTERNAL' : 'EXTERNAL'}
+                                {item.presetSource === 'WIP/BOM/FG(Internal)' || item.presetSource === 'INTERNAL' ? t('masterRegistry.sourceInternal') : t('masterRegistry.sourceExternal')}
                               </span>
                             )}
                           </div>
@@ -610,12 +612,12 @@ export default function MasterRegistryModule({
                         <div className="text-[10px] font-normal text-slate-500 mt-1 flex items-center gap-1.5 flex-wrap">
                           {item.vendorSupplier && (
                             <span className="font-medium text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
-                              Vendor: {item.vendorSupplier}
+                              {t('masterRegistry.vendorPrefix')} {item.vendorSupplier}
                             </span>
                           )}
                           {item.location && (
                             <span className="font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
-                              Loc: {item.location}
+                              {t('masterRegistry.locPrefix')} {item.location}
                             </span>
                           )}
                         </div>
@@ -626,24 +628,24 @@ export default function MasterRegistryModule({
                       {item.type === 'BARCODE_PRESET' && (
                         <div className="text-[10px] font-mono text-slate-400 mt-0.5 flex flex-wrap items-center gap-1.5">
                           {normalizeUnitCode(item.unit) ? (
-                            <span>UOM: <strong className="text-slate-600">{normalizeUnitCode(item.unit)}</strong></span>
+                            <span>{t('masterRegistry.uomPrefix')} <strong className="text-slate-600">{normalizeUnitCode(item.unit)}</strong></span>
                           ) : (
                             <span className="inline-block px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 text-[9px] font-bold">
                               {MISSING_UNIT_LABEL}
                             </span>
                           )}
-                          {item.location && <span>| Loc: <strong className="text-slate-600">{item.location}</strong></span>}
+                          {item.location && <span>| {t('masterRegistry.locPrefix')} <strong className="text-slate-600">{item.location}</strong></span>}
                         </div>
                       )}
                     </td>
                     <td className="p-3 text-center">
                       {item.status === 'ACTIVE' ? (
                         <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                          <CheckCircle2 className="h-3 w-3" /> ACTIVE
+                          <CheckCircle2 className="h-3 w-3" /> {t('masterRegistry.statusActive')}
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
-                          <XCircle className="h-3 w-3" /> INACTIVE
+                          <XCircle className="h-3 w-3" /> {t('masterRegistry.statusInactive')}
                         </span>
                       )}
                     </td>
@@ -659,9 +661,9 @@ export default function MasterRegistryModule({
                             if (val === 'EDIT') handleOpenEdit(item);
                             else if (val === 'DELETE') {
                               setConfirmAction({
-                                title: 'Delete Master Registry Item',
-                                message: `Are you sure you want to delete registered item "${item.name}" (${item.code || item.id})?`,
-                                confirmLabel: 'YES, DELETE',
+                                title: t('masterRegistry.deleteConfirmTitle'),
+                                message: t('masterRegistry.confirmDeleteItemMsg', { name: item.name, code: item.code || item.id }),
+                                confirmLabel: t('masterRegistry.deleteConfirmBtnLabel'),
                                 onConfirm: () => onDeleteItem(item.id)
                               });
                             }
@@ -670,12 +672,12 @@ export default function MasterRegistryModule({
                           className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
                           id={`action-select-reg-${item.id}`}
                         >
-                          <option value="" disabled>Actions...</option>
-                          <option value="EDIT">📝 Edit Registration</option>
-                          <option value="DELETE">🗑️ Delete Option</option>
+                          <option value="" disabled>{t('masterRegistry.actionsPlaceholder')}</option>
+                          <option value="EDIT">📝 {t('masterRegistry.actionEdit')}</option>
+                          <option value="DELETE">🗑️ {t('masterRegistry.actionDelete')}</option>
                         </select>
                       ) : (
-                        <span className="text-slate-400 italic text-[10px] font-semibold">Super Admin Only</span>
+                        <span className="text-slate-400 italic text-[10px] font-semibold">{t('masterRegistry.superAdminOnly')}</span>
                       )}
                     </td>
                   </tr>
@@ -709,7 +711,7 @@ export default function MasterRegistryModule({
                 <div className="flex items-center gap-2">
                   <Plus className="h-4 w-4 text-indigo-400" />
                   <h3 className="font-bold text-sm">
-                    {editingItem ? 'Edit Master Registration' : 'Register New Option'}
+                    {editingItem ? t('masterRegistry.modalEditTitle') : t('masterRegistry.modalCreateTitle')}
                   </h3>
                 </div>
                 <button 
@@ -722,21 +724,21 @@ export default function MasterRegistryModule({
 
               <form onSubmit={handleSubmit} className="p-5 space-y-4 max-h-[85vh] overflow-y-auto">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Registration Target *</label>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">{t('masterRegistry.regTargetLabel')}</label>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {(['BARCODE_PRESET', 'CUSTOMER', 'SUPPLIER', 'LOCATION'] as RegistryType[]).map(t => (
+                    {(['BARCODE_PRESET', 'CUSTOMER', 'SUPPLIER', 'LOCATION'] as RegistryType[]).map(regType => (
                       <button
-                        key={t}
+                        key={regType}
                         type="button"
-                        onClick={() => setFormType(t)}
+                        onClick={() => setFormType(regType)}
                         className={`px-2 py-2 rounded-lg text-xs font-bold border flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                          formType === t 
+                          formType === regType 
                             ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' 
                             : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
                         }`}
                       >
-                        {getTypeIcon(t)}
-                        {t === 'BARCODE_PRESET' ? 'Barcode Preset' : t === 'CUSTOMER' ? 'Customer' : t === 'SUPPLIER' ? 'Supplier' : 'Location'}
+                        {getTypeIcon(regType)}
+                        {regType === 'BARCODE_PRESET' ? t('masterRegistry.cardPresetTitle') : regType === 'CUSTOMER' ? t('masterRegistry.cardCustomerTitle') : regType === 'SUPPLIER' ? t('masterRegistry.cardSupplierTitle') : t('masterRegistry.cardLocationTitle')}
                       </button>
                     ))}
                   </div>
@@ -744,7 +746,7 @@ export default function MasterRegistryModule({
 
                 {formType === 'BARCODE_PRESET' && (
                   <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Source Stream *</label>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">{t('masterRegistry.sourceStreamLabel')}</label>
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
@@ -756,7 +758,7 @@ export default function MasterRegistryModule({
                         }`}
                       >
                         <Truck className="h-3.5 w-3.5" />
-                        EXTERNAL (Vendor)
+                        {t('masterRegistry.streamExternal')}
                       </button>
                       <button
                         type="button"
@@ -768,7 +770,7 @@ export default function MasterRegistryModule({
                         }`}
                       >
                         <Building2 className="h-3.5 w-3.5" />
-                        INTERNAL (Production)
+                        {t('masterRegistry.streamInternal')}
                       </button>
                     </div>
                   </div>
@@ -777,23 +779,21 @@ export default function MasterRegistryModule({
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
                     {formType === 'BARCODE_PRESET'
-                      ? 'Item Code / Barcode *'
+                      ? t('masterRegistry.codeLabelPreset')
                       : formType === 'CUSTOMER'
-                      ? 'Customer Code'
+                      ? t('masterRegistry.codeLabelCustomer')
                       : formType === 'SUPPLIER'
-                      ? 'Supplier Code'
-                      : formType === 'LOCATION'
-                      ? 'Location Code'
-                      : 'Code / Short Identifier'}
+                      ? t('masterRegistry.codeLabelSupplier')
+                      : t('masterRegistry.codeLabelLocation')}
                   </label>
                   <input 
                     type="text"
                     required={formType === 'BARCODE_PRESET'}
                     placeholder={
-                      formType === 'BARCODE_PRESET' ? 'e.g. SAMPLE-RESIN-001 or Barcode Value'
-                      : formType === 'CUSTOMER' ? 'e.g. CUST-001'
-                      : formType === 'SUPPLIER' ? 'e.g. SUP-APX'
-                      : 'e.g. LOC-ZA'
+                      formType === 'BARCODE_PRESET' ? t('masterRegistry.codePlaceholderPreset')
+                      : formType === 'CUSTOMER' ? t('masterRegistry.codePlaceholderCustomer')
+                      : formType === 'SUPPLIER' ? t('masterRegistry.codePlaceholderSupplier')
+                      : t('masterRegistry.codePlaceholderLocation')
                     }
                     value={formCode}
                     onChange={e => setFormCode(e.target.value)}
@@ -803,20 +803,19 @@ export default function MasterRegistryModule({
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    {formType === 'BARCODE_PRESET' ? 'Item Name / Title *'
-                      : formType === 'CUSTOMER' ? 'Customer Name *'
-                      : formType === 'SUPPLIER' ? 'Supplier / Vendor Name *'
-                      : formType === 'LOCATION' ? 'Location / Zone Name *'
-                      : 'Name / Title *'}
+                    {formType === 'BARCODE_PRESET' ? t('masterRegistry.nameLabelPreset')
+                      : formType === 'CUSTOMER' ? t('masterRegistry.nameLabelCustomer')
+                      : formType === 'SUPPLIER' ? t('masterRegistry.nameLabelSupplier')
+                      : t('masterRegistry.nameLabelLocation')}
                   </label>
                   <input 
                     type="text"
                     required
                     placeholder={
-                      formType === 'BARCODE_PRESET' ? 'e.g. PC/ABS Cycoloy Resin Pellets'
-                      : formType === 'CUSTOMER' ? 'e.g. Acme Corporation'
-                      : formType === 'SUPPLIER' ? 'e.g. Apex Chemical Corp'
-                      : 'e.g. Zone A - Raw Materials'
+                      formType === 'BARCODE_PRESET' ? t('masterRegistry.namePlaceholderPreset')
+                      : formType === 'CUSTOMER' ? t('masterRegistry.namePlaceholderCustomer')
+                      : formType === 'SUPPLIER' ? t('masterRegistry.namePlaceholderSupplier')
+                      : t('masterRegistry.namePlaceholderLocation')
                     }
                     value={formName}
                     onChange={e => setFormName(e.target.value)}
@@ -826,18 +825,18 @@ export default function MasterRegistryModule({
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    {formType === 'BARCODE_PRESET' ? 'Item Description / Notes'
-                      : formType === 'CUSTOMER' ? 'Customer Notes / Address'
-                      : formType === 'SUPPLIER' ? 'Supplier Description / Notes'
-                      : 'Description / Notes'}
+                    {formType === 'BARCODE_PRESET' ? t('masterRegistry.descLabelPreset')
+                      : formType === 'CUSTOMER' ? t('masterRegistry.descLabelCustomer')
+                      : formType === 'SUPPLIER' ? t('masterRegistry.descLabelSupplier')
+                      : t('masterRegistry.descLabelGeneric')}
                   </label>
                   <textarea 
                     rows={2}
                     placeholder={
-                      formType === 'BARCODE_PRESET' ? 'e.g. High-impact flame retardant engineering plastic resin pellets...'
-                      : formType === 'CUSTOMER' ? 'e.g. Automotive molded plastic assemblies & packaging'
-                      : formType === 'SUPPLIER' ? 'e.g. Primary resin & chemical compound supplier'
-                      : 'Optional details, contacts, or specs...'
+                      formType === 'BARCODE_PRESET' ? t('masterRegistry.descPlaceholderPreset')
+                      : formType === 'CUSTOMER' ? t('masterRegistry.descPlaceholderCustomer')
+                      : formType === 'SUPPLIER' ? t('masterRegistry.descPlaceholderSupplier')
+                      : t('masterRegistry.descPlaceholderGeneric')
                     }
                     value={formDesc}
                     onChange={e => setFormDesc(e.target.value)}
@@ -848,7 +847,7 @@ export default function MasterRegistryModule({
                 {formType === 'BARCODE_PRESET' && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">
-                      Category * <span className="text-[10px] text-slate-400 font-normal">(from unified category registry)</span>
+                      {t('masterRegistry.categoryLabel')} * <span className="text-[10px] text-slate-400 font-normal">({t('masterRegistry.categoryUnifiedHint')})</span>
                     </label>
                     <select
                       required
@@ -856,7 +855,7 @@ export default function MasterRegistryModule({
                       onChange={e => setFormCategory(e.target.value)}
                       className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer"
                     >
-                      <option value="" disabled>-- Select Unified Category --</option>
+                      <option value="" disabled>{t('masterRegistry.selectUnifiedCategoryOpt')}</option>
                       {unifiedCategories.map(cat => (
                         <option key={cat} value={cat}>
                           {cat}
@@ -869,14 +868,14 @@ export default function MasterRegistryModule({
                 {formType === 'BARCODE_PRESET' && (
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Unit of Measure (UOM) *</label>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">{t('masterRegistry.uomReqLabel')}</label>
                       <select
                         required
                         value={formUnit}
                         onChange={e => setFormUnit(normalizeUnitCode(e.target.value))}
                         className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono font-bold focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer bg-white"
                       >
-                        <option value="" disabled>-- Select UOM --</option>
+                        <option value="" disabled>{t('masterRegistry.selectUomOpt')}</option>
                         {getAllSelectUomOptions(formUnit).map(uom => (
                           <option key={uom} value={uom}>{uom}</option>
                         ))}
@@ -884,11 +883,11 @@ export default function MasterRegistryModule({
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Vendor / Supplier</label>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">{t('masterRegistry.vendorOptLabel')}</label>
                       <input 
                         type="text"
                         list="preset-suppliers-list"
-                        placeholder="e.g. Sabic Plastics"
+                        placeholder={t('masterRegistry.vendorOptPlaceholder')}
                         value={formVendorSupplier}
                         onChange={e => setFormVendorSupplier(e.target.value)}
                         className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
@@ -901,10 +900,10 @@ export default function MasterRegistryModule({
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">Default Storage Location</label>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">{t('masterRegistry.defaultLocLabel')}</label>
                       <input 
                         type="text"
-                        placeholder="e.g. RAW-ZONE-A1"
+                        placeholder={t('masterRegistry.defaultLocPlaceholder')}
                         value={formLocation}
                         onChange={e => setFormLocation(e.target.value)}
                         className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono uppercase focus:ring-2 focus:ring-indigo-500 focus:outline-none"
@@ -914,14 +913,14 @@ export default function MasterRegistryModule({
                 )}
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Status</label>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">{t('masterRegistry.statusLabel')}</label>
                   <select 
                     value={formStatus}
                     onChange={e => setFormStatus(e.target.value as 'ACTIVE' | 'INACTIVE')}
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                   >
-                    <option value="ACTIVE">ACTIVE (Visible in selection lists)</option>
-                    <option value="INACTIVE">INACTIVE (Hidden from selection lists)</option>
+                    <option value="ACTIVE">{t('masterRegistry.statusActiveOpt')}</option>
+                    <option value="INACTIVE">{t('masterRegistry.statusInactiveOpt')}</option>
                   </select>
                 </div>
 
@@ -931,14 +930,14 @@ export default function MasterRegistryModule({
                     onClick={() => setShowRegisterModal(false)}
                     className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
                   >
-                    Cancel
+                    {t('common.cancel')}
                   </button>
 
                   <button
                     type="submit"
                     className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition shadow-sm"
                   >
-                    {editingItem ? 'Save Changes' : 'Register Item'}
+                    {editingItem ? t('common.saveChanges') : t('masterRegistry.registerItemBtn')}
                   </button>
                 </div>
               </form>
@@ -987,7 +986,7 @@ export default function MasterRegistryModule({
 
                 <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg flex items-center gap-2 text-amber-800 text-[11px] font-semibold">
                   <AlertOctagon className="h-4 w-4 text-amber-600 shrink-0" />
-                  <span>Please select YES to confirm or NO to cancel this action.</span>
+                  <span>{t('receiving.selectYesNoHint')}</span>
                 </div>
 
                 <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
@@ -997,7 +996,7 @@ export default function MasterRegistryModule({
                     className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer"
                   >
                     <XCircle className="h-4 w-4 text-slate-500" />
-                    NO
+                    {t('receiving.noLabel')}
                   </button>
                   <button
                     type="button"
@@ -1008,7 +1007,7 @@ export default function MasterRegistryModule({
                     className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shadow-sm cursor-pointer"
                   >
                     <CheckCircle2 className="h-4 w-4 text-white" />
-                    {confirmAction.confirmLabel || 'YES'}
+                    {confirmAction.confirmLabel || t('receiving.yesLabel')}
                   </button>
                 </div>
               </div>

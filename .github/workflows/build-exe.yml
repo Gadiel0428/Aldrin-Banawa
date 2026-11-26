@@ -94,6 +94,10 @@ jobs:
         working-directory: ${{ steps.locate.outputs.dir }}
         run: npm run lint
 
+      - name: Run Unit Tests (Vitest)
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: npm run test
+
       - name: Build Application and Server Bundle
         working-directory: ${{ steps.locate.outputs.dir }}
         env:

@@ -49,6 +49,7 @@ import {
   resolveMasterDataUnit,
 } from '../../shared/units';
 import { computeStockAlerts } from '../utils/stockAlerts';
+import { useI18n } from '../i18n';
 
 interface StockFIFOControlProps {
   stocks: MaterialStockItem[];
@@ -83,6 +84,7 @@ export default function StockFIFOControl({
   fifoColorsByMonth,
   onUpdateFifoColors
 }: StockFIFOControlProps) {
+  const { t, dateLocale } = useI18n();
   const effectiveCanEdit = canEdit || isSuperAdmin;
   const effectiveCalendar: FifoColorsMap = fifoColorsByMonth || FIFO_COLORS_BY_MONTH;
 
@@ -156,14 +158,14 @@ export default function StockFIFOControl({
   const handleAddStockSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newPartCode || !newDesc || newQty <= 0 || !newLot || !newLocation) {
-      showPrintToast('Please fill out all required fields.', 'warning');
+      showPrintToast(t('stocks.fillRequiredWarning'), 'warning');
       return;
     }
 
     const masterUnit = findMasterPresetUnit({ partCode: newPartCode, description: newDesc }, registries);
     const cleanUnit = normalizeUnitCode(newUnit) || masterUnit;
     if (!cleanUnit) {
-      showPrintToast('Please select a valid Unit of Measure (UOM).', 'warning');
+      showPrintToast(t('stocks.selectValidUomWarning'), 'warning');
       return;
     }
 
@@ -332,7 +334,7 @@ export default function StockFIFOControl({
   // Generate printable CSV summary of current stock levels
   const handleDownloadCSV = () => {
     if (sortedStocks.length === 0) {
-      showPrintToast('No stock items available in current view to export.', 'warning');
+      showPrintToast(t('stocks.noExportWarning'), 'warning');
       return;
     }
 
@@ -393,15 +395,15 @@ export default function StockFIFOControl({
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded border border-indigo-500/30">
-              INVENTORY & FIFO / FEFO CONTROL
+              {t('stocks.bannerBadge')}
             </span>
             <span className="text-emerald-400 text-[10px] font-bold flex items-center gap-1 font-mono">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse inline-block" /> VERIFIED
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse inline-block" /> {t('stocks.verifiedBadge')}
             </span>
           </div>
-          <h2 className="text-xl font-bold text-white tracking-tight">Material & Finished Goods Control (FIFO / FEFO)</h2>
+          <h2 className="text-xl font-bold text-white tracking-tight">{t('stocks.moduleTitle')}</h2>
           <p className="text-xs text-slate-300 mt-1">
-            Apply quarterly visual color tags, track expiration thresholds, prevent spillage, and avoid resin sack mixing.
+            {t('stocks.moduleSubtitle')}
           </p>
         </div>
       </div>
@@ -411,14 +413,14 @@ export default function StockFIFOControl({
         <div className="flex items-center justify-between border-b border-slate-100 pb-3">
           <div className="flex items-center gap-2">
             <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
-              <Layers className="h-4 w-4 text-slate-500" /> Standard Quarterly FIFO Color Coding Calendar
+              <Layers className="h-4 w-4 text-slate-500" /> {t('stocks.fifoLegendTitle')}
             </h3>
             <span className="bg-indigo-50 text-indigo-700 text-[10px] font-mono font-bold px-2 py-0.5 rounded border border-indigo-200">
-              12 MONTHS
+              {t('stocks.monthsCountBadge')}
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-[10px] font-mono text-slate-400 hidden sm:inline">Visual Control Guideline</span>
+            <span className="text-[10px] font-mono text-slate-400 hidden sm:inline">{t('stocks.visualControlGuideline')}</span>
             {isSuperAdmin && (
               <button
                 type="button"
@@ -429,11 +431,11 @@ export default function StockFIFOControl({
                   setShowEditCalendarModal(true);
                 }}
                 className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs hover:border-indigo-300"
-                title="Super Admin: Customize monthly FIFO color tags"
+                title={t('stocks.editCalendarTooltip')}
                 id="btn-edit-fifo-calendar"
               >
                 <Edit className="h-3 w-3 text-indigo-600" />
-                <span>Edit Calendar</span>
+                <span>{t('stocks.fifoCalendarBtn')}</span>
               </button>
             )}
           </div>
@@ -445,7 +447,7 @@ export default function StockFIFOControl({
         <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3">
           {Object.entries(effectiveCalendar).map(([monthNum, meta]) => {
             const date = new Date(2026, Number(monthNum) - 1, 1);
-            const monthLabel = date.toLocaleString('default', { month: 'long' });
+            const monthLabel = date.toLocaleString(dateLocale, { month: 'long' });
             const isCurrentMonth = (new Date().getMonth() + 1) === Number(monthNum);
             return (
               <div 
@@ -463,11 +465,11 @@ export default function StockFIFOControl({
                     ? 'border-indigo-300 bg-indigo-50/60 shadow-xs ring-1 ring-indigo-200' 
                     : 'border-slate-150 bg-slate-50 hover:bg-slate-100/70'
                 } ${isSuperAdmin ? 'cursor-pointer hover:border-indigo-300 hover:shadow-xs' : ''}`}
-                title={isSuperAdmin ? `Click to edit FIFO calendar color for ${monthLabel}` : `${monthLabel}: ${meta.name}`}
+                title={isSuperAdmin ? t('stocks.monthEditTooltip', { month: monthLabel }) : `${t('stocks.monthViewTooltip', { month: monthLabel })}: ${meta.name}`}
               >
                 {isCurrentMonth && (
                   <span className="absolute -top-2 right-1.5 bg-indigo-600 text-white text-[8px] font-bold px-1.5 py-0.2 rounded-full uppercase tracking-wider shadow-2xs">
-                    Current
+                    {t('stocks.currentBadge')}
                   </span>
                 )}
                 <div className="flex items-center gap-1">
@@ -483,7 +485,7 @@ export default function StockFIFOControl({
                 <span className="text-[10px] font-bold text-slate-700">{meta.name}</span>
                 {isSuperAdmin && (
                   <span className="text-[9px] text-indigo-600 font-semibold opacity-0 group-hover:opacity-100 transition-opacity">
-                    Edit
+                    {t('common.edit')}
                   </span>
                 )}
               </div>
@@ -514,7 +516,7 @@ export default function StockFIFOControl({
             <input 
               id="stock-search-input"
               type="text" 
-              placeholder="Search by Part Code, Description, Lot #..." 
+              placeholder={t('stocks.searchPlaceholder')} 
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               className="w-full pl-9 pr-8 py-2 border border-slate-200 rounded-lg text-xs font-medium focus:ring-2 focus:ring-slate-400/20 focus:border-slate-400 focus:outline-none transition-all bg-white shadow-xs"
@@ -524,7 +526,7 @@ export default function StockFIFOControl({
                 type="button"
                 onClick={() => setSearchQuery('')}
                 className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
-                title="Clear search input"
+                title={t('stocks.clearSearchTitle')}
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -532,7 +534,7 @@ export default function StockFIFOControl({
           </div>
           {searchQuery.trim() && (
             <div className="mt-1 text-[11px] text-slate-500 font-medium flex items-center gap-1">
-              <span>Showing <strong>{filteredStocks.length}</strong> matching item{filteredStocks.length !== 1 ? 's' : ''} for "{searchQuery.trim()}"</span>
+              <span>{t('stocks.showingMatches', { count: filteredStocks.length, query: searchQuery.trim() })}</span>
             </div>
           )}
         </div>
@@ -547,13 +549,13 @@ export default function StockFIFOControl({
               onChange={e => setSelectedType(e.target.value as any)}
               className="bg-transparent focus:outline-none font-semibold text-slate-700 cursor-pointer"
             >
-              <option value="ALL">All Materials</option>
-              <option value="RAW">Raw Materials</option>
-              <option value="PACKAGING">Packaging</option>
-              <option value="CONSUMABLE">Consumables</option>
-              <option value="WIP">WIP</option>
-              <option value="FG">Finished Goods</option>
-              <option value="SUB_PART">Sub-parts</option>
+              <option value="ALL">{t('stocks.filterAllTypes')}</option>
+              <option value="RAW">{t('stocks.typeRawOpt')}</option>
+              <option value="PACKAGING">{t('stocks.typePackagingOpt')}</option>
+              <option value="CONSUMABLE">{t('stocks.typeConsumableOpt')}</option>
+              <option value="WIP">{t('stocks.typeWipOpt')}</option>
+              <option value="FG">{t('stocks.typeFgOpt')}</option>
+              <option value="SUB_PART">{t('stocks.typeSubPartOpt')}</option>
             </select>
           </div>
 
@@ -565,11 +567,11 @@ export default function StockFIFOControl({
               onChange={e => setSelectedStatus(e.target.value as any)}
               className="bg-transparent focus:outline-none font-semibold text-slate-700 cursor-pointer"
             >
-              <option value="ALL">Status</option>
-              <option value="APPROVED">Approved</option>
-              <option value="QUARANTINE">Quarantine</option>
-              <option value="HOLD">Hold</option>
-              <option value="MISSING_UNIT">Missing Unit</option>
+              <option value="ALL">{t('stocks.filterAllStatuses')}</option>
+              <option value="APPROVED">{t('stocks.statusApproved')}</option>
+              <option value="QUARANTINE">{t('stocks.statusQuarantine')}</option>
+              <option value="HOLD">{t('stocks.statusHold')}</option>
+              <option value="MISSING_UNIT">{t('stocks.statusMissingUnit')}</option>
             </select>
           </div>
 
@@ -580,12 +582,12 @@ export default function StockFIFOControl({
               value={selectedCustomer}
               onChange={e => setSelectedCustomer(e.target.value)}
               className="bg-transparent focus:outline-none font-semibold text-slate-700 cursor-pointer max-w-[160px] truncate"
-              title="Filter by Registered Customer with SKU Count"
+              title={t('stocks.filterAllCustomers')}
             >
-              <option value="ALL">All Registered Customers</option>
+              <option value="ALL">{t('stocks.filterAllCustomers')}</option>
               {customersWithSkuCounts.map(item => (
                 <option key={item.customer} value={item.customer}>
-                  {item.customer} ({item.skuCount} SKUs)
+                  {item.customer} ({item.skuCount} SKU)
                 </option>
               ))}
             </select>
@@ -594,9 +596,9 @@ export default function StockFIFOControl({
           <button 
             onClick={handleDownloadCSV}
             className="bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold py-1.5 px-3 rounded-lg flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
-            title="Download printable CSV summary of current stock levels"
+            title={t('stocks.exportCsvTitle')}
           >
-            <Download className="h-3.5 w-3.5" /> Export CSV
+            <Download className="h-3.5 w-3.5" /> {t('stocks.exportCsvBtn')}
           </button>
 
           {effectiveCanEdit && (
@@ -604,7 +606,7 @@ export default function StockFIFOControl({
               onClick={() => setShowAddForm(!showAddForm)}
               className="bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-1.5 px-3.5 rounded-lg flex items-center gap-1 cursor-pointer"
             >
-              <Plus className="h-3.5 w-3.5" /> Add Stock Manually
+              <Plus className="h-3.5 w-3.5" /> {t('stocks.addStockBtn')}
             </button>
           )}
         </div>
@@ -618,57 +620,57 @@ export default function StockFIFOControl({
           id="manual-stock-form"
         >
           <div className="border-b border-slate-100 pb-2 flex justify-between items-center">
-            <h4 className="font-bold text-xs text-slate-800">Manual Stock Adjustment Register</h4>
-            <button type="button" onClick={() => setShowAddForm(false)} className="text-[10px] text-slate-400">Cancel</button>
+            <h4 className="font-bold text-xs text-slate-800">{t('stocks.addModalTitle')}</h4>
+            <button type="button" onClick={() => setShowAddForm(false)} className="text-[10px] text-slate-400">{t('common.cancel')}</button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
-              <label className="block text-[10px] font-semibold text-slate-500 mb-1">Part Code *</label>
+              <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('stocks.editPartCodeLabel')}</label>
               <input 
-                type="text" required placeholder="RM-RE-XXX" value={newPartCode}
+                type="text" required placeholder={t('stocks.manualPartPlaceholder')} value={newPartCode}
                 onChange={e => handleNewPartCodeChange(e.target.value)}
                 className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs font-mono"
               />
             </div>
             <div>
-              <label className="block text-[10px] font-semibold text-slate-500 mb-1">Description *</label>
+              <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('stocks.manualDescLabel')}</label>
               <input 
-                type="text" required placeholder="Plastic resins, Box, etc." value={newDesc}
+                type="text" required placeholder={t('stocks.manualDescPlaceholder')} value={newDesc}
                 onChange={e => setNewDesc(e.target.value)}
                 className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs"
               />
             </div>
             <div>
-              <label className="block text-[10px] font-semibold text-slate-500 mb-1">Type *</label>
+              <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('stocks.manualTypeLabel')}</label>
               <select 
                 value={newType} onChange={e => setNewType(e.target.value as any)}
                 className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs"
               >
-                <option value="RAW">Raw Material</option>
-                <option value="PACKAGING">Packaging</option>
-                <option value="CONSUMABLE">Consumable</option>
-                <option value="WIP">WIP (Internal)</option>
-                <option value="FG">Finished Goods</option>
-                <option value="SUB_PART">Sub-parts</option>
+                <option value="RAW">{t('stocks.manualTypeRaw')}</option>
+                <option value="PACKAGING">{t('stocks.manualTypePkg')}</option>
+                <option value="CONSUMABLE">{t('stocks.manualTypeCon')}</option>
+                <option value="WIP">{t('stocks.manualTypeWip')}</option>
+                <option value="FG">{t('stocks.manualTypeFg')}</option>
+                <option value="SUB_PART">{t('stocks.manualTypeSub')}</option>
               </select>
             </div>
             <div>
-              <label className="block text-[10px] font-semibold text-slate-500 mb-1">Lot / Batch Number *</label>
+              <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('stocks.editLotLabel')}</label>
               <input 
-                type="text" required placeholder="LOT-XXXX" value={newLot}
+                type="text" required placeholder={t('stocks.manualLotPlaceholder')} value={newLot}
                 onChange={e => setNewLot(e.target.value)}
                 className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs font-mono"
               />
             </div>
             <div>
-              <label className="block text-[10px] font-semibold text-slate-500 mb-1">Initial Quantity *</label>
+              <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('stocks.manualQtyLabel')}</label>
               <input 
                 type="text" 
                 inputMode="numeric"
                 pattern="[0-9]*"
                 required 
-                placeholder="Qty" 
+                placeholder={t('stocks.manualQtyPlaceholder')} 
                 value={newQty || ''}
                 onKeyDown={(e) => {
                   if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
@@ -683,29 +685,29 @@ export default function StockFIFOControl({
               />
             </div>
             <div>
-              <label className="block text-[10px] font-semibold text-slate-500 mb-1">Unit of Measure (UOM) *</label>
+              <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('stocks.manualUomLabel')}</label>
               <select 
                 value={newUnit} 
                 onChange={e => setNewUnit(e.target.value)}
                 required
                 className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs font-semibold"
               >
-                <option value="">-- Select UOM --</option>
+                <option value="">{t('stocks.manualSelectUomOpt')}</option>
                 {getAllSelectUomOptions(newUnit).map(u => (
                   <option key={u} value={u}>{u}</option>
                 ))}
               </select>
             </div>
             <div>
-              <label className="block text-[10px] font-semibold text-slate-500 mb-1">Warehouse Location (e.g. Rack A1) *</label>
+              <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('stocks.manualLocationLabel')}</label>
               <input 
-                type="text" required placeholder="Aisle B - Bin 4" value={newLocation}
+                type="text" required placeholder={t('stocks.manualLocationPlaceholder')} value={newLocation}
                 onChange={e => setNewLocation(e.target.value)}
                 className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs"
               />
             </div>
             <div>
-              <label className="block text-[10px] font-semibold text-slate-500 mb-1">Expiration Date (FEFO tracking)</label>
+              <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('stocks.manualExpiryLabel')}</label>
               <input 
                 type="date" value={newExpDate}
                 onChange={e => setNewExpDate(e.target.value)}
@@ -713,12 +715,12 @@ export default function StockFIFOControl({
               />
             </div>
             <div>
-              <label className="block text-[10px] font-semibold text-slate-500 mb-1">Customer/Client</label>
+              <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('stocks.manualCustomerLabel')}</label>
               <select 
                 value={newCustomer} onChange={e => setNewCustomer(e.target.value)}
                 className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs"
               >
-                <option value="">Select Registered Customer / Client...</option>
+                <option value="">{t('stocks.manualSelectCustomerOpt')}</option>
                 {registeredCustomers.map(cust => (
                   <option key={cust} value={cust}>{cust}</option>
                 ))}
@@ -733,13 +735,13 @@ export default function StockFIFOControl({
               className="h-4 w-4 rounded border-slate-300 text-slate-900"
             />
             <label htmlFor="chk-resin-risk" className="text-xs font-semibold text-slate-700 cursor-pointer">
-              Mark as Spillage/Dust Mix-up risk (Broken Resin Sack Check)
+              {t('stocks.manualResinRiskLabel')}
             </label>
           </div>
 
           <div className="flex justify-end gap-1">
             <button type="submit" className="bg-slate-900 text-white text-[11px] font-bold px-3 py-1.5 rounded">
-              Register Stock Item
+              {t('stocks.registerStockBtn')}
             </button>
           </div>
         </form>
@@ -753,7 +755,7 @@ export default function StockFIFOControl({
               <div className="flex items-center gap-2">
                 <AlertOctagon className="h-4 w-4 text-rose-600 shrink-0" />
                 <span>
-                  <strong>{stockAlertsSummary.missingUnitCount}</strong> stock record(s) have no unit in Master Data or batch record and are flagged as <span className="font-mono font-bold">{MISSING_UNIT_LABEL}</span>.
+                  {t('stocks.missingUnitBanner', { count: stockAlertsSummary.missingUnitCount })} <span className="font-mono font-bold">{t('common.missingUnit')}</span>.
                 </span>
               </div>
               <button
@@ -761,7 +763,7 @@ export default function StockFIFOControl({
                 onClick={() => setSelectedStatus(selectedStatus === 'MISSING_UNIT' ? 'ALL' : 'MISSING_UNIT')}
                 className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold text-[11px] transition cursor-pointer"
               >
-                {selectedStatus === 'MISSING_UNIT' ? 'Show All Statuses' : 'Filter Missing Unit'}
+                {selectedStatus === 'MISSING_UNIT' ? t('stocks.showAllStatusesBtn') : t('stocks.filterMissingUnitBtn')}
               </button>
             </div>
           )}
@@ -769,7 +771,7 @@ export default function StockFIFOControl({
           {groupedViewTotals.buckets.length > 0 && (
             <div className="bg-white border border-slate-200 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 shadow-2xs">
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                Total On-Hand by Unit ({filteredStocks.length} records)
+                {t('stocks.totalOnHandByUnit', { count: filteredStocks.length })}
               </span>
               <div className="flex flex-wrap items-center gap-2">
                 {groupedViewTotals.buckets.map((bucket) => (
@@ -781,7 +783,7 @@ export default function StockFIFOControl({
                         : 'bg-slate-50 text-slate-800 border-slate-200'
                     }`}
                   >
-                    {bucket.total.toLocaleString()} {bucket.displayUnit}
+                    {bucket.total.toLocaleString()} {bucket.isMissing ? t('common.missingUnit') : bucket.displayUnit}
                     <span className="ml-1 text-[10px] font-normal text-slate-500">({bucket.count})</span>
                   </span>
                 ))}
@@ -795,21 +797,21 @@ export default function StockFIFOControl({
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm" id="stock-grid-panel">
         <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-slate-50/50">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Active Warehouse Stock & FIFO Bins</span>
+            <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">{t('stocks.activeGridTitle')}</span>
             <span className="bg-slate-200/80 text-slate-700 text-[10px] font-mono font-semibold px-2 py-0.5 rounded-full">
-              {filteredStocks.length} records in view
+              {t('stocks.recordsInView', { count: filteredStocks.length })}
             </span>
             <span className="text-[11px] text-slate-500 font-medium hidden md:inline">
-              &bull; Sorted by <strong className="text-indigo-700 font-semibold">{sortField}</strong> ({sortDirection === 'asc' ? 'Ascending' : 'Descending'})
+              &bull; {t('stocks.sortedByText')} <strong className="text-indigo-700 font-semibold">{sortField}</strong> ({sortDirection === 'asc' ? t('stocks.ascText') : t('stocks.descText')})
             </span>
           </div>
           <div className="flex items-center gap-2">
             <button
               onClick={handleDownloadCSV}
               className="bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold py-1.5 px-3 rounded-lg flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer"
-              title="Export printable CSV summary of current stock levels (respects active sort)"
+              title={t('stocks.exportCsvSummaryTitle')}
             >
-              <Download className="h-3.5 w-3.5" /> Export CSV Summary
+              <Download className="h-3.5 w-3.5" /> {t('stocks.exportCsvSummaryBtn')}
             </button>
           </div>
         </div>
@@ -823,10 +825,10 @@ export default function StockFIFOControl({
                   className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                     sortField === 'id' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                   }`}
-                  title="Sort by Stock ID"
+                  title={t('stocks.sortByIdTitle')}
                 >
                   <div className="flex items-center gap-1">
-                    <span>Stock ID</span>
+                    <span>{t('stocks.colStockId')}</span>
                     <span className="text-slate-400 group-hover:text-slate-700">
                       {sortField === 'id' ? (sortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                     </span>
@@ -837,10 +839,10 @@ export default function StockFIFOControl({
                   className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                     sortField === 'type' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                   }`}
-                  title="Sort by Material Classification"
+                  title={t('stocks.sortByTypeTitle')}
                 >
                   <div className="flex items-center gap-1">
-                    <span>Classification</span>
+                    <span>{t('stocks.colClassification')}</span>
                     <span className="text-slate-400 group-hover:text-slate-700">
                       {sortField === 'type' ? (sortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                     </span>
@@ -851,10 +853,10 @@ export default function StockFIFOControl({
                   className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                     sortField === 'partCode' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                   }`}
-                  title="Sort by Part Code & Description"
+                  title={t('stocks.sortByPartTitle')}
                 >
                   <div className="flex items-center gap-1">
-                    <span>Part Code & Description</span>
+                    <span>{t('stocks.colPartCodeDesc')}</span>
                     <span className="text-slate-400 group-hover:text-slate-700">
                       {sortField === 'partCode' ? (sortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                     </span>
@@ -865,10 +867,10 @@ export default function StockFIFOControl({
                   className={`p-3 font-semibold select-none cursor-pointer transition-colors group text-right ${
                     sortField === 'quantity' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                   }`}
-                  title="Sort by Available Quantity"
+                  title={t('stocks.sortByQtyTitle')}
                 >
                   <div className="flex items-center justify-end gap-1">
-                    <span>Available Qty</span>
+                    <span>{t('stocks.colQuantity')}</span>
                     <span className="text-slate-400 group-hover:text-slate-700">
                       {sortField === 'quantity' ? (sortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                     </span>
@@ -879,10 +881,10 @@ export default function StockFIFOControl({
                   className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                     sortField === 'receivedDate' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                   }`}
-                  title="Sort by Receive Date & Lot"
+                  title={t('stocks.sortByRecvTitle')}
                 >
                   <div className="flex items-center gap-1">
-                    <span>Lot & Receive Date</span>
+                    <span>{t('stocks.colLotNumber')}</span>
                     <span className="text-slate-400 group-hover:text-slate-700">
                       {sortField === 'receivedDate' ? (sortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                     </span>
@@ -893,10 +895,10 @@ export default function StockFIFOControl({
                   className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                     sortField === 'expirationDate' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                   }`}
-                  title="Sort by Expiration Date (FEFO)"
+                  title={t('stocks.sortByExpTitle')}
                 >
                   <div className="flex items-center gap-1">
-                    <span>Expiration / FEFO</span>
+                    <span>{t('stocks.colExpiry')}</span>
                     <span className="text-slate-400 group-hover:text-slate-700">
                       {sortField === 'expirationDate' ? (sortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                     </span>
@@ -907,10 +909,10 @@ export default function StockFIFOControl({
                   className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                     sortField === 'fifoColor' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                   }`}
-                  title="Sort by FIFO Tag Color"
+                  title={t('stocks.sortByFifoTitle')}
                 >
                   <div className="flex items-center gap-1">
-                    <span>FIFO Tag Color</span>
+                    <span>{t('stocks.colFifoTag')}</span>
                     <span className="text-slate-400 group-hover:text-slate-700">
                       {sortField === 'fifoColor' ? (sortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                     </span>
@@ -921,10 +923,10 @@ export default function StockFIFOControl({
                   className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                     sortField === 'location' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                   }`}
-                  title="Sort by Warehouse Bin Location"
+                  title={t('stocks.sortByLocTitle')}
                 >
                   <div className="flex items-center gap-1">
-                    <span>Warehouse Bin</span>
+                    <span>{t('stocks.colLocation')}</span>
                     <span className="text-slate-400 group-hover:text-slate-700">
                       {sortField === 'location' ? (sortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                     </span>
@@ -935,16 +937,16 @@ export default function StockFIFOControl({
                   className={`p-3 font-semibold select-none cursor-pointer transition-colors group ${
                     sortField === 'status' ? 'bg-indigo-50/90 text-indigo-900 border-b-2 border-indigo-600' : 'hover:bg-slate-200/70'
                   }`}
-                  title="Sort by SOP Status"
+                  title={t('stocks.sortByStatusTitle')}
                 >
                   <div className="flex items-center gap-1">
-                    <span>SOP Status</span>
+                    <span>{t('stocks.colStatus')}</span>
                     <span className="text-slate-400 group-hover:text-slate-700">
                       {sortField === 'status' ? (sortDirection === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-indigo-600" /> : <ArrowDown className="h-3.5 w-3.5 text-indigo-600" />) : <ArrowUpDown className="h-3 w-3 opacity-40 group-hover:opacity-100" />}
                     </span>
                   </div>
                 </th>
-                <th className="p-3 font-semibold text-slate-600">Actions</th>
+                <th className="p-3 font-semibold text-slate-600">{t('stocks.colActions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -1051,7 +1053,7 @@ export default function StockFIFOControl({
                           ? 'bg-indigo-50/70 border-l-4 border-l-indigo-600 shadow-2xs' 
                           : 'hover:bg-indigo-50/30 hover:border-l-4 hover:border-l-indigo-300'
                       }`}
-                      title="Click row to expand detailed transaction history & metadata"
+                      title={t('stocks.rowExpandTooltip')}
                     >
                       <td className="p-4 font-mono font-semibold text-slate-600">
                         <div className="flex items-center gap-1.5">
@@ -1066,7 +1068,7 @@ export default function StockFIFOControl({
                                 ? 'bg-indigo-600 text-white shadow-2xs' 
                                 : 'text-slate-400 hover:text-indigo-600 hover:bg-indigo-100/60'
                             }`}
-                            title={isExpanded ? 'Collapse card view' : 'Expand detailed card view'}
+                            title={isExpanded ? t('stocks.collapseCardTitle') : t('stocks.expandCardTitle')}
                           >
                             {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                           </button>
@@ -1082,8 +1084,8 @@ export default function StockFIFOControl({
                         <div className="font-mono font-bold text-slate-800 flex items-center flex-wrap gap-1.5">
                           <span>{item.partCode}</span>
                           {item.resinSackRisk && (
-                            <span className="bg-orange-100 text-orange-800 text-[8px] font-bold px-1 rounded-sm shrink-0" title="Broken sack / mixing danger">
-                              SACK RISK
+                            <span className="bg-orange-100 text-orange-800 text-[8px] font-bold px-1 rounded-sm shrink-0" title={t('stocks.sackRiskTitle')}>
+                              {t('stocks.sackRiskBadge')}
                             </span>
                           )}
                           <span className="bg-indigo-50 text-indigo-700 text-[8px] font-bold px-1.5 py-0.5 rounded-sm border border-indigo-100 shrink-0 font-sans">
@@ -1093,10 +1095,10 @@ export default function StockFIFOControl({
                         <div className="text-slate-500 text-[11px] truncate max-w-[180px]">{item.description}</div>
                         {item.bom && item.bom.length > 0 && (
                           <div className="mt-2 bg-slate-50 border border-slate-200 p-2 rounded-lg max-w-[200px]">
-                            <span className="text-[9px] font-bold text-indigo-700 uppercase block mb-1">BOM Components ({item.bom.length})</span>
+                            <span className="text-[9px] font-bold text-indigo-700 uppercase block mb-1">{t('stocks.bomComponentsTitle')} ({item.bom.length})</span>
                             <div className="space-y-1 max-h-[80px] overflow-y-auto pr-1">
                               {item.bom.map((b: any, idx: number) => {
-                                const bUnit = normalizeUnitCode(b.unit) || MISSING_UNIT_LABEL;
+                                const bUnit = normalizeUnitCode(b.unit) || t('common.missingUnit');
                                 return (
                                   <div key={idx} className="flex justify-between items-center text-[9px] font-mono text-slate-600 leading-tight">
                                     <span className="truncate max-w-[110px]" title={`${b.partCode}: ${b.description}`}>{b.partCode}</span>
@@ -1113,7 +1115,7 @@ export default function StockFIFOControl({
                           {item.quantity.toLocaleString()}{' '}
                           {itemUnitInfo.isMissing ? (
                             <span className="inline-block px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 text-[9px] font-bold">
-                              {MISSING_UNIT_LABEL}
+                              {t('common.missingUnit')}
                             </span>
                           ) : (
                             itemUnitInfo.unit
@@ -1121,13 +1123,13 @@ export default function StockFIFOControl({
                         </div>
                         {typeof item.reorderMin === 'number' && item.reorderMin > 0 && item.quantity <= item.reorderMin && (
                           <span className="inline-block bg-rose-100 text-rose-800 text-[9px] font-bold px-1.5 py-0.5 rounded border border-rose-200 mt-1 font-sans">
-                            ⚠️ LOW STOCK (Min: {item.reorderMin} {itemUnitInfo.unit || MISSING_UNIT_LABEL})
+                            ⚠️ {t('stocks.lowStockBadge', { min: item.reorderMin, unit: itemUnitInfo.unit || t('common.missingUnit') })}
                           </span>
                         )}
                       </td>
                       <td className="p-4">
                         <div className="font-mono font-semibold">{item.lotNumber}</div>
-                        <div className="text-[10px] text-slate-400 font-mono">Rec: {item.receivedDate}</div>
+                        <div className="text-[10px] text-slate-400 font-mono">{t('stocks.recDatePrefix')} {item.receivedDate}</div>
                       </td>
                       <td className="p-4">
                         {item.expirationDate ? (
@@ -1136,11 +1138,11 @@ export default function StockFIFOControl({
                               {item.expirationDate}
                             </div>
                             <div className="text-[10px] text-slate-400 font-mono">
-                              {daysLeft !== null && daysLeft <= 0 ? 'Expired' : `${daysLeft} days remaining`}
+                              {daysLeft !== null && daysLeft <= 0 ? t('stocks.shelfLifeExpired') : t('stocks.daysRemaining', { days: daysLeft ?? 0 })}
                             </div>
                           </div>
                         ) : (
-                          <span className="text-slate-400 italic">No shelf limit</span>
+                          <span className="text-slate-400 italic">{t('stocks.noExpiry')}</span>
                         )}
                       </td>
                       <td className="p-4">
@@ -1162,15 +1164,15 @@ export default function StockFIFOControl({
                       <td className="p-4">
                         {item.status === 'APPROVED' ? (
                           <span className="bg-emerald-50 text-emerald-700 px-2 py-1 rounded font-bold text-[9px] border border-emerald-100">
-                            APPROVED
+                            {t('stocks.statusApproved')}
                           </span>
                         ) : item.status === 'QUARANTINE' ? (
                           <span className="bg-rose-50 text-rose-700 px-2 py-1 rounded font-bold text-[9px] border border-rose-100">
-                            QUARANTINE
+                            {t('stocks.statusQuarantine')}
                           </span>
                         ) : (
                           <span className="bg-amber-50 text-amber-700 px-2 py-1 rounded font-bold text-[9px] border border-amber-100">
-                            ON HOLD
+                            {t('stocks.statusHold')}
                           </span>
                         )}
                       </td>
@@ -1187,10 +1189,10 @@ export default function StockFIFOControl({
                                   ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs' 
                                   : 'bg-slate-100 hover:bg-indigo-50 text-slate-800 border-slate-300'
                               }`}
-                              title="Toggle inline transaction & metadata card"
+                              title={t('stocks.rowExpandTooltip')}
                             >
                               <History className="h-3.5 w-3.5 shrink-0" />
-                              <span>{isExpanded ? 'Hide Card' : 'Details'}</span>
+                              <span>{isExpanded ? t('stocks.hideCardBtn') : t('stocks.detailsBtn')}</span>
                             </button>
 
                             {(effectiveCanEdit || isSuperAdmin) ? (
@@ -1212,27 +1214,27 @@ export default function StockFIFOControl({
                                   } else if (val === 'RELEASE') {
                                     if (!effectiveCanEdit) return;
                                     setConfirmAction({
-                                      title: 'Release Stock Item',
-                                      message: `Are you sure you want to release stock item ${item.partCode} (Lot: ${item.lotNumber}) to active inventory?`,
-                                      confirmLabel: 'YES, RELEASE STOCK',
+                                      title: t('stocks.releaseStockTitle'),
+                                      message: t('stocks.releaseStockMsg', { partCode: item.partCode, lotNumber: item.lotNumber }),
+                                      confirmLabel: t('stocks.approveBtn'),
                                       confirmVariant: 'primary',
                                       onConfirm: () => onUpdateStockStatus(item.id, 'APPROVED')
                                     });
                                   } else if (val === 'QUARANTINE') {
                                     if (!effectiveCanEdit) return;
                                     setConfirmAction({
-                                      title: 'Quarantine Stock Item',
-                                      message: `Are you sure you want to place stock item ${item.partCode} (Lot: ${item.lotNumber}) into Quarantine?`,
-                                      confirmLabel: 'YES, QUARANTINE',
+                                      title: t('stocks.quarantineStockTitle'),
+                                      message: t('stocks.quarantineStockMsg', { partCode: item.partCode, lotNumber: item.lotNumber }),
+                                      confirmLabel: t('stocks.quarantineBtn'),
                                       confirmVariant: 'warning',
                                       onConfirm: () => onUpdateStockStatus(item.id, 'QUARANTINE')
                                     });
                                   } else if (val === 'DELETE') {
                                     if (!isSuperAdmin) return;
                                     setConfirmAction({
-                                      title: 'Delete Stock Item',
-                                      message: `Are you sure you want to delete registered stock item ${item.partCode} (Lot: ${item.lotNumber})?`,
-                                      confirmLabel: 'YES, DELETE ITEM',
+                                      title: t('stocks.deleteStockTitle'),
+                                      message: t('stocks.deleteStockMsg', { partCode: item.partCode, lotNumber: item.lotNumber }),
+                                      confirmLabel: t('stocks.deleteItemAction'),
                                       confirmVariant: 'danger',
                                       onConfirm: () => onDeleteStock?.(item.id)
                                     });
@@ -1242,21 +1244,21 @@ export default function StockFIFOControl({
                                 className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
                                 id={`action-select-stock-${item.id}`}
                               >
-                                <option value="" disabled>Actions...</option>
-                                <option value="HISTORY">📜 Modal View</option>
+                                <option value="" disabled>{t('common.actions')}...</option>
+                                <option value="HISTORY">📜 {t('stocks.viewHistoryBtn')}</option>
                                 {effectiveCanEdit && (
                                   <>
-                                    <option value="ADJUST">✏️ Adjust Quantity</option>
-                                    <option value="EDIT">📝 Edit Details</option>
+                                    <option value="ADJUST">✏️ {t('stocks.adjustQtyBtn')}</option>
+                                    <option value="EDIT">📝 {t('stocks.editDetailsAction')}</option>
                                     {item.status !== 'APPROVED' ? (
-                                      <option value="RELEASE">✅ Release Stock</option>
+                                      <option value="RELEASE">✅ {t('stocks.approveBtn')}</option>
                                     ) : (
-                                      <option value="QUARANTINE">⚠️ Quarantine Stock</option>
+                                      <option value="QUARANTINE">⚠️ {t('stocks.quarantineBtn')}</option>
                                     )}
                                   </>
                                 )}
                                 {isSuperAdmin && (
-                                  <option value="DELETE">🗑️ Delete Item</option>
+                                  <option value="DELETE">🗑️ {t('stocks.deleteItemAction')}</option>
                                 )}
                               </select>
                             ) : (
@@ -1268,7 +1270,7 @@ export default function StockFIFOControl({
                                 }}
                                 className="text-[10px] text-indigo-600 hover:underline font-semibold"
                               >
-                                Modal View
+                                {t('stocks.viewHistoryBtn')}
                               </button>
                             )}
                           </div>
@@ -1296,7 +1298,7 @@ export default function StockFIFOControl({
                                   <div className="flex items-center gap-2">
                                     <h4 className="text-sm font-bold text-slate-900 font-mono tracking-tight">{item.partCode}</h4>
                                     <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
-                                      Lot #{item.lotNumber}
+                                      {t('stocks.lotPrefix')} #{item.lotNumber}
                                     </span>
                                     <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-200 text-slate-700 uppercase">
                                       {item.type}
@@ -1321,7 +1323,7 @@ export default function StockFIFOControl({
                                       className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
                                     >
                                       <Edit className="h-3.5 w-3.5 text-indigo-600" />
-                                      <span>Adjust Balance</span>
+                                      <span>{t('stocks.adjustBalanceBtn')}</span>
                                     </button>
                                     <button
                                       type="button"
@@ -1329,7 +1331,7 @@ export default function StockFIFOControl({
                                       className="px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
                                     >
                                       <FileText className="h-3.5 w-3.5 text-slate-600" />
-                                      <span>Edit Specs</span>
+                                      <span>{t('stocks.editSpecsBtn')}</span>
                                     </button>
                                   </>
                                 )}
@@ -1339,13 +1341,13 @@ export default function StockFIFOControl({
                                   className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
                                 >
                                   <History className="h-3.5 w-3.5 text-indigo-600" />
-                                  <span>Full Modal</span>
+                                  <span>{t('stocks.fullModalBtn')}</span>
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => setExpandedStockId(null)}
                                   className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-                                  title="Collapse Card"
+                                  title={t('stocks.collapseCardTitle')}
                                 >
                                   <X className="h-4 w-4" />
                                 </button>
@@ -1356,12 +1358,12 @@ export default function StockFIFOControl({
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                               {/* Stat 1: Current Balance & Reorder Status */}
                               <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-2xs space-y-1">
-                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Current Physical Balance</span>
+                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">{t('stocks.cardBalanceTitle')}</span>
                                 <div className="flex items-baseline gap-1.5">
                                   <span className="text-xl font-mono font-bold text-slate-900">{item.quantity.toLocaleString()}</span>
                                   {itemUnitInfo.isMissing ? (
                                     <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-mono font-bold">
-                                      {MISSING_UNIT_LABEL}
+                                      {t('common.missingUnit')}
                                     </span>
                                   ) : (
                                     <span className="text-xs font-mono font-semibold text-slate-500">{itemUnitInfo.unit}</span>
@@ -1371,25 +1373,25 @@ export default function StockFIFOControl({
                                   {typeof item.reorderMin === 'number' && item.reorderMin > 0 ? (
                                     item.quantity <= item.reorderMin ? (
                                       <span className="text-rose-600 font-bold flex items-center gap-1">
-                                        <AlertTriangle className="h-3 w-3" /> Below safety min ({item.reorderMin} {itemUnitInfo.unit || MISSING_UNIT_LABEL})
+                                        <AlertTriangle className="h-3 w-3" /> {t('stocks.belowSafetyMin', { min: item.reorderMin, unit: itemUnitInfo.unit || t('common.missingUnit') })}
                                       </span>
                                     ) : (
                                       <span className="text-emerald-600 font-medium flex items-center gap-1">
-                                        <CheckCircle2 className="h-3 w-3" /> Safe level (Min: {item.reorderMin} {itemUnitInfo.unit || MISSING_UNIT_LABEL})
+                                        <CheckCircle2 className="h-3 w-3" /> {t('stocks.safeLevel', { min: item.reorderMin, unit: itemUnitInfo.unit || t('common.missingUnit') })}
                                       </span>
                                     )
                                   ) : (
-                                    <span className="text-slate-400 italic">No min reorder limit set</span>
+                                    <span className="text-slate-400 italic">{t('stocks.noReorderLimit')}</span>
                                   )}
                                 </div>
                               </div>
 
                               {/* Stat 2: Storage Location & FIFO Color Code */}
                               <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-2xs space-y-1">
-                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Storage Bin & FIFO Month</span>
+                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">{t('stocks.cardStorageFifoTitle')}</span>
                                 <div className="flex items-center gap-2">
                                   <MapPin className="h-4 w-4 text-indigo-600 shrink-0" />
-                                  <span className="text-sm font-bold text-slate-800">{item.location || 'Warehouse Main'}</span>
+                                  <span className="text-sm font-bold text-slate-800">{item.location || t('stocks.whMainFallback')}</span>
                                 </div>
                                 {(() => {
                                   const displayColor = normalizeFifoColor(item.fifoColor, item.receivedDate, effectiveCalendar);
@@ -1400,8 +1402,8 @@ export default function StockFIFOControl({
                                         className={`h-3 w-3 rounded-full border border-black/10 shrink-0 ${meta.colorClass}`}
                                         style={meta.hex ? { backgroundColor: meta.hex } : undefined} 
                                       />
-                                      <span className="font-bold text-slate-700">{displayColor} Tag</span>
-                                      <span className="text-[10px] text-slate-400">({item.receivedDate ? new Date(item.receivedDate.includes('T') ? item.receivedDate : `${item.receivedDate}T00:00:00`).toLocaleString('default', { month: 'short' }) : 'Month tag'})</span>
+                                      <span className="font-bold text-slate-700">{displayColor} {t('stocks.fifoTagSuffix')}</span>
+                                      <span className="text-[10px] text-slate-400">({item.receivedDate ? new Date(item.receivedDate.includes('T') ? item.receivedDate : `${item.receivedDate}T00:00:00`).toLocaleString(dateLocale, { month: 'short' }) : t('stocks.monthTagFallback')})</span>
                                     </div>
                                   );
                                 })()}
@@ -1409,40 +1411,40 @@ export default function StockFIFOControl({
 
                               {/* Stat 3: FEFO Shelf Life & Expiry */}
                               <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-2xs space-y-1">
-                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">FEFO Expiration & Quality</span>
+                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">{t('stocks.cardFefoQualityTitle')}</span>
                                 <div className="text-sm font-semibold font-mono text-slate-800">
-                                  {item.expirationDate ? item.expirationDate : 'Non-perishable'}
+                                  {item.expirationDate ? item.expirationDate : t('stocks.nonPerishable')}
                                 </div>
                                 <div className="text-[11px] pt-1 border-t border-slate-100 flex items-center justify-between">
                                   <span className={`font-semibold ${daysLeft !== null && daysLeft <= 0 ? 'text-rose-600' : daysLeft !== null && daysLeft <= 30 ? 'text-amber-600' : 'text-slate-500'}`}>
-                                    {daysLeft !== null ? (daysLeft <= 0 ? '⚠️ Expired' : `${daysLeft} days left`) : 'Permanent'}
+                                    {daysLeft !== null ? (daysLeft <= 0 ? `⚠️ ${t('stocks.shelfLifeExpired')}` : t('stocks.daysLeft', { days: daysLeft })) : t('stocks.permanentShelf')}
                                   </span>
                                   <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
                                     item.status === 'APPROVED' ? 'bg-emerald-50 text-emerald-700' : item.status === 'QUARANTINE' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-700'
                                   }`}>
-                                    {item.status}
+                                    {item.status === 'APPROVED' ? t('stocks.statusApproved') : item.status === 'QUARANTINE' ? t('stocks.statusQuarantine') : t('stocks.statusHold')}
                                   </span>
                                 </div>
                               </div>
 
                               {/* Stat 4: Total Movement Inflow & Outflow */}
                               <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-2xs space-y-1">
-                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Historical Movement Flow</span>
+                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">{t('stocks.cardFlowTitle')}</span>
                                 <div className="grid grid-cols-3 gap-1 text-center font-mono">
                                   <div className="bg-emerald-50/70 p-1 rounded border border-emerald-100">
-                                    <div className="text-[9px] text-emerald-700 font-semibold">IN (Recv)</div>
-                                    <div className="text-xs font-bold text-emerald-800">+{totalReceivedQty} {itemUnitInfo.unit || MISSING_UNIT_LABEL}</div>
+                                    <div className="text-[9px] text-emerald-700 font-semibold">{t('stocks.flowInRecv')}</div>
+                                    <div className="text-xs font-bold text-emerald-800">+{totalReceivedQty} {itemUnitInfo.unit || t('common.missingUnit')}</div>
                                   </div>
                                   <div className="bg-blue-50/70 p-1 rounded border border-blue-100">
-                                    <div className="text-[9px] text-blue-700 font-semibold">OUT (Issue)</div>
-                                    <div className="text-xs font-bold text-blue-800">-{totalIssuedQty} {itemUnitInfo.unit || MISSING_UNIT_LABEL}</div>
+                                    <div className="text-[9px] text-blue-700 font-semibold">{t('stocks.flowOutIssue')}</div>
+                                    <div className="text-xs font-bold text-blue-800">-{totalIssuedQty} {itemUnitInfo.unit || t('common.missingUnit')}</div>
                                   </div>
                                   <div className="bg-amber-50/70 p-1 rounded border border-amber-100">
-                                    <div className="text-[9px] text-amber-700 font-semibold">RET</div>
-                                    <div className="text-xs font-bold text-amber-800">+{totalReturnedQty} {itemUnitInfo.unit || MISSING_UNIT_LABEL}</div>
+                                    <div className="text-[9px] text-amber-700 font-semibold">{t('stocks.flowRet')}</div>
+                                    <div className="text-xs font-bold text-amber-800">+{totalReturnedQty} {itemUnitInfo.unit || t('common.missingUnit')}</div>
                                   </div>
                                 </div>
-                                <div className="text-[10px] text-slate-400 text-right pt-0.5">{historyEvents.length} log transactions</div>
+                                <div className="text-[10px] text-slate-400 text-right pt-0.5">{t('stocks.logTransactionsCount', { count: historyEvents.length })}</div>
                               </div>
                             </div>
 
@@ -1452,13 +1454,13 @@ export default function StockFIFOControl({
                                 <div className="flex items-center justify-between">
                                   <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
                                     <Layers className="h-3.5 w-3.5 text-indigo-600" />
-                                    Bill of Materials (BOM) Sub-components ({item.bom.length})
+                                    {t('stocks.bomSubcomponentsTitle')} ({item.bom.length})
                                   </span>
-                                  <span className="text-[10px] font-mono text-slate-400">Required per finished unit</span>
+                                  <span className="text-[10px] font-mono text-slate-400">{t('stocks.requiredPerUnit', { qty: 1, unit: itemUnitInfo.unit || t('common.unit') })}</span>
                                 </div>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
                                   {item.bom.map((b: any, idx: number) => {
-                                    const bUnit = normalizeUnitCode(b.unit) || MISSING_UNIT_LABEL;
+                                    const bUnit = normalizeUnitCode(b.unit) || t('common.missingUnit');
                                     return (
                                       <div key={idx} className="p-2 bg-slate-50/80 border border-slate-200 rounded-lg text-xs flex justify-between items-center">
                                         <div>
@@ -1480,9 +1482,9 @@ export default function StockFIFOControl({
                               <div className="p-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
                                 <div className="flex items-center gap-2">
                                   <Activity className="h-4 w-4 text-indigo-600" />
-                                  <span className="text-xs font-bold text-slate-800">Transaction History Timeline</span>
+                                  <span className="text-xs font-bold text-slate-800">{t('stocks.txTimelineTitle')}</span>
                                   <span className="text-[10px] font-mono font-semibold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">
-                                    {filteredEvents.length} records
+                                    {t('stocks.recordsCount', { count: filteredEvents.length })}
                                   </span>
                                 </div>
 
@@ -1500,7 +1502,13 @@ export default function StockFIFOControl({
                                             : 'hover:text-slate-900'
                                         }`}
                                       >
-                                        {tab === 'ALL' ? 'All' : tab === 'RECEIVING' ? 'Arrivals' : tab === 'ISSUANCE' ? 'Issuances' : 'Returns'}
+                                        {tab === 'ALL'
+                                          ? t('stocks.tabAll', { count: historyEvents.length })
+                                          : tab === 'RECEIVING'
+                                          ? t('stocks.tabArrivals', { count: matchedReceivings.length })
+                                          : tab === 'ISSUANCE'
+                                          ? t('stocks.tabIssuances', { count: matchedIssuances.length })
+                                          : t('stocks.tabReturns', { count: matchedReturns.length })}
                                       </button>
                                     ))}
                                   </div>
@@ -1509,20 +1517,20 @@ export default function StockFIFOControl({
 
                               {filteredEvents.length === 0 ? (
                                 <div className="p-6 text-center text-xs text-slate-400 italic">
-                                  No transaction logs found matching this item and filter.
+                                  {t('stocks.noTxMatchFilter')}
                                 </div>
                               ) : (
                                 <div className="max-h-[220px] overflow-y-auto">
                                   <table className="w-full text-left border-collapse text-[11px]">
                                     <thead className="bg-slate-50/80 text-slate-500 font-semibold sticky top-0 border-b border-slate-200">
                                       <tr>
-                                        <th className="p-2.5">Date</th>
-                                        <th className="p-2.5">Type</th>
-                                        <th className="p-2.5">Reference #</th>
-                                        <th className="p-2.5 text-right">Qty</th>
-                                        <th className="p-2.5">Party / Source</th>
-                                        <th className="p-2.5">Verification</th>
-                                        <th className="p-2.5">Details</th>
+                                        <th className="p-2.5">{t('stocks.txColDate')}</th>
+                                        <th className="p-2.5">{t('stocks.txColType')}</th>
+                                        <th className="p-2.5">{t('stocks.txColRef')}</th>
+                                        <th className="p-2.5 text-right">{t('stocks.txColQty')}</th>
+                                        <th className="p-2.5">{t('stocks.txColParty')}</th>
+                                        <th className="p-2.5">{t('stocks.txColVerification')}</th>
+                                        <th className="p-2.5">{t('stocks.txColDetails')}</th>
                                       </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-100 font-sans">
@@ -1540,14 +1548,14 @@ export default function StockFIFOControl({
                                               {ev.type === 'RECEIVING' && <ArrowDownLeft className="h-2.5 w-2.5" />}
                                               {ev.type === 'ISSUANCE' && <ArrowUpRight className="h-2.5 w-2.5" />}
                                               {ev.type === 'RETURN' && <RotateCcw className="h-2.5 w-2.5" />}
-                                              {ev.type}
+                                              {ev.type === 'RECEIVING' ? t('stocks.histTypeReceiving') : ev.type === 'ISSUANCE' ? t('stocks.histTypeIssuance') : t('stocks.histTypeReturn')}
                                             </span>
                                           </td>
                                           <td className="p-2.5 font-mono font-semibold text-slate-800">{ev.refNumber}</td>
                                           <td className={`p-2.5 text-right font-mono font-bold ${
                                             ev.type === 'RECEIVING' ? 'text-emerald-700' : ev.type === 'ISSUANCE' ? 'text-blue-700' : 'text-amber-700'
                                           }`}>
-                                            {ev.type === 'RECEIVING' || ev.type === 'RETURN' ? '+' : '-'}{ev.qty.toLocaleString()} {ev.unit || MISSING_UNIT_LABEL}
+                                            {ev.type === 'RECEIVING' || ev.type === 'RETURN' ? '+' : '-'}{ev.qty.toLocaleString()} {ev.unit || t('common.missingUnit')}
                                           </td>
                                           <td className="p-2.5 text-slate-700 font-medium">{ev.party}</td>
                                           <td className="p-2.5">
@@ -1595,11 +1603,11 @@ export default function StockFIFOControl({
               transition={{ type: 'spring', damping: 28, stiffness: 380, duration: 0.2 }}
               className="bg-white rounded-2xl shadow-2xl border border-slate-200 p-6 max-w-sm w-full space-y-4 my-auto"
             >
-              <h4 className="font-bold text-sm text-slate-800">Adjust Inventory Balance</h4>
-              <p className="text-xs text-slate-500">Record physical stock audit corrections or bin counts.</p>
+              <h4 className="font-bold text-sm text-slate-800">{t('stocks.adjustModalTitle')}</h4>
+              <p className="text-xs text-slate-500">{t('stocks.adjustModalSubtitle')}</p>
               
               <div className="space-y-1">
-                <label className="block text-[10px] font-bold text-slate-400">Target Item ID: {showAdjustModal}</label>
+                <label className="block text-[10px] font-bold text-slate-400">{t('stocks.targetItemIdLabel')} {showAdjustModal}</label>
                 <input 
                   type="text" 
                   inputMode="numeric"
@@ -1623,13 +1631,13 @@ export default function StockFIFOControl({
                   onClick={() => setShowAdjustModal(null)}
                   className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded hover:bg-slate-50 cursor-pointer"
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </button>
                 <button 
                   onClick={() => handleAdjustQtySubmit(showAdjustModal)}
                   className="px-3 py-1.5 bg-slate-950 text-white rounded hover:bg-slate-900 cursor-pointer"
                 >
-                  Save Adjustment
+                  {t('stocks.saveAdjustmentBtn')}
                 </button>
               </div>
             </motion.div>
@@ -1660,9 +1668,9 @@ export default function StockFIFOControl({
               <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                 <div>
                   <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-                    <Edit className="h-4 w-4 text-indigo-600" /> Edit Registered Item ({editingStockItem.id})
+                    <Edit className="h-4 w-4 text-indigo-600" /> {t('stocks.editModalTitle')} ({editingStockItem.id})
                   </h4>
-                  <p className="text-[11px] text-slate-500">Super Admin Item Metadata Overwrite</p>
+                  <p className="text-[11px] text-slate-500">{t('stocks.editModalSubtitle')}</p>
                 </div>
                 <button 
                   onClick={() => setEditingStockItem(null)}
@@ -1674,7 +1682,7 @@ export default function StockFIFOControl({
 
               <div className="grid grid-cols-2 gap-3 text-xs">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Part Code</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('stocks.editPartCodeLabel')}</label>
                   <input 
                     type="text" 
                     value={editingStockItem.partCode}
@@ -1684,23 +1692,23 @@ export default function StockFIFOControl({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Material Type</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('stocks.editTypeLabel')}</label>
                   <select 
                     value={editingStockItem.type}
                     onChange={e => setEditingStockItem({ ...editingStockItem, type: e.target.value as MaterialType })}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
                   >
-                    <option value="RAW">RAW MATERIAL</option>
-                    <option value="PACKAGING">PACKAGING</option>
-                    <option value="CONSUMABLE">CONSUMABLE</option>
-                    <option value="WIP">WIP</option>
-                    <option value="FG">FINISHED GOODS</option>
-                    <option value="SUB_PART">SUB PART</option>
+                    <option value="RAW">{t('stocks.editTypeRaw')}</option>
+                    <option value="PACKAGING">{t('stocks.editTypePkg')}</option>
+                    <option value="CONSUMABLE">{t('stocks.editTypeCon')}</option>
+                    <option value="WIP">{t('stocks.editTypeWip')}</option>
+                    <option value="FG">{t('stocks.editTypeFg')}</option>
+                    <option value="SUB_PART">{t('stocks.editTypeSub')}</option>
                   </select>
                 </div>
 
                 <div className="col-span-2">
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Item Description</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('stocks.editDescLabel')}</label>
                   <input 
                     type="text" 
                     value={editingStockItem.description}
@@ -1710,7 +1718,7 @@ export default function StockFIFOControl({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('stocks.editQtyLabel')}</label>
                   <input 
                     type="text" 
                     inputMode="numeric"
@@ -1730,7 +1738,7 @@ export default function StockFIFOControl({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Unit of Measure (UOM)</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('stocks.editUomLabel')}</label>
                   <select 
                     value={normalizeUnitCode(editingStockItem.unit)}
                     onChange={e => {
@@ -1739,7 +1747,7 @@ export default function StockFIFOControl({
                     }}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono font-semibold"
                   >
-                    <option value="">-- Select UOM --</option>
+                    <option value="">{t('stocks.manualSelectUomOpt')}</option>
                     {getAllSelectUomOptions(editingStockItem.unit).map(u => (
                       <option key={u} value={u}>{u}</option>
                     ))}
@@ -1747,7 +1755,7 @@ export default function StockFIFOControl({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Lot Number</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('stocks.editLotLabel')}</label>
                   <input 
                     type="text" 
                     value={editingStockItem.lotNumber}
@@ -1757,7 +1765,7 @@ export default function StockFIFOControl({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Location / Bin</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('stocks.editLocationLabel')}</label>
                   <input 
                     type="text" 
                     value={editingStockItem.location}
@@ -1767,7 +1775,7 @@ export default function StockFIFOControl({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">FIFO Color Code</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('stocks.editFifoColorLabel')}</label>
                   <select 
                     value={editingStockItem.fifoColor}
                     onChange={e => setEditingStockItem({ ...editingStockItem, fifoColor: e.target.value })}
@@ -1777,26 +1785,26 @@ export default function StockFIFOControl({
                       <option key={colorName} value={colorName}>{colorName}</option>
                     ))}
                     {editingStockItem.fifoColor && !Object.values(effectiveCalendar).some(c => c.name === editingStockItem.fifoColor) && (
-                      <option value={editingStockItem.fifoColor}>{editingStockItem.fifoColor} (Historical)</option>
+                      <option value={editingStockItem.fifoColor}>{editingStockItem.fifoColor} {t('stocks.editHistoricalSuffix')}</option>
                     )}
                   </select>
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">QC Status</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('stocks.editQcStatusLabel')}</label>
                   <select 
                     value={editingStockItem.status}
                     onChange={e => setEditingStockItem({ ...editingStockItem, status: e.target.value as any })}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-bold"
                   >
-                    <option value="APPROVED">APPROVED</option>
-                    <option value="QUARANTINE">QUARANTINE</option>
-                    <option value="HOLD">HOLD</option>
+                    <option value="APPROVED">{t('stocks.editQcApprovedOpt')}</option>
+                    <option value="QUARANTINE">{t('stocks.editQcQuarantineOpt')}</option>
+                    <option value="HOLD">{t('stocks.editQcHoldOpt')}</option>
                   </select>
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Expiration Date</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('stocks.editExpiryLabel')}</label>
                   <input 
                     type="date" 
                     value={editingStockItem.expirationDate || ''}
@@ -1806,12 +1814,12 @@ export default function StockFIFOControl({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Assigned Customer</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('stocks.editCustomerLabel')}</label>
                   <input 
                     type="text" 
                     value={editingStockItem.customer || ''}
                     onChange={e => setEditingStockItem({ ...editingStockItem, customer: e.target.value })}
-                    placeholder="Enter Customer / Client"
+                    placeholder={t('stocks.editCustomerPlaceholder')}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
                   />
                 </div>
@@ -1822,13 +1830,13 @@ export default function StockFIFOControl({
                   onClick={() => setEditingStockItem(null)}
                   className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50 cursor-pointer"
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </button>
                 <button 
                   onClick={() => {
                     const resolved = resolveMasterDataUnit(editingStockItem, registries, stocks);
                     if (!resolved.unit) {
-                      showPrintToast('Please assign a Unit of Measure (UOM) or set a Master Data unit.', 'warning');
+                      showPrintToast(t('stocks.editMissingUomWarn'), 'warning');
                       return;
                     }
                     onEditStock?.({
@@ -1840,7 +1848,7 @@ export default function StockFIFOControl({
                   }}
                   className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold cursor-pointer"
                 >
-                  Save Item Changes
+                  {t('stocks.saveItemChangesBtn')}
                 </button>
               </div>
             </motion.div>
@@ -1881,7 +1889,7 @@ export default function StockFIFOControl({
           const totalReturnedQty = matchedReturns.reduce((sum, ret) => sum + (Number(ret.quantity) || 0), 0);
 
           const historyStockUnitInfo = resolveMasterDataUnit(historyStockItem, registries, stocks);
-          const historyStockUnitLabel = historyStockUnitInfo.unit || MISSING_UNIT_LABEL;
+          const historyStockUnitLabel = historyStockUnitInfo.unit || t('common.missingUnit');
 
           // Combine into unified history timeline
           const historyEvents: Array<{
@@ -1994,7 +2002,7 @@ export default function StockFIFOControl({
                       <div className="flex items-center gap-2">
                         <h3 className="text-lg font-bold font-mono">{historyStockItem.partCode}</h3>
                         <span className="bg-blue-800 text-blue-100 px-2 py-0.5 rounded text-[10px] font-bold font-mono">
-                          LOT: {historyStockItem.lotNumber}
+                          {t('stocks.histLotPrefix')} {historyStockItem.lotNumber}
                         </span>
                       </div>
                       <p className="text-xs text-blue-200 mt-0.5 truncate max-w-lg">
@@ -2016,24 +2024,24 @@ export default function StockFIFOControl({
                   {/* Stats row */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
-                      <span className="text-[10px] font-bold text-slate-400 font-mono uppercase block">Current On-Hand</span>
+                      <span className="text-[10px] font-bold text-slate-400 font-mono uppercase block">{t('stocks.histCurrentOnHand')}</span>
                       <span className="text-xl font-bold text-indigo-950">{historyStockItem.quantity} {historyStockUnitLabel}</span>
-                      <span className="text-[10px] text-slate-500 block">Bin Location: {historyStockItem.location}</span>
+                      <span className="text-[10px] text-slate-500 block">{t('stocks.histBinLocPrefix')} {historyStockItem.location}</span>
                     </div>
                     <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl">
-                      <span className="text-[10px] font-bold text-emerald-600 font-mono uppercase block">Total Received</span>
+                      <span className="text-[10px] font-bold text-emerald-600 font-mono uppercase block">{t('stocks.histTotalReceived')}</span>
                       <span className="text-xl font-bold">{totalReceivedQty} {historyStockUnitLabel}</span>
-                      <span className="text-[10px] text-emerald-700 block">{matchedReceivings.length} receiving logs</span>
+                      <span className="text-[10px] text-emerald-700 block">{t('stocks.histReceivingLogsCount', { count: matchedReceivings.length })}</span>
                     </div>
                     <div className="p-3 bg-blue-50 border border-blue-200 text-blue-900 rounded-xl">
-                      <span className="text-[10px] font-bold text-blue-600 font-mono uppercase block">Total Issued</span>
+                      <span className="text-[10px] font-bold text-blue-600 font-mono uppercase block">{t('stocks.histTotalIssued')}</span>
                       <span className="text-xl font-bold">{totalIssuedQty} {historyStockUnitLabel}</span>
-                      <span className="text-[10px] text-blue-700 block">{matchedIssuances.length} issuance logs</span>
+                      <span className="text-[10px] text-blue-700 block">{t('stocks.histIssuanceLogsCount', { count: matchedIssuances.length })}</span>
                     </div>
                     <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl">
-                      <span className="text-[10px] font-bold text-amber-600 font-mono uppercase block">Total Returned</span>
+                      <span className="text-[10px] font-bold text-amber-600 font-mono uppercase block">{t('stocks.histTotalReturned')}</span>
                       <span className="text-xl font-bold">{totalReturnedQty} {historyStockUnitLabel}</span>
-                      <span className="text-[10px] text-amber-700 block">{matchedReturns.length} return logs</span>
+                      <span className="text-[10px] text-amber-700 block">{t('stocks.histReturnLogsCount', { count: matchedReturns.length })}</span>
                     </div>
                   </div>
 
@@ -2041,9 +2049,9 @@ export default function StockFIFOControl({
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider font-mono">
-                        Audit Timeline ({historyEvents.length} transactions)
+                        {t('stocks.auditTimelineTitle', { count: historyEvents.length })}
                       </h4>
-                      <span className="text-[11px] text-slate-500">Sorted by newest date</span>
+                      <span className="text-[11px] text-slate-500">{t('stocks.histSortedNewest')}</span>
                     </div>
 
                     <div className="border border-slate-200 rounded-xl overflow-hidden bg-white text-xs">
@@ -2051,20 +2059,20 @@ export default function StockFIFOControl({
                         <table className="w-full text-left border-collapse">
                           <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[10px] sticky top-0 bg-slate-50">
                             <tr>
-                              <th className="p-2.5">Type</th>
-                              <th className="p-2.5">Date</th>
-                              <th className="p-2.5">Ref / Form #</th>
-                              <th className="p-2.5 text-right">Qty Transacted</th>
-                              <th className="p-2.5">Source / Recipient</th>
-                              <th className="p-2.5">Status</th>
-                              <th className="p-2.5">Traceability Details</th>
+                              <th className="p-2.5">{t('stocks.histColType')}</th>
+                              <th className="p-2.5">{t('stocks.histColDate')}</th>
+                              <th className="p-2.5">{t('stocks.histColRef')}</th>
+                              <th className="p-2.5 text-right">{t('stocks.histColQtyTransacted')}</th>
+                              <th className="p-2.5">{t('stocks.histColSource')}</th>
+                              <th className="p-2.5">{t('stocks.histColStatus')}</th>
+                              <th className="p-2.5">{t('stocks.histColDetails')}</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
                             {historyEvents.length === 0 ? (
                               <tr>
                                 <td colSpan={7} className="p-8 text-center text-slate-400 italic">
-                                  No historical transactions found for Part Code "{historyStockItem.partCode}" and Lot "{historyStockItem.lotNumber}".
+                                  {t('stocks.histEmpty')}
                                 </td>
                               </tr>
                             ) : (
@@ -2073,17 +2081,17 @@ export default function StockFIFOControl({
                                   <td className="p-2.5">
                                     {evt.type === 'RECEIVING' && (
                                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                        <ArrowDownLeft className="h-3 w-3" /> RECEIVING
+                                        <ArrowDownLeft className="h-3 w-3" /> {t('stocks.histTypeReceiving')}
                                       </span>
                                     )}
                                     {evt.type === 'ISSUANCE' && (
                                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200">
-                                        <ArrowUpRight className="h-3 w-3" /> ISSUANCE
+                                        <ArrowUpRight className="h-3 w-3" /> {t('stocks.histTypeIssuance')}
                                       </span>
                                     )}
                                     {evt.type === 'RETURN' && (
                                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                                        <RotateCcw className="h-3 w-3" /> RETURN
+                                        <RotateCcw className="h-3 w-3" /> {t('stocks.histTypeReturn')}
                                       </span>
                                     )}
                                   </td>
@@ -2113,21 +2121,21 @@ export default function StockFIFOControl({
                 {/* Footer */}
                 <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
                   <div className="text-xs text-slate-500 font-medium">
-                    Full trace of inventory lifecycle from receiving inspection to production dispatch.
+                    {t('stocks.histFooterNote')}
                   </div>
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => setHistoryStockItem(null)}
                       className="px-4 py-2 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-100 cursor-pointer"
                     >
-                      Close
+                      {t('common.close')}
                     </button>
                     <button
                       onClick={downloadHistoryCSV}
                       className="flex items-center gap-1.5 px-4 py-2 bg-blue-900 hover:bg-blue-950 text-white rounded-lg text-xs font-bold cursor-pointer transition shadow-xs"
                     >
                       <Download className="h-3.5 w-3.5" />
-                      Export History CSV
+                      {t('stocks.exportHistoryCsvBtn')}
                     </button>
                   </div>
                 </div>
@@ -2154,13 +2162,13 @@ export default function StockFIFOControl({
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <h3 className="text-base font-bold tracking-tight">EDIT FIFO COLOR CODING CALENDAR</h3>
+                    <h3 className="text-base font-bold tracking-tight">{t('stocks.fifoModalTitle')}</h3>
                     <span className="bg-indigo-500/30 text-indigo-200 text-[10px] font-mono font-bold px-2 py-0.5 rounded-md border border-indigo-400/30">
-                      12 MONTHS
+                      {t('stocks.monthsCountBadge')}
                     </span>
                   </div>
                   <p className="text-xs text-slate-300 mt-0.5">
-                    Centralized visual color tag definitions synced across all workstations.
+                    {t('stocks.fifoModalSubtitle')}
                   </p>
                 </div>
               </div>
@@ -2172,7 +2180,7 @@ export default function StockFIFOControl({
                   setCalendarModalSuccess('');
                 }}
                 className="text-slate-400 hover:text-white p-2 rounded-lg hover:bg-white/10 transition cursor-pointer"
-                title="Close"
+                title={t('common.close')}
               >
                 <X className="h-5 w-5" />
               </button>
@@ -2206,7 +2214,7 @@ export default function StockFIFOControl({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
                 {Array.from({ length: 12 }, (_, i) => i + 1).map((monthNum) => {
                   const date = new Date(2026, monthNum - 1, 1);
-                  const monthName = date.toLocaleString('default', { month: 'long' });
+                  const monthName = date.toLocaleString(dateLocale, { month: 'long' });
                   const currentMonthNum = new Date().getMonth() + 1;
                   const isCurrent = monthNum === currentMonthNum;
                   const monthColor = editingCalendarDraft[monthNum] || DEFAULT_FIFO_COLORS_BY_MONTH[monthNum];
@@ -2230,7 +2238,7 @@ export default function StockFIFOControl({
                           </span>
                           {isCurrent && (
                             <span className="bg-indigo-600 text-white text-[8px] font-bold px-1.5 py-0.2 rounded-full uppercase tracking-wider">
-                              Current Month
+                              {t('stocks.currentMonthBadge')}
                             </span>
                           )}
                         </div>
@@ -2247,7 +2255,7 @@ export default function StockFIFOControl({
 
                       <div className="space-y-1.5">
                         <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                          Assigned Color
+                          {t('stocks.calMonthColorLabel')}
                         </label>
                         <select
                           value={monthColor.name}
@@ -2268,7 +2276,7 @@ export default function StockFIFOControl({
                           ))}
                           {!FIFO_COLOR_PRESETS.some(p => p.name === monthColor.name) && (
                             <option value={monthColor.name}>
-                              {monthColor.name} (Custom)
+                              {monthColor.name} {t('stocks.calCustomSuffix')}
                             </option>
                           )}
                         </select>
@@ -2285,15 +2293,15 @@ export default function StockFIFOControl({
                 type="button"
                 onClick={() => {
                   setEditingCalendarDraft({ ...DEFAULT_FIFO_COLORS_BY_MONTH });
-                  setCalendarModalSuccess('Restored standard 12-month SOP colors. Click "Save Calendar" to apply.');
+                  setCalendarModalSuccess(t('stocks.calResetSuccess'));
                   setCalendarModalError('');
                 }}
                 disabled={isSavingCalendar}
                 className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                title="Restore standard January-December default colors"
+                title={t('stocks.calResetTooltip')}
               >
                 <RotateCcw className="h-3.5 w-3.5 text-slate-500" />
-                <span>Reset to SOP Defaults</span>
+                <span>{t('stocks.resetSopDefaultsBtn')}</span>
               </button>
 
               <div className="flex items-center gap-2">
@@ -2307,7 +2315,7 @@ export default function StockFIFOControl({
                   disabled={isSavingCalendar}
                   className="px-4 py-1.5 bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 rounded-lg text-xs font-bold transition cursor-pointer"
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </button>
                 <button
                   type="button"
@@ -2317,13 +2325,13 @@ export default function StockFIFOControl({
                     setCalendarModalError('');
                     try {
                       await onUpdateFifoColors(editingCalendarDraft);
-                      setCalendarModalSuccess('FIFO Color Coding Calendar synchronized successfully across all workstations!');
+                      setCalendarModalSuccess(t('stocks.calSyncSuccess'));
                       setTimeout(() => {
                         setShowEditCalendarModal(false);
                         setCalendarModalSuccess('');
                       }, 1200);
                     } catch (err: any) {
-                      setCalendarModalError(err?.message || 'Failed to update FIFO color coding calendar');
+                      setCalendarModalError(err?.message || t('stocks.calSyncFailed'));
                     } finally {
                       setIsSavingCalendar(false);
                     }
@@ -2335,12 +2343,12 @@ export default function StockFIFOControl({
                   {isSavingCalendar ? (
                     <>
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      <span>Saving...</span>
+                      <span>{t('stocks.savingCalendarBtn')}</span>
                     </>
                   ) : (
                     <>
                       <CheckCircle2 className="h-3.5 w-3.5" />
-                      <span>Save Calendar</span>
+                      <span>{t('stocks.saveCalendarBtn')}</span>
                     </>
                   )}
                 </button>

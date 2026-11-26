@@ -13,6 +13,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { getApiBaseUrl, getAuthHeaders } from '../config/serverConfig';
+import { useI18n } from '../i18n';
 import type { AuditTrailEntry } from '../types';
 
 export type { AuditTrailEntry };
@@ -88,6 +89,7 @@ export default function AuditViewerModule({
   currentUser = 'ALDRIN BANAWA',
   currentEmployeeId = 'JPMP-002'
 }: AuditViewerModuleProps) {
+  const { t } = useI18n();
   const [logs, setLogs] = useState<AuditTrailEntry[]>([]);
   const [availableUsers, setAvailableUsers] = useState<string[]>([]);
   const [availableRecordTypes, setAvailableRecordTypes] = useState<string[]>([]);
@@ -273,9 +275,9 @@ export default function AuditViewerModule({
     return (
       <div className="bg-white border border-rose-200 rounded-2xl p-8 text-center max-w-lg mx-auto mt-8 shadow-sm">
         <ShieldAlert className="h-10 w-10 text-rose-600 mx-auto mb-3" />
-        <h2 className="text-base font-bold text-slate-900">Super Administrator Access Required</h2>
+        <h2 className="text-base font-bold text-slate-900">{t('audit.accessDeniedTitle')}</h2>
         <p className="text-xs text-slate-600 mt-1">
-          Only authorized Super Administrators can inspect the central system audit trail.
+          {t('audit.accessDeniedSubtitle')}
         </p>
       </div>
     );
@@ -292,14 +294,14 @@ export default function AuditViewerModule({
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-base sm:text-lg font-bold tracking-tight">
-                Super Admin Audit Trail
+                {t('audit.headerTitle')}
               </h2>
               <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 border border-indigo-400/30 text-[10px] font-mono font-bold text-indigo-200 uppercase">
-                {filteredLogs.length} / {totalCount} Entries
+                {t('audit.entriesBadge', { count: filteredLogs.length, total: totalCount })}
               </span>
             </div>
             <p className="text-xs text-slate-300 mt-0.5">
-              Immutable change history showing who changed what and when across inventory, accounts, devices, and system configuration.
+              {t('audit.headerSubtitle')}
             </p>
           </div>
         </div>
@@ -313,7 +315,7 @@ export default function AuditViewerModule({
             className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-slate-100 border border-slate-700 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-            <span>{isLoading ? 'Refreshing...' : 'Refresh'}</span>
+            <span>{isLoading ? t('audit.refreshingBtn') : t('audit.refreshBtn')}</span>
           </button>
 
           <button
@@ -325,7 +327,7 @@ export default function AuditViewerModule({
             title="Export the currently filtered audit view to CSV"
           >
             <Download className="h-3.5 w-3.5" />
-            <span>Export Current View (CSV)</span>
+            <span>{t('audit.exportCsvBtn')}</span>
           </button>
         </div>
       </div>
@@ -350,7 +352,7 @@ export default function AuditViewerModule({
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
           <div>
             <label htmlFor="audit-filter-date-from" className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 flex items-center gap-1">
-              <Calendar className="h-3 w-3" /> Date From
+              <Calendar className="h-3 w-3" /> {t('audit.filterDateFrom')}
             </label>
             <input
               id="audit-filter-date-from"
@@ -363,7 +365,7 @@ export default function AuditViewerModule({
 
           <div>
             <label htmlFor="audit-filter-date-to" className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 flex items-center gap-1">
-              <Calendar className="h-3 w-3" /> Date To
+              <Calendar className="h-3 w-3" /> {t('audit.filterDateTo')}
             </label>
             <input
               id="audit-filter-date-to"
@@ -376,7 +378,7 @@ export default function AuditViewerModule({
 
           <div>
             <label htmlFor="audit-filter-user" className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 flex items-center gap-1">
-              <User className="h-3 w-3" /> User
+              <User className="h-3 w-3" /> {t('audit.filterUser')}
             </label>
             <select
               id="audit-filter-user"
@@ -384,7 +386,7 @@ export default function AuditViewerModule({
               onChange={e => setUserFilter(e.target.value)}
               className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500"
             >
-              <option value="ALL">All Users</option>
+              <option value="ALL">{t('audit.filterAllUsers')}</option>
               {availableUsers.map(u => (
                 <option key={u} value={u}>
                   {u}
@@ -395,7 +397,7 @@ export default function AuditViewerModule({
 
           <div>
             <label htmlFor="audit-filter-record-type" className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 flex items-center gap-1">
-              <Layers className="h-3 w-3" /> Record Type
+              <Layers className="h-3 w-3" /> {t('audit.filterRecordType')}
             </label>
             <select
               id="audit-filter-record-type"
@@ -403,7 +405,7 @@ export default function AuditViewerModule({
               onChange={e => setRecordTypeFilter(e.target.value)}
               className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500"
             >
-              <option value="ALL">All Record Types</option>
+              <option value="ALL">{t('audit.filterAllRecordTypes')}</option>
               {availableRecordTypes.map(rt => (
                 <option key={rt} value={rt}>
                   {formatRecordTypeLabel(rt)} ({rt})
@@ -414,7 +416,7 @@ export default function AuditViewerModule({
 
           <div>
             <label htmlFor="audit-filter-search" className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1 flex items-center gap-1">
-              <Search className="h-3 w-3" /> Search Changes
+              <Search className="h-3 w-3" /> {t('audit.filterSearch')}
             </label>
             <div className="relative">
               <input
@@ -422,7 +424,7 @@ export default function AuditViewerModule({
                 type="text"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                placeholder="Part code, ID, summary..."
+                placeholder={t('audit.searchPlaceholder')}
                 className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500"
               />
             </div>
@@ -432,14 +434,14 @@ export default function AuditViewerModule({
         {hasActiveFilters && (
           <div className="flex items-center justify-between pt-1 border-t border-slate-100 text-xs">
             <span className="text-slate-500 font-medium">
-              Showing <span className="font-bold text-slate-800 font-mono">{filteredLogs.length}</span> matching entry(ies)
+              {t('audit.matchingEntries', { count: filteredLogs.length })}
             </span>
             <button
               type="button"
               onClick={handleResetFilters}
               className="text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-1 cursor-pointer"
             >
-              <RotateCcw className="h-3 w-3" /> Clear filters
+              <RotateCcw className="h-3 w-3" /> {t('audit.clearFiltersBtn')}
             </button>
           </div>
         )}
@@ -451,11 +453,11 @@ export default function AuditViewerModule({
           <table className="w-full text-left border-collapse text-xs" id="audit-logs-table">
             <thead>
               <tr className="bg-slate-900 text-slate-200 border-b border-slate-800 text-[10px] uppercase tracking-wider font-bold">
-                <th className="py-3 px-4 whitespace-nowrap">When</th>
-                <th className="py-3 px-4 whitespace-nowrap">Who</th>
-                <th className="py-3 px-4 whitespace-nowrap">Action</th>
-                <th className="py-3 px-4 whitespace-nowrap">Record Type</th>
-                <th className="py-3 px-4">What Changed</th>
+                <th className="py-3 px-4 whitespace-nowrap">{t('audit.colWhen')}</th>
+                <th className="py-3 px-4 whitespace-nowrap">{t('audit.colWho')}</th>
+                <th className="py-3 px-4 whitespace-nowrap">{t('audit.colAction')}</th>
+                <th className="py-3 px-4 whitespace-nowrap">{t('audit.filterRecordType')}</th>
+                <th className="py-3 px-4">{t('audit.colWhatChanged')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -497,14 +499,14 @@ export default function AuditViewerModule({
               {!isLoading && filteredLogs.length === 0 && (
                 <tr>
                   <td colSpan={5} className="py-10 px-4 text-center text-slate-500">
-                    No audit entries match the current filters.
+                    {t('audit.noEntriesMatch')}
                   </td>
                 </tr>
               )}
               {isLoading && filteredLogs.length === 0 && (
                 <tr>
                   <td colSpan={5} className="py-10 px-4 text-center text-slate-500">
-                    Loading audit trail...
+                    {t('audit.loading')}
                   </td>
                 </tr>
               )}

@@ -2,6 +2,7 @@ import { createPortal } from 'react-dom';
 import { Users, X, Activity, Server, Radio, Clock, CheckCircle2, Monitor } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { RegisteredAccount, ActivePresenceUser } from '../types';
+import { useI18n } from '../i18n';
 
 interface ActiveUsersModalProps {
   isOpen: boolean;
@@ -46,6 +47,7 @@ export default function ActiveUsersModal({
   onForceSync,
   isManualSyncing
 }: ActiveUsersModalProps) {
+  const { t } = useI18n();
   const totalOnline = Math.max(1, activePresence.length, activeUsers.length);
 
   const modalContent = (
@@ -75,13 +77,13 @@ export default function ActiveUsersModal({
                 </div>
                 <div>
                   <h3 className="font-bold text-white text-base tracking-wide flex items-center gap-2">
-                    <span>LIVE ACTIVE TERMINALS</span>
+                    <span>{t('modals.activeUsers.liveActiveTerminals')}</span>
                     <span className="bg-indigo-500/20 text-indigo-300 text-xs px-2 py-0.5 rounded-full border border-indigo-500/30 font-mono">
-                      {totalOnline} ONLINE
+                      {t('modals.activeUsers.onlineBadge', { count: totalOnline })}
                     </span>
                   </h3>
                   <p className="text-xs text-slate-400 font-mono">
-                    Juwei Multi-Station Real-Time Cluster
+                    {t('modals.activeUsers.clusterSubtitle')}
                   </p>
                 </div>
               </div>
@@ -97,7 +99,7 @@ export default function ActiveUsersModal({
             <div className="p-4 bg-slate-950/40 border-b border-slate-800 grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
               <div className="bg-slate-800/60 border border-slate-700/60 p-2.5 rounded-xl">
                 <div className="text-[10px] text-slate-400 uppercase font-mono font-bold flex items-center gap-1">
-                  <Radio className="h-3 w-3 text-emerald-400" /> WebSocket
+                  <Radio className="h-3 w-3 text-emerald-400" /> {t('modals.activeUsers.wsLabel')}
                 </div>
                 <div className="font-bold text-white mt-1 flex items-center gap-1.5 font-mono">
                   <span className={`w-2 h-2 rounded-full ${connectionStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
@@ -107,17 +109,17 @@ export default function ActiveUsersModal({
 
               <div className="bg-slate-800/60 border border-slate-700/60 p-2.5 rounded-xl">
                 <div className="text-[10px] text-slate-400 uppercase font-mono font-bold flex items-center gap-1">
-                  <Server className="h-3 w-3 text-blue-400" /> Central Database
+                  <Server className="h-3 w-3 text-blue-400" /> {t('modals.activeUsers.centralDbLabel')}
                 </div>
                 <div className="font-bold text-white mt-1 flex items-center gap-1.5 font-mono">
                   <span className={`w-2 h-2 rounded-full ${databaseStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
-                  <span>{databaseStatus === 'connected' ? 'Authoritative DB' : 'Offline'}</span>
+                  <span>{databaseStatus === 'connected' ? t('modals.activeUsers.authoritativeDb') : 'Offline'}</span>
                 </div>
               </div>
 
               <div className="bg-slate-800/60 border border-slate-700/60 p-2.5 rounded-xl col-span-2 sm:col-span-1">
                 <div className="text-[10px] text-slate-400 uppercase font-mono font-bold flex items-center gap-1">
-                  <Clock className="h-3 w-3 text-indigo-400" /> Last Sync
+                  <Clock className="h-3 w-3 text-indigo-400" /> {t('modals.activeUsers.lastSyncLabel')}
                 </div>
                 <div className="font-bold text-white mt-1 text-[11px] font-mono truncate">
                   {lastSyncedTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
@@ -128,15 +130,15 @@ export default function ActiveUsersModal({
             {/* Active Workstations / Operators List */}
             <div className="p-4 overflow-y-auto flex-1 space-y-2.5">
               <div className="text-[11px] font-mono text-slate-400 uppercase font-bold tracking-wider px-1 flex items-center justify-between">
-                <span>Connected Operators ({totalOnline})</span>
+                <span>{t('modals.activeUsers.connectedOperators', { count: totalOnline })}</span>
                 <span className="text-[10px] text-emerald-400 font-mono flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" /> Real-time sync active
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" /> {t('modals.activeUsers.realTimeSyncActive')}
                 </span>
               </div>
 
               {totalOnline === 0 ? (
                 <div className="p-6 text-center text-slate-500 italic text-xs bg-slate-950/30 rounded-xl border border-slate-800">
-                  No external operator terminals currently registered in this session.
+                  {t('modals.activeUsers.noTerminalsSession')}
                 </div>
               ) : (
                 (activePresence.length > 0 ? activePresence : activeUsers.map(u => ({ username: u }))).map((presenceItem: any, idx) => {
@@ -152,7 +154,7 @@ export default function ActiveUsersModal({
                   const stationTag = presenceItem.stationId || `WS-${idx + 1}`;
                   const platformTag = presenceItem.platform || 'Workstation';
                   const isSelf = presenceItem.source === 'self';
-                  const sourceTag = isSelf ? 'This Device' : (presenceItem.source === 'local' ? 'Local Tab' : 'Central Server');
+                  const sourceTag = isSelf ? t('modals.activeUsers.thisDevice') : (presenceItem.source === 'local' ? t('modals.activeUsers.localTab') : t('modals.activeUsers.centralServer'));
                   const itemKey = presenceItem.connection_id || presenceItem.connectionId || presenceItem.session_id || presenceItem.sessionId || `${user}-${stationTag}-${idx}`;
 
                   return (
@@ -218,7 +220,7 @@ export default function ActiveUsersModal({
                 className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold font-mono transition flex items-center gap-1.5 shadow-md cursor-pointer disabled:opacity-50"
               >
                 <CheckCircle2 className="h-3.5 w-3.5" />
-                <span>{isManualSyncing ? 'SYNCING...' : 'SYNC ALL WORKSTATIONS'}</span>
+                <span>{isManualSyncing ? t('modals.activeUsers.syncingBtn') : t('modals.activeUsers.syncAllBtn')}</span>
               </button>
             </div>
           </motion.div>

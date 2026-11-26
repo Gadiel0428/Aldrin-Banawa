@@ -26,6 +26,7 @@ import {
   groupQuantitiesByUnit,
   resolveMasterDataUnit,
 } from '../../shared/units';
+import { useI18n } from '../i18n';
 
 export type DocViewMode = 'OFFICIAL_DOC' | 'PICKING_LIST' | 'SUMMARY_LOG';
 
@@ -50,6 +51,7 @@ export default function PrintablePickingListModal({
   initialView = 'OFFICIAL_DOC',
   onClose
 }: PrintablePickingListModalProps) {
+  const { t } = useI18n();
   // Determine primary mode (Delivery vs Issuance)
   const isDeliveryMode = !!delivery || deliveriesList.length > 0;
   const isIssuanceMode = !!issuance || (issuancesList.length > 0 && !isDeliveryMode);
@@ -1197,9 +1199,9 @@ export default function PrintablePickingListModal({
             </div>
             <div>
               <h3 className="font-bold text-sm sm:text-base flex items-center gap-2">
-                {isDeliveryMode ? 'Official Delivery & Shipping Documentation' : 'Official Material Requisition & Issuance Documentation'}
+                {isDeliveryMode ? t('modals.printChrome.officialDeliveryHeader') : t('modals.printChrome.officialIssuanceHeader')}
                 <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-mono font-bold uppercase">
-                  Print Ready
+                  {t('modals.printChrome.printReady')}
                 </span>
               </h3>
               <p className="text-xs text-slate-400">
@@ -1222,7 +1224,7 @@ export default function PrintablePickingListModal({
                   }`}
                 >
                   <FileText className="h-3.5 w-3.5" />
-                  <span>{isDeliveryMode ? 'Delivery Receipt & Gate Pass' : 'Requisition Slip (MRS)'}</span>
+                  <span>{isDeliveryMode ? t('modals.printChrome.tabDeliveryReceipt') : t('modals.printChrome.tabRequisitionSlip')}</span>
                 </button>
 
                 <button
@@ -1235,7 +1237,7 @@ export default function PrintablePickingListModal({
                   }`}
                 >
                   <ClipboardList className="h-3.5 w-3.5" />
-                  <span>Picking List</span>
+                  <span>{t('modals.printChrome.tabPickingList')}</span>
                 </button>
               </>
             )}
@@ -1250,7 +1252,7 @@ export default function PrintablePickingListModal({
               }`}
             >
               <FileSpreadsheet className="h-3.5 w-3.5" />
-              <span>Summary Log Report</span>
+              <span>{t('modals.printChrome.tabSummaryLog')}</span>
             </button>
           </div>
 
@@ -1260,7 +1262,7 @@ export default function PrintablePickingListModal({
               onClick={handleOpenPreview}
               disabled={isExportingPDF || isGeneratingPreview}
               className={`px-3.5 py-2 ${isExportingPDF || isGeneratingPreview ? 'bg-slate-800/60 text-slate-500 border-slate-800 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white border-slate-700 hover:border-indigo-500/50 cursor-pointer active:scale-95'} border text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5`}
-              title="Open A4 Print Layout Preview before printing"
+              title={t('modals.printChrome.btnPreview')}
               id="btn-print-preview"
             >
               {isGeneratingPreview ? (
@@ -1268,7 +1270,7 @@ export default function PrintablePickingListModal({
               ) : (
                 <Eye className="h-4 w-4 text-indigo-400" />
               )}
-              <span>{isGeneratingPreview ? 'RENDERING...' : 'PRINT PREVIEW'}</span>
+              <span>{isGeneratingPreview ? t('modals.printChrome.btnRendering') : t('modals.printChrome.btnPreview')}</span>
             </button>
 
             <button
@@ -1277,17 +1279,17 @@ export default function PrintablePickingListModal({
               disabled={isExportingPDF}
               className={`px-4 py-2 ${isExportingPDF ? 'bg-indigo-800 text-indigo-300 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white cursor-pointer'} text-xs font-bold rounded-xl shadow-lg transition flex items-center gap-2`}
               id="btn-print-document-sheet"
-              title="Render A4 pages and open Print dialog (Ctrl+P)"
+              title={t('modals.printChrome.btnPrint')}
             >
               {isExportingPDF ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin text-amber-300" />
-                  <span>PREPARING PRINT...</span>
+                  <span>{t('modals.printChrome.btnPreparingPrint')}</span>
                 </>
               ) : (
                 <>
                   <Printer className="h-4 w-4" />
-                  <span>PRINT DOCUMENT</span>
+                  <span>{t('modals.printChrome.btnPrint')}</span>
                 </>
               )}
             </button>
@@ -1295,7 +1297,7 @@ export default function PrintablePickingListModal({
               type="button"
               onClick={onClose}
               className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition cursor-pointer"
-              title="Close Document View"
+              title={t('common.close')}
             >
               <X className="h-5 w-5" />
             </button>
@@ -1306,10 +1308,10 @@ export default function PrintablePickingListModal({
         <div className="bg-amber-50 border-b border-amber-200 px-5 py-2.5 flex flex-wrap items-center justify-between gap-3 no-print text-xs text-amber-950 shrink-0">
           <div className="flex items-center gap-2">
             <span className="font-bold flex items-center gap-1 text-amber-900 bg-amber-200/60 px-2 py-0.5 rounded">
-              <CheckCircle2 className="h-3.5 w-3.5 text-amber-700" /> REVIEW BEFORE PRINTING
+              <CheckCircle2 className="h-3.5 w-3.5 text-amber-700" /> {t('modals.printChrome.reviewBannerTitle')}
             </span>
             <span className="text-amber-900 font-medium">
-              All signature blocks and signatory dates below are fully editable before generating the paper/PDF document.
+              {t('modals.printChrome.reviewBannerDesc')}
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -1322,12 +1324,12 @@ export default function PrintablePickingListModal({
               {isGeneratingPreview ? (
                 <>
                   <Loader2 className="h-3 w-3 animate-spin text-amber-700" />
-                  <span>Preparing...</span>
+                  <span>{t('modals.printChrome.btnPreparing')}</span>
                 </>
               ) : (
                 <>
                   <Eye className="h-3 w-3 text-amber-800" />
-                  <span>Preview A4 Page</span>
+                  <span>{t('modals.printChrome.btnPreviewA4')}</span>
                 </>
               )}
             </button>
@@ -1340,12 +1342,12 @@ export default function PrintablePickingListModal({
               {isExportingPDF ? (
                 <>
                   <Loader2 className="h-3 w-3 animate-spin text-amber-300" />
-                  <span>Preparing Print...</span>
+                  <span>{t('modals.printChrome.btnPreparingPrint')}</span>
                 </>
               ) : (
                 <>
                   <Printer className="h-3 w-3" />
-                  <span>Confirm & Print Document</span>
+                  <span>{t('modals.printChrome.btnConfirmPrint')}</span>
                 </>
               )}
             </button>
@@ -1391,7 +1393,7 @@ export default function PrintablePickingListModal({
                           : "text-slate-400 hover:text-white"
                       }`}
                     >
-                      {isDeliveryMode ? "Delivery Receipt" : "Requisition Slip"}
+                      {isDeliveryMode ? t('modals.printChrome.tabDeliveryReceipt') : t('modals.printChrome.tabRequisitionSlip')}
                     </button>
                     <button
                       type="button"
@@ -1402,7 +1404,7 @@ export default function PrintablePickingListModal({
                           : "text-slate-400 hover:text-white"
                       }`}
                     >
-                      Picking List
+                      {t('modals.printChrome.tabPickingList')}
                     </button>
                   </>
                 )}
@@ -1415,7 +1417,7 @@ export default function PrintablePickingListModal({
                       : "text-slate-400 hover:text-white"
                   }`}
                 >
-                  Summary Log
+                  {t('modals.printChrome.tabSummaryLog')}
                 </button>
               </div>
             }

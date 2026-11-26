@@ -1036,6 +1036,9 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
                 JSON.stringify({
                   type: "ERROR",
                   error: upsertRes.error,
+                  ...(upsertRes.fieldErrors
+                    ? { fieldErrors: upsertRes.fieldErrors, errors: upsertRes.fieldErrors }
+                    : {}),
                   status: upsertRes.status,
                   collection: payload.collection,
                   recordId: payload.record?.id || payload.record_id,

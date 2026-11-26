@@ -24,6 +24,7 @@ import {
   MapPin,
   Layers
 } from 'lucide-react';
+import { useI18n } from '../i18n';
 
 export interface ScannedItemPreview {
   code: string;
@@ -52,11 +53,15 @@ export default function BarcodeScannerModal({
   onClose,
   onScanResult,
   resolveScanDetails,
-  confirmButtonLabel = "Confirm",
-  title = "Barcode & QR Scanner",
-  subtitle = "Scan material tag, lot label, or QR code using USB / Bluetooth scanner, camera, or image upload",
+  confirmButtonLabel,
+  title,
+  subtitle,
   initialTab = 'scanner'
 }: BarcodeScannerModalProps) {
+  const { t } = useI18n();
+  const resolvedTitle = title || t('modals.scanner.defaultTitle');
+  const resolvedSubtitle = subtitle || t('modals.scanner.defaultSubtitle');
+  const resolvedConfirmLabel = confirmButtonLabel || t('common.confirm');
   const [activeTab, setActiveTab] = useState<'scanner' | 'camera' | 'upload'>(initialTab);
   const [scannedCode, setScannedCode] = useState<string | null>(null);
   const [pendingPreview, setPendingPreview] = useState<ScannedItemPreview | null>(null);
@@ -307,9 +312,9 @@ export default function BarcodeScannerModal({
                 </div>
                 <div className="min-w-0 flex-1">
                   <h3 className="font-semibold text-sm text-white tracking-tight">
-                    {title}
+                    {resolvedTitle}
                   </h3>
-                  <p className="text-[11px] text-slate-400 truncate">{subtitle}</p>
+                  <p className="text-[11px] text-slate-400 truncate">{resolvedSubtitle}</p>
                 </div>
               </div>
 
@@ -351,7 +356,7 @@ export default function BarcodeScannerModal({
                     }`}
                   >
                     <Barcode className="h-3.5 w-3.5" />
-                    <span className="truncate">Handheld Scanner</span>
+                    <span className="truncate">{t('modals.scanner.tabScanner')}</span>
                   </button>
 
                   <button
@@ -364,7 +369,7 @@ export default function BarcodeScannerModal({
                     }`}
                   >
                     <Camera className="h-3.5 w-3.5" />
-                    <span className="truncate">Live Camera</span>
+                    <span className="truncate">{t('modals.scanner.tabCamera')}</span>
                   </button>
 
                   <button
@@ -377,7 +382,7 @@ export default function BarcodeScannerModal({
                     }`}
                   >
                     <Upload className="h-3.5 w-3.5" />
-                    <span className="truncate">Upload Image</span>
+                    <span className="truncate">{t('modals.scanner.tabUpload')}</span>
                   </button>
                 </div>
               </div>
@@ -404,16 +409,16 @@ export default function BarcodeScannerModal({
                       >
                         <CheckCircle2 className="h-3 w-3" />
                         {pendingPreview.matchedSource === 'STOCK'
-                          ? 'Stock Record Matched'
+                          ? t('modals.scanner.stockMatchedBadge')
                           : pendingPreview.matchedSource === 'REGISTRY'
-                          ? 'Master Registry Matched'
-                          : 'Unregistered Barcode'}
+                          ? t('modals.scanner.registryMatchedBadge')
+                          : t('modals.scanner.unregisteredBadge')}
                       </span>
                       <h4 className="text-sm font-bold text-white mt-2">
-                        Confirm Scanned Item
+                        {t('modals.scanner.confirmItemTitle')}
                       </h4>
                       <p className="text-[11px] text-slate-400 mt-0.5">
-                        Verify item name, lot, and location before continuing. Nothing is saved until you tap Confirm.
+                        {t('modals.scanner.confirmItemSubtitle')}
                       </p>
                     </div>
                   </div>
@@ -421,7 +426,7 @@ export default function BarcodeScannerModal({
                   {/* Scanned Code Header */}
                   <div className="px-3 py-2 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-between gap-2 text-xs">
                     <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400">
-                      Scanned Barcode
+                      {t('modals.scanner.scannedBarcodeLabel')}
                     </span>
                     <span className="font-mono font-bold text-indigo-300 break-all text-right">
                       {pendingPreview.code}
@@ -436,7 +441,7 @@ export default function BarcodeScannerModal({
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400">
-                          Item Name
+                          {t('modals.scanner.itemNameLabel')}
                         </div>
                         <div
                           id="scan-confirm-item-name"
@@ -460,7 +465,7 @@ export default function BarcodeScannerModal({
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400">
-                            Lot
+                            {t('modals.scanner.lotLabel')}
                           </div>
                           <div
                             id="scan-confirm-lot"
@@ -477,7 +482,7 @@ export default function BarcodeScannerModal({
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400">
-                            Location
+                            {t('modals.scanner.locationLabel')}
                           </div>
                           <div
                             id="scan-confirm-location"
@@ -499,7 +504,7 @@ export default function BarcodeScannerModal({
                       className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
                     >
                       <RotateCcw className="h-3.5 w-3.5" />
-                      <span>Scan Again</span>
+                      <span>{t('modals.scanner.scanAgainBtn')}</span>
                     </button>
                     <button
                       type="button"
@@ -508,7 +513,7 @@ export default function BarcodeScannerModal({
                       className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-md shadow-emerald-950/50 transition cursor-pointer"
                     >
                       <CheckCircle2 className="h-4 w-4" />
-                      <span>{confirmButtonLabel}</span>
+                      <span>{resolvedConfirmLabel}</span>
                     </button>
                   </div>
                 </div>
@@ -520,7 +525,7 @@ export default function BarcodeScannerModal({
                   <div className="inline-flex p-2.5 bg-indigo-500/10 text-indigo-400 rounded-full border border-indigo-500/20">
                     <Loader2 className="h-6 w-6 animate-spin text-indigo-400" />
                   </div>
-                  <h4 className="font-mono text-xs font-bold text-slate-200 uppercase tracking-wider">Verifying Barcode Data...</h4>
+                  <h4 className="font-mono text-xs font-bold text-slate-200 uppercase tracking-wider">{t('modals.scanner.verifyingBarcode')}</h4>
                   <p className="text-[11px] text-slate-400 font-mono break-all max-h-24 overflow-y-auto">{scannedCode}</p>
                 </div>
               )}
@@ -533,11 +538,11 @@ export default function BarcodeScannerModal({
                     <div className="flex items-center justify-between px-0.5">
                       <span className="text-[11px] font-mono font-medium text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
                         <Barcode className="h-3.5 w-3.5 text-slate-500" />
-                        Active Barcode Reader Input
+                        {t('modals.scanner.activeReaderInput')}
                       </span>
                       <div className="flex items-center gap-1.5 text-[10px] font-mono text-emerald-400">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                        <span>Scanner Ready</span>
+                        <span>{t('modals.scanner.scannerReady')}</span>
                       </div>
                     </div>
 
@@ -561,7 +566,7 @@ export default function BarcodeScannerModal({
                           name="barcode_scan_input"
                           value={barcodeInput}
                           onChange={(e) => setBarcodeInput(e.target.value)}
-                          placeholder="Scan barcode or type code..."
+                          placeholder={t('modals.scanner.scanOrTypePlaceholder')}
                           className="w-full bg-transparent px-1 text-sm font-mono focus:outline-none placeholder:text-slate-500 placeholder:font-sans placeholder:text-xs text-slate-100"
                           autoFocus
                         />
@@ -590,10 +595,10 @@ export default function BarcodeScannerModal({
                         {barcodeInput ? (
                           <>
                             <Loader2 className="h-3.5 w-3.5 animate-spin text-white" />
-                            <span>Processing</span>
+                            <span>{t('modals.scanner.processingBtn')}</span>
                           </>
                         ) : (
-                          <span>Submit</span>
+                          <span>{t('modals.scanner.submitBtn')}</span>
                         )}
                       </button>
                     </div>
@@ -601,7 +606,7 @@ export default function BarcodeScannerModal({
                     {/* Minimalist Subtle Note */}
                     <div className="pt-1 flex items-center gap-2 text-[11px] text-slate-400 px-1">
                       <Keyboard className="h-3.5 w-3.5 text-slate-500 shrink-0" />
-                      <span>Handheld scanners automatically input and submit barcode values into this field.</span>
+                      <span>{t('modals.scanner.handheldNote')}</span>
                     </div>
                   </form>
                 </div>
@@ -617,7 +622,7 @@ export default function BarcodeScannerModal({
                     {cameraStarting && (
                       <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/80 backdrop-blur-xs gap-2 p-4 text-center">
                         <Loader2 className="h-8 w-8 text-indigo-400 animate-spin" />
-                        <span className="text-xs text-slate-300 font-medium">Initializing camera feed...</span>
+                        <span className="text-xs text-slate-300 font-medium">{t('modals.scanner.initCamera')}</span>
                       </div>
                     )}
 
@@ -633,14 +638,14 @@ export default function BarcodeScannerModal({
                             onClick={() => setActiveTab('scanner')}
                             className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-semibold cursor-pointer"
                           >
-                            Use Handheld Scanner
+                            {t('modals.scanner.tabScanner')}
                           </button>
                           <button
                             type="button"
                             onClick={() => setActiveTab('upload')}
                             className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-semibold cursor-pointer"
                           >
-                            Upload Photo
+                            {t('modals.scanner.tabUpload')}
                           </button>
                         </div>
                       </div>
@@ -649,13 +654,13 @@ export default function BarcodeScannerModal({
                     {cameraActive && !cameraError && (
                       <div className="absolute top-2 left-2 z-10 px-2.5 py-1 rounded-full bg-slate-950/80 border border-emerald-500/40 text-[10px] font-mono text-emerald-400 flex items-center gap-1.5 backdrop-blur-sm pointer-events-none">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                        <span>Camera Active: Point at QR / Barcode</span>
+                        <span>{t('modals.scanner.cameraActiveNotice')}</span>
                       </div>
                     )}
                   </div>
 
                   <p className="text-[11px] text-slate-400 text-center">
-                    Hold material lot tag, roll barcode, or QR code steady inside the frame.
+                    {t('modals.scanner.cameraAimNotice')}
                   </p>
                 </div>
               )}
@@ -668,8 +673,8 @@ export default function BarcodeScannerModal({
                       <Upload className="h-5 w-5" />
                     </div>
                     <div>
-                      <h4 className="font-medium text-slate-200 text-xs">Select Barcode or QR Image</h4>
-                      <p className="text-[11px] text-slate-500 mt-0.5">PNG, JPG, WEBP, or SVG material tag images</p>
+                      <h4 className="font-medium text-slate-200 text-xs">{t('modals.scanner.selectImageTitle')}</h4>
+                      <p className="text-[11px] text-slate-500 mt-0.5">{t('modals.scanner.selectImageSubtitle')}</p>
                     </div>
                     <input
                       type="file"
@@ -692,7 +697,7 @@ export default function BarcodeScannerModal({
             {/* Modal Footer */}
             <div className="px-5 py-2.5 border-t border-slate-800/80 bg-slate-950/40 flex justify-between items-center text-[11px] text-slate-400">
               <span className="font-mono text-slate-500">
-                {pendingPreview ? 'Confirmation required before saving' : 'USB / Bluetooth Scanner Ready'}
+                {pendingPreview ? t('modals.scanner.confirmRequiredFooter') : t('modals.scanner.scannerReadyFooter')}
               </span>
               <button
                 type="button"
@@ -704,7 +709,7 @@ export default function BarcodeScannerModal({
                 }}
                 className="px-3 py-1 bg-slate-800/80 hover:bg-slate-800 text-slate-300 rounded-lg font-medium transition cursor-pointer"
               >
-                {pendingPreview ? 'Cancel' : 'Close'}
+                {pendingPreview ? t('common.cancel') : t('common.close')}
               </button>
             </div>
           </motion.div>

@@ -18,6 +18,7 @@ import {
   showPrintToast,
   formatPrintErrorMessage
 } from '../utils/printDocument';
+import { useI18n } from '../i18n';
 
 export interface PrintPreviewModalProps {
   isOpen: boolean;
@@ -42,6 +43,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   isRendering = false,
   extraToolbarControls
 }) => {
+  const { t } = useI18n();
   const [scale, setScale] = useState<number>(1.0);
   const [fitMode, setFitMode] = useState<'custom' | 'fit-width' | 'actual'>('actual');
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -244,7 +246,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
               onClick={zoomOut}
               disabled={scale <= 0.35}
               className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
-              title="Zoom Out (-15%)"
+              title={t('modals.printChrome.zoomOut')}
               aria-label="Zoom Out"
             >
               <ZoomOut className="h-4 w-4" />
@@ -259,7 +261,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
               onClick={zoomIn}
               disabled={scale >= 2.0}
               className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
-              title="Zoom In (+15%)"
+              title={t('modals.printChrome.zoomIn')}
               aria-label="Zoom In"
             >
               <ZoomIn className="h-4 w-4" />
@@ -289,7 +291,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                   ? 'bg-slate-800 text-white font-bold shadow-xs'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
-              title="Fit to Window Width"
+              title={t('modals.printChrome.fitPage')}
             >
               <Maximize2 className="h-3 w-3 inline mr-1" />
               Fit
@@ -312,12 +314,12 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
               {isPrinting ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin text-amber-300" />
-                  <span className="whitespace-nowrap font-mono tracking-tight">PRINTING...</span>
+                  <span className="whitespace-nowrap font-mono tracking-tight">{t('modals.printChrome.btnPreparingPrint')}</span>
                 </>
               ) : (
                 <>
                   <Printer className="h-4 w-4" />
-                  <span className="whitespace-nowrap font-mono tracking-tight">Print</span>
+                  <span className="whitespace-nowrap font-mono tracking-tight">{t('modals.printChrome.btnPrint')}</span>
                 </>
               )}
             </button>
@@ -336,12 +338,12 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
               {isSavingPdf ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin text-amber-300" />
-                  <span className="whitespace-nowrap font-mono tracking-tight">SAVING PDF...</span>
+                  <span className="whitespace-nowrap font-mono tracking-tight">{t('modals.printChrome.savePdf')}...</span>
                 </>
               ) : (
                 <>
                   <Download className="h-4 w-4" />
-                  <span className="whitespace-nowrap font-mono tracking-tight">Save PDF</span>
+                  <span className="whitespace-nowrap font-mono tracking-tight">{t('modals.printChrome.savePdf')}</span>
                 </>
               )}
             </button>
@@ -354,7 +356,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
               aria-label="Close"
             >
               <X className="h-4 w-4" />
-              <span>Close</span>
+              <span>{t('common.close')}</span>
             </button>
           </div>
         </header>
@@ -365,17 +367,17 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
             <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />
             <span>
               {totalPages > 0
-                ? `Page ${currentPage} of ${totalPages} · Crisp A4 Render Ready`
-                : 'Rendering A4 Print Pages...'}
+                ? `${t('modals.printChrome.pageOf')} ${currentPage} / ${totalPages} · ${t('modals.printChrome.printReady')}`
+                : t('modals.printChrome.btnRendering')}
             </span>
           </div>
           <div className="flex items-center gap-3">
             <span>
-              Press <kbd className="px-1.5 py-0.5 bg-slate-800 rounded text-slate-200 border border-slate-700">Ctrl+P</kbd> to print
+              <kbd className="px-1.5 py-0.5 bg-slate-800 rounded text-slate-200 border border-slate-700">Ctrl+P</kbd> {t('modals.printChrome.printShortcutHint')}
             </span>
             <span>·</span>
             <span>
-              <kbd className="px-1.5 py-0.5 bg-slate-800 rounded text-slate-200 border border-slate-700">Esc</kbd> to close
+              <kbd className="px-1.5 py-0.5 bg-slate-800 rounded text-slate-200 border border-slate-700">Esc</kbd> {t('modals.printChrome.escShortcutHint')}
             </span>
           </div>
         </div>

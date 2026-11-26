@@ -17,6 +17,8 @@ import { generateAuthoritativeId } from '../../lib/idGenerator';
 import { syncManager } from '../../sync/syncManager';
 import { showPrintToast } from '../../utils/printDocument';
 import { formatQuantityWithUnit, normalizeUnitCode } from '../../../shared/units';
+import { allocateFifoLots } from '../../../shared/fifoAllocation';
+import { translate } from '../../i18n';
 
 export interface UseReceivingActionsParams {
   receiving: ReceivingRecord[];
@@ -62,7 +64,7 @@ export function useReceivingActions({
 }: UseReceivingActionsParams) {
   const handleAddReceiving = (record: ReceivingRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
+      showPrintToast(translate('toasts.viewOnlyDenied'), 'error');
       return;
     }
     const newStockId = generateAuthoritativeId('STK');
@@ -94,6 +96,7 @@ export function useReceivingActions({
       ...(resolvedUnit ? { unitMissing: false } : { unitMissing: true }),
       lotNumber: record.lotNumber,
       receivedDate: record.receivedDate || record.date,
+      expirationDate: record.expirationDate || undefined,
       color: record.color,
       fifoColor: normalizeFifoColor(record.fifoColorCode || (record as any).fifoColor, record.receivedDate || record.date, fifoColorsByMonth),
       status: record.status === 'QUARANTINED' ? 'QUARANTINE' : (record.iqcStatus === 'PENDING_IQC' ? 'HOLD' : 'APPROVED'),
@@ -110,21 +113,11 @@ export function useReceivingActions({
 
     if (isInternal && record.bom && record.bom.length > 0 && record.autoDeductBom) {
       record.bom.forEach(bomItem => {
-        let remainingToDeduct = bomItem.quantityRequired;
-
-        const matchingStockItems = nextStocks
-          .filter(s => s.partCode === bomItem.partCode && s.status === 'APPROVED' && s.quantity > 0)
-          .sort((a, b) => new Date(a.receivedDate).getTime() - new Date(b.receivedDate).getTime());
-
-        matchingStockItems.forEach(stockItem => {
-          if (remainingToDeduct <= 0) return;
-
-          const deductAmount = Math.min(stockItem.quantity, remainingToDeduct);
-          remainingToDeduct -= deductAmount;
-
-          const updatedStock = { ...stockItem, quantity: stockItem.quantity - deductAmount };
+        const plan = allocateFifoLots(nextStocks, bomItem.partCode, bomItem.quantityRequired);
+        plan.allocations.forEach(({ stockItem, quantityAllocated, remainingLotQuantity }) => {
+          const updatedStock = { ...stockItem, quantity: remainingLotQuantity };
           nextStocks = nextStocks.map(s => s.id === stockItem.id ? updatedStock : s);
-          bomDeductions.push({ stockItem, deductAmount });
+          bomDeductions.push({ stockItem, deductAmount: quantityAllocated });
         });
       });
     }
@@ -180,7 +173,7 @@ export function useReceivingActions({
 
   const handleUpdateIqc = (id: string, iqcStatus: ReceivingRecord['iqcStatus']) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
+      showPrintToast(translate('toasts.viewOnlyDenied'), 'error');
       return;
     }
     const updatedReceivingRecord = receiving.find(r => r.id === id);
@@ -212,7 +205,7 @@ export function useReceivingActions({
 
   const handleEditReceiving = (record: ReceivingRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: OPERATORS IN VIEW ONLY MODE CANNOT EDIT RECEIVING RECORDS.", 'error');
+      showPrintToast(translate('toasts.viewOnlyEditReceivingDenied'), 'error');
       return;
     }
     const next = receiving.map(r => r.id === record.id ? record : r);
@@ -224,7 +217,7 @@ export function useReceivingActions({
 
   const handleDeleteReceiving = (id: string) => {
     if (currentPermission !== 'FULL_ACCESS') {
-      showPrintToast("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE RECEIVING TRANSACTIONS.", 'error');
+      showPrintToast(translate('toasts.superAdminDeleteReceivingDenied'), 'error');
       return;
     }
     deleteRecordLocallyAndRemotely('receiving', id);
@@ -235,7 +228,7 @@ export function useReceivingActions({
 
   const handleAddReturn = (record: ReturnRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
+      showPrintToast(translate('toasts.viewOnlyDenied'), 'error');
       return;
     }
     const newStockId = generateAuthoritativeId('STK');
@@ -302,7 +295,7 @@ export function useReceivingActions({
 
   const handleUpdateReturnStatus = (id: string, status: ReturnRecord['status']) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
+      showPrintToast(translate('toasts.viewOnlyDenied'), 'error');
       return;
     }
     const existingRet = returns.find(r => r.id === id);
@@ -330,7 +323,7 @@ export function useReceivingActions({
 
   const handleEditReturn = (record: ReturnRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: OPERATORS IN VIEW ONLY MODE CANNOT EDIT RETURN RECORDS.", 'error');
+      showPrintToast(translate('toasts.viewOnlyEditReturnDenied'), 'error');
       return;
     }
     const next = returns.map(r => r.id === record.id ? record : r);
@@ -342,7 +335,7 @@ export function useReceivingActions({
 
   const handleDeleteReturn = (id: string) => {
     if (currentPermission !== 'FULL_ACCESS') {
-      showPrintToast("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE RETURN TRANSACTIONS.", 'error');
+      showPrintToast(translate('toasts.superAdminDeleteReturnDenied'), 'error');
       return;
     }
     deleteRecordLocallyAndRemotely('returns', id);
@@ -353,7 +346,7 @@ export function useReceivingActions({
 
   const handleAddRecycling = (record: RecyclingRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
+      showPrintToast(translate('toasts.viewOnlyDenied'), 'error');
       return;
     }
     const keyword = (record.itemType || '').trim().toUpperCase();
@@ -407,7 +400,7 @@ export function useReceivingActions({
 
   const handleDeleteRecycling = (id: string) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
+      showPrintToast(translate('toasts.viewOnlyDenied'), 'error');
       return;
     }
     deleteRecordLocallyAndRemotely('recycling', id);

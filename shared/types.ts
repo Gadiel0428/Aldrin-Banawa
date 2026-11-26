@@ -115,6 +115,7 @@ export interface ReceivingRecord extends BaseRecordAudit {
   id: string;
   date: string;
   receivedDate?: string;
+  expirationDate?: string;
   location?: string;
   vendorSupplier?: string;
   reorderMin?: number;
@@ -208,6 +209,9 @@ export interface IssuanceRecord extends BaseRecordAudit {
   receivedBy: string;
   stockId?: string;
   movementIdempotencyKey?: string;
+  overrideReason?: string;
+  superAdminApproved?: boolean;
+  superAdminApprover?: string;
 }
 
 export interface DeliveryRecord extends BaseRecordAudit {
@@ -531,6 +535,36 @@ export interface RebuildMovementsResult {
   repairedBalances: number;
   totalMovements: number;
   totalStocks: number;
+}
+
+export type PrintCheckDocumentType =
+  | 'REQUISITION'
+  | 'PICKING_LIST'
+  | 'GATE_PASS'
+  | 'QR_BADGE';
+
+export interface PrintCheckDocVerification {
+  docType: PrintCheckDocumentType;
+  expectedCode: string;
+  scannedCode: string;
+  confirmedMatch: boolean;
+  scannedAt?: string;
+}
+
+export interface PrintCheckLogEntry {
+  id: string;
+  checkedDate: string;
+  checkedAt: string;
+  printer: string;
+  operatorName: string;
+  operatorEmployeeId: string;
+  stationId?: string;
+  deviceId?: string;
+  overallStatus: 'PASS' | 'FAIL';
+  matchedCount: number;
+  totalCount: number;
+  documents: PrintCheckDocVerification[];
+  notes?: string;
 }
 
 export interface CentralDatabaseState {

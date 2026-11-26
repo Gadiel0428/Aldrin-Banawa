@@ -23,6 +23,7 @@ import type {
   MasterRegistryItem,
   MaterialStockItem,
   PinAuditEntry,
+  PrintCheckLogEntry,
   ReceivingRecord,
   RecyclingRecord,
   RegisteredAccount,
@@ -30,6 +31,7 @@ import type {
 } from "../../shared/types.ts";
 
 export const MAX_AUDIT_TRAIL_ENTRIES = 5000;
+export const MAX_PRINT_CHECK_LOGS = 1000;
 
 export const INITIAL_STOCK: MaterialStockItem[] = [];
 export const INITIAL_RECEIVING: ReceivingRecord[] = [];
@@ -298,6 +300,7 @@ export interface UpsertExecutionResult {
   success: boolean;
   status: number;
   error?: string;
+  fieldErrors?: Record<string, string>;
   confirmedRecord?: any;
   currentRecord?: any;
   isCreation?: boolean;
@@ -358,6 +361,8 @@ export interface ServerContext {
   fifoRepairAuditLogFile: string;
   fifoRepairAuditLogs: FifoRepairAuditEntry[];
   initialFifoRepairReport: FifoStartupRepairReport;
+  printCheckLogFile: string;
+  printCheckLogs: PrintCheckLogEntry[];
 
   // Backup & Release cache state
   isBackupInProgress: boolean;
@@ -415,12 +420,14 @@ export function createServerContext(params: {
   const pinAuditLogFile = config.getStorageFilePath("pin-audit-log.json");
   const auditTrailFile = config.getStorageFilePath("audit-trail.json");
   const fifoRepairAuditLogFile = config.getStorageFilePath("fifo-repair-audit-log.json");
+  const printCheckLogFile = config.getStorageFilePath("print-check-logs.json");
   const releasePersistFile = config.getStorageFilePath("latest-github-release.json");
 
   const backupAuditRead = readJsonArrayFile<BackupAuditEntry>(backupAuditLogFile);
   const pinAuditRead = readJsonArrayFile<PinAuditEntry>(pinAuditLogFile);
   const auditTrailRead = readJsonArrayFile<AuditTrailEntry>(auditTrailFile);
   const fifoRepairRead = readJsonArrayFile<FifoRepairAuditEntry>(fifoRepairAuditLogFile);
+  const printCheckRead = readJsonArrayFile<PrintCheckLogEntry>(printCheckLogFile);
 
   return {
     serverInstanceId,
@@ -491,6 +498,8 @@ export function createServerContext(params: {
     auditTrailFileExistsOnBoot: auditTrailRead.exists,
     fifoRepairAuditLogFile,
     fifoRepairAuditLogs: fifoRepairRead.items,
+    printCheckLogFile,
+    printCheckLogs: printCheckRead.items,
     initialFifoRepairReport: {
       stocksScanned: 0,
       stocksRepaired: 0,

@@ -6,6 +6,7 @@
 import React from 'react';
 import BarcodeScannerModal from '../../components/BarcodeScannerModal';
 import QuickRecordLookupModal from '../../components/QuickRecordLookupModal';
+import { useI18n } from '../../i18n';
 import {
   MaterialStockItem,
   ReceivingRecord,
@@ -53,14 +54,16 @@ export const QuickLookupModals: React.FC<QuickLookupModalsProps> = ({
   registries,
   onNavigateToModule
 }) => {
+  const { t } = useI18n();
+
   return (
     <>
       {showScanner && (
         <BarcodeScannerModal
           isOpen={showScanner}
           onClose={onCloseScanner}
-          title="Quick Record Lookup Barcode & QR Scanner"
-          subtitle="Scan material tag, roll barcode, lot label, or requisition QR code"
+          title={t('modals.quickLookup.scannerTitle')}
+          subtitle={t('modals.quickLookup.scannerSubtitle')}
           onScanResult={onScanResult}
         />
       )}

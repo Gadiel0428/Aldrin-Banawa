@@ -38,6 +38,9 @@ import {
   normalizeUnitCode,
   resolveMasterDataUnit,
 } from '../../shared/units';
+import { validateDeliveryRecord } from '../../shared/validation';
+import { getManilaTodayString } from '../lib/businessDate';
+import { useI18n } from '../i18n';
 
 interface DeliveryModuleProps {
   deliveries: DeliveryRecord[];
@@ -68,6 +71,7 @@ export default function DeliveryModule({
   registries = [],
   currentUser = ''
 }: DeliveryModuleProps) {
+  const { t, localizeValidation } = useI18n();
   const effectiveCanEdit = canEdit || isSuperAdmin;
   const [searchQuery, setSearchQuery] = useState('');
   const [editingDelivery, setEditingDelivery] = useState<DeliveryRecord | null>(null);
@@ -85,7 +89,36 @@ export default function DeliveryModule({
   const [modelName, setModelName] = useState('');
   const [partCode, setPartCode] = useState('');
   const [quantity, setQuantity] = useState(0);
+  const [quantityInput, setQuantityInput] = useState('');
   const [unit, setUnit] = useState('PCS');
+  const [pickFieldErrors, setPickFieldErrors] = useState<Record<string, string>>({});
+  const [gatePassFieldErrors, setGatePassFieldErrors] = useState<Record<string, string>>({});
+  const [editFieldErrors, setEditFieldErrors] = useState<Record<string, string>>({});
+  const [editDeliveryQtyInput, setEditDeliveryQtyInput] = useState('');
+
+  const clearPickErr = (field: string) => {
+    setPickFieldErrors(prev => {
+      if (!prev[field]) return prev;
+      const { [field]: _removed, ...rest } = prev;
+      return rest;
+    });
+  };
+
+  const clearGateErr = (field: string) => {
+    setGatePassFieldErrors(prev => {
+      if (!prev[field]) return prev;
+      const { [field]: _removed, ...rest } = prev;
+      return rest;
+    });
+  };
+
+  const clearEditDelErr = (field: string) => {
+    setEditFieldErrors(prev => {
+      if (!prev[field]) return prev;
+      const { [field]: _removed, ...rest } = prev;
+      return rest;
+    });
+  };
 
   // Forklift form states
   const [showForkliftForm, setShowForkliftForm] = useState(false);
@@ -105,45 +138,61 @@ export default function DeliveryModule({
   const [salesInvoice, setSalesInvoice] = useState('');
   const [wayBill, setWayBill] = useState('');
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getManilaTodayString();
 
   const isForkliftPrechecked = forkliftChecks.some(check => check.date === todayStr);
 
   const handlePickPartCodeChange = (val: string) => {
     const upper = val.toUpperCase();
     setPartCode(upper);
+    clearPickErr('partCode');
     const resolved = resolveMasterDataUnit({ partCode: upper, modelName }, registries, stocks);
     if (resolved.unit) {
       setUnit(resolved.unit);
+      clearPickErr('unit');
     }
   };
 
   const handlePickSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const resolvedUnit = normalizeUnitCode(unit) || resolveMasterDataUnit({ partCode, modelName }, registries, stocks).unit;
-    if (!pickingListNumber || !poNumber || !modelName || !partCode || quantity <= 0 || !resolvedUnit) {
-      showPrintToast('Please fill out all fields including Unit of Measure.', 'warning');
-      return;
-    }
+    const resolvedUnit = normalizeUnitCode(unit) || resolveMasterDataUnit({ partCode, modelName }, registries, stocks).unit || '';
+    const rawQty = quantityInput.trim() === '' ? NaN : Number(quantityInput.trim());
+    const numericQty = Number.isNaN(rawQty) ? 0 : rawQty;
 
     const newDelivery: DeliveryRecord = {
       id: generateAuthoritativeId('DEL'),
       date: todayStr,
-      pickingListNumber,
-      poNumber,
-      modelName,
-      partCode,
-      quantity,
+      pickingListNumber: pickingListNumber.trim(),
+      poNumber: poNumber.trim(),
+      modelName: modelName.trim(),
+      partCode: partCode.trim().toUpperCase(),
+      quantity: numericQty,
       unit: resolvedUnit,
-      unitMissing: false,
+      unitMissing: !resolvedUnit,
       packagingConditionOk: true,
       fifoVerified: true,
       forkliftChecklistSigned: isForkliftPrechecked,
       gatePassNumber: `MGP-2026-${generateAuthoritativeId('GP')}`,
       status: 'PREPARING',
-      preparedBy: 'Aldrin Clerk'
+      preparedBy: currentUser || 'Aldrin Clerk'
     };
 
+    const validation = validateDeliveryRecord(
+      {
+        ...newDelivery,
+        quantity: quantityInput.trim() === '' ? '' : rawQty,
+      } as any,
+      deliveries,
+      { requireOperationalFields: true }
+    );
+
+    if (!validation.valid) {
+      setPickFieldErrors(validation.fieldErrors);
+      showPrintToast(localizeValidation(validation.message || '') || t('delivery.fixValidation'), 'warning');
+      return;
+    }
+
+    setPickFieldErrors({});
     onAddDelivery(newDelivery);
 
     // Reset
@@ -152,6 +201,7 @@ export default function DeliveryModule({
     setModelName('');
     setPartCode('');
     setQuantity(0);
+    setQuantityInput('');
     setUnit('PCS');
     setShowPickForm(false);
   };
@@ -159,7 +209,7 @@ export default function DeliveryModule({
   const handleForkliftCheckSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!operator) {
-      showPrintToast('Operator name is required.', 'warning');
+      showPrintToast(t('delivery.operatorRequired'), 'warning');
       return;
     }
 
@@ -184,12 +234,36 @@ export default function DeliveryModule({
   };
 
   const handleGatePassReleaseSubmit = (id: string) => {
-    if (!drNumber || !salesInvoice || !wayBill) {
-      showPrintToast('Please key in all release references (DR #, Sales Invoice #, and Waybill #) as required by standard gate protocols.', 'warning');
+    const targetDelivery = deliveries.find(d => d.id === id);
+    const cleanDr = drNumber.trim();
+    const cleanSi = salesInvoice.trim();
+    const cleanWb = wayBill.trim();
+
+    const candidate: Partial<DeliveryRecord> = {
+      ...(targetDelivery || {}),
+      id,
+      status: 'RELEASED',
+      drNumber: cleanDr,
+      salesInvoice: cleanSi,
+      wayBill: cleanWb,
+    };
+
+    const validation = validateDeliveryRecord(candidate as any, deliveries, {
+      requireReleaseDocs: true,
+    });
+
+    if (!validation.valid) {
+      setGatePassFieldErrors(validation.fieldErrors);
+      showPrintToast(localizeValidation(validation.message || '') || t('delivery.fixReleaseValidation'), 'warning');
       return;
     }
 
-    onUpdateDeliveryStatus(id, 'RELEASED', { drNumber, salesInvoice, wayBill });
+    setGatePassFieldErrors({});
+    onUpdateDeliveryStatus(id, 'RELEASED', {
+      drNumber: cleanDr,
+      salesInvoice: cleanSi,
+      wayBill: cleanWb,
+    });
     setShowGatePassModal(null);
     setDrNumber('');
     setSalesInvoice('');
@@ -211,15 +285,15 @@ export default function DeliveryModule({
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded border border-indigo-500/30">
-              OUTBOUND DISPATCH & LOGISTICS
+              {t('delivery.bannerBadge')}
             </span>
             <span className="text-emerald-400 text-[10px] font-bold flex items-center gap-1 font-mono">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse inline-block" /> READY
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse inline-block" /> {t('delivery.readyBadge')}
             </span>
           </div>
-          <h2 className="text-xl font-bold text-white tracking-tight">Delivery & Gate Pass Operations</h2>
+          <h2 className="text-xl font-bold text-white tracking-tight">{t('delivery.title')}</h2>
           <p className="text-xs text-slate-300 mt-1">
-            Build Picking Lists, execute forklift pre-inspections, verify packaging, and authorize Gate Passes.
+            {t('delivery.subtitle')}
           </p>
         </div>
 
@@ -231,7 +305,7 @@ export default function DeliveryModule({
               activeSubTab === 'shipments' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
             }`}
           >
-            <Truck className="h-4 w-4" /> Outbound Shipments
+            <Truck className="h-4 w-4" /> {t('delivery.tabDispatch')}
           </button>
           <button 
             onClick={() => setActiveSubTab('forklift')}
@@ -239,7 +313,7 @@ export default function DeliveryModule({
               activeSubTab === 'forklift' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
             }`}
           >
-            <Settings className="h-4 w-4" /> Forklift Pre-Inspection
+            <Settings className="h-4 w-4" /> {t('delivery.tabForklift')}
           </button>
         </div>
       </div>
@@ -251,15 +325,15 @@ export default function DeliveryModule({
             <div className="p-4 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl flex gap-3 items-start" id="forklift-warning-banner">
               <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
               <div className="space-y-1">
-                <h4 className="font-bold text-xs">Safe Loading Pre-requisite Pending</h4>
+                <h4 className="font-bold text-xs">{t('delivery.forkliftWarningTitle')}</h4>
                 <p className="text-xs text-slate-600">
-                  <strong>The forklift pre-inspection checklist is pending for today!</strong> Operators must complete this safety check before loading palletized finished goods to trucks.
+                  {t('delivery.forkliftWarningDesc')}
                 </p>
                 <button 
                   onClick={() => setActiveSubTab('forklift')}
                   className="text-xs font-bold text-amber-800 underline block mt-2"
                 >
-                  Log Forklift Pre-Inspection Check Now
+                  {t('delivery.forkliftWarningBtn')}
                 </button>
               </div>
             </div>
@@ -267,9 +341,9 @@ export default function DeliveryModule({
             <div className="p-4 bg-emerald-50 border border-emerald-100 text-emerald-900 rounded-xl flex gap-3 items-start" id="forklift-passed-banner">
               <ClipboardCheck className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
               <div className="space-y-1">
-                <h4 className="font-bold text-xs text-emerald-800">Forklift Operations Approved</h4>
+                <h4 className="font-bold text-xs text-emerald-800">{t('delivery.forkliftPassedTitle')}</h4>
                 <p className="text-xs text-slate-600">
-                  Forklift inspection checklist is complete. Safe loading and transfer operations are fully authorized.
+                  {t('delivery.forkliftPassedDesc')}
                 </p>
               </div>
             </div>
@@ -288,14 +362,14 @@ export default function DeliveryModule({
                       setPrintInitialView('OFFICIAL_DOC');
                       setSelectedPickingDocDelivery(target);
                     } else {
-                      showPrintToast('No delivery records available to print.', 'warning');
+                      showPrintToast(t('delivery.noDeliveriesToPrint'), 'warning');
                     }
                   }}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 px-3.5 rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer whitespace-nowrap shrink-0"
                   id="btn-print-active-dr"
-                  title="Preview & Print Official Delivery Receipt & Gate Pass Manifest"
+                  title={t('delivery.printDrTooltip')}
                 >
-                  <Printer className="h-4 w-4" /> Print Delivery Receipt & Gate Pass
+                  <Printer className="h-4 w-4" /> {t('delivery.printDrBtn')}
                 </button>
 
                 <button 
@@ -305,14 +379,14 @@ export default function DeliveryModule({
                       setPrintInitialView('SUMMARY_LOG');
                       setSelectedPickingDocDelivery(filteredDeliveries[0] || deliveries[0]);
                     } else {
-                      showPrintToast('No delivery records available to print log summary.', 'warning');
+                      showPrintToast(t('delivery.noSummaryToPrint'), 'warning');
                     }
                   }}
                   className="bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-2 px-3.5 rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer whitespace-nowrap shrink-0"
                   id="btn-print-delivery-log"
-                  title="Print Summary Log Report of all Filtered Delivery Records"
+                  title={t('delivery.printSummaryTooltip')}
                 >
-                  <Printer className="h-4 w-4 text-slate-300" /> Print Summary Log
+                  <Printer className="h-4 w-4 text-slate-300" /> {t('delivery.printSummaryBtn')}
                 </button>
               </div>
 
@@ -323,11 +397,11 @@ export default function DeliveryModule({
                     className="bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold py-2 px-4 rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer whitespace-nowrap shrink-0"
                     id="btn-create-pick"
                   >
-                    <Plus className="h-4 w-4" /> Create Picking List (DPL)
+                    <Plus className="h-4 w-4" /> {t('delivery.createDeliveryBtn')}
                   </button>
                 ) : (
                   <span className="text-[10px] font-mono text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1.5 rounded-lg font-bold uppercase shrink-0 whitespace-nowrap">
-                    🔒 View-Only Mode
+                    {t('delivery.viewOnlyBadge')}
                   </span>
                 )}
               </div>
@@ -340,7 +414,7 @@ export default function DeliveryModule({
               </span>
               <input 
                 type="text" 
-                placeholder="Search shipping records..." 
+                placeholder={t('delivery.searchPlaceholder')} 
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none bg-slate-50/50"
@@ -350,88 +424,152 @@ export default function DeliveryModule({
 
           {showPickForm && (
             <form 
+              noValidate
               onSubmit={handlePickSubmit}
               className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-4"
               id="picking-form"
             >
               <div className="border-b border-slate-100 pb-2 flex justify-between items-center">
                 <h3 className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
-                  <Sparkles className="h-4 w-4 text-slate-500" /> New Delivery Picking List (DPL) Entry
+                  <Sparkles className="h-4 w-4 text-slate-500" /> {t('delivery.newDeliveryTitle')}
                 </h3>
-                <button type="button" onClick={() => setShowPickForm(false)} className="text-[10px] text-slate-400">Cancel</button>
+                <button type="button" onClick={() => { setPickFieldErrors({}); setShowPickForm(false); }} className="text-[10px] text-slate-400">{t('common.cancel')}</button>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-[10px] font-semibold text-slate-500 mb-1">Picking List (DPL) # *</label>
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('delivery.pickingListLabel')}</label>
                   <input 
-                    type="text" required placeholder="e.g. DPL-2026-906" value={pickingListNumber}
-                    onChange={e => setPickingListNumber(e.target.value)}
-                    className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs font-mono"
+                    type="text" required placeholder={t('delivery.pickDplPlaceholder')} value={pickingListNumber}
+                    onChange={e => {
+                      setPickingListNumber(e.target.value);
+                      clearPickErr('pickingListNumber');
+                    }}
+                    className={`w-full px-3 py-1.5 border rounded text-xs font-mono ${
+                      pickFieldErrors.pickingListNumber
+                        ? 'border-rose-500 ring-1 ring-rose-500'
+                        : 'border-slate-200'
+                    }`}
                   />
+                  {pickFieldErrors.pickingListNumber && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(pickFieldErrors.pickingListNumber)}
+                    </p>
+                  )}
                 </div>
                 <div>
-                  <label className="block text-[10px] font-semibold text-slate-500 mb-1">Customer PO Number *</label>
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('delivery.poNumberLabel')}</label>
                   <input 
-                    type="text" required placeholder="e.g. CUST-PO-45523" value={poNumber}
-                    onChange={e => setPoNumber(e.target.value)}
-                    className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs font-mono"
+                    type="text" required placeholder={t('delivery.pickPoPlaceholder')} value={poNumber}
+                    onChange={e => {
+                      setPoNumber(e.target.value);
+                      clearPickErr('poNumber');
+                    }}
+                    className={`w-full px-3 py-1.5 border rounded text-xs font-mono ${
+                      pickFieldErrors.poNumber
+                        ? 'border-rose-500 ring-1 ring-rose-500'
+                        : 'border-slate-200'
+                    }`}
                   />
+                  {pickFieldErrors.poNumber && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(pickFieldErrors.poNumber)}
+                    </p>
+                  )}
                 </div>
                 <div>
-                  <label className="block text-[10px] font-semibold text-slate-500 mb-1">Finished Model / Description *</label>
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('delivery.modelNameLabel')}</label>
                   <input 
-                    type="text" required placeholder="e.g. Smart Router Pro" value={modelName}
-                    onChange={e => setModelName(e.target.value)}
-                    className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs"
+                    type="text" required placeholder={t('delivery.pickModelPlaceholder')} value={modelName}
+                    onChange={e => {
+                      setModelName(e.target.value);
+                      clearPickErr('modelName');
+                    }}
+                    className={`w-full px-3 py-1.5 border rounded text-xs ${
+                      pickFieldErrors.modelName
+                        ? 'border-rose-500 ring-1 ring-rose-500'
+                        : 'border-slate-200'
+                    }`}
                   />
+                  {pickFieldErrors.modelName && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(pickFieldErrors.modelName)}
+                    </p>
+                  )}
                 </div>
                 <div>
-                  <label className="block text-[10px] font-semibold text-slate-500 mb-1">Part Code *</label>
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('delivery.partCodeLabel')}</label>
                   <input 
-                    type="text" required placeholder="e.g. FG-SN-999" value={partCode}
+                    type="text" required placeholder={t('delivery.pickPartPlaceholder')} value={partCode}
                     onChange={e => handlePickPartCodeChange(e.target.value)}
-                    className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs font-mono"
+                    className={`w-full px-3 py-1.5 border rounded text-xs font-mono ${
+                      pickFieldErrors.partCode
+                        ? 'border-rose-500 ring-1 ring-rose-500'
+                        : 'border-slate-200'
+                    }`}
                   />
+                  {pickFieldErrors.partCode && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(pickFieldErrors.partCode)}
+                    </p>
+                  )}
                 </div>
                 <div>
-                  <label className="block text-[10px] font-semibold text-slate-500 mb-1">Dispatch Quantity *</label>
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('delivery.quantityLabel')}</label>
                   <input 
                     type="text" 
-                    inputMode="numeric"
-                    pattern="[0-9]*"
+                    inputMode="decimal"
                     required 
-                    placeholder="Dispatch qty"
-                    value={quantity || ''}
-                    onKeyDown={(e) => {
-                      if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
-                        e.preventDefault();
-                      }
-                    }}
+                    placeholder={t('delivery.pickQtyPlaceholder')}
+                    value={quantityInput}
                     onChange={e => {
-                      const sanitized = e.target.value.replace(/\D/g, '');
-                      setQuantity(sanitized ? parseInt(sanitized, 10) : 0);
+                      const raw = e.target.value.replace(/[^0-9.-]/g, '');
+                      setQuantityInput(raw);
+                      const num = Number(raw);
+                      setQuantity(raw.trim() === '' || Number.isNaN(num) ? 0 : num);
+                      clearPickErr('quantity');
                     }}
-                    className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs font-mono"
+                    className={`w-full px-3 py-1.5 border rounded text-xs font-mono ${
+                      pickFieldErrors.quantity
+                        ? 'border-rose-500 ring-1 ring-rose-500'
+                        : 'border-slate-200'
+                    }`}
                   />
+                  {pickFieldErrors.quantity && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(pickFieldErrors.quantity)}
+                    </p>
+                  )}
                 </div>
                 <div>
-                  <label className="block text-[10px] font-semibold text-slate-500 mb-1">Unit of Measure *</label>
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('delivery.unitLabel')}</label>
                   <select
                     value={unit}
-                    onChange={e => setUnit(normalizeUnitCode(e.target.value))}
-                    className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs font-mono font-bold bg-white"
+                    onChange={e => {
+                      setUnit(normalizeUnitCode(e.target.value));
+                      clearPickErr('unit');
+                    }}
+                    className={`w-full px-3 py-1.5 border rounded text-xs font-mono font-bold bg-white ${
+                      pickFieldErrors.unit
+                        ? 'border-rose-500 ring-1 ring-rose-500'
+                        : 'border-slate-200'
+                    }`}
                   >
                     {getAllSelectUomOptions(unit).map(u => (
                       <option key={u} value={u}>{u}</option>
                     ))}
                   </select>
+                  {pickFieldErrors.unit && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(pickFieldErrors.unit)}
+                    </p>
+                  )}
                 </div>
               </div>
 
               <div className="flex justify-end gap-1.5 pt-2 border-t border-slate-100">
-                <button type="button" onClick={() => setShowPickForm(false)} className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded text-xs">Discard</button>
-                <button type="submit" className="px-3 py-1.5 bg-slate-900 text-white rounded text-xs font-semibold">Generate Picking List</button>
+                <button type="button" onClick={() => { setPickFieldErrors({}); setShowPickForm(false); }} className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded text-xs">{t('receiving.discardBtn')}</button>
+                <button type="submit" className="px-3 py-1.5 bg-slate-900 text-white rounded text-xs font-semibold">{t('delivery.generatePickingBtn')}</button>
               </div>
             </form>
           )}
@@ -439,24 +577,24 @@ export default function DeliveryModule({
           {/* Deliveries list table */}
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm" id="shipment-grid-panel">
             <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Outbound Shipments & Gate Pass Log</span>
-              <span className="text-xs font-mono text-slate-500 font-semibold">{filteredDeliveries.length} entries</span>
+              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">{t('delivery.shipmentLogTitle')}</span>
+              <span className="text-xs font-mono text-slate-500 font-semibold">{t('delivery.entriesCount', { count: filteredDeliveries.length })}</span>
             </div>
 
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="bg-slate-100 text-slate-500 font-medium border-b border-slate-200">
-                    <th className="p-4 font-semibold">Gate Pass #</th>
-                    <th className="p-4 font-semibold">Date Created</th>
-                    <th className="p-4 font-semibold">DPL Ref</th>
-                    <th className="p-4 font-semibold">Client PO</th>
-                    <th className="p-4 font-semibold">Model Name & Code</th>
-                    <th className="p-4 font-semibold text-right">Quantity</th>
-                    <th className="p-4 font-semibold">SOP Verification Checks</th>
-                    <th className="p-4 font-semibold">Official Release Documents</th>
-                    <th className="p-4 font-semibold">Release Status</th>
-                    <th className="p-4 font-semibold">Action</th>
+                    <th className="p-4 font-semibold">{t('delivery.colGatePass')}</th>
+                    <th className="p-4 font-semibold">{t('delivery.colDateCreated')}</th>
+                    <th className="p-4 font-semibold">{t('delivery.colDplRef')}</th>
+                    <th className="p-4 font-semibold">{t('delivery.colClientPo')}</th>
+                    <th className="p-4 font-semibold">{t('delivery.colModelCode')}</th>
+                    <th className="p-4 font-semibold text-right">{t('delivery.colQuantity')}</th>
+                    <th className="p-4 font-semibold">{t('delivery.colSopChecks')}</th>
+                    <th className="p-4 font-semibold">{t('delivery.colReleaseDocs')}</th>
+                    <th className="p-4 font-semibold">{t('delivery.colReleaseStatus')}</th>
+                    <th className="p-4 font-semibold">{t('delivery.colAction')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -490,7 +628,7 @@ export default function DeliveryModule({
                               ? 'bg-indigo-50/70 border-l-4 border-l-indigo-600 shadow-2xs' 
                               : 'hover:bg-indigo-50/30 hover:border-l-4 hover:border-l-indigo-300'
                           }`}
-                          title="Click row to expand outbound shipment metadata & compliance checks"
+                          title={t('delivery.rowExpandTooltip')}
                         >
                           <td className="p-4 font-mono font-bold text-slate-800">
                             <div className="flex items-center gap-1.5">
@@ -503,7 +641,7 @@ export default function DeliveryModule({
                                 className={`p-1 rounded-md transition-colors ${
                                   isExpanded ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
                                 }`}
-                                title={isExpanded ? 'Collapse row' : 'Expand row details'}
+                                title={isExpanded ? t('delivery.collapseRowTitle') : t('delivery.expandRowTitle')}
                               >
                                 {isExpanded ? (
                                   <ChevronDown className="h-3.5 w-3.5" />
@@ -523,7 +661,7 @@ export default function DeliveryModule({
                                 setSelectedPickingDocDelivery(d);
                               }}
                               className="font-mono font-bold text-indigo-600 hover:text-indigo-800 hover:underline flex items-center gap-1 cursor-pointer"
-                              title="Click to view & print official Picking List (DPL)"
+                              title={t('delivery.dplPrintTooltip')}
                             >
                               <Printer className="h-3 w-3 text-indigo-500 shrink-0" />
                               <span>{d.pickingListNumber}</span>
@@ -547,46 +685,46 @@ export default function DeliveryModule({
                           <td className="p-4 space-y-1">
                             <div className="flex items-center gap-1 text-[10px] font-medium text-slate-700">
                               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                              Packaging Condition OK
+                              {t('delivery.sopPackagingOk')}
                             </div>
                             <div className="flex items-center gap-1 text-[10px] font-medium text-slate-700">
                               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                              FIFO Batch Confirmed
+                              {t('delivery.sopFifoConfirmed')}
                             </div>
                             <div className="flex items-center gap-1 text-[10px] font-medium text-slate-700">
                               <span className={`h-1.5 w-1.5 rounded-full ${d.forkliftChecklistSigned ? 'bg-emerald-500' : 'bg-amber-400 animate-pulse'}`} />
-                              Forklift Pre-checked
+                              {t('delivery.sopForkliftPrechecked')}
                             </div>
                           </td>
                           <td className="p-4 text-[10px] text-slate-600 space-y-0.5">
                             {d.drNumber ? (
                               <div className="font-mono font-semibold text-slate-800">DR: {d.drNumber}</div>
                             ) : (
-                              <div className="text-slate-400 italic">No DR yet</div>
+                              <div className="text-slate-400 italic">{t('delivery.noDrYet')}</div>
                             )}
                             {d.salesInvoice ? (
                               <div className="font-mono text-slate-500">SI: {d.salesInvoice}</div>
                             ) : (
-                              <div className="text-slate-400 italic">No Sales Invoice</div>
+                              <div className="text-slate-400 italic">{t('delivery.noSalesInvoice')}</div>
                             )}
                             {d.wayBill ? (
                               <div className="font-mono text-slate-400 font-medium">Waybill: {d.wayBill}</div>
                             ) : (
-                              <div className="text-slate-400 italic">No Waybill assigned</div>
+                              <div className="text-slate-400 italic">{t('delivery.noWaybillAssigned')}</div>
                             )}
                           </td>
                           <td className="p-4">
                             {d.status === 'PREPARING' ? (
                               <span className="bg-slate-100 text-slate-700 border border-slate-200 px-2 py-1 rounded font-bold text-[9px]">
-                                PREPARING
+                                {t('delivery.statusPreparing')}
                               </span>
                             ) : d.status === 'LOADED' ? (
                               <span className="bg-amber-50 text-amber-700 border border-amber-200 px-2 py-1 rounded font-bold text-[9px] animate-pulse">
-                                LOADED (AWAITING GATE)
+                                {t('delivery.statusLoaded')}
                               </span>
                             ) : (
                               <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-1 rounded font-bold text-[9px]">
-                                DISPATCHED & RELEASED
+                                {t('delivery.statusReleased')}
                               </span>
                             )}
                           </td>
@@ -604,23 +742,29 @@ export default function DeliveryModule({
                                 } else if (val === 'LOAD') {
                                   if (!effectiveCanEdit) return;
                                   if (!isForkliftPrechecked) {
-                                    showPrintToast('Cannot load pallets! Standard operating procedure requires completing the Daily Forklift Checklist first.', 'error');
+                                    showPrintToast(t('delivery.cannotLoadPalletsErr'), 'error');
                                     e.target.value = '';
                                     return;
                                   }
                                   onUpdateDeliveryStatus(d.id, 'LOADED');
                                 } else if (val === 'GATE_PASS') {
                                   if (!effectiveCanEdit) return;
+                                  setGatePassFieldErrors({});
+                                  setDrNumber('');
+                                  setSalesInvoice('');
+                                  setWayBill('');
                                   setShowGatePassModal(d.id);
                                 } else if (val === 'EDIT') {
                                   if (!effectiveCanEdit) return;
+                                  setEditFieldErrors({});
+                                  setEditDeliveryQtyInput(String(d.quantity ?? ''));
                                   setEditingDelivery({ ...d });
                                 } else if (val === 'DELETE') {
                                   if (!isSuperAdmin) return;
                                   setConfirmAction({
-                                    title: 'Delete Delivery Shipment',
-                                    message: `Are you sure you want to delete delivery shipment ${d.gatePassNumber} (${d.modelName})?`,
-                                    confirmLabel: 'YES, DELETE SHIPMENT',
+                                    title: t('delivery.deleteDeliveryTitle'),
+                                    message: t('delivery.deleteDeliveryMsg', { id: d.gatePassNumber, modelName: d.modelName }),
+                                    confirmLabel: t('delivery.confirmYesDeleteShipment'),
                                     confirmVariant: 'danger',
                                     onConfirm: () => onDeleteDelivery?.(d.id)
                                   });
@@ -630,22 +774,22 @@ export default function DeliveryModule({
                               className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
                               id={`action-select-del-${d.id}`}
                             >
-                              <option value="" disabled>Actions...</option>
-                              <option value="PRINT_DR">📄 Print Delivery Receipt & Gate Pass</option>
-                              <option value="PRINT_DPL">📋 Print Picking List (DPL)</option>
+                              <option value="" disabled>{t('delivery.actionsPlaceholder')}</option>
+                              <option value="PRINT_DR">📄 {t('delivery.actionPrintDr')}</option>
+                              <option value="PRINT_DPL">📋 {t('delivery.printPickingAction')}</option>
                               {effectiveCanEdit && (
                                 <>
                                   {d.status === 'PREPARING' && (
-                                    <option value="LOAD">📦 Load Pallets</option>
+                                    <option value="LOAD">📦 {t('delivery.loadPalletsAction')}</option>
                                   )}
                                   {d.status === 'LOADED' && (
-                                    <option value="GATE_PASS">📄 Gate Release Pass</option>
+                                    <option value="GATE_PASS">📄 {t('delivery.gateReleaseAction')}</option>
                                   )}
-                                  <option value="EDIT">📝 Edit Shipment</option>
+                                  <option value="EDIT">📝 {t('delivery.editShipmentAction')}</option>
                                 </>
                               )}
                               {isSuperAdmin && (
-                                <option value="DELETE">🗑️ Delete Shipment</option>
+                                <option value="DELETE">🗑️ {t('delivery.deleteShipmentAction')}</option>
                               )}
                             </select>
                           </td>
@@ -673,7 +817,7 @@ export default function DeliveryModule({
                                         <div>
                                           <div className="flex items-center gap-2">
                                             <span className="text-sm font-bold text-slate-900">
-                                              Gate Pass: <span className="font-mono text-indigo-600">{d.gatePassNumber}</span>
+                                              {t('delivery.cardGatePassColon')} <span className="font-mono text-indigo-600">{d.gatePassNumber}</span>
                                             </span>
                                             <span className="text-xs text-slate-400 font-mono">({d.id})</span>
                                             <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
@@ -683,29 +827,29 @@ export default function DeliveryModule({
                                                 ? 'bg-amber-50 text-amber-700 border border-amber-200 animate-pulse'
                                                 : 'bg-slate-100 text-slate-700 border border-slate-200'
                                             }`}>
-                                              {d.status === 'RELEASED' ? 'DISPATCHED & RELEASED' : d.status === 'LOADED' ? 'LOADED (AWAITING GATE PASS)' : 'PREPARING / STAGING'}
+                                              {d.status === 'RELEASED' ? t('delivery.statusReleased') : d.status === 'LOADED' ? t('delivery.statusLoaded') : t('delivery.cardPreparingStaging')}
                                             </span>
                                           </div>
                                           <p className="text-xs text-slate-500 mt-0.5">
-                                            Model: <strong className="text-slate-800">{d.modelName}</strong> &bull; Part Code: <strong className="font-mono text-slate-800">{d.partCode}</strong> &bull; PO: <strong className="font-mono text-slate-700">{d.poNumber}</strong>
+                                            {t('delivery.cardModelColon')} <strong className="text-slate-800">{d.modelName}</strong> &bull; {t('delivery.cardPartCodeColon')} <strong className="font-mono text-slate-800">{d.partCode}</strong> &bull; {t('delivery.cardPoColon')} <strong className="font-mono text-slate-700">{d.poNumber}</strong>
                                           </p>
                                         </div>
                                       </div>
 
                                       <div className="flex flex-wrap items-center gap-2 text-xs">
                                         <span className="bg-slate-100 text-slate-700 font-mono font-semibold px-2.5 py-1 rounded-lg border border-slate-200">
-                                          Date: {d.date}
+                                          {t('delivery.cardDateColon')} {d.date}
                                         </span>
                                         <span className={`font-bold px-2.5 py-1 rounded-lg border font-mono ${
                                           deliveryUnitRes.isMissing
                                             ? 'bg-rose-50 text-rose-700 border-rose-200'
                                             : 'bg-blue-50 text-blue-800 border-blue-200'
                                         }`}>
-                                          Quantity: {formatNumberForUnit(d.quantity)} {deliveryUnitRes.isMissing ? MISSING_UNIT_LABEL : deliveryUnitRes.unit}
+                                          {t('delivery.cardQtyColon')} {formatNumberForUnit(d.quantity)} {deliveryUnitRes.isMissing ? MISSING_UNIT_LABEL : deliveryUnitRes.unit}
                                         </span>
                                         {matchedStock && matchedStockUnitRes && (
                                           <span className="bg-emerald-50 text-emerald-800 font-bold px-2.5 py-1 rounded-lg border border-emerald-200 font-mono">
-                                            Warehouse Stock: {formatNumberForUnit(matchedStock.quantity)} {matchedStockUnitRes.isMissing ? MISSING_UNIT_LABEL : matchedStockUnitRes.unit}
+                                            {t('delivery.cardWhStockColon')} {formatNumberForUnit(matchedStock.quantity)} {matchedStockUnitRes.isMissing ? MISSING_UNIT_LABEL : matchedStockUnitRes.unit}
                                           </span>
                                         )}
                                       </div>
@@ -717,28 +861,28 @@ export default function DeliveryModule({
                                       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
                                         <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
                                           <Factory className="h-4 w-4 text-indigo-500" />
-                                          <span>Shipment & Order Specifications</span>
+                                          <span>{t('delivery.cardShipmentSpecsTitle')}</span>
                                         </div>
                                         <div className="grid grid-cols-2 gap-2 text-xs">
                                           <div>
-                                            <span className="text-slate-400 text-[11px] block">Client PO #:</span>
+                                            <span className="text-slate-400 text-[11px] block">{t('delivery.cardClientPo')}</span>
                                             <span className="font-mono font-bold text-slate-800">{d.poNumber}</span>
                                           </div>
                                           <div>
-                                            <span className="text-slate-400 text-[11px] block">Picking List (DPL):</span>
+                                            <span className="text-slate-400 text-[11px] block">{t('delivery.cardDpl')}</span>
                                             <span className="font-mono font-semibold text-indigo-700">{d.pickingListNumber}</span>
                                           </div>
                                           <div>
-                                            <span className="text-slate-400 text-[11px] block">Part Code:</span>
+                                            <span className="text-slate-400 text-[11px] block">{t('delivery.cardPartCode')}</span>
                                             <span className="font-mono font-bold text-slate-800">{d.partCode}</span>
                                           </div>
                                           <div>
-                                            <span className="text-slate-400 text-[11px] block">Product Model:</span>
+                                            <span className="text-slate-400 text-[11px] block">{t('delivery.cardProductModel')}</span>
                                             <span className="font-semibold text-slate-800">{d.modelName}</span>
                                           </div>
                                           <div className="col-span-2 pt-1 border-t border-slate-100 flex justify-between items-center text-slate-500 text-[11px]">
-                                            <span>Category / Group:</span>
-                                            <span className="font-semibold text-slate-700">{registryItem?.category || 'Finished Goods Outbound'}</span>
+                                            <span>{t('delivery.cardCategoryGroup')}</span>
+                                            <span className="font-semibold text-slate-700">{registryItem?.category || t('delivery.cardFgOutbound')}</span>
                                           </div>
                                         </div>
                                       </div>
@@ -747,21 +891,21 @@ export default function DeliveryModule({
                                       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
                                         <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
                                           <FileSignature className="h-4 w-4 text-emerald-600" />
-                                          <span>Official Regulatory Documents</span>
+                                          <span>{t('delivery.cardOfficialDocsTitle')}</span>
                                         </div>
                                         <div className="space-y-2 text-xs">
                                           <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2.5 rounded-lg border border-slate-150">
                                             <div>
-                                              <span className="text-slate-400 text-[10px] block">Delivery Receipt (DR):</span>
-                                              <span className="font-mono font-bold text-slate-800 text-[11px]">{d.drNumber || 'Pending Issuance'}</span>
+                                              <span className="text-slate-400 text-[10px] block">{t('delivery.cardDrLabel')}</span>
+                                              <span className="font-mono font-bold text-slate-800 text-[11px]">{d.drNumber || t('delivery.cardPendingIssuance')}</span>
                                             </div>
                                             <div>
-                                              <span className="text-slate-400 text-[10px] block">Sales Invoice (SI):</span>
-                                              <span className="font-mono font-bold text-slate-800 text-[11px]">{d.salesInvoice || 'Pending Billing'}</span>
+                                              <span className="text-slate-400 text-[10px] block">{t('delivery.cardSiLabel')}</span>
+                                              <span className="font-mono font-bold text-slate-800 text-[11px]">{d.salesInvoice || t('delivery.cardPendingBilling')}</span>
                                             </div>
                                             <div className="col-span-2 pt-1 border-t border-slate-200">
-                                              <span className="text-slate-400 text-[10px] block">Transportation Waybill:</span>
-                                              <span className="font-mono font-semibold text-slate-700 text-[11px]">{d.wayBill || 'Pending Carrier Assignment'}</span>
+                                              <span className="text-slate-400 text-[10px] block">{t('delivery.cardWaybillLabel')}</span>
+                                              <span className="font-mono font-semibold text-slate-700 text-[11px]">{d.wayBill || t('delivery.cardPendingCarrier')}</span>
                                             </div>
                                           </div>
                                         </div>
@@ -771,28 +915,28 @@ export default function DeliveryModule({
                                       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
                                         <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
                                           <ShieldCheck className="h-4 w-4 text-purple-500" />
-                                          <span>SOP Quality & Forklift Audit</span>
+                                          <span>{t('delivery.cardSopAuditTitle')}</span>
                                         </div>
 
                                         <div className="space-y-2 text-xs">
                                           <div className="space-y-1 bg-slate-50 p-2 rounded-lg border border-slate-150 text-[11px]">
                                             <div className="flex items-center justify-between">
-                                              <span className="text-slate-600">Packaging Integrity:</span>
+                                              <span className="text-slate-600">{t('delivery.cardPkgIntegrity')}</span>
                                               <span className="text-emerald-700 font-bold flex items-center gap-1">
-                                                <Check className="h-3 w-3" /> VERIFIED OK
+                                                <Check className="h-3 w-3" /> {t('delivery.cardVerifiedOk')}
                                               </span>
                                             </div>
                                             <div className="flex items-center justify-between">
-                                              <span className="text-slate-600">FIFO Batch Integrity:</span>
+                                              <span className="text-slate-600">{t('delivery.cardFifoBatchIntegrity')}</span>
                                               <span className="text-emerald-700 font-bold flex items-center gap-1">
-                                                <Check className="h-3 w-3" /> VERIFIED OK
+                                                <Check className="h-3 w-3" /> {t('delivery.cardVerifiedOk')}
                                               </span>
                                             </div>
                                             <div className="flex items-center justify-between">
-                                              <span className="text-slate-600">Daily Forklift Inspection:</span>
+                                              <span className="text-slate-600">{t('delivery.cardDailyForkliftInsp')}</span>
                                               <span className={`font-bold flex items-center gap-1 ${d.forkliftChecklistSigned ? 'text-emerald-700' : 'text-amber-600'}`}>
                                                 {d.forkliftChecklistSigned ? <Check className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
-                                                {d.forkliftChecklistSigned ? 'COMPLETED' : 'PENDING CHECK'}
+                                                {d.forkliftChecklistSigned ? t('delivery.cardCompleted') : t('delivery.cardPendingCheck')}
                                               </span>
                                             </div>
                                           </div>
@@ -806,7 +950,7 @@ export default function DeliveryModule({
                                               }}
                                               className="flex-1 px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-bold transition-colors cursor-pointer border border-blue-200 flex items-center justify-center gap-1 shadow-2xs"
                                             >
-                                              <Printer className="h-3 w-3" /> DR / Gate Pass
+                                              <Printer className="h-3 w-3" /> {t('delivery.cardBtnDrGatePass')}
                                             </button>
                                             <button
                                               type="button"
@@ -816,7 +960,7 @@ export default function DeliveryModule({
                                               }}
                                               className="flex-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-colors cursor-pointer border border-slate-200 flex items-center justify-center gap-1 shadow-2xs"
                                             >
-                                              <ClipboardList className="h-3 w-3" /> Picking List
+                                              <ClipboardList className="h-3 w-3" /> {t('delivery.cardBtnPickList')}
                                             </button>
                                           </div>
                                         </div>
@@ -841,9 +985,9 @@ export default function DeliveryModule({
           {/* Forklift Checks subtab */}
           <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
             <div>
-              <h3 className="font-bold text-sm text-slate-800">Forklift Pre-Operation Checklists</h3>
+              <h3 className="font-bold text-sm text-slate-800">{t('delivery.forkliftSectionTitle')}</h3>
               <p className="text-xs text-slate-500 mt-1">
-                Conduct daily forklift checks using the Forklift Daily Monitoring Checklist prior to operations to prevent safety hazards.
+                {t('delivery.forkliftSectionSubtitle')}
               </p>
             </div>
 
@@ -853,11 +997,11 @@ export default function DeliveryModule({
                 className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-2 px-4 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
                 id="btn-log-forklift"
               >
-                <Plus className="h-4 w-4" /> Create Daily Pre-Check
+                <Plus className="h-4 w-4" /> {t('delivery.createDailyPrecheckBtn')}
               </button>
             ) : (
               <span className="text-[10px] font-mono text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded font-bold uppercase">
-                🔒 View-Only Mode
+                {t('delivery.viewOnlyBadge')}
               </span>
             )}
           </div>
@@ -869,67 +1013,67 @@ export default function DeliveryModule({
               id="forklift-form"
             >
               <div className="border-b border-slate-100 pb-2 flex justify-between items-center">
-                <h4 className="font-bold text-xs text-slate-800">Operator Pre-Inspection Logging Form</h4>
-                <button type="button" onClick={() => setShowForkliftForm(false)} className="text-[10px] text-slate-400">Cancel</button>
+                <h4 className="font-bold text-xs text-slate-800">{t('delivery.forkliftFormTitle')}</h4>
+                <button type="button" onClick={() => setShowForkliftForm(false)} className="text-[10px] text-slate-400">{t('common.cancel')}</button>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-[10px] font-semibold text-slate-500 mb-1">Operator Name *</label>
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('delivery.operatorNameLabel')}</label>
                   <input 
-                    type="text" required placeholder="e.g. Juan Forklift Op" value={operator}
+                    type="text" required placeholder={t('delivery.operatorPlaceholder')} value={operator}
                     onChange={e => setOperator(e.target.value)}
                     className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs"
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-semibold text-slate-500 mb-1">Forklift Fleet ID *</label>
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('delivery.forkliftIdLabel')}</label>
                   <select 
                     value={forkliftId}
                     onChange={e => setForkliftId(e.target.value)}
                     className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs"
                   >
-                    <option value="FL-TOYOTA-02">FL-TOYOTA-02 (Heavy Pallet Lift)</option>
-                    <option value="FL-KOMATSU-01">FL-KOMATSU-01 (Light Pallet Lift)</option>
-                    <option value="FL-NISSAN-05">FL-NISSAN-05 (WIP Reach Truck)</option>
+                    <option value="FL-TOYOTA-02">{t('delivery.forkliftFleetOpt1')}</option>
+                    <option value="FL-KOMATSU-01">{t('delivery.forkliftFleetOpt2')}</option>
+                    <option value="FL-NISSAN-05">{t('delivery.forkliftFleetOpt3')}</option>
                   </select>
                 </div>
               </div>
 
               <div className="bg-slate-50 p-4 rounded-xl border border-slate-150 space-y-3">
-                <h5 className="text-[11px] font-bold text-slate-700">Pre-Operational Safety Inspection Checks</h5>
+                <h5 className="text-[11px] font-bold text-slate-700">{t('delivery.forkliftChecksSubtitle')}</h5>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                   <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700">
                     <input type="checkbox" checked={brakesOk} onChange={e => setBrakesOk(e.target.checked)} className="h-4 w-4" />
-                    Foot & Parking Brakes Operational
+                    {t('delivery.checkBrakes')}
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700">
                     <input type="checkbox" checked={lightsOk} onChange={e => setLightsOk(e.target.checked)} className="h-4 w-4" />
-                    Headlights & Backup Alarms Ok
+                    {t('delivery.checkLights')}
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700">
                     <input type="checkbox" checked={hydraulicOk} onChange={e => setHydraulicOk(e.target.checked)} className="h-4 w-4" />
-                    Hydraulic Mast Lift/Tilt Ok
+                    {t('delivery.checkHydraulic')}
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700">
                     <input type="checkbox" checked={steeringOk} onChange={e => setSteeringOk(e.target.checked)} className="h-4 w-4" />
-                    Power Steering Smooth
+                    {t('delivery.checkSteering')}
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700">
                     <input type="checkbox" checked={tiresOk} onChange={e => setTiresOk(e.target.checked)} className="h-4 w-4" />
-                    Tires Pressure/Condition Ok
+                    {t('delivery.checkTires')}
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700">
                     <input type="checkbox" checked={batteryFluidOk} onChange={e => setBatteryFluidOk(e.target.checked)} className="h-4 w-4" />
-                    Battery Terminals / Fluid Ok
+                    {t('delivery.checkBatteryFluid')}
                   </label>
                 </div>
               </div>
 
               <div>
-                <label className="block text-[10px] font-semibold text-slate-500 mb-1">Inspection Remarks</label>
+                <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('delivery.inspectionRemarksLabel')}</label>
                 <input 
-                  type="text" placeholder="e.g. Fluids top up complete. All green." value={remarks}
+                  type="text" placeholder={t('delivery.remarksPlaceholder')} value={remarks}
                   onChange={e => setRemarks(e.target.value)}
                   className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs focus:ring-1 focus:ring-slate-400"
                 />
@@ -937,7 +1081,7 @@ export default function DeliveryModule({
 
               <div className="flex justify-end gap-1 border-t border-slate-100 pt-3">
                 <button type="submit" className="bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-bold px-3 py-1.5 rounded">
-                  Authorize & Sign Safety Checklist
+                  {t('delivery.submitForkliftBtn')}
                 </button>
               </div>
             </form>
@@ -946,7 +1090,7 @@ export default function DeliveryModule({
           {/* Forklift checks logs list */}
           <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm" id="forklift-grid-panel">
             <div className="p-4 border-b border-slate-100 bg-slate-50/50">
-              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Daily Safety Inspection History Logs</span>
+              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">{t('delivery.forkliftHistoryTitle')}</span>
             </div>
 
             <div className="divide-y divide-slate-100 text-xs">
@@ -960,7 +1104,7 @@ export default function DeliveryModule({
                       className={`p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 cursor-pointer transition-all ${
                         isExpanded ? 'bg-indigo-50/60 border-l-4 border-l-indigo-600' : 'hover:bg-slate-50/70 hover:border-l-4 hover:border-l-indigo-300'
                       }`}
-                      title="Click to view 6-point mechanical safety checklist"
+                      title={t('delivery.forkliftRowTooltip')}
                     >
                       <div className="space-y-1">
                         <div className="flex items-center gap-2">
@@ -975,24 +1119,24 @@ export default function DeliveryModule({
                             {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                           </button>
                           <span className="font-mono font-bold text-slate-800">{check.forkliftId}</span>
-                          <span className="text-slate-400 font-mono text-[11px]">&bull; Date: {check.date}</span>
+                          <span className="text-slate-400 font-mono text-[11px]">&bull; {t('delivery.forkliftDatePrefix')} {check.date}</span>
                         </div>
                         <div className="text-slate-600 font-medium flex items-center gap-1 pl-6">
-                          Signed Operator: <span className="font-semibold text-slate-800">{check.operator}</span>
+                          {t('delivery.forkliftSignedOpPrefix')} <span className="font-semibold text-slate-800">{check.operator}</span>
                         </div>
                         {check.remarks && (
-                          <div className="text-[11px] text-slate-400 italic pl-6">Remarks: {check.remarks}</div>
+                          <div className="text-[11px] text-slate-400 italic pl-6">{t('delivery.forkliftRemarksPrefix')} {check.remarks}</div>
                         )}
                       </div>
                       
                       <div className="flex items-center gap-3">
                         {checkPassed ? (
                           <span className="bg-emerald-50 text-emerald-700 font-semibold px-2.5 py-1 rounded flex items-center gap-1 border border-emerald-100">
-                            <CheckCircle className="h-4 w-4" /> SAFE TO OPERATE
+                            <CheckCircle className="h-4 w-4" /> {t('delivery.passedAll')}
                           </span>
                         ) : (
                           <span className="bg-rose-50 text-rose-700 font-semibold px-2.5 py-1 rounded flex items-center gap-1 border border-rose-100">
-                            <ShieldAlert className="h-4 w-4" /> HAZARD ACTIVE (HOLD)
+                            <ShieldAlert className="h-4 w-4" /> {t('delivery.failedCheck')}
                           </span>
                         )}
                       </div>
@@ -1010,45 +1154,45 @@ export default function DeliveryModule({
                         >
                           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2 text-[11px]">
                             <div className={`p-2.5 rounded-lg border ${check.brakesOk ? 'bg-emerald-50/70 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
-                              <span className="text-[10px] text-slate-500 block">Brakes & Parking:</span>
+                              <span className="text-[10px] text-slate-500 block">{t('delivery.cardBrakes')}:</span>
                               <span className="font-bold flex items-center gap-1 mt-0.5">
                                 {check.brakesOk ? <Check className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
-                                {check.brakesOk ? 'PASS' : 'FAIL'}
+                                {check.brakesOk ? t('delivery.passLabel') : t('delivery.failLabel')}
                               </span>
                             </div>
                             <div className={`p-2.5 rounded-lg border ${check.lightsOk ? 'bg-emerald-50/70 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
-                              <span className="text-[10px] text-slate-500 block">Lights & Horn:</span>
+                              <span className="text-[10px] text-slate-500 block">{t('delivery.cardLights')}:</span>
                               <span className="font-bold flex items-center gap-1 mt-0.5">
                                 {check.lightsOk ? <Check className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
-                                {check.lightsOk ? 'PASS' : 'FAIL'}
+                                {check.lightsOk ? t('delivery.passLabel') : t('delivery.failLabel')}
                               </span>
                             </div>
                             <div className={`p-2.5 rounded-lg border ${check.hydraulicOk ? 'bg-emerald-50/70 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
-                              <span className="text-[10px] text-slate-500 block">Hydraulic Forks:</span>
+                              <span className="text-[10px] text-slate-500 block">{t('delivery.cardHydraulic')}:</span>
                               <span className="font-bold flex items-center gap-1 mt-0.5">
                                 {check.hydraulicOk ? <Check className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
-                                {check.hydraulicOk ? 'PASS' : 'FAIL'}
+                                {check.hydraulicOk ? t('delivery.passLabel') : t('delivery.failLabel')}
                               </span>
                             </div>
                             <div className={`p-2.5 rounded-lg border ${check.steeringOk ? 'bg-emerald-50/70 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
-                              <span className="text-[10px] text-slate-500 block">Steering & Turn:</span>
+                              <span className="text-[10px] text-slate-500 block">{t('delivery.cardSteering')}:</span>
                               <span className="font-bold flex items-center gap-1 mt-0.5">
                                 {check.steeringOk ? <Check className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
-                                {check.steeringOk ? 'PASS' : 'FAIL'}
+                                {check.steeringOk ? t('delivery.passLabel') : t('delivery.failLabel')}
                               </span>
                             </div>
                             <div className={`p-2.5 rounded-lg border ${check.tiresOk ? 'bg-emerald-50/70 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
-                              <span className="text-[10px] text-slate-500 block">Tires & Wheels:</span>
+                              <span className="text-[10px] text-slate-500 block">{t('delivery.cardTires')}:</span>
                               <span className="font-bold flex items-center gap-1 mt-0.5">
                                 {check.tiresOk ? <Check className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
-                                {check.tiresOk ? 'PASS' : 'FAIL'}
+                                {check.tiresOk ? t('delivery.passLabel') : t('delivery.failLabel')}
                               </span>
                             </div>
                             <div className={`p-2.5 rounded-lg border ${check.batteryFluidOk ? 'bg-emerald-50/70 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
-                              <span className="text-[10px] text-slate-500 block">Battery & Fluids:</span>
+                              <span className="text-[10px] text-slate-500 block">{t('delivery.cardBattery')}:</span>
                               <span className="font-bold flex items-center gap-1 mt-0.5">
                                 {check.batteryFluidOk ? <Check className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
-                                {check.batteryFluidOk ? 'PASS' : 'FAIL'}
+                                {check.batteryFluidOk ? t('delivery.passLabel') : t('delivery.failLabel')}
                               </span>
                             </div>
                           </div>
@@ -1084,52 +1228,91 @@ export default function DeliveryModule({
             >
               <div>
                 <h4 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
-                  <FileSignature className="h-4 w-4 text-slate-600" /> Prepare Material Gate Pass Release
+                  <FileSignature className="h-4 w-4 text-slate-600" /> {t('delivery.releaseModalTitle')}
                 </h4>
-                <p className="text-[11px] text-slate-500 mt-1">Linking required outbound documents is required prior to physical release.</p>
+                <p className="text-[11px] text-slate-500 mt-1">{t('delivery.releaseModalSubtitle')}</p>
               </div>
 
               <div className="space-y-3 text-xs">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 mb-1">Official Delivery Receipt (DR) # *</label>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1">{t('delivery.drNumberLabel')}</label>
                   <input 
-                    type="text" required placeholder="DR-XXXXX" value={drNumber}
-                    onChange={e => setDrNumber(e.target.value)}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:outline-none"
+                    type="text" required placeholder="DR-00001" value={drNumber}
+                    onChange={e => {
+                      setDrNumber(e.target.value);
+                      clearGateErr('drNumber');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded font-mono focus:outline-none ${
+                      gatePassFieldErrors.drNumber
+                        ? 'border-rose-500 ring-1 ring-rose-500'
+                        : 'border-slate-200'
+                    }`}
                   />
+                  {gatePassFieldErrors.drNumber && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(gatePassFieldErrors.drNumber)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 mb-1">Official Sales Invoice (SI) # *</label>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1">{t('delivery.salesInvoiceLabel')}</label>
                   <input 
-                    type="text" required placeholder="SI-XXXX" value={salesInvoice}
-                    onChange={e => setSalesInvoice(e.target.value)}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:outline-none"
+                    type="text" required placeholder="SI-00001" value={salesInvoice}
+                    onChange={e => {
+                      setSalesInvoice(e.target.value);
+                      clearGateErr('salesInvoice');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded font-mono focus:outline-none ${
+                      gatePassFieldErrors.salesInvoice
+                        ? 'border-rose-500 ring-1 ring-rose-500'
+                        : 'border-slate-200'
+                    }`}
                   />
+                  {gatePassFieldErrors.salesInvoice && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(gatePassFieldErrors.salesInvoice)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 mb-1">Transportation Way Bill # *</label>
+                  <label className="block text-[10px] font-bold text-slate-400 mb-1">{t('delivery.wayBillLabel')}</label>
                   <input 
-                    type="text" required placeholder="WB-LBC-XXXXX" value={wayBill}
-                    onChange={e => setWayBill(e.target.value)}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:outline-none"
+                    type="text" required placeholder="WB-LBC-00001" value={wayBill}
+                    onChange={e => {
+                      setWayBill(e.target.value);
+                      clearGateErr('wayBill');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded font-mono focus:outline-none ${
+                      gatePassFieldErrors.wayBill
+                        ? 'border-rose-500 ring-1 ring-rose-500'
+                        : 'border-slate-200'
+                    }`}
                   />
+                  {gatePassFieldErrors.wayBill && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(gatePassFieldErrors.wayBill)}
+                    </p>
+                  )}
                 </div>
               </div>
 
               <div className="flex justify-end gap-2 text-xs font-semibold pt-2 border-t border-slate-100">
                 <button 
-                  onClick={() => setShowGatePassModal(null)}
+                  onClick={() => {
+                    setGatePassFieldErrors({});
+                    setShowGatePassModal(null);
+                  }}
                   className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded hover:bg-slate-50 cursor-pointer"
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </button>
                 <button 
                   onClick={() => handleGatePassReleaseSubmit(showGatePassModal)}
                   className="px-3 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 cursor-pointer"
                 >
-                  Sign & Authorize Release
+                  {t('delivery.confirmReleaseBtn')}
                 </button>
               </div>
             </motion.div>
@@ -1160,9 +1343,9 @@ export default function DeliveryModule({
               <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                 <div>
                   <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-                    <Edit className="h-4 w-4 text-indigo-600" /> Edit Registered Delivery ({editingDelivery.gatePassNumber})
+                    <Edit className="h-4 w-4 text-indigo-600" /> {t('delivery.editDeliveryTitle', { id: editingDelivery.gatePassNumber })}
                   </h4>
-                  <p className="text-[11px] text-slate-500">Super Admin Record Overwrite</p>
+                  <p className="text-[11px] text-slate-500">{t('delivery.editSubtitle')}</p>
                 </div>
                 <button 
                   onClick={() => setEditingDelivery(null)}
@@ -1174,7 +1357,7 @@ export default function DeliveryModule({
 
               <div className="grid grid-cols-2 gap-3 text-xs">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Gate Pass #</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('delivery.editGatePassLabel')}</label>
                   <input 
                     type="text" 
                     value={editingDelivery.gatePassNumber}
@@ -1184,7 +1367,7 @@ export default function DeliveryModule({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Date</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('delivery.editDateLabel')}</label>
                   <input 
                     type="date" 
                     value={editingDelivery.date}
@@ -1194,146 +1377,280 @@ export default function DeliveryModule({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">DPL / Picking List Ref</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('delivery.editDplRefLabel')}</label>
                   <input 
                     type="text" 
                     value={editingDelivery.pickingListNumber}
-                    onChange={e => setEditingDelivery({ ...editingDelivery, pickingListNumber: e.target.value })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                    onChange={e => {
+                      setEditingDelivery({ ...editingDelivery, pickingListNumber: e.target.value });
+                      clearEditDelErr('pickingListNumber');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editFieldErrors.pickingListNumber
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editFieldErrors.pickingListNumber && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editFieldErrors.pickingListNumber)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">PO Number</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('delivery.editPoLabel')}</label>
                   <input 
                     type="text" 
+                    placeholder="PO-2026-0001"
                     value={editingDelivery.poNumber}
-                    onChange={e => setEditingDelivery({ ...editingDelivery, poNumber: e.target.value })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                    onChange={e => {
+                      setEditingDelivery({ ...editingDelivery, poNumber: e.target.value });
+                      clearEditDelErr('poNumber');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editFieldErrors.poNumber
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editFieldErrors.poNumber && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editFieldErrors.poNumber)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Part Code</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('delivery.editPartCodeLabel')}</label>
                   <input 
                     type="text" 
                     value={editingDelivery.partCode}
-                    onChange={e => setEditingDelivery({ ...editingDelivery, partCode: e.target.value.toUpperCase() })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                    onChange={e => {
+                      setEditingDelivery({ ...editingDelivery, partCode: e.target.value.toUpperCase() });
+                      clearEditDelErr('partCode');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editFieldErrors.partCode
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editFieldErrors.partCode && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editFieldErrors.partCode)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Model Name</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('delivery.editModelNameLabel')}</label>
                   <input 
                     type="text" 
                     value={editingDelivery.modelName}
-                    onChange={e => setEditingDelivery({ ...editingDelivery, modelName: e.target.value })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                    onChange={e => {
+                      setEditingDelivery({ ...editingDelivery, modelName: e.target.value });
+                      clearEditDelErr('modelName');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 ${
+                      editFieldErrors.modelName
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editFieldErrors.modelName && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editFieldErrors.modelName)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('delivery.editQtyLabel')}</label>
                   <input 
                     type="text" 
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    value={editingDelivery.quantity || ''}
-                    onKeyDown={(e) => {
-                      if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
-                        e.preventDefault();
-                      }
-                    }}
+                    inputMode="decimal"
+                    value={editDeliveryQtyInput}
                     onChange={e => {
-                      const sanitized = e.target.value.replace(/\D/g, '');
-                      setEditingDelivery({ ...editingDelivery, quantity: sanitized ? parseInt(sanitized, 10) : 0 });
+                      const raw = e.target.value.replace(/[^0-9.-]/g, '');
+                      setEditDeliveryQtyInput(raw);
+                      const num = Number(raw);
+                      setEditingDelivery({ ...editingDelivery, quantity: raw.trim() === '' || Number.isNaN(num) ? 0 : num });
+                      clearEditDelErr('quantity');
                     }}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editFieldErrors.quantity
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editFieldErrors.quantity && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editFieldErrors.quantity)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Unit of Measure</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('delivery.editUomLabel')}</label>
                   <select
                     value={normalizeUnitCode(editingDelivery.unit)}
                     onChange={e => {
                       const norm = normalizeUnitCode(e.target.value);
                       setEditingDelivery({ ...editingDelivery, unit: norm, unitMissing: !norm });
+                      clearEditDelErr('unit');
                     }}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono font-bold bg-white"
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono font-bold bg-white ${
+                      editFieldErrors.unit
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   >
-                    <option value="">-- Select UOM --</option>
+                    <option value="">{t('delivery.editSelectUomOpt')}</option>
                     {getAllSelectUomOptions(editingDelivery.unit).map(u => (
                       <option key={u} value={u}>{u}</option>
                     ))}
                   </select>
+                  {editFieldErrors.unit && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editFieldErrors.unit)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Status</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('delivery.editStatusLabel')}</label>
                   <select 
                     value={editingDelivery.status}
-                    onChange={e => setEditingDelivery({ ...editingDelivery, status: e.target.value as any })}
+                    onChange={e => {
+                      setEditingDelivery({ ...editingDelivery, status: e.target.value as any });
+                      clearEditDelErr('drNumber');
+                      clearEditDelErr('salesInvoice');
+                    }}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-bold"
                   >
-                    <option value="PREPARING">PREPARING</option>
-                    <option value="LOADED">LOADED</option>
-                    <option value="RELEASED">RELEASED</option>
+                    <option value="PREPARING">{t('delivery.editStatusPreparingOpt')}</option>
+                    <option value="LOADED">{t('delivery.editStatusLoadedOpt')}</option>
+                    <option value="RELEASED">{t('delivery.editStatusReleasedOpt')}</option>
                   </select>
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">DR Number</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('delivery.editDrLabel')}</label>
                   <input 
                     type="text" 
+                    placeholder="DR-00001"
                     value={editingDelivery.drNumber || ''}
-                    onChange={e => setEditingDelivery({ ...editingDelivery, drNumber: e.target.value })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                    onChange={e => {
+                      setEditingDelivery({ ...editingDelivery, drNumber: e.target.value });
+                      clearEditDelErr('drNumber');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editFieldErrors.drNumber
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editFieldErrors.drNumber && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editFieldErrors.drNumber)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Sales Invoice</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('delivery.editSiLabel')}</label>
                   <input 
                     type="text" 
+                    placeholder="SI-00001"
                     value={editingDelivery.salesInvoice || ''}
-                    onChange={e => setEditingDelivery({ ...editingDelivery, salesInvoice: e.target.value })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                    onChange={e => {
+                      setEditingDelivery({ ...editingDelivery, salesInvoice: e.target.value });
+                      clearEditDelErr('salesInvoice');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editFieldErrors.salesInvoice
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editFieldErrors.salesInvoice && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editFieldErrors.salesInvoice)}
+                    </p>
+                  )}
                 </div>
 
                 <div className="col-span-2">
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Waybill Number</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('delivery.editWaybillLabel')}</label>
                   <input 
                     type="text" 
                     value={editingDelivery.wayBill || ''}
-                    onChange={e => setEditingDelivery({ ...editingDelivery, wayBill: e.target.value })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                    onChange={e => {
+                      setEditingDelivery({ ...editingDelivery, wayBill: e.target.value });
+                      clearEditDelErr('wayBill');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editFieldErrors.wayBill
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editFieldErrors.wayBill && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editFieldErrors.wayBill)}
+                    </p>
+                  )}
                 </div>
               </div>
 
               <div className="flex justify-end gap-2 text-xs font-semibold pt-3 border-t border-slate-100">
                 <button 
-                  onClick={() => setEditingDelivery(null)}
+                  onClick={() => {
+                    setEditFieldErrors({});
+                    setEditingDelivery(null);
+                  }}
                   className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50"
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </button>
                 <button 
                   onClick={() => {
                     const resolved = resolveMasterDataUnit(editingDelivery, registries, stocks);
-                    onEditDelivery?.({
+                    const rawQty = editDeliveryQtyInput.trim() === '' ? NaN : Number(editDeliveryQtyInput.trim());
+                    const candidate: DeliveryRecord = {
                       ...editingDelivery,
+                      quantity: Number.isNaN(rawQty) ? 0 : rawQty,
                       unit: resolved.unit,
-                      unitMissing: resolved.isMissing,
-                    });
+                      unitMissing: !resolved.unit,
+                      poNumber: editingDelivery.poNumber?.trim() || '',
+                      drNumber: editingDelivery.drNumber?.trim() || undefined,
+                      salesInvoice: editingDelivery.salesInvoice?.trim() || undefined,
+                      wayBill: editingDelivery.wayBill?.trim() || undefined,
+                    };
+                    const validation = validateDeliveryRecord(
+                      {
+                        ...candidate,
+                        quantity: editDeliveryQtyInput.trim() === '' ? '' : rawQty,
+                      } as any,
+                      deliveries,
+                      {
+                        requireOperationalFields: true,
+                        requireReleaseDocs: editingDelivery.status === 'RELEASED',
+                      }
+                    );
+                    if (!validation.valid) {
+                      setEditFieldErrors(validation.fieldErrors);
+                      showPrintToast(localizeValidation(validation.message || '') || t('delivery.fixValidation'), 'warning');
+                      return;
+                    }
+                    setEditFieldErrors({});
+                    onEditDelivery?.(candidate);
                     setEditingDelivery(null);
                   }}
                   className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold"
                 >
-                  Save Delivery Changes
+                  {t('delivery.saveDeliveryChangesBtn')}
                 </button>
               </div>
             </motion.div>

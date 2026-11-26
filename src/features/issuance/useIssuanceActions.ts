@@ -8,6 +8,7 @@ import { IssuanceRecord, MaterialStockItem } from '../../types';
 import { syncManager } from '../../sync/syncManager';
 import { showPrintToast } from '../../utils/printDocument';
 import { formatQuantityWithUnit, normalizeUnitCode } from '../../../shared/units';
+import { translate } from '../../i18n';
 
 export interface UseIssuanceActionsParams {
   issuances: IssuanceRecord[];
@@ -50,7 +51,7 @@ export function useIssuanceActions({
 
   const handleAddIssuance = (record: IssuanceRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
+      showPrintToast(translate('toasts.viewOnlyDenied'), 'error');
       return;
     }
     const lastDeducted = lastDeductedMovementRef.current;
@@ -77,16 +78,19 @@ export function useIssuanceActions({
       lastDeductedMovementRef.current = null;
     }
 
+    const overrideDetails = record.overrideReason
+      ? ` [FIFO Override: Newer Lot Selected | Reason: ${record.overrideReason} | Approved by: ${record.superAdminApprover || 'Super Admin'}]`
+      : '';
     const nextIssuances = [enrichedRecord, ...issuances];
     setIssuances(nextIssuances);
-    upsertRecordLocallyAndRemotely('issuances', enrichedRecord, `Issued ${formatQuantityWithUnit(record.quantityIssued, resolvedUnit)} for Requisition: ${record.requisitionNumber}`);
+    upsertRecordLocallyAndRemotely('issuances', enrichedRecord, `Issued ${formatQuantityWithUnit(record.quantityIssued, resolvedUnit)} for Requisition: ${record.requisitionNumber}${overrideDetails}`);
 
-    sendSystemActivity(`${currentUser} logged materials issuance of ${formatQuantityWithUnit(record.quantityIssued, resolvedUnit)} for Requisition: ${record.requisitionNumber}.`);
+    sendSystemActivity(`${currentUser} logged materials issuance of ${formatQuantityWithUnit(record.quantityIssued, resolvedUnit)} for Requisition: ${record.requisitionNumber}.${overrideDetails}`);
   };
 
   const handleDeductStock = (partCode: string, lotNumber: string, quantity: number): boolean => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: ACTIONS ARE RESTRICTED TO VIEW ONLY UNDER YOUR ACCESS LEVEL.", 'error');
+      showPrintToast(translate('toasts.viewOnlyDenied'), 'error');
       return false;
     }
     const stockIdx = stocks.findIndex(s => s.partCode === partCode && s.lotNumber === lotNumber && s.status === 'APPROVED');
@@ -127,7 +131,7 @@ export function useIssuanceActions({
 
   const handleEditIssuance = (record: IssuanceRecord) => {
     if (currentPermission === 'VIEW_ONLY') {
-      showPrintToast("PERMISSION DENIED: OPERATORS IN VIEW ONLY MODE CANNOT EDIT ISSUANCE RECORDS.", 'error');
+      showPrintToast(translate('toasts.viewOnlyEditIssuanceDenied'), 'error');
       return;
     }
     const next = issuances.map(i => i.id === record.id ? record : i);
@@ -139,7 +143,7 @@ export function useIssuanceActions({
 
   const handleDeleteIssuance = (id: string) => {
     if (currentPermission !== 'FULL_ACCESS') {
-      showPrintToast("PERMISSION DENIED: ONLY SUPER ADMIN (FULL ACCESS) CAN DELETE LIVE ISSUANCE TRANSACTIONS.", 'error');
+      showPrintToast(translate('toasts.superAdminDeleteIssuanceDenied'), 'error');
       return;
     }
     deleteRecordLocallyAndRemotely('issuances', id);

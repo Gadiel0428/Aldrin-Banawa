@@ -5,20 +5,147 @@
 
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
-import * as pdfjsLib from 'pdfjs-dist';
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 // ISO A4 @ 300 DPI dimensions
-const A4_PORTRAIT_WIDTH_PX = 2480;
-const A4_PORTRAIT_HEIGHT_PX = 3508;
-const A4_LANDSCAPE_WIDTH_PX = 3508;
-const A4_LANDSCAPE_HEIGHT_PX = 2480;
-const A4_MARGIN_MM = 10;
-const A4_WIDTH_MM = 210;
-const A4_HEIGHT_MM = 297;
-const CLONE_WIDTH_PX = 718;
+export const A4_PORTRAIT_WIDTH_PX = 2480;
+export const A4_PORTRAIT_HEIGHT_PX = 3508;
+export const A4_LANDSCAPE_WIDTH_PX = 3508;
+export const A4_LANDSCAPE_HEIGHT_PX = 2480;
+export const A4_MARGIN_MM = 10;
+export const A4_WIDTH_MM = 210;
+export const A4_HEIGHT_MM = 297;
+export const CLONE_WIDTH_PX = 718;
+
+export interface PageBreakBlockRange {
+  top: number;
+  bottom: number;
+}
+
+export interface PlannedPageSlice {
+  pageNumber: number;
+  startY: number;
+  endY: number;
+  height: number;
+  destDrawHeight: number;
+}
+
+export interface PageBreakPlanOptions {
+  canvasWidth: number;
+  canvasHeight: number;
+  domWidth?: number;
+  rawRanges?: PageBreakBlockRange[];
+  pageWidthPx?: number;
+  pageHeightPx?: number;
+  marginXPx?: number;
+  marginYPx?: number;
+  minProgressPx?: number;
+}
+
+export interface PageBreakPlanResult {
+  marginXPx: number;
+  marginYPx: number;
+  destContentWidth: number;
+  destContentHeight: number;
+  maxSrcSliceHeight: number;
+  srcToDestRatio: number;
+  domToCanvasScale: number;
+  pages: PlannedPageSlice[];
+}
+
+/**
+ * Computes A4 page slice boundaries for a rasterized document canvas while avoiding
+ * mid-element splits across `tr` / `.avoid-break` DOM ranges.
+ */
+export function planDocumentPageBreaks(options: PageBreakPlanOptions): PageBreakPlanResult {
+  const {
+    canvasWidth,
+    canvasHeight,
+    domWidth = 0,
+    rawRanges = [],
+    pageWidthPx = A4_PORTRAIT_WIDTH_PX,
+    pageHeightPx = A4_PORTRAIT_HEIGHT_PX,
+    marginXPx = Math.round((A4_MARGIN_MM / A4_WIDTH_MM) * pageWidthPx),
+    marginYPx = Math.round((A4_MARGIN_MM / A4_HEIGHT_MM) * pageHeightPx),
+    minProgressPx = 8,
+  } = options;
+
+  const destContentWidth = Math.max(1, pageWidthPx - marginXPx * 2);
+  const destContentHeight = Math.max(1, pageHeightPx - marginYPx * 2);
+
+  if (canvasWidth <= 0 || canvasHeight <= 0) {
+    return {
+      marginXPx,
+      marginYPx,
+      destContentWidth,
+      destContentHeight,
+      maxSrcSliceHeight: 0,
+      srcToDestRatio: 0,
+      domToCanvasScale: 3,
+      pages: [],
+    };
+  }
+
+  const srcToDestRatio = destContentWidth / canvasWidth;
+  const maxSrcSliceHeight = Math.max(1, Math.floor(destContentHeight / srcToDestRatio));
+  const domToCanvasScale = domWidth > 0 ? canvasWidth / domWidth : 3;
+
+  const canvasRanges = rawRanges
+    .filter((r) => Number.isFinite(r.top) && Number.isFinite(r.bottom) && r.bottom > r.top && r.bottom > 0)
+    .map((r) => ({
+      top: r.top * domToCanvasScale,
+      bottom: r.bottom * domToCanvasScale,
+    }))
+    .sort((a, b) => a.top - b.top);
+
+  const pages: PlannedPageSlice[] = [];
+  let y = 0;
+
+  while (y < canvasHeight) {
+    const idealEnd = Math.min(y + maxSrcSliceHeight, canvasHeight);
+    let nextY = idealEnd;
+
+    if (idealEnd < canvasHeight) {
+      // Avoid cutting through any tr or .avoid-break element
+      const crossingBlocks = canvasRanges.filter(
+        (range) => range.top < idealEnd && range.bottom > idealEnd && range.top > y + minProgressPx
+      );
+      if (crossingBlocks.length > 0) {
+        const earliestBoundary = Math.floor(Math.min(...crossingBlocks.map((b) => b.top)));
+        if (earliestBoundary > y + minProgressPx) {
+          nextY = earliestBoundary;
+        }
+      }
+    }
+
+    if (nextY <= y) {
+      nextY = idealEnd;
+    }
+
+    const sliceHeight = nextY - y;
+    const destDrawHeight = Math.min(destContentHeight, Math.round(sliceHeight * srcToDestRatio));
+
+    pages.push({
+      pageNumber: pages.length + 1,
+      startY: y,
+      endY: nextY,
+      height: sliceHeight,
+      destDrawHeight,
+    });
+
+    y = nextY;
+  }
+
+  return {
+    marginXPx,
+    marginYPx,
+    destContentWidth,
+    destContentHeight,
+    maxSrcSliceHeight,
+    srcToDestRatio,
+    domToCanvasScale,
+    pages,
+  };
+}
 
 /**
  * Formats any caught error into a readable user-facing message.
@@ -727,47 +854,14 @@ export async function renderDocumentPages(el: HTMLElement | null | undefined): P
       throw new Error('Rendered document canvas is empty.');
     }
 
-    const marginXPx = Math.round((A4_MARGIN_MM / A4_WIDTH_MM) * A4_PORTRAIT_WIDTH_PX);
-    const marginYPx = Math.round((A4_MARGIN_MM / A4_HEIGHT_MM) * A4_PORTRAIT_HEIGHT_PX);
-    const destContentWidth = A4_PORTRAIT_WIDTH_PX - marginXPx * 2;
-    const destContentHeight = A4_PORTRAIT_HEIGHT_PX - marginYPx * 2;
+    const plan = planDocumentPageBreaks({
+      canvasWidth: canvas.width,
+      canvasHeight: canvas.height,
+      domWidth: rootRect.width,
+      rawRanges,
+    });
 
-    const srcToDestRatio = destContentWidth / canvas.width;
-    const maxSrcSliceHeight = Math.floor(destContentHeight / srcToDestRatio);
-    const domToCanvasScale = rootRect.width > 0 ? canvas.width / rootRect.width : 3;
-
-    const canvasRanges = rawRanges
-      .map((r) => ({
-        top: r.top * domToCanvasScale,
-        bottom: r.bottom * domToCanvasScale,
-      }))
-      .sort((a, b) => a.top - b.top);
-
-    const pages: string[] = [];
-    let y = 0;
-
-    while (y < canvas.height) {
-      const idealEnd = Math.min(y + maxSrcSliceHeight, canvas.height);
-      let nextY = idealEnd;
-
-      if (idealEnd < canvas.height) {
-        // Avoid cutting through any tr or .avoid-break element
-        const crossingBlocks = canvasRanges.filter(
-          (range) => range.top < idealEnd && range.bottom > idealEnd && range.top > y + 8
-        );
-        if (crossingBlocks.length > 0) {
-          const earliestBoundary = Math.floor(Math.min(...crossingBlocks.map((b) => b.top)));
-          if (earliestBoundary > y + 8) {
-            nextY = earliestBoundary;
-          }
-        }
-      }
-
-      if (nextY <= y) {
-        nextY = idealEnd;
-      }
-
-      const sliceHeight = nextY - y;
+    const pages: string[] = plan.pages.map((slice) => {
       const pageCanvas = document.createElement('canvas');
       pageCanvas.width = A4_PORTRAIT_WIDTH_PX;
       pageCanvas.height = A4_PORTRAIT_HEIGHT_PX;
@@ -780,22 +874,20 @@ export async function renderDocumentPages(el: HTMLElement | null | undefined): P
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, A4_PORTRAIT_WIDTH_PX, A4_PORTRAIT_HEIGHT_PX);
 
-      const destDrawHeight = Math.min(destContentHeight, Math.round(sliceHeight * srcToDestRatio));
       ctx.drawImage(
         canvas,
         0,
-        y,
+        slice.startY,
         canvas.width,
-        sliceHeight,
-        marginXPx,
-        marginYPx,
-        destContentWidth,
-        destDrawHeight
+        slice.height,
+        plan.marginXPx,
+        plan.marginYPx,
+        plan.destContentWidth,
+        slice.destDrawHeight
       );
 
-      pages.push(pageCanvas.toDataURL('image/png'));
-      y = nextY;
-    }
+      return pageCanvas.toDataURL('image/png');
+    });
 
     if (pages.length === 0) {
       throw new Error('No A4 pages were produced from the document.');
@@ -816,6 +908,12 @@ export async function renderPdfDocToPages(doc: jsPDF): Promise<string[]> {
   if (!doc || typeof document === 'undefined') {
     throw new Error('Valid jsPDF document instance is required.');
   }
+
+  const [pdfjsLib, workerModule] = await Promise.all([
+    import('pdfjs-dist'),
+    import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
+  ]);
+  pdfjsLib.GlobalWorkerOptions.workerSrc = workerModule.default;
 
   const arrayBuffer = doc.output('arraybuffer');
   const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) });

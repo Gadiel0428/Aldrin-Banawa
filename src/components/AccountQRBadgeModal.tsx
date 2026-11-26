@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { RegisteredAccount } from '../types';
 import { PrintPreviewModal } from './PrintPreviewModal';
+import { useI18n } from '../i18n';
 import {
   renderDocumentPages,
   printPages,
@@ -40,6 +41,7 @@ export default function AccountQRBadgeModal({
   onClose,
   onDirectLogin
 }: AccountQRBadgeModalProps) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const [showPin, setShowPin] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -252,10 +254,10 @@ export default function AccountQRBadgeModal({
                 </div>
                 <div>
                   <h3 className="font-bold text-sm text-white flex items-center gap-1.5">
-                    Operator Login QR Badge
+                    {t('modals.qrBadge.modalTitle')}
                   </h3>
                   <p className="text-[10px] text-indigo-300 font-mono uppercase">
-                    Juwei WMS Gateway Pass
+                    {t('modals.qrBadge.modalSubtitle')}
                   </p>
                 </div>
               </div>
@@ -263,7 +265,7 @@ export default function AccountQRBadgeModal({
                 type="button"
                 onClick={onClose}
                 className="text-slate-400 hover:text-white p-1.5 rounded-xl hover:bg-white/10 transition cursor-pointer"
-                title="Close"
+                title={t('common.close')}
               >
                 <X className="h-4 w-4" />
               </button>
@@ -362,7 +364,7 @@ export default function AccountQRBadgeModal({
                     }}
                     className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition flex items-center justify-center gap-2 shadow-md uppercase cursor-pointer"
                   >
-                    <UserCheck className="h-4 w-4" /> LOG IN AS {account.username}
+                    <UserCheck className="h-4 w-4" /> {t('modals.qrBadge.loginAsBtn', { username: account.username })}
                   </button>
                 )}
 
@@ -376,11 +378,11 @@ export default function AccountQRBadgeModal({
                   >
                     {isGeneratingPreview ? (
                       <>
-                        <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-300 shrink-0" /> PREVIEW...
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-300 shrink-0" /> {t('modals.qrBadge.previewingBtn')}
                       </>
                     ) : (
                       <>
-                        <Eye className="h-3.5 w-3.5 shrink-0 text-indigo-300" /> PREVIEW
+                        <Eye className="h-3.5 w-3.5 shrink-0 text-indigo-300" /> {t('modals.qrBadge.previewBtn')}
                       </>
                     )}
                   </button>
@@ -394,11 +396,11 @@ export default function AccountQRBadgeModal({
                   >
                     {isExportingPDF ? (
                       <>
-                        <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300 shrink-0" /> PRINTING...
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300 shrink-0" /> {t('modals.qrBadge.printingBtn')}
                       </>
                     ) : (
                       <>
-                        <Printer className="h-3.5 w-3.5 shrink-0" /> PRINT
+                        <Printer className="h-3.5 w-3.5 shrink-0" /> {t('modals.qrBadge.printBtn')}
                       </>
                     )}
                   </button>
@@ -410,7 +412,7 @@ export default function AccountQRBadgeModal({
                     className="bg-blue-700 hover:bg-blue-600 text-white font-bold py-2 px-1 rounded-xl text-[11px] transition flex items-center justify-center gap-1 shadow-sm uppercase cursor-pointer disabled:opacity-50 whitespace-nowrap"
                     title="Download QR Badge Image as PNG"
                   >
-                    <Download className="h-3.5 w-3.5 shrink-0" /> {isDownloading ? 'SAVING...' : 'SAVE PNG'}
+                    <Download className="h-3.5 w-3.5 shrink-0" /> {isDownloading ? t('modals.qrBadge.savingPngBtn') : t('modals.qrBadge.savePngBtn')}
                   </button>
 
                   <button
@@ -421,11 +423,11 @@ export default function AccountQRBadgeModal({
                   >
                     {copied ? (
                       <>
-                        <Check className="h-3.5 w-3.5 text-blue-300 shrink-0" /> COPIED!
+                        <Check className="h-3.5 w-3.5 text-blue-300 shrink-0" /> {t('modals.qrBadge.copiedBtn')}
                       </>
                     ) : (
                       <>
-                        <Copy className="h-3.5 w-3.5 text-blue-300 shrink-0" /> COPY DATA
+                        <Copy className="h-3.5 w-3.5 text-blue-300 shrink-0" /> {t('modals.qrBadge.copyDataBtn')}
                       </>
                     )}
                   </button>
@@ -435,7 +437,7 @@ export default function AccountQRBadgeModal({
 
             {/* Modal Footer */}
             <div className="px-5 py-2.5 border-t border-blue-900/60 bg-blue-950/90 text-[10px] text-blue-300 font-mono text-center shrink-0">
-              JUWEI WMS OPERATOR SECURITY SYSTEM • QR VERIFICATION ENABLED
+              {t('modals.qrBadge.footerText')}
             </div>
           </motion.div>
         </motion.div>

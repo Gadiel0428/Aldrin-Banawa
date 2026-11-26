@@ -23,6 +23,7 @@ import type {
   StockMovementType,
 } from "../../shared/types.ts";
 import { normalizeUnitCode, resolveMasterDataUnit } from "../../shared/units.ts";
+import { allocateFifoLots } from "../../shared/fifoAllocation.ts";
 import logger from "../../src/lib/logger.ts";
 import { mapStockMovementFromApi } from "../api/mapper.ts";
 import { recordAuditTrail } from "./auditService.ts";
@@ -593,25 +594,13 @@ export function ensureMovementsForBusinessRecord(
     const isInternal = rcv.source === "INTERNAL" || rcv.source === "WIP/BOM/FG(Internal)";
     if (isInternal && Array.isArray(rcv.bom) && rcv.bom.length > 0 && rcv.autoDeductBom) {
       for (const bomItem of rcv.bom) {
-        let remaining = Number(bomItem.quantityRequired) || 0;
-        if (remaining <= 0) continue;
-        const candidates = (ctx.state.stocks || [])
-          .filter(
-            (s) =>
-              s &&
-              s.partCode === bomItem.partCode &&
-              s.status === "APPROVED" &&
-              (Number(s.quantity) || 0) > 0
-          )
-          .sort((a, b) => new Date(a.receivedDate).getTime() - new Date(b.receivedDate).getTime());
-
-        for (const compStock of candidates) {
-          if (remaining <= 0) break;
-          const avail = computeDerivedBalanceForStock(ctx, compStock);
-          if (avail <= 0) continue;
-          const deductAmount = Math.min(avail, remaining);
-          remaining = roundStockQuantity(remaining - deductAmount);
-
+        const plan = allocateFifoLots(
+          ctx.state.stocks || [],
+          bomItem.partCode,
+          bomItem.quantityRequired,
+          (compStock) => computeDerivedBalanceForStock(ctx, compStock)
+        );
+        for (const { stockItem: compStock, quantityAllocated: deductAmount } of plan.allocations) {
           const bomOutcome = ensureIdempotentMovement(ctx, {
             productId: compStock.id,
             type: "ADJUSTMENT_OUT",

@@ -7,8 +7,7 @@ import {defineConfig} from 'vite';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export default defineConfig(() => {
-  const buildTimestamp = Date.now();
+export default defineConfig(({ command }) => {
   const normalizeVer = (v: unknown) => String(v || '').replace(/^v/i, '').trim();
   const cmpVer = (a: string, b: string) => {
     const pa = normalizeVer(a).split(/[.-]/).map((p) => (/^\d+$/.test(p) ? parseInt(p, 10) : 0));
@@ -21,11 +20,13 @@ export default defineConfig(() => {
   };
 
   const candidates: string[] = [];
+  let persistedBuildId: number | string | null = null;
   try {
     const buildInfoPath = path.resolve(__dirname, 'public/build-info.json');
     if (fs.existsSync(buildInfoPath)) {
       const bInfo = JSON.parse(fs.readFileSync(buildInfoPath, 'utf8'));
       if (bInfo.version) candidates.push(normalizeVer(bInfo.version));
+      if (bInfo.buildId) persistedBuildId = bInfo.buildId;
     }
   } catch (e) {}
 
@@ -45,6 +46,8 @@ export default defineConfig(() => {
     } catch (e) {}
   }
 
+  const buildTimestamp = command === 'build' ? Date.now() : (persistedBuildId || appVersion || 'dev');
+
   return {
     base: './',
     define: {
@@ -57,11 +60,36 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
         'react': path.resolve(__dirname, 'node_modules/react'),
         'react-dom': path.resolve(__dirname, 'node_modules/react-dom'),
+        'react-is': path.resolve(__dirname, 'node_modules/react-is'),
       },
-      dedupe: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime'],
+      dedupe: [
+        'react',
+        'react-dom',
+        'react/jsx-runtime',
+        'react/jsx-dev-runtime',
+        'react-is',
+        'react-redux',
+      ],
     },
     optimizeDeps: {
-      include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime'],
+      include: [
+        'react',
+        'react-dom',
+        'react-dom/client',
+        'react/jsx-runtime',
+        'react/jsx-dev-runtime',
+        'react-is',
+        'react-redux',
+        'recharts',
+        'lucide-react',
+        'motion/react',
+        'qrcode.react',
+        'html5-qrcode',
+        'html2canvas',
+        'jspdf',
+        'jspdf-autotable',
+        'pdfjs-dist',
+      ],
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

@@ -31,6 +31,7 @@ import { showPrintToast } from '../utils/printDocument';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAuthoritativeId } from '../lib/idGenerator';
+import { verifyCentralCredentials } from '../lib/centralApi';
 import {
   MISSING_UNIT_LABEL,
   formatNumberForUnit,
@@ -38,6 +39,10 @@ import {
   normalizeUnitCode,
   resolveMasterDataUnit,
 } from '../../shared/units';
+import { validateIssuanceRecord } from '../../shared/validation';
+import { getFifoEligibleLots, checkFifoSelectionCompliance } from '../../shared/fifoAllocation';
+import { getManilaTodayString } from '../lib/businessDate';
+import { useI18n } from '../i18n';
 
 interface IssuanceModuleProps {
   stocks: MaterialStockItem[];
@@ -64,6 +69,7 @@ export default function IssuanceModule({
   registries = [],
   currentUser = ''
 }: IssuanceModuleProps) {
+  const { t, localizeValidation } = useI18n();
   const effectiveCanEdit = canEdit || isSuperAdmin;
   const [searchQuery, setSearchQuery] = useState('');
   const [showScannerModal, setShowScannerModal] = useState(false);
@@ -103,9 +109,39 @@ export default function IssuanceModule({
   const [selectedPartCode, setSelectedPartCode] = useState(initialIssuanceDraft?.selectedPartCode || '');
   const [selectedLotNumber, setSelectedLotNumber] = useState(initialIssuanceDraft?.selectedLotNumber || '');
   const [quantityRequested, setQuantityRequested] = useState<number>(initialIssuanceDraft?.quantityRequested || 0);
+  const [quantityRequestedInput, setQuantityRequestedInput] = useState<string>(
+    initialIssuanceDraft?.quantityRequested !== undefined && initialIssuanceDraft?.quantityRequested !== 0
+      ? String(initialIssuanceDraft.quantityRequested)
+      : ''
+  );
   const [quantityIssued, setQuantityIssued] = useState<number>(initialIssuanceDraft?.quantityIssued || 0);
+  const [quantityIssuedInput, setQuantityIssuedInput] = useState<string>(
+    initialIssuanceDraft?.quantityIssued !== undefined && initialIssuanceDraft?.quantityIssued !== 0
+      ? String(initialIssuanceDraft.quantityIssued)
+      : ''
+  );
   const [issuedBy, setIssuedBy] = useState(initialIssuanceDraft?.issuedBy || (currentUser || 'Warehouse Staff'));
   const [receivedBy, setReceivedBy] = useState(initialIssuanceDraft?.receivedBy || '');
+  const [issuanceFieldErrors, setIssuanceFieldErrors] = useState<Record<string, string>>({});
+  const [editIssuanceFieldErrors, setEditIssuanceFieldErrors] = useState<Record<string, string>>({});
+  const [editQtyRequestedInput, setEditQtyRequestedInput] = useState<string>('');
+  const [editQtyIssuedInput, setEditQtyIssuedInput] = useState<string>('');
+
+  const clearIssErr = (field: string) => {
+    setIssuanceFieldErrors(prev => {
+      if (!prev[field]) return prev;
+      const { [field]: _removed, ...rest } = prev;
+      return rest;
+    });
+  };
+
+  const clearEditIssErr = (field: string) => {
+    setEditIssuanceFieldErrors(prev => {
+      if (!prev[field]) return prev;
+      const { [field]: _removed, ...rest } = prev;
+      return rest;
+    });
+  };
 
   // Auto-save issuance draft to localStorage
   useEffect(() => {
@@ -152,9 +188,12 @@ export default function IssuanceModule({
     setSelectedPartCode('');
     setSelectedLotNumber('');
     setQuantityRequested(0);
+    setQuantityRequestedInput('');
     setQuantityIssued(0);
+    setQuantityIssuedInput('');
     setReceivedBy('');
     setConfirmedScanInfo(null);
+    setIssuanceFieldErrors({});
     setShowForm(false);
   };
 
@@ -164,6 +203,19 @@ export default function IssuanceModule({
 
   const [availableLots, setAvailableLots] = useState<MaterialStockItem[]>([]);
   const [fifoAlert, setFifoAlert] = useState<string | null>(null);
+  const [newerLotReason, setNewerLotReason] = useState<string>('');
+  const [superAdminApproved, setSuperAdminApproved] = useState<boolean>(isSuperAdmin);
+  const [adminEmpId, setAdminEmpId] = useState<string>('JPMP-002');
+  const [adminPin, setAdminPin] = useState<string>('');
+  const [adminVerifyMsg, setAdminVerifyMsg] = useState<string | null>(null);
+
+  const FIXED_FIFO_REASONS = [
+    'Lot Damaged',
+    'Customer Request',
+    'Lot Segregated',
+    'Production Urgency',
+    'Quality Hold on Older Lot'
+  ];
 
   const resolveIssuanceScanDetails = (scannedCode: string): ScannedItemPreview => {
     const cleanCode = scannedCode.trim();
@@ -186,8 +238,8 @@ export default function IssuanceModule({
       return {
         code: cleanCode,
         itemName: matchedStock.description || matchedStock.partCode,
-        lot: matchedStock.lotNumber || 'Unassigned Lot',
-        location: matchedStock.location || 'Unassigned',
+        lot: matchedStock.lotNumber || t('common.na'),
+        location: matchedStock.location || t('common.na'),
         partCode: matchedStock.partCode,
         quantityLabel: `${formatNumberForUnit(matchedStock.quantity)} ${stockUnit.unit || MISSING_UNIT_LABEL}`,
         matchedSource: 'STOCK'
@@ -198,8 +250,8 @@ export default function IssuanceModule({
       return {
         code: cleanCode,
         itemName: matchedRegistry.name || matchedRegistry.description || matchedRegistry.code,
-        lot: 'No active lot in stock',
-        location: matchedRegistry.location || 'Unassigned',
+        lot: t('common.na'),
+        location: matchedRegistry.location || t('common.na'),
         partCode: matchedRegistry.code,
         category: matchedRegistry.category,
         matchedSource: 'REGISTRY'
@@ -208,9 +260,9 @@ export default function IssuanceModule({
 
     return {
       code: cleanCode,
-      itemName: `Unregistered Item (${cleanCode})`,
-      lot: 'No active lot in stock',
-      location: 'Unassigned',
+      itemName: `${cleanCode}`,
+      lot: t('common.na'),
+      location: t('common.na'),
       partCode: cleanCode.toUpperCase(),
       matchedSource: 'UNMATCHED'
     };
@@ -248,10 +300,11 @@ export default function IssuanceModule({
     }
   };
 
-  // Update available lots when part code changes
+  // Update available lots when part code changes, sorted by receivedDate ascending (oldest first)
   useEffect(() => {
     if (selectedPartCode) {
-      const lots = approvedStocks.filter(item => item.partCode === selectedPartCode);
+      const lots = getFifoEligibleLots(stocks, selectedPartCode);
+
       setAvailableLots(lots);
       if (lots.length > 0) {
         if (!selectedLotNumber || !lots.some(l => l.lotNumber === selectedLotNumber)) {
@@ -266,56 +319,55 @@ export default function IssuanceModule({
     }
   }, [selectedPartCode, stocks]);
 
+  const fifoCompliance = checkFifoSelectionCompliance(availableLots, selectedLotNumber);
+  const oldestLot = fifoCompliance.oldestLot;
+  const isNewerLotSelected = fifoCompliance.isNewerLotSelected;
+
+  useEffect(() => {
+    if (!isNewerLotSelected) {
+      setNewerLotReason('');
+      setSuperAdminApproved(isSuperAdmin);
+      setAdminPin('');
+      setAdminVerifyMsg(null);
+    } else if (isSuperAdmin) {
+      setSuperAdminApproved(true);
+    }
+  }, [isNewerLotSelected, isSuperAdmin]);
+
   // FIFO validation checks: scan all approved lots of the part code to see if an older lot is ignored
   useEffect(() => {
-    if (selectedPartCode && selectedLotNumber && availableLots.length > 1) {
-      // Find the currently selected lot's received date
-      const selectedLotItem = availableLots.find(item => item.lotNumber === selectedLotNumber);
-      if (selectedLotItem) {
-        const selectedDate = new Date(selectedLotItem.receivedDate).getTime();
-
-        // Check if there is any other lot with an earlier received date
-        const olderLots = availableLots.filter(item => {
-          const itemDate = new Date(item.receivedDate).getTime();
-          return item.lotNumber !== selectedLotNumber && itemDate < selectedDate && item.quantity > 0;
-        });
-
-        if (olderLots.length > 0) {
-          const oldestLot = olderLots.sort((a, b) => new Date(a.receivedDate).getTime() - new Date(b.receivedDate).getTime())[0];
-          setFifoAlert(
-            `Warning: Lot "${oldestLot.lotNumber}" (received on ${oldestLot.receivedDate}) is older than your selected Lot "${selectedLotNumber}". FIFO mandates issuing older stock first!`
-          );
-        } else {
-          setFifoAlert(null);
-        }
-      }
+    if (selectedPartCode && selectedLotNumber && fifoCompliance.olderAvailableLots.length > 0) {
+      const oldestLotItem = fifoCompliance.olderAvailableLots[0];
+      setFifoAlert(
+        t('issuance.fifoAlertTemplate', {
+          lot: `${oldestLotItem.lotNumber} (${oldestLotItem.receivedDate})`,
+          location: oldestLotItem.location || t('common.na')
+        })
+      );
     } else {
       setFifoAlert(null);
     }
-  }, [selectedLotNumber, selectedPartCode, availableLots]);
+  }, [selectedLotNumber, selectedPartCode, availableLots, t]);
 
   // Auto-fill quantity issued when requested changes
-  const handleQtyRequestChange = (val: number) => {
-    setQuantityRequested(val);
-    setQuantityIssued(val); // Default matching
+  const handleQtyRequestChange = (rawVal: string) => {
+    const cleaned = rawVal.replace(/[^0-9.-]/g, '');
+    setQuantityRequestedInput(cleaned);
+    setQuantityIssuedInput(cleaned);
+    const num = Number(cleaned);
+    const parsed = cleaned.trim() === '' || Number.isNaN(num) ? 0 : num;
+    setQuantityRequested(parsed);
+    setQuantityIssued(parsed); // Default matching
+    clearIssErr('quantityRequested');
+    clearIssErr('quantityIssued');
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!requisitionNumber || !selectedPartCode || !selectedLotNumber || quantityIssued <= 0 || !receivedBy) {
-      showPrintToast('Please complete all required fields.', 'warning');
-      return;
-    }
 
-    // Attempt to deduct the inventory
-    const success = onDeductStock(selectedPartCode, selectedLotNumber, quantityIssued);
-    if (!success) {
-      showPrintToast('Error: Not enough stock quantity available in the selected lot to fulfill this issuance.', 'error');
-      return;
-    }
-
-    // Retrieve full item details
-    const selectedItem = approvedStocks.find(item => item.partCode === selectedPartCode && item.lotNumber === selectedLotNumber);
+    const selectedItem = approvedStocks.find(
+      item => item.partCode === selectedPartCode && item.lotNumber === selectedLotNumber
+    );
     const itemDesc = selectedItem ? selectedItem.description : 'Unknown Item';
     const resolvedUnit = resolveMasterDataUnit(
       { unit: selectedItem?.unit, partCode: selectedPartCode, description: itemDesc, lotNumber: selectedLotNumber },
@@ -323,23 +375,70 @@ export default function IssuanceModule({
       stocks
     );
 
+    const rawReq = quantityRequestedInput.trim() === '' ? NaN : Number(quantityRequestedInput.trim());
+    const rawIss = quantityIssuedInput.trim() === '' ? NaN : Number(quantityIssuedInput.trim());
+    const numericReq = Number.isNaN(rawReq) ? 0 : rawReq;
+    const numericIss = Number.isNaN(rawIss) ? 0 : rawIss;
+
     const newIssuance: IssuanceRecord = {
       id: generateAuthoritativeId('ISS'),
-      date: new Date().toISOString().split('T')[0],
-      requisitionNumber,
+      date: getManilaTodayString(),
+      requisitionNumber: requisitionNumber.trim(),
       department,
       partCode: selectedPartCode,
       description: itemDesc,
-      quantityRequested,
-      quantityIssued,
+      quantityRequested: numericReq,
+      quantityIssued: numericIss,
       unit: resolvedUnit.unit,
       unitMissing: resolvedUnit.isMissing,
       lotNumber: selectedLotNumber,
-      fifoVerified: fifoAlert === null,
-      issuedBy,
-      receivedBy
+      fifoVerified: !isNewerLotSelected,
+      issuedBy: issuedBy.trim(),
+      receivedBy: receivedBy.trim(),
+      ...(isNewerLotSelected ? {
+        overrideReason: newerLotReason,
+        superAdminApproved: true,
+        superAdminApprover: isSuperAdmin ? currentUser : (adminEmpId || 'JPMP-002')
+      } : {})
     };
 
+    const validation = validateIssuanceRecord(
+      {
+        ...newIssuance,
+        quantityRequested: quantityRequestedInput.trim() === '' ? '' : rawReq,
+        quantityIssued: quantityIssuedInput.trim() === '' ? '' : rawIss,
+      } as any,
+      {
+        requireOperationalFields: true,
+        availableLotQty: selectedItem ? selectedItem.quantity : undefined,
+        isNewerLotSelected,
+        superAdminApproved,
+      }
+    );
+
+    const extraErrors: Record<string, string> = { ...validation.fieldErrors };
+    if (!issuedBy.trim()) {
+      extraErrors.issuedBy = t('issuance.issuedByRequiredErr');
+    }
+
+    if (Object.keys(extraErrors).length > 0) {
+      setIssuanceFieldErrors(extraErrors);
+      const firstErr = Object.values(extraErrors)[0] || t('delivery.fixValidation');
+      showPrintToast(localizeValidation(firstErr), 'warning');
+      return;
+    }
+
+    // Attempt to deduct the inventory
+    const success = onDeductStock(selectedPartCode, selectedLotNumber, numericIss);
+    if (!success) {
+      setIssuanceFieldErrors({
+        quantityIssued: t('issuance.insufficientStockError')
+      });
+      showPrintToast(t('issuance.insufficientStockError'), 'error');
+      return;
+    }
+
+    setIssuanceFieldErrors({});
     onAddIssuance(newIssuance);
     clearIssuanceDraft();
 
@@ -348,8 +447,14 @@ export default function IssuanceModule({
     setSelectedPartCode('');
     setSelectedLotNumber('');
     setQuantityRequested(0);
+    setQuantityRequestedInput('');
     setQuantityIssued(0);
+    setQuantityIssuedInput('');
     setReceivedBy('');
+    setNewerLotReason('');
+    setSuperAdminApproved(isSuperAdmin);
+    setAdminPin('');
+    setAdminVerifyMsg(null);
     setConfirmedScanInfo(null);
     setShowForm(false);
   };
@@ -369,15 +474,15 @@ export default function IssuanceModule({
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-bold font-mono px-2 py-0.5 rounded border border-indigo-500/30">
-              PRODUCTION ISSUANCE DISPATCH
+              {t('issuance.bannerBadge')}
             </span>
             <span className="text-emerald-400 text-[10px] font-bold flex items-center gap-1 font-mono">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse inline-block" /> AUTHORIZED
+              <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse inline-block" /> {t('issuance.authorizedBadge')}
             </span>
           </div>
-          <h2 className="text-xl font-bold text-white tracking-tight">Material Issuance to Production</h2>
+          <h2 className="text-xl font-bold text-white tracking-tight">{t('issuance.title')}</h2>
           <p className="text-xs text-slate-300 mt-1">
-            Issue approved materials and finished sub-parts to lines, perform FIFO sequence checks, and record receiver signatures.
+            {t('issuance.subtitle')}
           </p>
         </div>
       </div>
@@ -393,7 +498,7 @@ export default function IssuanceModule({
               className="bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-2 px-3.5 rounded-lg flex items-center justify-center gap-2 shadow-2xs transition cursor-pointer whitespace-nowrap shrink-0"
               id="btn-scan-issuance-barcode"
             >
-              <ScanLine className="h-4 w-4" /> Scan
+              <ScanLine className="h-4 w-4" /> {t('issuance.scanBtn')}
             </button>
 
             <button 
@@ -404,14 +509,14 @@ export default function IssuanceModule({
                   setPrintInitialView('OFFICIAL_DOC');
                   setSelectedPickingDocIssuance(target);
                 } else {
-                  showPrintToast('No material issuance records available to print.', 'warning');
+                  showPrintToast(t('issuance.noRecordsToPrint'), 'warning');
                 }
               }}
               className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 px-3.5 rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer whitespace-nowrap shrink-0"
               id="btn-print-active-mrs"
-              title="Preview & Print Official Material Requisition Slip (MRS)"
+              title={t('issuance.printMrsTooltip')}
             >
-              <Printer className="h-4 w-4" /> Print Requisition Slip (MRS)
+              <Printer className="h-4 w-4" /> {t('issuance.printPickingBtn')}
             </button>
 
             <button 
@@ -421,14 +526,14 @@ export default function IssuanceModule({
                   setPrintInitialView('SUMMARY_LOG');
                   setSelectedPickingDocIssuance(filteredIssuances[0] || issuances[0]);
                 } else {
-                  showPrintToast('No material issuance records available to print log summary.', 'warning');
+                  showPrintToast(t('issuance.noSummaryToPrint'), 'warning');
                 }
               }}
               className="bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-2 px-3.5 rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer whitespace-nowrap shrink-0"
               id="btn-print-issuance-log"
-              title="Print Summary Log Report of all Filtered Issuance Records"
+              title={t('issuance.printSummaryTooltip')}
             >
-              <Printer className="h-4 w-4 text-slate-300" /> Print Summary Log
+              <Printer className="h-4 w-4 text-slate-300" /> {t('issuance.printSummaryBtn')}
             </button>
           </div>
 
@@ -439,11 +544,11 @@ export default function IssuanceModule({
                 className="bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold py-2 px-4 rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer whitespace-nowrap shrink-0"
                 id="btn-new-requisition"
               >
-                <Plus className="h-4 w-4" /> Process Material Requisition
+                <Plus className="h-4 w-4" /> {t('issuance.processReqBtn')}
               </button>
             ) : (
               <span className="text-[10px] font-mono text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1.5 rounded-lg font-bold uppercase shrink-0 whitespace-nowrap">
-                🔒 View-Only Mode
+                {t('issuance.viewOnlyBadge')}
               </span>
             )}
           </div>
@@ -456,7 +561,7 @@ export default function IssuanceModule({
           </span>
           <input 
             type="text" 
-            placeholder="Search issuances by Requisition #, Part #, Item Name, Department..." 
+            placeholder={t('issuance.searchPlaceholder')} 
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 focus:outline-none bg-slate-50/50"
@@ -467,6 +572,7 @@ export default function IssuanceModule({
       {/* Issuance form */}
       {showForm && (
         <form 
+          noValidate
           onSubmit={handleSubmit}
           className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm space-y-6"
           id="issuance-form"
@@ -474,10 +580,10 @@ export default function IssuanceModule({
           <div className="border-b border-slate-100 pb-3 flex justify-between items-center">
             <div className="flex items-center gap-2.5">
               <h3 className="font-bold text-sm text-slate-800 flex items-center gap-1.5">
-                <FileSpreadsheet className="h-4 w-4 text-slate-500" /> New Material Requisition Fulfill Form (MRS)
+                <FileSpreadsheet className="h-4 w-4 text-slate-500" /> {t('issuance.formTitle')}
               </h3>
               <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                <CheckCircle2 className="h-3 w-3 text-emerald-600" /> Auto-saved draft
+                <CheckCircle2 className="h-3 w-3 text-emerald-600" /> {t('receiving.autoSavedDraft')}
               </span>
             </div>
             <button 
@@ -485,7 +591,7 @@ export default function IssuanceModule({
               onClick={handleDiscardIssuance} 
               className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer"
             >
-              Cancel
+              {t('common.cancel')}
             </button>
           </div>
 
@@ -494,126 +600,168 @@ export default function IssuanceModule({
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
                 <span className="inline-flex items-center gap-1.5 font-bold text-emerald-800">
                   <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-                  Scan Confirmed:
+                  {t('receiving.scanConfirmed')}
                 </span>
-                <span><strong>Item:</strong> {confirmedScanInfo.itemName}</span>
-                <span className="font-mono"><strong>Lot:</strong> {confirmedScanInfo.lot}</span>
-                <span><strong>Location:</strong> {confirmedScanInfo.location}</span>
+                <span><strong>{t('issuance.scanItemLabel')}</strong> {confirmedScanInfo.itemName}</span>
+                <span className="font-mono"><strong>{t('issuance.scanLotLabel')}</strong> {confirmedScanInfo.lot}</span>
+                <span><strong>{t('issuance.scanLocLabel')}</strong> {confirmedScanInfo.location}</span>
               </div>
             </div>
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1">Requisition Slip Number *</label>
+              <label className="block text-xs font-semibold text-slate-500 mb-1">{t('issuance.requisitionLabel')}</label>
               <input 
                 type="text"
                 required
-                placeholder="e.g. REQ-2026-009"
+                placeholder={t('issuance.requisitionPlaceholder')}
                 value={requisitionNumber}
-                onChange={e => setRequisitionNumber(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono focus:outline-none focus:ring-1 focus:ring-slate-400"
+                onChange={e => {
+                  setRequisitionNumber(e.target.value);
+                  clearIssErr('requisitionNumber');
+                }}
+                className={`w-full px-3 py-2 border rounded-lg text-xs font-mono focus:outline-none focus:ring-1 ${
+                  issuanceFieldErrors.requisitionNumber
+                    ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                    : 'border-slate-200 focus:ring-slate-400'
+                }`}
               />
+              {issuanceFieldErrors.requisitionNumber && (
+                <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                  {localizeValidation(issuanceFieldErrors.requisitionNumber)}
+                </p>
+              )}
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1">Requesting Department *</label>
+              <label className="block text-xs font-semibold text-slate-500 mb-1">{t('issuance.departmentLabel')}</label>
               <select 
                 value={department}
                 onChange={e => setDepartment(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-slate-400"
               >
-                <option value="Injection Molding Dept">Injection Molding Dept</option>
-                <option value="Printing & Assembly Dept">Printing & Assembly Dept</option>
-                <option value="Production Control Line A">Production Control Line A</option>
-                <option value="PMC Dept">PMC Dept (Logistics)</option>
-                <option value="Packaging Section B">Packaging Section B</option>
+                <option value="Injection Molding Dept">{t('issuance.deptInjection')}</option>
+                <option value="Printing & Assembly Dept">{t('issuance.deptPrinting')}</option>
+                <option value="Production Control Line A">{t('issuance.deptProdLineA')}</option>
+                <option value="PMC Dept">{t('issuance.deptPmc')}</option>
+                <option value="Packaging Section B">{t('issuance.deptPackagingB')}</option>
               </select>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1">Part Code to Issue *</label>
+              <label className="block text-xs font-semibold text-slate-500 mb-1">{t('issuance.partCodeLabel')}</label>
               <select 
                 value={selectedPartCode}
-                onChange={e => setSelectedPartCode(e.target.value)}
+                onChange={e => {
+                  setSelectedPartCode(e.target.value);
+                  clearIssErr('partCode');
+                  clearIssErr('lotNumber');
+                }}
                 required
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono focus:outline-none focus:ring-1 focus:ring-slate-400"
+                className={`w-full px-3 py-2 border rounded-lg text-xs font-mono focus:outline-none focus:ring-1 ${
+                  issuanceFieldErrors.partCode
+                    ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                    : 'border-slate-200 focus:ring-slate-400'
+                }`}
               >
-                <option value="">-- Choose Approved Part Code --</option>
+                <option value="">{t('issuance.selectPartPlaceholder')}</option>
                 {uniquePartCodes.map(code => (
                   <option key={code} value={code}>{code}</option>
                 ))}
               </select>
+              {issuanceFieldErrors.partCode && (
+                <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                  {localizeValidation(issuanceFieldErrors.partCode)}
+                </p>
+              )}
             </div>
           </div>
 
           {selectedPartCode && (
             <div className="bg-slate-50 p-4 rounded-xl border border-slate-150 space-y-4">
-              <h4 className="text-xs font-bold text-slate-700">FIFO Bin & Lot Allocation Check</h4>
+              <h4 className="text-xs font-bold text-slate-700">{t('issuance.lotCheckHeader')}</h4>
               
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">Select Lot Number *</label>
+                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">{t('issuance.lotLabel')}</label>
                   <select 
                     value={selectedLotNumber}
-                    onChange={e => setSelectedLotNumber(e.target.value)}
+                    onChange={e => {
+                      setSelectedLotNumber(e.target.value);
+                      clearIssErr('lotNumber');
+                    }}
                     required
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono bg-white focus:outline-none"
+                    className={`w-full px-3 py-2 border rounded-lg text-xs font-mono bg-white focus:outline-none ${
+                      issuanceFieldErrors.lotNumber
+                        ? 'border-rose-500 ring-1 ring-rose-500'
+                        : 'border-slate-200'
+                    }`}
                   >
                     {availableLots.map(lot => {
                       const lotUnit = resolveMasterDataUnit(lot, registries).unit || MISSING_UNIT_LABEL;
                       return (
                         <option key={lot.id} value={lot.lotNumber}>
-                          {lot.lotNumber} ({formatNumberForUnit(lot.quantity)} {lotUnit} available)
+                          {lot.lotNumber} ({formatNumberForUnit(lot.quantity)} {lotUnit} {t('issuance.availableQtyLabel')})
                         </option>
                       );
                     })}
                   </select>
+                  {issuanceFieldErrors.lotNumber && (
+                    <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(issuanceFieldErrors.lotNumber)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">Quantity Requested *</label>
+                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">{t('issuance.qtyRequestedLabel')}</label>
                   <input 
                     type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
+                    inputMode="decimal"
                     required
-                    placeholder="Qty requested"
-                    value={quantityRequested || ''}
-                    onKeyDown={(e) => {
-                      if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
-                        e.preventDefault();
-                      }
-                    }}
-                    onChange={e => {
-                      const sanitized = e.target.value.replace(/\D/g, '');
-                      const val = sanitized ? parseInt(sanitized, 10) : 0;
-                      handleQtyRequestChange(val);
-                    }}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-mono focus:outline-none"
+                    placeholder={t('issuance.qtyReqPlaceholder')}
+                    value={quantityRequestedInput}
+                    onChange={e => handleQtyRequestChange(e.target.value)}
+                    className={`w-full px-3 py-2 border rounded-lg text-xs bg-white font-mono focus:outline-none ${
+                      issuanceFieldErrors.quantityRequested
+                        ? 'border-rose-500 ring-1 ring-rose-500'
+                        : 'border-slate-200'
+                    }`}
                   />
+                  {issuanceFieldErrors.quantityRequested && (
+                    <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(issuanceFieldErrors.quantityRequested)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">Quantity to Issue (FIFO match) *</label>
+                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">{t('issuance.qtyIssuedLabel')}</label>
                   <input 
                     type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
+                    inputMode="decimal"
                     required
-                    placeholder="Qty issued"
-                    value={quantityIssued || ''}
-                    onKeyDown={(e) => {
-                      if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
-                        e.preventDefault();
-                      }
-                    }}
+                    placeholder={t('issuance.qtyIssuedPlaceholder')}
+                    value={quantityIssuedInput}
                     onChange={e => {
-                      const sanitized = e.target.value.replace(/\D/g, '');
-                      setQuantityIssued(sanitized ? parseInt(sanitized, 10) : 0);
+                      const raw = e.target.value.replace(/[^0-9.-]/g, '');
+                      setQuantityIssuedInput(raw);
+                      const num = Number(raw);
+                      setQuantityIssued(raw.trim() === '' || Number.isNaN(num) ? 0 : num);
+                      clearIssErr('quantityIssued');
                     }}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-white font-mono focus:outline-none"
+                    className={`w-full px-3 py-2 border rounded-lg text-xs bg-white font-mono focus:outline-none ${
+                      issuanceFieldErrors.quantityIssued
+                        ? 'border-rose-500 ring-1 ring-rose-500'
+                        : 'border-slate-200'
+                    }`}
                   />
+                  {issuanceFieldErrors.quantityIssued && (
+                    <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(issuanceFieldErrors.quantityIssued)}
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -626,7 +774,123 @@ export default function IssuanceModule({
               ) : (
                 <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-lg text-xs flex items-center gap-2">
                   <ShieldCheck className="h-4 w-4 text-emerald-600 shrink-0" />
-                  <span><strong>SOP Verification Success:</strong> Selected lot is compliant with the FIFO sequence rules for this part code.</span>
+                  <span><strong>{t('issuance.sopComplianceSuccessTitle')}:</strong> {t('issuance.sopComplianceSuccessDesc')}</span>
+                </div>
+              )}
+
+              {isNewerLotSelected && (
+                <div className="p-4 bg-amber-50 border border-amber-300 rounded-xl space-y-3 mt-3">
+                  <div className="flex items-center gap-2 text-amber-900 font-bold text-xs">
+                    <ShieldAlert className="h-4 w-4 text-amber-600 shrink-0" />
+                    <span>{t('issuance.newerLotWarningTitle', { lot: oldestLot?.lotNumber || '' })}</span>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">{t('issuance.overrideReasonLabel')}</label>
+                    <select
+                      value={newerLotReason}
+                      onChange={e => {
+                        setNewerLotReason(e.target.value);
+                        clearIssErr('overrideReason');
+                      }}
+                      required
+                      className={`w-full px-3 py-2 border bg-white rounded-lg text-xs font-medium focus:outline-none ${
+                        issuanceFieldErrors.overrideReason
+                          ? 'border-rose-500 ring-1 ring-rose-500'
+                          : 'border-amber-300'
+                      }`}
+                    >
+                      <option value="">{t('issuance.selectOverrideReason')}</option>
+                      {FIXED_FIFO_REASONS.map(r => (
+                        <option key={r} value={r}>
+                          {r === 'Lot Damaged' ? t('issuance.reasonDamaged')
+                            : r === 'Customer Request' ? t('issuance.reasonCustomerRequest')
+                            : r === 'Lot Segregated' ? t('issuance.reasonSegregated')
+                            : r === 'Production Urgency' ? t('issuance.reasonProductionUrgency')
+                            : r === 'Quality Hold on Older Lot' ? t('issuance.reasonQualityHold')
+                            : r}
+                        </option>
+                      ))}
+                    </select>
+                    {issuanceFieldErrors.overrideReason && (
+                      <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                        {localizeValidation(issuanceFieldErrors.overrideReason)}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="pt-2 border-t border-amber-200">
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">{t('issuance.superAdminApproverLabel')}</label>
+                    {isSuperAdmin ? (
+                      <label className="flex items-center gap-2 text-xs font-semibold text-emerald-800 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={superAdminApproved}
+                          onChange={e => {
+                            setSuperAdminApproved(e.target.checked);
+                            clearIssErr('superAdminApproved');
+                          }}
+                          className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4"
+                        />
+                        <span>{t('issuance.approveOverrideCheckbox', { user: currentUser || t('issuance.superAdminFallback') })}</span>
+                      </label>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            placeholder={t('issuance.superAdminIdPlaceholder')}
+                            value={adminEmpId}
+                            onChange={e => setAdminEmpId(e.target.value)}
+                            className="flex-1 px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-mono"
+                          />
+                          <input
+                            type="password"
+                            placeholder={t('issuance.superAdminPinLabel')}
+                            value={adminPin}
+                            onChange={e => setAdminPin(e.target.value)}
+                            className="flex-1 px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-mono"
+                          />
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (!adminEmpId || !adminPin) {
+                                setAdminVerifyMsg(t('issuance.verifyEnterAdminErr'));
+                                return;
+                              }
+                              try {
+                                const verifiedUser = await verifyCentralCredentials(adminEmpId, adminPin);
+                                if (verifiedUser && (verifiedUser.role?.toUpperCase().includes('SUPER') || verifiedUser.role?.toUpperCase().includes('ADMIN') || verifiedUser.employeeId === 'JPMP-002')) {
+                                  setSuperAdminApproved(true);
+                                  clearIssErr('superAdminApproved');
+                                  setAdminVerifyMsg(t('issuance.verifyAdminSuccess'));
+                                } else {
+                                  setSuperAdminApproved(false);
+                                  setAdminVerifyMsg(t('issuance.verifyAdminInvalid'));
+                                }
+                              } catch (err) {
+                                setSuperAdminApproved(false);
+                                setAdminVerifyMsg(t('issuance.verifyAdminErr'));
+                              }
+                            }}
+                            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg cursor-pointer"
+                          >
+                            {t('issuance.verifyAdminBtn')}
+                          </button>
+                        </div>
+                        {adminVerifyMsg && (
+                          <p className={`text-[11px] font-mono ${superAdminApproved ? 'text-emerald-700' : 'text-rose-700'}`}>
+                            {adminVerifyMsg}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {issuanceFieldErrors.superAdminApproved && (
+                      <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                        {localizeValidation(issuanceFieldErrors.superAdminApproved)}
+                      </p>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -634,25 +898,49 @@ export default function IssuanceModule({
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-slate-100 pt-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1">Issued By (Warehouse personnel) *</label>
+              <label className="block text-xs font-semibold text-slate-500 mb-1">{t('issuance.issuedByLabel')}</label>
               <input 
                 type="text"
                 required
                 value={issuedBy}
-                onChange={e => setIssuedBy(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs"
+                onChange={e => {
+                  setIssuedBy(e.target.value);
+                  clearIssErr('issuedBy');
+                }}
+                className={`w-full px-3 py-2 border rounded-lg text-xs ${
+                  issuanceFieldErrors.issuedBy
+                    ? 'border-rose-500 ring-1 ring-rose-500'
+                    : 'border-slate-200'
+                }`}
               />
+              {issuanceFieldErrors.issuedBy && (
+                <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                  {localizeValidation(issuanceFieldErrors.issuedBy)}
+                </p>
+              )}
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-500 mb-1">Received By (Production Representative Signature) *</label>
+              <label className="block text-xs font-semibold text-slate-500 mb-1">{t('issuance.receivedByLabel')}</label>
               <input 
                 type="text"
                 required
-                placeholder="Print Full Name"
+                placeholder={t('issuance.receivedByPlaceholder')}
                 value={receivedBy}
-                onChange={e => setReceivedBy(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-slate-400 focus:outline-none"
+                onChange={e => {
+                  setReceivedBy(e.target.value);
+                  clearIssErr('receivedBy');
+                }}
+                className={`w-full px-3 py-2 border rounded-lg text-xs focus:ring-1 focus:outline-none ${
+                  issuanceFieldErrors.receivedBy
+                    ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                    : 'border-slate-200 focus:ring-slate-400'
+                }`}
               />
+              {issuanceFieldErrors.receivedBy && (
+                <p className="mt-1 text-[11px] font-semibold text-rose-600" role="alert">
+                  {localizeValidation(issuanceFieldErrors.receivedBy)}
+                </p>
+              )}
             </div>
           </div>
 
@@ -662,13 +950,13 @@ export default function IssuanceModule({
               onClick={handleDiscardIssuance} 
               className="px-4 py-2 border border-slate-200 text-slate-600 text-xs font-semibold rounded-lg hover:bg-slate-50 cursor-pointer"
             >
-              Discard
+              {t('receiving.discardBtn')}
             </button>
             <button 
               type="submit" 
               className="px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 cursor-pointer"
             >
-              Verify, Issue and Update Balance
+              {t('issuance.submitBtn')}
             </button>
           </div>
         </form>
@@ -677,24 +965,24 @@ export default function IssuanceModule({
       {/* Issuances Logs Table */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm" id="issuance-grid-panel">
         <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-          <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Fulfill and Issuance Log History</span>
-          <span className="text-xs font-mono text-slate-500 font-semibold">{filteredIssuances.length} issuances logged</span>
+          <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">{t('issuance.logHistoryTitle')}</span>
+          <span className="text-xs font-mono text-slate-500 font-semibold">{t('issuance.issuancesLogged', { count: filteredIssuances.length })}</span>
         </div>
 
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="bg-slate-100 text-slate-500 font-medium border-b border-slate-200">
-                <th className="p-4 font-semibold">Issuance ID</th>
-                <th className="p-4 font-semibold">Date Issued</th>
-                <th className="p-4 font-semibold">Requisition #</th>
-                <th className="p-4 font-semibold">Department</th>
-                <th className="p-4 font-semibold">Material Code & Description</th>
-                <th className="p-4 font-semibold text-right">Quantity Issued</th>
-                <th className="p-4 font-semibold">Lot Issued</th>
-                <th className="p-4 font-semibold">FIFO Audit</th>
-                <th className="p-4 font-semibold">Authorized Signatures</th>
-                <th className="p-4 font-semibold">Action</th>
+                <th className="p-4 font-semibold">{t('issuance.colIssuanceId')}</th>
+                <th className="p-4 font-semibold">{t('issuance.colDateIssued')}</th>
+                <th className="p-4 font-semibold">{t('issuance.colRequisition')}</th>
+                <th className="p-4 font-semibold">{t('issuance.colDepartment')}</th>
+                <th className="p-4 font-semibold">{t('issuance.colMaterialDesc')}</th>
+                <th className="p-4 font-semibold text-right">{t('issuance.colQtyIssued')}</th>
+                <th className="p-4 font-semibold">{t('issuance.colLotIssued')}</th>
+                <th className="p-4 font-semibold">{t('issuance.colFifoAudit')}</th>
+                <th className="p-4 font-semibold">{t('issuance.colSignatures')}</th>
+                <th className="p-4 font-semibold">{t('issuance.colAction')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -729,7 +1017,7 @@ export default function IssuanceModule({
                           ? 'bg-indigo-50/70 border-l-4 border-l-indigo-600 shadow-2xs' 
                           : 'hover:bg-indigo-50/30 hover:border-l-4 hover:border-l-indigo-300'
                       }`}
-                      title="Click row to expand issuance details & FIFO metadata"
+                      title={t('issuance.rowExpandTooltip')}
                     >
                       <td className="p-4 font-mono font-semibold text-slate-600">
                         <div className="flex items-center gap-1.5">
@@ -742,7 +1030,7 @@ export default function IssuanceModule({
                             className={`p-1 rounded-md transition-colors ${
                               isExpanded ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
                             }`}
-                            title={isExpanded ? 'Collapse row' : 'Expand row details'}
+                            title={isExpanded ? t('issuance.collapseRowTitle') : t('issuance.expandRowTitle')}
                           >
                             {isExpanded ? (
                               <ChevronDown className="h-3.5 w-3.5" />
@@ -762,7 +1050,7 @@ export default function IssuanceModule({
                             setSelectedPickingDocIssuance(iss);
                           }}
                           className="font-mono font-bold text-indigo-600 hover:text-indigo-800 hover:underline flex items-center gap-1 cursor-pointer"
-                          title="Click to view & print official Material Requisition Slip (MRS)"
+                          title={t('issuance.printMrsRowTitle')}
                         >
                           <Printer className="h-3 w-3 text-indigo-500 shrink-0" />
                           <span>{iss.requisitionNumber}</span>
@@ -787,17 +1075,17 @@ export default function IssuanceModule({
                       <td className="p-4">
                         {iss.fifoVerified ? (
                           <span className="text-emerald-600 font-semibold flex items-center gap-1">
-                            <ShieldCheck className="h-4 w-4" /> Passed FIFO
+                            <ShieldCheck className="h-4 w-4" /> {t('issuance.passedFifo')}
                           </span>
                         ) : (
-                          <span className="text-amber-600 font-semibold flex items-center gap-1" title="Issued out of chronological order">
-                            <ShieldAlert className="h-4 w-4" /> Override Warning
+                          <span className="text-amber-600 font-semibold flex items-center gap-1" title={t('issuance.overrideOrderTitle')}>
+                            <ShieldAlert className="h-4 w-4" /> {t('issuance.overrideWarning')}
                           </span>
                         )}
                       </td>
                       <td className="p-4 text-slate-600 space-y-0.5">
-                        <div className="flex items-center gap-1"><User className="h-3 w-3 text-slate-400" /> <span className="text-[10px]">Staff:</span> {iss.issuedBy}</div>
-                        <div className="flex items-center gap-1"><CornerDownRight className="h-3 w-3 text-slate-400" /> <span className="text-[10px]">Recv:</span> {iss.receivedBy}</div>
+                        <div className="flex items-center gap-1"><User className="h-3 w-3 text-slate-400" /> <span className="text-[10px]">{t('issuance.staffPrefix')}</span> {iss.issuedBy}</div>
+                        <div className="flex items-center gap-1"><CornerDownRight className="h-3 w-3 text-slate-400" /> <span className="text-[10px]">{t('issuance.recvPrefix')}</span> {iss.receivedBy}</div>
                       </td>
                       <td className="p-4" data-no-expand="true">
                         <select
@@ -812,13 +1100,16 @@ export default function IssuanceModule({
                               setSelectedPickingDocIssuance(iss);
                             } else if (val === 'EDIT') {
                               if (!effectiveCanEdit) return;
+                              setEditIssuanceFieldErrors({});
+                              setEditQtyRequestedInput(String(iss.quantityRequested ?? ''));
+                              setEditQtyIssuedInput(String(iss.quantityIssued ?? ''));
                               setEditingIssuance({ ...iss });
                             } else if (val === 'DELETE') {
                               if (!isSuperAdmin) return;
                               setConfirmAction({
-                                title: 'Delete Issuance Record',
-                                message: `Are you sure you want to delete issuance record ${iss.id} (${iss.requisitionNumber})?`,
-                                confirmLabel: 'YES, DELETE RECORD',
+                                title: t('issuance.deleteTitle'),
+                                message: t('issuance.deleteMsg', { id: iss.id, requisitionNumber: iss.requisitionNumber }),
+                                confirmLabel: t('issuance.confirmYesDelete'),
                                 confirmVariant: 'danger',
                                 onConfirm: () => onDeleteIssuance?.(iss.id)
                               });
@@ -828,14 +1119,14 @@ export default function IssuanceModule({
                           className="bg-white border border-slate-300 hover:border-indigo-400 text-slate-800 text-[11px] font-semibold py-1 px-2.5 rounded-lg shadow-2xs focus:ring-1 focus:ring-indigo-500 cursor-pointer outline-none transition-colors"
                           id={`action-select-iss-${iss.id}`}
                         >
-                          <option value="" disabled>Actions...</option>
-                          <option value="PRINT_MRS">📄 Print Requisition Slip (MRS)</option>
-                          <option value="PRINT_PL">📋 Print Picking List</option>
+                          <option value="" disabled>{t('issuance.actionsPlaceholder')}</option>
+                          <option value="PRINT_MRS">📄 {t('issuance.actionPrintMrs')}</option>
+                          <option value="PRINT_PL">📋 {t('issuance.actionPrintPickList')}</option>
                           {effectiveCanEdit && (
-                            <option value="EDIT">📝 Edit Record</option>
+                            <option value="EDIT">📝 {t('issuance.actionEditRecord')}</option>
                           )}
                           {isSuperAdmin && (
-                            <option value="DELETE">🗑️ Delete Record</option>
+                            <option value="DELETE">🗑️ {t('issuance.actionDeleteRecord')}</option>
                           )}
                         </select>
                       </td>
@@ -863,7 +1154,7 @@ export default function IssuanceModule({
                                     <div>
                                       <div className="flex items-center gap-2">
                                         <span className="text-sm font-bold text-slate-900">
-                                          Requisition: <span className="font-mono text-indigo-600">{iss.requisitionNumber}</span>
+                                          {t('issuance.reqColon')} <span className="font-mono text-indigo-600">{iss.requisitionNumber}</span>
                                         </span>
                                         <span className="font-mono text-xs text-slate-400">({iss.id})</span>
                                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
@@ -871,29 +1162,29 @@ export default function IssuanceModule({
                                             ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
                                             : 'bg-amber-50 text-amber-700 border border-amber-200'
                                         }`}>
-                                          {iss.fifoVerified ? 'FIFO COMPLIANT' : 'OVERRIDE AUDIT REQUIRED'}
+                                          {iss.fifoVerified ? t('issuance.fifoCompliantBadge') : t('issuance.overrideAuditBadge')}
                                         </span>
                                       </div>
                                       <p className="text-xs text-slate-500 mt-0.5">
-                                        Target: <strong className="text-slate-700">{iss.department}</strong> &bull; Part: <strong className="font-mono text-slate-700">{iss.partCode}</strong> - {iss.description}
+                                        {t('issuance.targetColon')} <strong className="text-slate-700">{iss.department}</strong> &bull; {t('issuance.partColon')} <strong className="font-mono text-slate-700">{iss.partCode}</strong> - {iss.description}
                                       </p>
                                     </div>
                                   </div>
 
                                   <div className="flex flex-wrap items-center gap-2 text-xs">
                                     <span className="bg-slate-100 text-slate-700 font-mono font-semibold px-2.5 py-1 rounded-lg border border-slate-200">
-                                      Date: {iss.date}
+                                      {t('issuance.dateColon')} {iss.date}
                                     </span>
                                     <span className={`font-bold px-2.5 py-1 rounded-lg border font-mono ${
                                       issUnitRes.isMissing
                                         ? 'bg-rose-50 text-rose-700 border-rose-200'
                                         : 'bg-indigo-50 text-indigo-800 border-indigo-200'
                                     }`}>
-                                      Issued: {formatNumberForUnit(iss.quantityIssued)} {issUnitRes.isMissing ? MISSING_UNIT_LABEL : issUnitRes.unit}
+                                      {t('issuance.issuedColon')} {formatNumberForUnit(iss.quantityIssued)} {issUnitRes.isMissing ? MISSING_UNIT_LABEL : issUnitRes.unit}
                                     </span>
                                     {matchedStock && matchedStockUnitRes && (
                                       <span className="bg-emerald-50 text-emerald-800 font-bold px-2.5 py-1 rounded-lg border border-emerald-200 font-mono">
-                                        Current Stock: {formatNumberForUnit(matchedStock.quantity)} {matchedStockUnitRes.isMissing ? MISSING_UNIT_LABEL : matchedStockUnitRes.unit}
+                                        {t('issuance.currentStockColon')} {formatNumberForUnit(matchedStock.quantity)} {matchedStockUnitRes.isMissing ? MISSING_UNIT_LABEL : matchedStockUnitRes.unit}
                                       </span>
                                     )}
                                   </div>
@@ -905,27 +1196,27 @@ export default function IssuanceModule({
                                   <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
                                     <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
                                       <Tag className="h-4 w-4 text-indigo-500" />
-                                      <span>Material & Warehouse Location</span>
+                                      <span>{t('issuance.cardMaterialWhTitle')}</span>
                                     </div>
                                     <div className="grid grid-cols-2 gap-2 text-xs">
                                       <div>
-                                        <span className="text-slate-400 text-[11px] block">Part Code:</span>
+                                        <span className="text-slate-400 text-[11px] block">{t('issuance.cardPartCode')}</span>
                                         <span className="font-mono font-bold text-slate-800">{iss.partCode}</span>
                                       </div>
                                       <div>
-                                        <span className="text-slate-400 text-[11px] block">Category:</span>
-                                        <span className="font-semibold text-indigo-700">{registryItem?.category || 'Production Material'}</span>
+                                        <span className="text-slate-400 text-[11px] block">{t('issuance.cardCategory')}</span>
+                                        <span className="font-semibold text-indigo-700">{registryItem?.category || t('issuance.cardProdMaterial')}</span>
                                       </div>
                                       <div>
-                                        <span className="text-slate-400 text-[11px] block">Batch / Lot #:</span>
+                                        <span className="text-slate-400 text-[11px] block">{t('issuance.cardBatchLot')}</span>
                                         <span className="font-mono font-bold text-slate-800">{iss.lotNumber}</span>
                                       </div>
                                       <div>
-                                        <span className="text-slate-400 text-[11px] block">Bin Location:</span>
-                                        <span className="font-mono font-semibold text-slate-800">{matchedStock?.location || 'Standard Bay / Shelf'}</span>
+                                        <span className="text-slate-400 text-[11px] block">{t('issuance.cardBinLocation')}</span>
+                                        <span className="font-mono font-semibold text-slate-800">{matchedStock?.location || t('issuance.cardStdBay')}</span>
                                       </div>
                                       <div className="col-span-2 pt-1 border-t border-slate-100 flex justify-between items-center text-slate-500 text-[11px]">
-                                        <span>Unit of Measure:</span>
+                                        <span>{t('issuance.cardUom')}</span>
                                         {issUnitRes.isMissing ? (
                                           <span className="inline-block px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-bold">
                                             {MISSING_UNIT_LABEL}
@@ -941,31 +1232,31 @@ export default function IssuanceModule({
                                   <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
                                     <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
                                       <ShieldCheck className="h-4 w-4 text-emerald-600" />
-                                      <span>FIFO & SOP Compliance</span>
+                                      <span>{t('issuance.cardFifoSopTitle')}</span>
                                     </div>
                                     <div className="space-y-2 text-xs">
                                       <div>
-                                        <span className="text-slate-400 text-[11px] block">FIFO Status:</span>
+                                        <span className="text-slate-400 text-[11px] block">{t('issuance.cardFifoStatus')}</span>
                                         <div className="mt-0.5">
                                           {iss.fifoVerified ? (
                                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800">
-                                              <Check className="h-3 w-3" /> Strict First-In First-Out Verified
+                                              <Check className="h-3 w-3" /> {t('issuance.cardStrictFifoOk')}
                                             </span>
                                           ) : (
                                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold bg-amber-100 text-amber-800">
-                                              <ShieldAlert className="h-3 w-3" /> Manual Out-of-Sequence Override
+                                              <ShieldAlert className="h-3 w-3" /> {t('issuance.cardManualOverride')}
                                             </span>
                                           )}
                                         </div>
                                       </div>
                                       <div className="bg-slate-50 p-2 rounded-lg border border-slate-150 text-[11px] text-slate-600 space-y-1">
                                         <div className="flex justify-between">
-                                          <span>Stock Allocation:</span>
-                                          <strong className="text-slate-800">Deducted from Inventory</strong>
+                                          <span>{t('issuance.cardStockAllocation')}</span>
+                                          <strong className="text-slate-800">{t('issuance.cardDeductedInv')}</strong>
                                         </div>
                                         <div className="flex justify-between">
-                                          <span>Requisition Purpose:</span>
-                                          <strong className="text-slate-800">{iss.department} Operations</strong>
+                                          <span>{t('issuance.cardReqPurpose')}</span>
+                                          <strong className="text-slate-800">{iss.department} · {t('issuance.cardDeptOps')}</strong>
                                         </div>
                                       </div>
                                     </div>
@@ -975,19 +1266,19 @@ export default function IssuanceModule({
                                   <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs space-y-3">
                                     <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-2">
                                       <FileSpreadsheet className="h-4 w-4 text-purple-500" />
-                                      <span>Signatures & Official Documents</span>
+                                      <span>{t('issuance.cardSignDocsTitle')}</span>
                                     </div>
 
                                     <div className="space-y-2 text-xs">
                                       <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2 rounded-lg border border-slate-150">
                                         <div>
-                                          <span className="text-slate-400 text-[10px] block">Issued By (Warehouse):</span>
+                                          <span className="text-slate-400 text-[10px] block">{t('issuance.cardIssuedByWh')}</span>
                                           <span className="font-semibold text-slate-800 text-[11px] flex items-center gap-1">
                                             <User className="h-3 w-3 text-slate-400" /> {iss.issuedBy}
                                           </span>
                                         </div>
                                         <div>
-                                          <span className="text-slate-400 text-[10px] block">Received By (Production):</span>
+                                          <span className="text-slate-400 text-[10px] block">{t('issuance.cardReceivedByProd')}</span>
                                           <span className="font-semibold text-slate-800 text-[11px] flex items-center gap-1">
                                             <CornerDownRight className="h-3 w-3 text-slate-400" /> {iss.receivedBy}
                                           </span>
@@ -1003,7 +1294,7 @@ export default function IssuanceModule({
                                           }}
                                           className="flex-1 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold transition-colors cursor-pointer border border-indigo-200 flex items-center justify-center gap-1 shadow-2xs"
                                         >
-                                          <Printer className="h-3 w-3" /> Requisition Slip
+                                          <Printer className="h-3 w-3" /> {t('issuance.cardBtnReqSlip')}
                                         </button>
                                         <button
                                           type="button"
@@ -1013,7 +1304,7 @@ export default function IssuanceModule({
                                           }}
                                           className="flex-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-colors cursor-pointer border border-slate-200 flex items-center justify-center gap-1 shadow-2xs"
                                         >
-                                          <ClipboardList className="h-3 w-3" /> Picking List
+                                          <ClipboardList className="h-3 w-3" /> {t('issuance.cardBtnPickList')}
                                         </button>
                                       </div>
                                     </div>
@@ -1055,9 +1346,9 @@ export default function IssuanceModule({
               <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                 <div>
                   <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-                    <Edit className="h-4 w-4 text-indigo-600" /> Edit Registered Issuance ({editingIssuance.id})
+                    <Edit className="h-4 w-4 text-indigo-600" /> {t('issuance.editModalTitle', { id: editingIssuance.id })}
                   </h4>
-                  <p className="text-[11px] text-slate-500">Super Admin Record Overwrite</p>
+                  <p className="text-[11px] text-slate-500">{t('issuance.editSubtitle')}</p>
                 </div>
                 <button 
                   onClick={() => setEditingIssuance(null)}
@@ -1069,17 +1360,29 @@ export default function IssuanceModule({
 
               <div className="grid grid-cols-2 gap-3 text-xs">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Requisition Number</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('issuance.editReqNumLabel')}</label>
                   <input 
                     type="text" 
                     value={editingIssuance.requisitionNumber}
-                    onChange={e => setEditingIssuance({ ...editingIssuance, requisitionNumber: e.target.value })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                    onChange={e => {
+                      setEditingIssuance({ ...editingIssuance, requisitionNumber: e.target.value });
+                      clearEditIssErr('requisitionNumber');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editIssuanceFieldErrors.requisitionNumber
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editIssuanceFieldErrors.requisitionNumber && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editIssuanceFieldErrors.requisitionNumber)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Date Issued</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('issuance.dateLabel')}</label>
                   <input 
                     type="date" 
                     value={editingIssuance.date}
@@ -1089,7 +1392,7 @@ export default function IssuanceModule({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Department</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('issuance.editDeptLabel')}</label>
                   <input 
                     type="text" 
                     value={editingIssuance.department}
@@ -1099,17 +1402,29 @@ export default function IssuanceModule({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Part Code</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('issuance.editPartCodeLabel')}</label>
                   <input 
                     type="text" 
                     value={editingIssuance.partCode}
-                    onChange={e => setEditingIssuance({ ...editingIssuance, partCode: e.target.value.toUpperCase() })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                    onChange={e => {
+                      setEditingIssuance({ ...editingIssuance, partCode: e.target.value.toUpperCase() });
+                      clearEditIssErr('partCode');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editIssuanceFieldErrors.partCode
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editIssuanceFieldErrors.partCode && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editIssuanceFieldErrors.partCode)}
+                    </p>
+                  )}
                 </div>
 
                 <div className="col-span-2">
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Description</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('issuance.editDescLabel')}</label>
                   <input 
                     type="text" 
                     value={editingIssuance.description}
@@ -1119,57 +1434,81 @@ export default function IssuanceModule({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity Requested</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('issuance.editQtyReqLabel')}</label>
                   <input 
                     type="text" 
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    value={editingIssuance.quantityRequested || ''}
-                    onKeyDown={(e) => {
-                      if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
-                        e.preventDefault();
-                      }
-                    }}
+                    inputMode="decimal"
+                    value={editQtyRequestedInput}
                     onChange={e => {
-                      const sanitized = e.target.value.replace(/\D/g, '');
-                      setEditingIssuance({ ...editingIssuance, quantityRequested: sanitized ? parseInt(sanitized, 10) : 0 });
+                      const raw = e.target.value.replace(/[^0-9.-]/g, '');
+                      setEditQtyRequestedInput(raw);
+                      const num = Number(raw);
+                      setEditingIssuance({ ...editingIssuance, quantityRequested: raw.trim() === '' || Number.isNaN(num) ? 0 : num });
+                      clearEditIssErr('quantityRequested');
                     }}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editIssuanceFieldErrors.quantityRequested
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editIssuanceFieldErrors.quantityRequested && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editIssuanceFieldErrors.quantityRequested)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Quantity Issued</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('issuance.editQtyIssuedLabel')}</label>
                   <input 
                     type="text" 
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    value={editingIssuance.quantityIssued || ''}
-                    onKeyDown={(e) => {
-                      if (['e', 'E', '+', '-', '.', ','].includes(e.key)) {
-                        e.preventDefault();
-                      }
-                    }}
+                    inputMode="decimal"
+                    value={editQtyIssuedInput}
                     onChange={e => {
-                      const sanitized = e.target.value.replace(/\D/g, '');
-                      setEditingIssuance({ ...editingIssuance, quantityIssued: sanitized ? parseInt(sanitized, 10) : 0 });
+                      const raw = e.target.value.replace(/[^0-9.-]/g, '');
+                      setEditQtyIssuedInput(raw);
+                      const num = Number(raw);
+                      setEditingIssuance({ ...editingIssuance, quantityIssued: raw.trim() === '' || Number.isNaN(num) ? 0 : num });
+                      clearEditIssErr('quantityIssued');
                     }}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editIssuanceFieldErrors.quantityIssued
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editIssuanceFieldErrors.quantityIssued && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editIssuanceFieldErrors.quantityIssued)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Lot Number</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('issuance.editLotLabel')}</label>
                   <input 
                     type="text" 
                     value={editingIssuance.lotNumber}
-                    onChange={e => setEditingIssuance({ ...editingIssuance, lotNumber: e.target.value })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono"
+                    onChange={e => {
+                      setEditingIssuance({ ...editingIssuance, lotNumber: e.target.value });
+                      clearEditIssErr('lotNumber');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 font-mono ${
+                      editIssuanceFieldErrors.lotNumber
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editIssuanceFieldErrors.lotNumber && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editIssuanceFieldErrors.lotNumber)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Unit of Measure</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('issuance.editUomLabel')}</label>
                   <select
                     value={normalizeUnitCode(editingIssuance.unit)}
                     onChange={e => {
@@ -1178,7 +1517,7 @@ export default function IssuanceModule({
                     }}
                     className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500 font-mono font-bold bg-white"
                   >
-                    <option value="">-- Select UOM --</option>
+                    <option value="">{t('issuance.editSelectUomOpt')}</option>
                     {getAllSelectUomOptions(editingIssuance.unit).map(u => (
                       <option key={u} value={u}>{u}</option>
                     ))}
@@ -1186,46 +1525,97 @@ export default function IssuanceModule({
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Issued By</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('issuance.editIssuedByLabel')}</label>
                   <input 
                     type="text" 
                     value={editingIssuance.issuedBy}
-                    onChange={e => setEditingIssuance({ ...editingIssuance, issuedBy: e.target.value })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                    onChange={e => {
+                      setEditingIssuance({ ...editingIssuance, issuedBy: e.target.value });
+                      clearEditIssErr('issuedBy');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 ${
+                      editIssuanceFieldErrors.issuedBy
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editIssuanceFieldErrors.issuedBy && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editIssuanceFieldErrors.issuedBy)}
+                    </p>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Received By</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('issuance.editReceivedByLabel')}</label>
                   <input 
                     type="text" 
                     value={editingIssuance.receivedBy}
-                    onChange={e => setEditingIssuance({ ...editingIssuance, receivedBy: e.target.value })}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                    onChange={e => {
+                      setEditingIssuance({ ...editingIssuance, receivedBy: e.target.value });
+                      clearEditIssErr('receivedBy');
+                    }}
+                    className={`w-full border px-3 py-1.5 rounded focus:ring-1 ${
+                      editIssuanceFieldErrors.receivedBy
+                        ? 'border-rose-500 ring-1 ring-rose-500 focus:ring-rose-500'
+                        : 'border-slate-200 focus:ring-indigo-500'
+                    }`}
                   />
+                  {editIssuanceFieldErrors.receivedBy && (
+                    <p className="mt-1 text-[10px] font-semibold text-rose-600" role="alert">
+                      {localizeValidation(editIssuanceFieldErrors.receivedBy)}
+                    </p>
+                  )}
                 </div>
               </div>
 
               <div className="flex justify-end gap-2 text-xs font-semibold pt-3 border-t border-slate-100">
                 <button 
-                  onClick={() => setEditingIssuance(null)}
+                  onClick={() => {
+                    setEditIssuanceFieldErrors({});
+                    setEditingIssuance(null);
+                  }}
                   className="px-4 py-2 border border-slate-200 text-slate-600 rounded-lg hover:bg-slate-50"
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </button>
                 <button 
                   onClick={() => {
                     const resolved = resolveMasterDataUnit(editingIssuance, registries, stocks);
-                    onEditIssuance?.({
+                    const rawReq = editQtyRequestedInput.trim() === '' ? NaN : Number(editQtyRequestedInput.trim());
+                    const rawIss = editQtyIssuedInput.trim() === '' ? NaN : Number(editQtyIssuedInput.trim());
+                    const candidate: IssuanceRecord = {
                       ...editingIssuance,
+                      quantityRequested: Number.isNaN(rawReq) ? 0 : rawReq,
+                      quantityIssued: Number.isNaN(rawIss) ? 0 : rawIss,
                       unit: resolved.unit,
                       unitMissing: resolved.isMissing,
-                    });
+                    };
+                    const validation = validateIssuanceRecord(
+                      {
+                        ...candidate,
+                        quantityRequested: editQtyRequestedInput.trim() === '' ? '' : rawReq,
+                        quantityIssued: editQtyIssuedInput.trim() === '' ? '' : rawIss,
+                      } as any,
+                      { requireOperationalFields: true }
+                    );
+                    const extraErrors: Record<string, string> = { ...validation.fieldErrors };
+                    if (!candidate.issuedBy?.trim()) {
+                      extraErrors.issuedBy = t('issuance.issuedByRequiredShort');
+                    }
+                    if (Object.keys(extraErrors).length > 0) {
+                      setEditIssuanceFieldErrors(extraErrors);
+                      const firstErr = Object.values(extraErrors)[0] || t('delivery.fixValidation');
+                      showPrintToast(localizeValidation(firstErr), 'warning');
+                      return;
+                    }
+                    setEditIssuanceFieldErrors({});
+                    onEditIssuance?.(candidate);
                     setEditingIssuance(null);
                   }}
                   className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-sm font-bold"
                 >
-                  Save Issuance Changes
+                  {t('issuance.saveChangesBtn')}
                 </button>
               </div>
             </motion.div>
@@ -1239,8 +1629,8 @@ export default function IssuanceModule({
         onClose={() => setShowScannerModal(false)}
         onScanResult={handleScanResult}
         resolveScanDetails={resolveIssuanceScanDetails}
-        title="Issuance Material Barcode Scanner"
-        subtitle="Use handheld barcode scanner or enter barcode manually"
+        title={t('issuance.scannerTitle')}
+        subtitle={t('issuance.scannerSubtitle')}
       />
 
       {/* Printable Requisition & Picking List Modal */}

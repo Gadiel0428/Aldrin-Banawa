@@ -52,6 +52,7 @@ import {
 import { showPrintToast } from '../utils/printDocument';
 import logger from '../lib/logger';
 import { normalizeUnitCode, resolveMasterDataUnit } from '../../shared/units';
+import { translate, localizeValidationMessage } from '../i18n';
 
 export function getDefaultServerAddress(): string {
   return getCentralServerHost();
@@ -339,6 +340,7 @@ export function useSync({
   // Real-time states
   const [socket, setSocket] = useState<WebSocket | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
+  const runSyncCheckRef = useRef<(() => Promise<boolean>) | null>(null);
   const [isDeviceRevoked, setIsDeviceRevoked] = useState<boolean>(false);
   const isDeviceRevokedRef = useRef<boolean>(false);
   const [syncConflicts, setSyncConflicts] = useState<SyncConflictItem[]>(() => {
@@ -719,6 +721,7 @@ export function useSync({
             id: r.id || `RCV-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
             date: r.date || new Date().toISOString().split('T')[0],
             receivedDate: r.receivedDate || r.received_date || r.date,
+            expirationDate: r.expirationDate || r.expiration_date || undefined,
             location: r.location,
             vendorSupplier: r.vendorSupplier || r.vendor_supplier,
             reorderMin: r.reorderMin || r.reorder_min ? Number(r.reorderMin || r.reorder_min) : undefined,
@@ -1069,7 +1072,7 @@ export function useSync({
         socketRef.current = null;
       }
       setSocket(null);
-      showPrintToast('This computer was removed from the system', 'error');
+      showPrintToast(translate('toasts.deviceRemoved'), 'error');
     }
   };
 
@@ -1141,7 +1144,7 @@ export function useSync({
       }
       return [conflictObj, ...prev];
     });
-    showPrintToast(`Sync conflict on ${conflictInput.collection} (${conflictInput.recordId}). Open Conflicts to review.`, 'warning');
+    showPrintToast(translate('toasts.syncConflict', { collection: conflictInput.collection, recordId: conflictInput.recordId }), 'warning');
   };
 
   const flushPendingMutationsQueue = async (forceRetry = false) => {
@@ -1780,7 +1783,7 @@ export function useSync({
                 setLiveSyncToast({
                   id: record.id,
                   author,
-                  action: actionDesc || `Updated ${collection} record`,
+                  action: actionDesc || translate('toasts.updatedRecord', { collection }),
                   time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                 });
               }
@@ -1831,7 +1834,7 @@ export function useSync({
                 setLiveSyncToast({
                   id: String(Date.now()),
                   author,
-                  action: `Registered operator ${user.username || user.employeeId}`,
+                  action: translate('toasts.registeredOperator', { username: user.username || user.employeeId, employeeId: user.employeeId }),
                   time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                 });
               }
@@ -1849,7 +1852,7 @@ export function useSync({
                 setLiveSyncToast({
                   id: String(Date.now()),
                   author,
-                  action: `Updated operator ${user.username || user.employeeId}`,
+                  action: translate('toasts.updatedOperator', { username: user.username || user.employeeId, employeeId: user.employeeId }),
                   time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                 });
               }
@@ -1875,7 +1878,7 @@ export function useSync({
             setLiveSyncToast({
               id: String(Date.now()),
               author: payload.resetBy || 'Super Administrator',
-              action: `GLOBAL RESET: Central database cleared`,
+              action: translate('toasts.globalResetComplete'),
               time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
             });
             setLastSyncedTime(new Date());
@@ -1886,7 +1889,7 @@ export function useSync({
               setLiveSyncToast({
                 id: String(Date.now()),
                 author: payload.username || 'System',
-                action: `Terminal ${payload.stationId} (${payload.platform || 'Device'}) completed fresh install & synced`,
+                action: translate('toasts.terminalInstalled', { stationId: payload.stationId, platform: payload.platform || 'Device' }),
                 time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
               });
             }
@@ -1894,7 +1897,7 @@ export function useSync({
             setLiveSyncToast({
               id: String(Date.now()),
               author: payload.author || 'Workstation',
-              action: payload.action || 'Updated data',
+              action: payload.action || translate('toasts.updatedData'),
               time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
             });
           }
@@ -2266,7 +2269,7 @@ export function useSync({
       setLiveSyncToast({
         id: String(Date.now()),
         author: 'System',
-        action: isUserInitiated ? 'Fresh install re-initialized • Synchronized with all cluster operators' : 'Fresh install complete • Synced with all cluster terminals',
+        action: isUserInitiated ? translate('toasts.freshInstallResynced') : translate('toasts.freshInstallSynced'),
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
       });
     } catch (e) {
@@ -2292,7 +2295,7 @@ export function useSync({
   ) => {
     if (!record || !record.id || !collection) return;
     if (isDeviceRevokedRef.current) {
-      showPrintToast('This computer was removed from the system', 'error');
+      showPrintToast(translate('toasts.deviceRemoved'), 'error');
       return;
     }
 
@@ -2423,7 +2426,7 @@ export function useSync({
             handleDeviceRevoked(persistentDevId);
             return;
           }
-          showPrintToast(errJson.error || 'Permission denied', 'error');
+          showPrintToast(errJson.error ? localizeValidationMessage(errJson.error) : translate('toasts.serverPermissionDenied'), 'error');
           return;
         }
         if (res.status === 409) {
@@ -2440,6 +2443,13 @@ export function useSync({
             actionDesc,
             error: errJson.error || 'VERSION_CONFLICT: Newer revision exists on server.'
           });
+          return;
+        }
+        if (res.status === 400) {
+          const errJson = await res.json().catch(() => ({}));
+          removeConfirmedMutations([clientMutationId]);
+          showPrintToast(errJson.error ? localizeValidationMessage(errJson.error) : translate('toasts.serverValidationError'), 'error');
+          runSyncCheckRef.current?.();
           return;
         }
         if (res.ok) {
@@ -2480,7 +2490,7 @@ export function useSync({
   ) => {
     if (!id || !collection) return;
     if (isDeviceRevokedRef.current) {
-      showPrintToast('This computer was removed from the system', 'error');
+      showPrintToast(translate('toasts.deviceRemoved'), 'error');
       return;
     }
 
@@ -2595,7 +2605,7 @@ export function useSync({
             handleDeviceRevoked(persistentDevId);
             return;
           }
-          showPrintToast(errJson.error || 'Permission denied', 'error');
+          showPrintToast(errJson.error ? localizeValidationMessage(errJson.error) : translate('toasts.serverPermissionDenied'), 'error');
           return;
         }
         if (res.status === 409) {
@@ -3125,6 +3135,7 @@ export function useSync({
       }
       return false;
     };
+    runSyncCheckRef.current = runSyncCheck;
 
     const connectWebSocket = async () => {
       if (!isMounted || isDeviceRevokedRef.current) return;
@@ -3256,7 +3267,7 @@ export function useSync({
                 setLiveSyncToast({
                   id: String(Date.now()),
                   author,
-                  action: actionDesc || `${payload.type} processed in room`,
+                  action: actionDesc || translate('toasts.processedInRoom', { type: payload.type }),
                   time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                 });
               }
@@ -3359,6 +3370,10 @@ export function useSync({
                     error: r.error || 'VERSION_CONFLICT: Newer revision exists on server.'
                   });
                   currentQueue = getPendingMutations();
+                } else if (r.status === 400) {
+                  confirmedIds.push(mutId);
+                  showPrintToast(r.error ? localizeValidationMessage(r.error) : translate('toasts.serverValidationError'), 'error');
+                  runSyncCheck();
                 } else {
                   const prevMut = currentQueue.find((q) => q.id === mutId) || entry?.mutation;
                   if (prevMut) {
@@ -3431,7 +3446,7 @@ export function useSync({
                 setLiveSyncToast({
                   id: String(Date.now()),
                   author: payload.connection.username || 'Operator',
-                  action: `Connected to cluster (${payload.connection.platform || 'Workstation'})`,
+                  action: translate('toasts.connectedCluster', { platform: payload.connection.platform || 'Workstation' }),
                   time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                 });
               }
@@ -3445,7 +3460,7 @@ export function useSync({
                 setLiveSyncToast({
                   id: String(Date.now()),
                   author: payload.connection.username || 'Operator',
-                  action: `Disconnected from cluster`,
+                  action: translate('toasts.disconnectedCluster'),
                   time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                 });
               }
@@ -3479,7 +3494,7 @@ export function useSync({
               setLiveSyncToast({
                 id: String(Date.now()),
                 author: author || 'Super Administrator',
-                action: `GLOBAL RESET COMPLETE: Central database cleared`,
+                action: translate('toasts.globalResetComplete'),
                 time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
               });
               setLastSyncedTime(new Date());
@@ -3529,7 +3544,7 @@ export function useSync({
                   setLiveSyncToast({
                     id: record.id,
                     author,
-                    action: actionDesc || `Updated ${collection} record`,
+                    action: actionDesc || translate('toasts.updatedRecord', { collection }),
                     time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                   });
                 }
@@ -3541,7 +3556,7 @@ export function useSync({
                 setLiveSyncToast({
                   id: String(Date.now()),
                   author: payload.username,
-                  action: payload.action || 'Updated data',
+                  action: payload.action || translate('toasts.updatedData'),
                   time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                 });
               }
@@ -3579,7 +3594,7 @@ export function useSync({
                   setLiveSyncToast({
                     id,
                     author,
-                    action: actionDesc || `Deleted ${collection} record`,
+                    action: actionDesc || translate('toasts.deletedRecord', { collection }),
                     time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                   });
                 }
@@ -3670,7 +3685,7 @@ export function useSync({
                   setLiveSyncToast({
                     id: String(Date.now()),
                     author: author || 'Admin',
-                    action: `Registered operator ${user.username} (${user.employeeId})`,
+                    action: translate('toasts.registeredOperator', { username: user.username, employeeId: user.employeeId }),
                     time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                   });
                 }
@@ -3690,7 +3705,7 @@ export function useSync({
                   setLiveSyncToast({
                     id: String(Date.now()),
                     author: author || 'Admin',
-                    action: `Updated operator ${user.username} (${user.employeeId})`,
+                    action: translate('toasts.updatedOperator', { username: user.username, employeeId: user.employeeId }),
                     time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                   });
                 }
@@ -3740,7 +3755,7 @@ export function useSync({
                 setLiveSyncToast({
                   id: String(Date.now()),
                   author: payload.triggeredBy,
-                  action: 'Triggered cluster-wide data refresh',
+                  action: translate('toasts.clusterRefreshTriggered'),
                   time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                 });
               }
@@ -3753,7 +3768,7 @@ export function useSync({
                 setLiveSyncToast({
                   id: String(Date.now()),
                   author: username || 'Cluster Node',
-                  action: `Terminal ${stationId} (${platform || 'Device'}) completed fresh install • Live Synced`,
+                  action: translate('toasts.terminalInstalled', { stationId, platform: platform || 'Device' }),
                   time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                 });
                 runSyncCheck();
@@ -3799,7 +3814,14 @@ export function useSync({
               }
 
               if (payload.status === 403) {
-                showPrintToast(payload.error || 'Permission denied', 'error');
+                showPrintToast(payload.error ? localizeValidationMessage(payload.error) : translate('toasts.serverPermissionDenied'), 'error');
+                break;
+              }
+
+              if (payload.status === 400) {
+                if (clientMutationId) removeConfirmedMutations([clientMutationId]);
+                showPrintToast(payload.error ? localizeValidationMessage(payload.error) : translate('toasts.serverValidationError'), 'error');
+                runSyncCheck();
                 break;
               }
 
@@ -3942,7 +3964,7 @@ export function useSync({
 
   const syncCollection = (collection: string, data: any[]) => {
     if (isDeviceRevokedRef.current) {
-      showPrintToast('This computer was removed from the system', 'error');
+      showPrintToast(translate('toasts.deviceRemoved'), 'error');
       return;
     }
 
@@ -4077,7 +4099,7 @@ export function useSync({
       currentRole === 'SUPER ADMINISTRATOR';
 
     if (!isSuperAdminOperating) {
-      showPrintToast("UNAUTHORIZED: Only Super Administrator (JPMP-002) is authorized to execute a complete global database reset.", 'error');
+      showPrintToast(translate('toasts.superAdminGlobalResetDenied'), 'error');
       return;
     }
 
@@ -4146,7 +4168,7 @@ export function useSync({
     setLiveSyncToast({
       id: String(Date.now()),
       author: cleanAuthor,
-      action: `GLOBAL RESET COMPLETE: Central database cleared`,
+      action: translate('toasts.globalResetComplete'),
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     });
     setLastSyncedTime(new Date());
@@ -4163,7 +4185,7 @@ export function useSync({
       currentRole === 'SUPER ADMINISTRATOR';
 
     if (!isSuperAdminOperating) {
-      showPrintToast("UNAUTHORIZED: Only Super Administrator (JPMP-002) is authorized to wipe operator accounts.", 'error');
+      showPrintToast(translate('toasts.superAdminWipeAccountsDenied'), 'error');
       return;
     }
 

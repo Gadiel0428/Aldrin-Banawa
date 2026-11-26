@@ -1,5 +1,6 @@
 import { Component, ErrorInfo, ReactNode } from 'react';
 import { AlertTriangle, RefreshCw, Trash2, Copy, Check } from 'lucide-react';
+import { translate } from '../i18n';
 
 interface Props {
   children?: ReactNode;
@@ -69,21 +70,21 @@ export class ErrorBoundary extends Component<Props, State> {
               </div>
               <div>
                 <span className="text-[10px] font-mono font-bold text-rose-400 uppercase tracking-widest block">
-                  SYSTEM RECOVERY • JUWEI WMS
+                  {translate('errorBoundary.systemRecovery')}
                 </span>
                 <h1 className="text-lg font-bold text-white font-mono tracking-tight">
-                  APPLICATION RECOVERY MODE
+                  {translate('errorBoundary.recoveryMode')}
                 </h1>
               </div>
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              The application encountered an operational state issue. You can quickly reload the system or clear cached temporary state below:
+              {translate('errorBoundary.description')}
             </p>
 
             {this.state.error && (
               <div className="bg-slate-950 border border-slate-800 p-3.5 rounded-xl font-mono text-[11px] text-rose-300 space-y-1">
-                <div className="font-bold text-rose-400">Error Details:</div>
+                <div className="font-bold text-rose-400">{translate('errorBoundary.errorDetails')}</div>
                 <div className="break-words font-mono text-slate-200">{this.state.error.toString()}</div>
               </div>
             )}
@@ -94,7 +95,7 @@ export class ErrorBoundary extends Component<Props, State> {
                 onClick={this.handleReload}
                 className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 px-4 rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg transition cursor-pointer font-mono uppercase"
               >
-                <RefreshCw className="h-4 w-4" /> 🔄 RELOAD APPLICATION
+                <RefreshCw className="h-4 w-4" /> 🔄 {translate('errorBoundary.reloadApp')}
               </button>
 
               <button
@@ -103,7 +104,7 @@ export class ErrorBoundary extends Component<Props, State> {
                 className={`w-full ${this.state.confirmingReset ? 'bg-rose-700 hover:bg-rose-600 text-white border-rose-500' : 'bg-slate-800 hover:bg-slate-700 text-rose-300 border-rose-950/60'} border font-bold py-2.5 px-4 rounded-xl text-xs flex items-center justify-center gap-2 transition cursor-pointer font-mono uppercase`}
               >
                 <Trash2 className="h-4 w-4" />
-                {this.state.confirmingReset ? 'CLICK AGAIN TO CONFIRM LOCAL RESET' : '🧹 RESET LOCAL DATA & RESTART'}
+                {this.state.confirmingReset ? translate('errorBoundary.confirmReset') : `🧹 ${translate('errorBoundary.resetLocalData')}`}
               </button>
 
               <button
@@ -114,12 +115,12 @@ export class ErrorBoundary extends Component<Props, State> {
                 {this.state.copied ? (
                   <>
                     <Check className="h-3.5 w-3.5 text-emerald-400" />
-                    <span className="text-emerald-300">COPIED TO CLIPBOARD!</span>
+                    <span className="text-emerald-300">{translate('errorBoundary.copied')}</span>
                   </>
                 ) : (
                   <>
                     <Copy className="h-3.5 w-3.5 text-slate-400" />
-                    <span>COPY DIAGNOSTIC LOG</span>
+                    <span>{translate('errorBoundary.copyLog')}</span>
                   </>
                 )}
               </button>

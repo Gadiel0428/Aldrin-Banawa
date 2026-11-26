@@ -26,6 +26,7 @@ import { StockMovement, StockMovementType } from '../types/movement';
 import { MaterialStockItem } from '../types';
 import { generateAuthoritativeId } from '../lib/idGenerator';
 import { MISSING_UNIT_LABEL, normalizeUnitCode } from '../../shared/units';
+import { useI18n } from '../i18n';
 
 interface StockMovementProps {
   stocks: MaterialStockItem[];
@@ -38,6 +39,7 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
   currentUser,
   onStockUpdated,
 }) => {
+  const { t } = useI18n();
   const [movements, setMovements] = useState<StockMovement[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -80,7 +82,7 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
   const handleCreateMovement = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedStockId || quantity <= 0) {
-      setErrorMsg('Please select a material and enter a valid quantity.');
+      setErrorMsg(t('movements.errSelectMaterialQty'));
       return;
     }
 
@@ -114,7 +116,7 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
         if (onStockUpdated) onStockUpdated();
       }
     } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to execute stock movement.');
+      setErrorMsg(err.message || t('movements.errFailedMovement'));
     } finally {
       setSubmitting(false);
     }
@@ -175,10 +177,10 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
         <div>
           <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2.5">
             <Layers className="w-6 h-6 text-indigo-500" />
-            Atomic Stock Movement Audit Ledger
+            {t('movements.title')}
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Immutable transaction history synchronized across all computers & devices. Never directly overwrites inventory quantities.
+            {t('movements.subtitle')}
           </p>
         </div>
 
@@ -189,14 +191,14 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
             className="flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
+            {t('movements.refreshBtn')}
           </button>
           <button
             onClick={() => setIsModalOpen(true)}
             className="flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white shadow-md shadow-indigo-600/20 transition-all cursor-pointer"
           >
             <Plus className="w-4 h-4" />
-            Record Movement
+            {t('movements.recordMovementBtn')}
           </button>
         </div>
       </div>
@@ -207,7 +209,7 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
           <input
             type="text"
-            placeholder="Search SKU, item name, reference PO, device ID, or notes..."
+            placeholder={t('movements.searchPlaceholder')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
@@ -221,15 +223,15 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
             onChange={(e) => setTypeFilter(e.target.value)}
             className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-medium text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
           >
-            <option value="ALL">All Movement Types</option>
-            <option value="PURCHASE">PURCHASE (Receiving)</option>
-            <option value="SALE">SALE (Issuance)</option>
-            <option value="ADJUSTMENT_IN">ADJUSTMENT IN (Surplus)</option>
-            <option value="ADJUSTMENT_OUT">ADJUSTMENT OUT (Scrap / Deficit)</option>
-            <option value="TRANSFER_IN">TRANSFER IN</option>
-            <option value="TRANSFER_OUT">TRANSFER OUT</option>
-            <option value="SALE_RETURN">SALE RETURN</option>
-            <option value="RECYCLING">PACKAGING RECYCLING</option>
+            <option value="ALL">{t('movements.allTypes')}</option>
+            <option value="PURCHASE">{t('movements.typePurchase')}</option>
+            <option value="SALE">{t('movements.typeSale')}</option>
+            <option value="ADJUSTMENT_IN">{t('movements.typeAdjustmentIn')}</option>
+            <option value="ADJUSTMENT_OUT">{t('movements.typeAdjustmentOut')}</option>
+            <option value="TRANSFER_IN">{t('movements.typeTransferIn')}</option>
+            <option value="TRANSFER_OUT">{t('movements.typeTransferOut')}</option>
+            <option value="SALE_RETURN">{t('movements.typeSaleReturn')}</option>
+            <option value="RECYCLING">{t('movements.typeRecycling')}</option>
           </select>
         </div>
       </div>
@@ -240,20 +242,20 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 text-slate-500 dark:text-slate-400 uppercase tracking-wider font-semibold">
-                <th className="py-3 px-4">Date & Time</th>
-                <th className="py-3 px-4">Type</th>
-                <th className="py-3 px-4">Item & Part Code</th>
-                <th className="py-3 px-4 text-right">Delta Qty</th>
-                <th className="py-3 px-4 text-right">Inventory Balance</th>
-                <th className="py-3 px-4">Reference</th>
-                <th className="py-3 px-4">Device & User</th>
+                <th className="py-3 px-4">{t('movements.colTimestamp')}</th>
+                <th className="py-3 px-4">{t('movements.colType')}</th>
+                <th className="py-3 px-4">{t('movements.colPartCode')}</th>
+                <th className="py-3 px-4 text-right">{t('movements.colDelta')}</th>
+                <th className="py-3 px-4 text-right">{t('movements.colBalance')}</th>
+                <th className="py-3 px-4">{t('movements.colReference')}</th>
+                <th className="py-3 px-4">{t('movements.colUser')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
               {filteredMovements.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="py-8 text-center text-slate-400">
-                    {loading ? 'Loading atomic stock movements...' : 'No stock movements recorded yet.'}
+                    {loading ? t('movements.loading') : t('movements.empty')}
                   </td>
                 </tr>
               ) : (
@@ -336,7 +338,7 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
             <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Layers className="w-5 h-5 text-indigo-500" />
-                <h3 className="font-bold text-base text-slate-900 dark:text-white">Record Atomic Stock Movement</h3>
+                <h3 className="font-bold text-base text-slate-900 dark:text-white">{t('movements.modalTitle')}</h3>
               </div>
               <button
                 onClick={() => setIsModalOpen(false)}
@@ -356,7 +358,7 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Target Material / SKU
+                  {t('movements.labelTargetMaterial')}
                 </label>
                 <select
                   value={selectedStockId}
@@ -364,7 +366,7 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
                   className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500/20"
                   required
                 >
-                  <option value="">-- Select Material --</option>
+                  <option value="">{t('movements.selectMaterialOption')}</option>
                   {stocks.map((s) => {
                     const u = normalizeUnitCode(s.unit) || MISSING_UNIT_LABEL;
                     return (
@@ -379,27 +381,27 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Movement Type
+                    {t('movements.labelMovementType')}
                   </label>
                   <select
                     value={movementType}
                     onChange={(e) => setMovementType(e.target.value as StockMovementType)}
                     className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500/20"
                   >
-                    <option value="ADJUSTMENT_IN">ADJUSTMENT IN (+)</option>
-                    <option value="ADJUSTMENT_OUT">ADJUSTMENT OUT (-)</option>
-                    <option value="PURCHASE">PURCHASE (+)</option>
-                    <option value="SALE">SALE (-)</option>
-                    <option value="TRANSFER_IN">TRANSFER IN (+)</option>
-                    <option value="TRANSFER_OUT">TRANSFER OUT (-)</option>
-                    <option value="SALE_RETURN">SALE RETURN (+)</option>
-                    <option value="RECYCLING">RECYCLING (+/-)</option>
+                    <option value="ADJUSTMENT_IN">{t('movements.typeAdjustmentIn')}</option>
+                    <option value="ADJUSTMENT_OUT">{t('movements.typeAdjustmentOut')}</option>
+                    <option value="PURCHASE">{t('movements.typePurchase')}</option>
+                    <option value="SALE">{t('movements.typeSale')}</option>
+                    <option value="TRANSFER_IN">{t('movements.typeTransferIn')}</option>
+                    <option value="TRANSFER_OUT">{t('movements.typeTransferOut')}</option>
+                    <option value="SALE_RETURN">{t('movements.typeSaleReturn')}</option>
+                    <option value="RECYCLING">{t('movements.typeRecycling')}</option>
                   </select>
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Quantity
+                    {t('movements.labelQuantity')}
                   </label>
                   <input
                     type="number"
@@ -415,11 +417,11 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Reference # (e.g. PO, Delivery Pass, Cycle Count ID)
+                  {t('movements.labelReference')}
                 </label>
                 <input
                   type="text"
-                  placeholder="Optional reference identifier"
+                  placeholder={t('movements.referencePlaceholder')}
                   value={refNumber}
                   onChange={(e) => setRefNumber(e.target.value)}
                   className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500/20"
@@ -428,11 +430,11 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Audit Notes / Reason
+                  {t('movements.labelNotes')}
                 </label>
                 <textarea
                   rows={2}
-                  placeholder="State reason for stock adjustment or transfer..."
+                  placeholder={t('movements.notesPlaceholder')}
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
                   className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500/20"
@@ -445,14 +447,14 @@ export const StockMovementView: React.FC<StockMovementProps> = ({
                   onClick={() => setIsModalOpen(false)}
                   className="px-4 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
                 >
-                  Cancel
+                  {t('movements.cancelBtn')}
                 </button>
                 <button
                   type="submit"
                   disabled={submitting}
                   className="px-5 py-2 text-xs font-bold rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white shadow-md shadow-indigo-600/20 transition-all disabled:opacity-50 cursor-pointer"
                 >
-                  {submitting ? 'Executing Atomic RPC...' : 'Commit Movement'}
+                  {submitting ? t('movements.executingRpc') : t('movements.commitBtn')}
                 </button>
               </div>
             </form>

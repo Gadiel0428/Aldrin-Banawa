@@ -50,7 +50,8 @@ import {
   MasterRegistryItem,
   ChatMessage
 } from '../types';
-import { computeStockAlerts } from '../utils/stockAlerts';
+import { computeDashboardTotals } from '../utils/dashboardTotals';
+import { getManilaTodayString } from '../lib/businessDate';
 import ReceivingVsIssuanceReportModal from './ReceivingVsIssuanceReportModal';
 import InventoryReportModal from './InventoryReportModal';
 import { PrintPreviewModal } from './PrintPreviewModal';
@@ -62,10 +63,10 @@ import {
   compareUnitKeys,
   formatNumberForUnit,
   formatQuantityWithUnit,
-  groupQuantitiesByUnit,
   resolveMasterDataUnit,
   type UnitTotalBucket
 } from '../../shared/units';
+import { useI18n } from '../i18n';
 
 interface DashboardOverviewProps {
   stocks: MaterialStockItem[];
@@ -109,11 +110,13 @@ export default function DashboardOverview({
   registries = [],
   openAlertsSignal = 0
 }: DashboardOverviewProps) {
+  const { t, dateLocale } = useI18n();
   const [activePopup, setActivePopup] = useState<DashboardPopup>(null);
   const [alertsFilter, setAlertsFilter] = useState<'ALL' | 'LOW_STOCK' | 'SHELF_LIFE' | 'MISSING_UNIT'>('ALL');
   const [selectedTrendUnit, setSelectedTrendUnit] = useState<string>('');
   const [activeTab, setActiveTab] = useState<'transactions' | 'chat'>('transactions');
   const [msgText, setMsgText] = useState('');
+  const [selectedTransaction, setSelectedTransaction] = useState<{ type: 'RECEIVING' | 'ISSUANCE'; record: any } | null>(null);
   const [showReportModal, setShowReportModal] = useState(false);
   const [showInventoryReportModal, setShowInventoryReportModal] = useState(false);
   const [isExportingPDF, setIsExportingPDF] = useState(false);
@@ -153,100 +156,86 @@ export default function DashboardOverview({
   const isCompactHeight = viewportHeight <= 800;
   const visibleAlertLimit = isCompactHeight ? 3 : 5;
 
-  // Resolve master-data/batch units across operational collections without blind PCS masking
-  const resolvedReceiving = React.useMemo(
+  const dashboardTotals = React.useMemo(
     () =>
-      receiving.map(r => {
-        const res = resolveMasterDataUnit(r, registries, stocks);
-        return { ...r, unit: res.unit, unitMissing: res.isMissing };
+      computeDashboardTotals({
+        stocks,
+        receiving,
+        issuances,
+        deliveries,
+        forkliftChecks,
+        registries,
       }),
-    [receiving, registries, stocks]
+    [stocks, receiving, issuances, deliveries, forkliftChecks, registries]
   );
 
-  const resolvedIssuances = React.useMemo(
-    () =>
-      issuances.map(i => {
-        const res = resolveMasterDataUnit(i, registries, stocks);
-        return { ...i, unit: res.unit, unitMissing: res.isMissing };
+  const {
+    resolvedReceiving,
+    resolvedIssuances,
+    resolvedDeliveries,
+    receivedGrouped,
+    issuedGrouped,
+    flowVelocityByUnit,
+    topFlowSkus,
+    quarantineCount,
+    pendingIqcCount,
+    brokenResinSacks,
+    forkliftDoneToday,
+    operationalMissingUnitCount,
+    alerts: {
+      todayStr,
+      lowStockSkus,
+      nearExpiryItems,
+      unifiedAlerts,
+      missingUnitItems,
+      missingUnitCount,
+      totalCount: totalAlertCount,
+      lowStockCount,
+      shelfLifeCount,
+    },
+  } = dashboardTotals;
+
+  // Live Transactions (combining receiving and issuances, sorted newest first by date then time)
+  const liveTransactions = React.useMemo(() => {
+    const rxItems = resolvedReceiving.map(r => ({
+      id: r.id,
+      type: 'RECEIVING' as const,
+      date: r.date || r.receivedDate || '',
+      timestamp: r.created_at || r.updated_at || '',
+      summary: t('dashboard.receivedSummary', {
+        qty: `${formatNumberForUnit(r.quantity)} ${r.unit || MISSING_UNIT_LABEL}`,
+        partCode: r.partCode,
       }),
-    [issuances, registries, stocks]
-  );
+      secondary: `${t('dashboard.txLotLabel', { lot: r.lotNumber || t('common.na') })} | ${t('dashboard.txClassificationLabel', { classification: r.supplierOrDept || t('common.na') })} [${r.drNumber || r.rrNumber || r.id.slice(-6)}]`,
+      record: r,
+      collection: 'receiving'
+    }));
 
-  const resolvedDeliveries = React.useMemo(
-    () =>
-      deliveries.map(d => {
-        const res = resolveMasterDataUnit({ ...d, description: d.modelName }, registries, stocks);
-        return { ...d, unit: res.unit, unitMissing: res.isMissing };
+    const issItems = resolvedIssuances.map(i => ({
+      id: i.id,
+      type: 'ISSUANCE' as const,
+      date: i.date || '',
+      timestamp: i.created_at || i.updated_at || '',
+      summary: t('dashboard.issuedSummary', {
+        qty: `${formatNumberForUnit(i.quantityIssued)} ${i.unit || MISSING_UNIT_LABEL}`,
+        department: i.department || 'PRODUCTION',
       }),
-    [deliveries, registries, stocks]
-  );
+      secondary: `${t('common.partCode').toUpperCase()}: ${i.partCode} | ${t('dashboard.txReqLabel', { req: i.requisitionNumber || t('common.na') })}`,
+      record: i,
+      collection: 'issuances'
+    }));
 
-  // Unit-grouped Inbound vs Outbound KPI aggregates (never sum KG + PCS)
-  const receivedGrouped = React.useMemo(
-    () => groupQuantitiesByUnit(resolvedReceiving, r => Number(r.quantity) || 0, r => r.unit),
-    [resolvedReceiving]
-  );
-  const issuedGrouped = React.useMemo(
-    () => groupQuantitiesByUnit(resolvedIssuances, i => Number(i.quantityIssued) || 0, i => i.unit),
-    [resolvedIssuances]
-  );
+    const combined = [...rxItems, ...issItems];
+    combined.sort((a, b) => {
+      const cmpDate = b.date.localeCompare(a.date);
+      if (cmpDate !== 0) return cmpDate;
+      return b.timestamp.localeCompare(a.timestamp);
+    });
+    return combined;
+  }, [resolvedReceiving, resolvedIssuances, t]);
 
-  const flowVelocityByUnit = React.useMemo(() => {
-    const rxMap = new Map(receivedGrouped.buckets.map(b => [b.key, b.total]));
-    const issMap = new Map(issuedGrouped.buckets.map(b => [b.key, b.total]));
-    const keys = Array.from(new Set([...rxMap.keys(), ...issMap.keys()])).sort(compareUnitKeys);
-    return keys.map(key => {
-      const rx = rxMap.get(key) || 0;
-      const iss = issMap.get(key) || 0;
-      const total = rx + iss;
-      const isMissing = key === MISSING_UNIT_KEY;
-      return {
-        key,
-        displayUnit: isMissing ? MISSING_UNIT_LABEL : key,
-        isMissing,
-        rx,
-        iss,
-        rxPct: total > 0 ? Math.round((rx / total) * 100) : 50,
-        issPct: total > 0 ? Math.round((iss / total) * 100) : 50
-      };
-    });
-  }, [receivedGrouped, issuedGrouped]);
-
-  // Top SKUs by Flow Activity (Receiving + Issuance combined within the SKU's own unit)
-  const topFlowSkus = React.useMemo(() => {
-    const map: Record<string, { partCode: string; description: string; rx: number; iss: number; currentStock: number; unit: string; unitMissing: boolean }> = {};
-    resolvedReceiving.forEach(r => {
-      if (!map[r.partCode]) {
-        map[r.partCode] = { partCode: r.partCode, description: r.itemDescription, rx: 0, iss: 0, currentStock: 0, unit: r.unit, unitMissing: r.unitMissing };
-      } else if (!map[r.partCode].unit && r.unit) {
-        map[r.partCode].unit = r.unit;
-        map[r.partCode].unitMissing = false;
-      }
-      map[r.partCode].rx += Number(r.quantity) || 0;
-    });
-    resolvedIssuances.forEach(i => {
-      if (!map[i.partCode]) {
-        map[i.partCode] = { partCode: i.partCode, description: i.description, rx: 0, iss: 0, currentStock: 0, unit: i.unit, unitMissing: i.unitMissing };
-      } else if (!map[i.partCode].unit && i.unit) {
-        map[i.partCode].unit = i.unit;
-        map[i.partCode].unitMissing = false;
-      }
-      map[i.partCode].iss += Number(i.quantityIssued) || 0;
-    });
-    stocks.forEach(s => {
-      if (s.status === 'APPROVED' && map[s.partCode]) {
-        map[s.partCode].currentStock += Number(s.quantity) || 0;
-        const stockUnit = resolveMasterDataUnit(s, registries, stocks);
-        if (!stockUnit.isMissing) {
-          map[s.partCode].unit = stockUnit.unit;
-          map[s.partCode].unitMissing = false;
-        }
-      }
-    });
-    return Object.values(map)
-      .sort((a, b) => (b.rx + b.iss) - (a.rx + a.iss))
-      .slice(0, 5);
-  }, [resolvedReceiving, resolvedIssuances, stocks, registries]);
+  const todayManilaStr = getManilaTodayString();
+  const futureTransactionsCount = liveTransactions.filter(tx => tx.date > todayManilaStr).length;
 
   const handleDirectExportPDF = async () => {
     if (isExportingPDF) return;
@@ -292,37 +281,7 @@ export default function DashboardOverview({
     sendChatMessage(text);
   };
 
-  // Calculate stats
-  const quarantineCount = stocks.filter(item => item.status === 'QUARANTINE' || item.status === 'HOLD').length;
-  const pendingIqcCount = receiving.filter(item => item.iqcStatus === 'PENDING_IQC').length;
-
-  // Compute Low-Stock, Shelf-Life (<= 30 days), and Missing-Unit alerts from stock + master data
-  const {
-    todayStr,
-    lowStockSkus,
-    nearExpiryItems,
-    unifiedAlerts,
-    missingUnitItems,
-    missingUnitCount,
-    totalCount: totalAlertCount,
-    lowStockCount,
-    shelfLifeCount
-  } = React.useMemo(() => computeStockAlerts(stocks, undefined, registries), [stocks, registries]);
-
-  const operationalMissingUnitCount = React.useMemo(
-    () =>
-      missingUnitCount +
-      resolvedReceiving.filter(r => r.unitMissing).length +
-      resolvedIssuances.filter(i => i.unitMissing).length +
-      resolvedDeliveries.filter(d => d.unitMissing).length,
-    [missingUnitCount, resolvedReceiving, resolvedIssuances, resolvedDeliveries]
-  );
-
-  // Broken Resin Sacks Risk
-  const brokenResinSacks = stocks.filter(item => item.resinSackRisk && item.status === 'QUARANTINE');
-
-  // Forklift checklist for today
-  const forkliftDoneToday = forkliftChecks.some(check => check.date === todayStr);
+  // Operational totals, alerts, broken resin sacks, and forklift status are derived via computeDashboardTotals above.
 
   // Recent transactions timeline combining receiving, issuance, and delivery logs
   const timelineEvents = [
@@ -463,7 +422,7 @@ export default function DashboardOverview({
       const d = new Date(endDate);
       d.setDate(d.getDate() - (6 - idx));
       const isoDate = d.toISOString().split('T')[0];
-      const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      const label = d.toLocaleDateString(dateLocale, { month: 'short', day: 'numeric' });
       return { isoDate, label, daysAgo: 6 - idx };
     });
 
@@ -529,7 +488,7 @@ export default function DashboardOverview({
           <span className={`text-[clamp(0.95rem,1.9vh,1.25rem)] font-extrabold font-mono tabular-nums leading-none ${valueColorClass}`}>
             0
           </span>
-          <span className={`text-[9px] font-bold font-mono shrink-0 ${unitColorClass}`}>RECORDS</span>
+          <span className={`text-[9px] font-bold font-mono shrink-0 ${unitColorClass}`}>{t('dashboard.recordsUnit')}</span>
         </div>
       );
     }
@@ -579,17 +538,17 @@ export default function DashboardOverview({
         <div className="flex items-center gap-2.5 min-w-0">
           <span
             className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse shrink-0"
-            title="Live Central Sync Connected"
+            title={t('dashboard.liveSyncTitle')}
           />
           <h2 className="text-[clamp(0.85rem,1.5vh,1.05rem)] font-bold text-white tracking-tight truncate">
-            Juwei Warehouse &amp; Inventory Control
+            {t('dashboard.title')}
           </h2>
           <button
             type="button"
             onClick={() => setActivePopup('iso')}
             className="p-1 text-slate-300 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer shrink-0"
-            title="ISO 9001:2015 Warehouse Core Directives"
-            aria-label="Open ISO 9001 Warehouse Directives"
+            title={t('dashboard.isoDirectiveTooltip')}
+            aria-label={t('dashboard.isoDirectiveTooltip')}
             id="btn-iso-directives-info"
           >
             <Info className="h-4 w-4" />
@@ -605,10 +564,10 @@ export default function DashboardOverview({
                 setActivePopup('alerts');
               }}
               className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-rose-950 hover:bg-rose-900 text-rose-200 border border-rose-500/60 transition flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
-              title="Records missing a unit in both record and master data"
+              title={t('dashboard.missingUnitsTooltip')}
             >
               <AlertTriangle className="h-3.5 w-3.5 text-rose-400 shrink-0" />
-              <span>Missing Units</span>
+              <span>{t('dashboard.missingUnitsBtn')}</span>
               <span className="px-1.5 py-0.5 rounded-full text-[10px] font-mono font-extrabold bg-rose-600 text-white leading-none">
                 {operationalMissingUnitCount}
               </span>
@@ -626,10 +585,10 @@ export default function DashboardOverview({
                 ? 'bg-rose-600 hover:bg-rose-500 text-white border-rose-400/40'
                 : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-600'
             }`}
-            title="View items below minimum quantity or expiring within 30 days"
+            title={t('dashboard.alertsBtnTooltip')}
           >
             <Bell className="h-3.5 w-3.5 shrink-0" />
-            <span>Alerts</span>
+            <span>{t('dashboard.alertsBtn')}</span>
             <span
               id="dashboard-alerts-count-badge"
               className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-extrabold tabular-nums leading-none ${
@@ -647,10 +606,10 @@ export default function DashboardOverview({
             onClick={() => setShowInventoryReportModal(true)}
             id="btn-generate-inventory-report"
             className="bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 xl:px-3 py-1.5 rounded-lg text-[11px] xl:text-xs font-bold transition shadow-xs flex items-center gap-1.5 cursor-pointer border border-emerald-400/30 whitespace-nowrap shrink-0"
-            title="Compile and export current inventory data into formatted PDF or CSV"
+            title={t('dashboard.generateReportTooltip')}
           >
             <FileSpreadsheet className="h-3.5 w-3.5 shrink-0" />
-            <span>Generate Report</span>
+            <span>{t('dashboard.generateReportBtn')}</span>
           </button>
 
           <button
@@ -658,14 +617,14 @@ export default function DashboardOverview({
             onClick={() => setShowReportModal(true)}
             id="btn-receiving-vs-issuance-report"
             className="bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 xl:px-3 py-1.5 rounded-lg text-[11px] xl:text-xs font-bold transition shadow-xs flex items-center gap-1.5 cursor-pointer border border-indigo-400/30 whitespace-nowrap shrink-0"
-            title="Generate print-friendly summary and export Receiving vs Issuance PDF"
+            title={t('dashboard.rxVsIssPdfTooltip')}
           >
             <FileText className="h-3.5 w-3.5 shrink-0" />
-            <span>Receiving vs Issuance PDF</span>
+            <span>{t('dashboard.rxVsIssPdfBtn')}</span>
           </button>
 
           <span className="text-[10px] font-bold text-white font-mono bg-slate-800/90 px-2.5 py-1.5 rounded-lg border border-slate-700 whitespace-nowrap shrink-0">
-            PHILIPPINES PLANT
+            {t('dashboard.plantBadge')}
           </span>
         </div>
       </div>
@@ -680,17 +639,17 @@ export default function DashboardOverview({
           type="button"
           onClick={() => setView('receiving')}
           className="text-left p-[clamp(0.45rem,0.95vh,0.7rem)] bg-white border border-emerald-200 hover:border-emerald-400 rounded-xl shadow-2xs transition cursor-pointer flex flex-col justify-between min-w-0 group"
-          title="Open Material Receiving"
+          title={t('dashboard.inboundTooltip')}
         >
           <div className="flex items-center justify-between gap-1 text-emerald-700">
             <span className="text-[clamp(0.5625rem,0.9vh,0.6875rem)] font-bold uppercase tracking-tight truncate">
-              Inbound Received
+              {t('dashboard.inboundReceived')}
             </span>
             <ArrowDownLeft className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
           </div>
           {renderKpiUnitBuckets(receivedGrouped.buckets, 'text-emerald-700', 'text-emerald-600')}
           <span className="text-[9px] text-slate-500 font-mono truncate mt-1">
-            {receiving.length} receipts · grouped by unit
+            {t('dashboard.receiptsGroupedByUnit', { count: receiving.length })}
           </span>
         </button>
 
@@ -699,17 +658,17 @@ export default function DashboardOverview({
           type="button"
           onClick={() => setView('issuance')}
           className="text-left p-[clamp(0.45rem,0.95vh,0.7rem)] bg-white border border-blue-200 hover:border-blue-400 rounded-xl shadow-2xs transition cursor-pointer flex flex-col justify-between min-w-0 group"
-          title="Open Materials Issuance"
+          title={t('dashboard.outboundTooltip')}
         >
           <div className="flex items-center justify-between gap-1 text-blue-700">
             <span className="text-[clamp(0.5625rem,0.9vh,0.6875rem)] font-bold uppercase tracking-tight truncate">
-              Outbound Issued
+              {t('dashboard.outboundIssued')}
             </span>
             <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-blue-600" />
           </div>
           {renderKpiUnitBuckets(issuedGrouped.buckets, 'text-blue-700', 'text-blue-600')}
           <span className="text-[9px] text-slate-500 font-mono truncate mt-1">
-            {issuances.length} requisitions · grouped by unit
+            {t('dashboard.requisitionsGroupedByUnit', { count: issuances.length })}
           </span>
         </button>
 
@@ -718,11 +677,11 @@ export default function DashboardOverview({
           type="button"
           onClick={() => setActivePopup('lowStock')}
           className="text-left p-[clamp(0.45rem,0.95vh,0.7rem)] bg-white border border-rose-200 hover:border-rose-400 rounded-xl shadow-2xs transition cursor-pointer flex flex-col justify-between min-w-0"
-          title="Open Low Stock Reorder Alerts Detail"
+          title={t('dashboard.lowStockTooltip')}
         >
           <div className="flex items-center justify-between gap-1 text-rose-600">
             <span className="text-[clamp(0.5625rem,0.9vh,0.6875rem)] font-bold uppercase tracking-tight truncate">
-              Low Stock
+              {t('dashboard.lowStockTitle')}
             </span>
             <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-rose-600" />
           </div>
@@ -732,7 +691,7 @@ export default function DashboardOverview({
             </span>
           </div>
           <span className="text-[9px] text-rose-600/90 font-mono truncate mt-1">
-            {lowStockSkus.length > 0 ? 'Below reorder min' : 'Levels normal'}
+            {lowStockSkus.length > 0 ? t('dashboard.belowReorderMin') : t('dashboard.levelsNormal')}
           </span>
         </button>
 
@@ -741,11 +700,11 @@ export default function DashboardOverview({
           type="button"
           onClick={() => setActivePopup('shelfLife')}
           className="text-left p-[clamp(0.45rem,0.95vh,0.7rem)] bg-white border border-amber-200 hover:border-amber-400 rounded-xl shadow-2xs transition cursor-pointer flex flex-col justify-between min-w-0"
-          title="Open Shelf-Life, Quarantine & IQC Alerts Detail"
+          title={t('dashboard.shelfLifeTooltip')}
         >
           <div className="flex items-center justify-between gap-1 text-amber-700">
             <span className="text-[clamp(0.5625rem,0.9vh,0.6875rem)] font-bold uppercase tracking-tight truncate">
-              Shelf-Life
+              {t('dashboard.shelfLifeTitle')}
             </span>
             <Timer className="h-3.5 w-3.5 shrink-0 text-amber-600" />
           </div>
@@ -755,7 +714,7 @@ export default function DashboardOverview({
             </span>
           </div>
           <span className="text-[9px] text-slate-500 font-mono truncate mt-1">
-            {quarantineCount} hold · {pendingIqcCount} IQC
+            {t('dashboard.holdAndIqcSub', { hold: quarantineCount, iqc: pendingIqcCount })}
           </span>
         </button>
       </div>
@@ -771,7 +730,7 @@ export default function DashboardOverview({
             <div className="flex items-center gap-2 min-w-0">
               <TrendingUp className="h-4 w-4 text-indigo-600 shrink-0" />
               <h3 className="font-bold text-xs xl:text-sm text-slate-800 truncate">
-                7-Day Stock Trends
+                {t('dashboard.stockTrendsTitle')}
               </h3>
               {activeTrendUnitDisplay && (
                 <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border ${
@@ -810,7 +769,7 @@ export default function DashboardOverview({
                 onClick={() => setView('stock')}
                 className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 transition flex items-center gap-1 cursor-pointer shrink-0 whitespace-nowrap"
               >
-                Inventory <ArrowUpRight className="h-3 w-3" />
+                {t('dashboard.inventoryLink')} <ArrowUpRight className="h-3 w-3" />
               </button>
             </div>
           </div>
@@ -873,115 +832,83 @@ export default function DashboardOverview({
           </div>
         </div>
 
-        {/* MIDDLE (col-span-4): Stacked Low Stock Alerts + Shelf Life Alerts */}
-        <div className="lg:col-span-4 flex flex-col lg:min-h-0 gap-3">
-          {/* Panel 1: Low Stock Alerts */}
-          <div
-            className="bg-white border border-rose-200 rounded-xl p-[clamp(0.55rem,1.05vh,0.75rem)] shadow-2xs flex-1 min-h-0 flex flex-col"
-            id="low-stock-alert-card"
-          >
-            <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-rose-100 shrink-0">
-              <div className="flex items-center gap-1.5 min-w-0">
-                <AlertTriangle className="h-3.5 w-3.5 text-rose-600 shrink-0" />
-                <h3 className="font-bold text-xs text-slate-800 truncate">Low Stock Alerts</h3>
-                <span className="text-[10px] font-mono font-bold text-rose-600 tabular-nums shrink-0">
-                  ({lowStockSkus.length})
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActivePopup('lowStock')}
-                className="text-[11px] font-semibold text-rose-600 hover:text-rose-800 transition cursor-pointer shrink-0 whitespace-nowrap"
-              >
-                View all &rarr;
-              </button>
+        {/* MIDDLE (col-span-4): Live Transactions Panel */}
+        <div
+          className="lg:col-span-4 bg-white border border-slate-200 rounded-xl p-[clamp(0.65rem,1.25vh,0.9rem)] shadow-2xs flex flex-col lg:min-h-0"
+          id="live-transactions-panel"
+        >
+          <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 shrink-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <Package className="h-4 w-4 text-indigo-600 shrink-0" />
+              <h3 className="font-bold text-xs xl:text-sm text-slate-800 truncate">
+                {t('dashboard.liveTransactionsTitle')}
+              </h3>
+              <span className="text-[10px] font-mono font-bold text-slate-500 tabular-nums shrink-0">
+                ({liveTransactions.length})
+              </span>
             </div>
+            <button
+              type="button"
+              onClick={() => setView('stock-movements')}
+              className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 transition flex items-center gap-1 cursor-pointer shrink-0 whitespace-nowrap"
+            >
+              {t('dashboard.liveTransactionsViewAll')} &rarr;
+            </button>
+          </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar divide-y divide-rose-100/70 mt-1">
-              {displayedLowStock.map((item, idx) => (
+          <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar divide-y divide-slate-100 mt-1">
+            {liveTransactions.slice(0, 5).map((tx, idx) => {
+              const isFuture = tx.date > todayManilaStr;
+              return (
                 <button
                   type="button"
-                  key={`low-stock-row-${item.partCode || 'item'}-${idx}`}
-                  onClick={() => setActivePopup('lowStock')}
-                  className="w-full text-left py-1.5 px-1.5 text-xs flex items-center justify-between gap-2 hover:bg-rose-50/70 rounded transition cursor-pointer"
+                  key={tx.id ? `live-tx-${tx.id}-${idx}` : `live-tx-${idx}`}
+                  onClick={() => setSelectedTransaction({ type: tx.type, record: tx.record })}
+                  className="w-full text-left py-2 px-1.5 text-xs flex flex-col gap-1 hover:bg-slate-50 rounded transition cursor-pointer"
                 >
-                  <div className="min-w-0 flex-1 flex items-center gap-1.5">
-                    <span className="font-mono font-bold text-rose-800 shrink-0">{item.partCode}</span>
-                    <span className="text-slate-500 truncate">{item.description}</span>
-                  </div>
-                  <span className="font-mono font-bold text-rose-700 tabular-nums shrink-0">
-                    {formatNumberForUnit(item.currentQty)}/{formatNumberForUnit(item.reorderMin)}{' '}
-                    {item.unitMissing ? (
-                      <span className="text-[9px] bg-rose-100 border border-rose-200 px-1 rounded">{MISSING_UNIT_LABEL}</span>
-                    ) : (
-                      item.unit
-                    )}
-                  </span>
-                </button>
-              ))}
-              {lowStockSkus.length === 0 && (
-                <div className="h-full min-h-[72px] flex items-center justify-center gap-1.5 text-xs text-slate-500">
-                  <CheckCircle className="h-4 w-4 text-emerald-500 shrink-0" />
-                  <span>All stock levels above reorder minimum</span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Panel 2: Shelf Life Alerts */}
-          <div
-            className="bg-white border border-slate-200 rounded-xl p-[clamp(0.55rem,1.05vh,0.75rem)] shadow-2xs flex-1 min-h-0 flex flex-col"
-            id="shelf-life-alerts-card"
-          >
-            <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-slate-100 shrink-0">
-              <div className="flex items-center gap-1.5 min-w-0">
-                <Timer className="h-3.5 w-3.5 text-amber-600 shrink-0" />
-                <h3 className="font-bold text-xs text-slate-800 truncate">Shelf Life Alerts</h3>
-                <span className="text-[10px] font-mono font-bold text-amber-600 tabular-nums shrink-0">
-                  ({nearExpiryItems.length})
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActivePopup('shelfLife')}
-                className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 transition cursor-pointer shrink-0 whitespace-nowrap"
-              >
-                View all &rarr;
-              </button>
-            </div>
-
-            <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar divide-y divide-slate-100 mt-1">
-              {displayedShelfLife.map((lotAlert, idx) => {
-                const { item, diffDays, isExpired } = lotAlert;
-                return (
-                  <button
-                    type="button"
-                    key={item.id ? `near-expiry-row-${item.id}` : `near-expiry-row-${idx}`}
-                    onClick={() => setActivePopup('shelfLife')}
-                    className="w-full text-left py-1.5 px-1.5 text-xs flex items-center justify-between gap-2 hover:bg-slate-50 rounded transition cursor-pointer"
-                  >
-                    <div className="min-w-0 flex-1 flex items-center gap-1.5">
-                      <span className="font-mono font-bold text-slate-800 shrink-0">{item.partCode}</span>
-                      <span className="text-slate-500 truncate">{item.lotNumber || item.description}</span>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-extrabold uppercase shrink-0 ${
+                        tx.type === 'RECEIVING'
+                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                          : 'bg-blue-100 text-blue-800 border border-blue-200'
+                      }`}>
+                        {tx.type === 'RECEIVING' ? t('dashboard.txTypeReceiving') : t('dashboard.txTypeIssuance')}
+                      </span>
+                      <span className="font-semibold text-slate-800 truncate">{tx.summary}</span>
                     </div>
-                    <span
-                      className={`font-mono font-bold tabular-nums shrink-0 ${
-                        isExpired ? 'text-rose-600' : 'text-amber-600'
-                      }`}
-                    >
-                      {isExpired ? 'EXPIRED' : `${diffDays}d left`}
-                    </span>
-                  </button>
-                );
-              })}
-              {nearExpiryItems.length === 0 && (
-                <div className="h-full min-h-[72px] flex items-center justify-center gap-1.5 text-xs text-slate-500">
-                  <CheckCircle className="h-4 w-4 text-emerald-500 shrink-0" />
-                  <span>All materials have healthy shelf life</span>
-                </div>
-              )}
-            </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {isFuture && (
+                        <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200 text-[9px] font-bold font-mono">
+                          {t('dashboard.liveTransactionsCheckDate')}
+                        </span>
+                      )}
+                      <span className="font-mono text-[11px] text-slate-500">{tx.date}</span>
+                    </div>
+                  </div>
+                  <div className="text-[11px] text-slate-500 font-mono truncate pl-0.5">
+                    {tx.secondary}
+                  </div>
+                </button>
+              );
+            })}
+            {liveTransactions.length === 0 && (
+              <div className="h-full min-h-[120px] flex items-center justify-center text-xs text-slate-400">
+                {t('dashboard.liveTransactionsEmpty')}
+              </div>
+            )}
           </div>
+
+          {futureTransactionsCount > 0 && (
+            <div className="pt-2 mt-1 border-t border-slate-100 text-[10px] font-mono text-amber-700 flex items-center gap-1 shrink-0">
+              <AlertTriangle className="h-3 w-3 shrink-0" />
+              <span>
+                {futureTransactionsCount === 1
+                  ? t('dashboard.liveTransactionsFutureFooter', { count: futureTransactionsCount })
+                  : t('dashboard.liveTransactionsFutureFooterPlural', { count: futureTransactionsCount })}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* RIGHT (col-span-3): Safety Card, Broken Sack Spillage Chip, Online Operators */}
@@ -1000,20 +927,20 @@ export default function DashboardOverview({
                 <ClipboardCheck
                   className={`h-4 w-4 shrink-0 ${forkliftDoneToday ? 'text-emerald-600' : 'text-amber-600'}`}
                 />
-                <h3 className="font-bold text-xs truncate">Safety Status</h3>
+                <h3 className="font-bold text-xs truncate">{t('dashboard.safetyStatusTitle')}</h3>
               </div>
               <span
                 className={`text-[10px] font-mono font-bold shrink-0 ${
                   forkliftDoneToday ? 'text-emerald-700' : 'text-amber-700'
                 }`}
               >
-                {forkliftDoneToday ? 'VERIFIED' : 'PENDING'}
+                {forkliftDoneToday ? t('dashboard.verifiedBadge') : t('dashboard.pendingBadge')}
               </span>
             </div>
             <p className="text-[11px] text-slate-600 leading-snug">
               {forkliftDoneToday
-                ? 'Daily forklift pre-inspection completed for safe loading.'
-                : 'Daily forklift pre-inspection checklist pending prior to loading.'}
+                ? t('dashboard.forkliftVerifiedDesc')
+                : t('dashboard.forkliftPendingDesc')}
             </p>
             <button
               type="button"
@@ -1021,7 +948,7 @@ export default function DashboardOverview({
               className="w-full py-1.5 px-2.5 bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-bold rounded-lg transition cursor-pointer whitespace-nowrap"
               id="btn-open-safety-operations"
             >
-              Open Safety Operations
+              {t('dashboard.openSafetyOpsBtn')}
             </button>
           </div>
 
@@ -1040,14 +967,14 @@ export default function DashboardOverview({
               <FlameKindling
                 className={`h-4 w-4 shrink-0 ${brokenResinSacks.length > 0 ? 'text-amber-600' : 'text-slate-500'}`}
               />
-              <span className="text-xs font-bold truncate">Broken Sack Spillage</span>
+              <span className="text-xs font-bold truncate">{t('dashboard.brokenSackSpillage')}</span>
             </div>
             <span
               className={`text-[10px] font-mono font-bold shrink-0 ${
                 brokenResinSacks.length > 0 ? 'text-amber-800' : 'text-emerald-700'
               }`}
             >
-              {brokenResinSacks.length > 0 ? `${brokenResinSacks.length} RISK` : 'CLEAR'}
+              {brokenResinSacks.length > 0 ? t('dashboard.riskCount', { count: brokenResinSacks.length }) : t('dashboard.clearBadge')}
             </span>
           </button>
 
@@ -1056,7 +983,7 @@ export default function DashboardOverview({
             <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-slate-100 shrink-0">
               <div className="flex items-center gap-1.5 min-w-0">
                 <Users className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
-                <h3 className="font-bold text-xs text-slate-800 truncate">Online Operators</h3>
+                <h3 className="font-bold text-xs text-slate-800 truncate">{t('dashboard.onlineOperatorsTitle')}</h3>
                 <span className="text-[10px] font-mono font-bold text-emerald-700 tabular-nums shrink-0">
                   ({activeUsers.length})
                 </span>
@@ -1065,9 +992,8 @@ export default function DashboardOverview({
                 type="button"
                 onClick={() => (isSuperAdmin ? setView('accounts') : setActivePopup('operators'))}
                 className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 transition cursor-pointer shrink-0 whitespace-nowrap"
-                title={isSuperAdmin ? 'Open JPMP Accounts Directory' : 'Open Online Operators & Dispatch'}
               >
-                View all &rarr;
+                {t('common.viewAll')} &rarr;
               </button>
             </div>
 
@@ -1087,18 +1013,18 @@ export default function DashboardOverview({
                       <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
                       <span className="font-semibold text-slate-800 truncate">
                         {user}
-                        {user === currentUser ? ' (You)' : ''}
+                        {user === currentUser ? t('dashboard.youTag') : ''}
                       </span>
                     </div>
                     <span className="text-[10px] font-mono text-slate-500 truncate max-w-[85px] shrink-0">
-                      {matchedAcc?.employeeId || matchedAcc?.role || 'ONLINE'}
+                      {matchedAcc?.employeeId || matchedAcc?.role || t('dashboard.onlineBadge')}
                     </span>
                   </button>
                 );
               })}
               {activeUsers.length === 0 && (
                 <div className="h-full min-h-[72px] flex items-center justify-center text-xs text-slate-400">
-                  No operators currently online
+                  {t('dashboard.noOperatorsOnline')}
                 </div>
               )}
             </div>
@@ -1128,13 +1054,13 @@ export default function DashboardOverview({
                   <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between shrink-0">
                     <div className="flex items-center gap-2">
                       <ClipboardCheck className="h-5 w-5 text-emerald-400" />
-                      <h3 className="font-bold text-sm">Forklift Safety Operations &amp; Spillage Control</h3>
+                      <h3 className="font-bold text-sm">{t('dashboard.safetyModalTitle')}</h3>
                     </div>
                     <button
                       type="button"
                       onClick={() => setActivePopup(null)}
                       className="p-1 text-slate-400 hover:text-white rounded-lg cursor-pointer"
-                      aria-label="Close"
+                      aria-label={t('common.close')}
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -1150,12 +1076,14 @@ export default function DashboardOverview({
                       <ClipboardCheck className="h-5 w-5 shrink-0 mt-0.5" />
                       <div className="flex-1 space-y-1.5">
                         <h4 className="font-bold text-sm">
-                          Forklift Safety Operations — {forkliftDoneToday ? 'Completed Today' : 'Pending Today'}
+                          {t('dashboard.forkliftOpsStatus', {
+                            status: forkliftDoneToday ? t('dashboard.completedToday') : t('dashboard.pendingToday'),
+                          })}
                         </h4>
                         <p className="text-xs text-slate-600">
                           {forkliftDoneToday
-                            ? 'Daily forklift pre-inspection checklist completed. Safe to load and transfer materials.'
-                            : 'Daily forklift checklist PENDING! Forklift operators must complete pre-inspection prior to loading.'}
+                            ? t('dashboard.forkliftDoneBody')
+                            : t('dashboard.forkliftPendingBody')}
                         </p>
                         <button
                           type="button"
@@ -1165,7 +1093,7 @@ export default function DashboardOverview({
                           }}
                           className="inline-flex items-center gap-1 text-xs font-bold text-indigo-700 hover:underline cursor-pointer"
                         >
-                          {forkliftDoneToday ? 'View Forklift Checklists' : 'Log Pre-Inspection Checklist'}
+                          {forkliftDoneToday ? t('dashboard.viewForkliftChecklists') : t('dashboard.logPreInspection')}
                           <ArrowUpRight className="h-3.5 w-3.5" />
                         </button>
                       </div>
@@ -1181,12 +1109,14 @@ export default function DashboardOverview({
                       <FlameKindling className="h-5 w-5 shrink-0 mt-0.5" />
                       <div className="flex-1 space-y-1.5">
                         <h4 className="font-bold text-sm">
-                          Broken Sack Spillage Control ({brokenResinSacks.length > 0 ? 'Risk Active' : 'Normal'})
+                          {t('dashboard.brokenSackControlTitle', {
+                            status: brokenResinSacks.length > 0 ? t('dashboard.riskActive') : t('dashboard.statusNormal'),
+                          })}
                         </h4>
                         <p className="text-xs text-slate-600">
                           {brokenResinSacks.length > 0
                             ? `Procedures dictate strictly isolating broken sacks of ${brokenResinSacks[0].partCode} in Quarantine to prevent spillage and resin mixing.`
-                            : 'No resin sack mixing risks or active spillage incidents reported.'}
+                            : t('dashboard.noSpillageRisks')}
                         </p>
                         {brokenResinSacks.length > 0 && (
                           <button
@@ -1197,7 +1127,7 @@ export default function DashboardOverview({
                             }}
                             className="inline-flex items-center gap-1 text-xs font-bold text-amber-800 hover:underline cursor-pointer"
                           >
-                            Inspect Quarantine Items <ArrowUpRight className="h-3.5 w-3.5" />
+                            {t('dashboard.inspectQuarantineItems')} <ArrowUpRight className="h-3.5 w-3.5" />
                           </button>
                         )}
                       </div>
@@ -1205,7 +1135,7 @@ export default function DashboardOverview({
 
                     <div className="border-t border-slate-200 pt-3">
                       <h4 className="text-xs font-bold text-slate-700 mb-2">
-                        Recent Forklift Pre-Inspection Logs ({forkliftChecks.length})
+                        {t('dashboard.recentForkliftLogs', { count: forkliftChecks.length })}
                       </h4>
                       {forkliftChecks.length > 0 ? (
                         <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden">
@@ -1213,14 +1143,14 @@ export default function DashboardOverview({
                             <div key={chk.id || idx} className="px-3 py-2 text-xs flex items-center justify-between gap-3 bg-white">
                               <div className="min-w-0">
                                 <span className="font-mono font-bold text-slate-800">{chk.forkliftId}</span>
-                                <span className="text-slate-500 ml-2">Operator: {chk.operator}</span>
+                                <span className="text-slate-500 ml-2">{t('dashboard.operatorPrefix', { name: chk.operator })}</span>
                               </div>
                               <span className="font-mono text-slate-500 shrink-0">{chk.date}</span>
                             </div>
                           ))}
                         </div>
                       ) : (
-                        <p className="text-xs text-slate-400">No forklift pre-inspection logs recorded yet.</p>
+                        <p className="text-xs text-slate-400">{t('dashboard.noForkliftLogs')}</p>
                       )}
                     </div>
                   </div>
@@ -1282,13 +1212,13 @@ export default function DashboardOverview({
                   <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between shrink-0">
                     <div className="flex items-center gap-2">
                       <FileText className="h-5 w-5 text-indigo-400" />
-                      <h3 className="font-bold text-sm">Receiving vs Issuance Material Flow Summary</h3>
+                      <h3 className="font-bold text-sm">{t('dashboard.flowModalTitle')}</h3>
                     </div>
                     <button
                       type="button"
                       onClick={() => setActivePopup(null)}
                       className="p-1 text-slate-400 hover:text-white rounded-lg cursor-pointer"
-                      aria-label="Close"
+                      aria-label={t('common.close')}
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -1296,7 +1226,7 @@ export default function DashboardOverview({
                   <div className="p-5 overflow-y-auto space-y-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="text-xs text-slate-600">
-                        Inbound replenishment vs outbound manufacturing consumption across all recorded lots.
+                        {t('dashboard.flowModalDesc')}
                       </p>
                       <div className="flex items-center gap-2">
                         <button
@@ -1306,7 +1236,7 @@ export default function DashboardOverview({
                           className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer"
                         >
                           <Download className="h-3.5 w-3.5" />
-                          {isExportingPDF ? 'Generating...' : 'Export PDF'}
+                          {isExportingPDF ? t('dashboard.generating') : t('common.exportPdf')}
                         </button>
                         <button
                           type="button"
@@ -1317,27 +1247,27 @@ export default function DashboardOverview({
                           className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer border border-slate-200"
                         >
                           <Printer className="h-3.5 w-3.5" />
-                          <span>Full Audit Report</span>
+                          <span>{t('dashboard.fullAuditReport')}</span>
                         </button>
                       </div>
                     </div>
 
                     <div className="space-y-2.5 bg-slate-50 p-3 rounded-xl border border-slate-200">
                       <div className="text-[10px] font-mono font-bold uppercase text-slate-500 flex justify-between">
-                        <span>Flow Velocity by Unit</span>
-                        <span>Separate unit buckets</span>
+                        <span>{t('dashboard.flowVelocityByUnit')}</span>
+                        <span>{t('dashboard.separateUnitBuckets')}</span>
                       </div>
                       {flowVelocityByUnit.length === 0 ? (
-                        <div className="text-xs text-slate-400 italic">No inbound or outbound transactions yet.</div>
+                        <div className="text-xs text-slate-400 italic">{t('dashboard.noFlowTransactions')}</div>
                       ) : (
                         flowVelocityByUnit.map(row => (
                           <div key={`popup-vel-${row.key}`} className="space-y-1">
                             <div className="flex justify-between text-xs font-bold gap-2 flex-wrap">
                               <span className="text-emerald-700 font-mono">
-                                Inbound [{row.displayUnit}]: {formatNumberForUnit(row.rx)} {row.displayUnit} ({row.rxPct}%)
+                                {t('dashboard.inboundLabel')} [{row.displayUnit}]: {formatNumberForUnit(row.rx)} {row.displayUnit} ({row.rxPct}%)
                               </span>
                               <span className="text-blue-700 font-mono">
-                                Outbound [{row.displayUnit}]: {formatNumberForUnit(row.iss)} {row.displayUnit} ({row.issPct}%)
+                                {t('dashboard.outboundLabel')} [{row.displayUnit}]: {formatNumberForUnit(row.iss)} {row.displayUnit} ({row.issPct}%)
                               </span>
                             </div>
                             <div className="w-full bg-slate-200 rounded-full h-2.5 flex overflow-hidden">
@@ -1352,7 +1282,7 @@ export default function DashboardOverview({
                     {topFlowSkus.length > 0 && (
                       <div className="space-y-2">
                         <h4 className="text-xs font-bold text-slate-700 uppercase">
-                          Top Transacted Material Velocity
+                          {t('dashboard.topMaterialVelocity')}
                         </h4>
                         <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden">
                           {topFlowSkus.map((sku, idx) => {
@@ -1392,13 +1322,13 @@ export default function DashboardOverview({
                   <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between shrink-0">
                     <div className="flex items-center gap-2">
                       <AlertTriangle className="h-5 w-5 text-rose-400" />
-                      <h3 className="font-bold text-sm">Low Stock Level Alerts ({lowStockSkus.length})</h3>
+                      <h3 className="font-bold text-sm">{t('dashboard.lowStockModalTitle', { count: lowStockSkus.length })}</h3>
                     </div>
                     <button
                       type="button"
                       onClick={() => setActivePopup(null)}
                       className="p-1 text-slate-400 hover:text-white rounded-lg cursor-pointer"
-                      aria-label="Close"
+                      aria-label={t('common.close')}
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -1406,7 +1336,7 @@ export default function DashboardOverview({
                   <div className="p-5 overflow-y-auto space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="text-xs text-slate-600">
-                        Approved material stock currently below defined <span className="font-mono font-bold text-rose-700">reorderMin</span> limits.
+                        {t('dashboard.lowStockModalDesc')}
                       </p>
                       <div className="flex items-center gap-2">
                         <button
@@ -1418,7 +1348,7 @@ export default function DashboardOverview({
                           className="text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer"
                         >
                           <FileSpreadsheet className="h-3.5 w-3.5" />
-                          <span>Reorder Report</span>
+                          <span>{t('dashboard.reorderReportBtn')}</span>
                         </button>
                         <button
                           type="button"
@@ -1428,7 +1358,7 @@ export default function DashboardOverview({
                           }}
                           className="text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 px-3 py-1.5 rounded-lg transition cursor-pointer"
                         >
-                          Inventory Registry &rarr;
+                          {t('dashboard.inventoryRegistryLink')} &rarr;
                         </button>
                       </div>
                     </div>
@@ -1449,7 +1379,7 @@ export default function DashboardOverview({
                                   {formatNumberForUnit(item.currentQty)} / {formatQuantityWithUnit(item.reorderMin, item.unit)}
                                 </span>
                                 <span className="text-[10px] text-rose-600 block">
-                                  Shortage: -{formatQuantityWithUnit(item.shortage, item.unit)} ({pct}%)
+                                  {t('dashboard.shortageLabel', { amount: formatQuantityWithUnit(item.shortage, item.unit) })} ({pct}%)
                                 </span>
                               </div>
                             </div>
@@ -1458,7 +1388,7 @@ export default function DashboardOverview({
                       })}
                       {lowStockSkus.length === 0 && (
                         <div className="p-6 text-center text-xs text-slate-500">
-                          All material inventory stock levels are above defined minimum reorder thresholds.
+                          {t('dashboard.allLevelsHealthy')}
                         </div>
                       )}
                     </div>
@@ -1472,13 +1402,13 @@ export default function DashboardOverview({
                   <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between shrink-0">
                     <div className="flex items-center gap-2">
                       <Timer className="h-5 w-5 text-amber-400" />
-                      <h3 className="font-bold text-sm">Shelf Life, Quarantine &amp; IQC Overview</h3>
+                      <h3 className="font-bold text-sm">{t('dashboard.shelfLifeModalTitle')}</h3>
                     </div>
                     <button
                       type="button"
                       onClick={() => setActivePopup(null)}
                       className="p-1 text-slate-400 hover:text-white rounded-lg cursor-pointer"
-                      aria-label="Close"
+                      aria-label={t('common.close')}
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -1493,7 +1423,7 @@ export default function DashboardOverview({
                         }}
                         className="p-3 rounded-xl border border-amber-200 bg-amber-50/60 text-left cursor-pointer hover:border-amber-400"
                       >
-                        <span className="text-slate-500 block text-[10px] uppercase font-bold">Expiring (&le;30d)</span>
+                        <span className="text-slate-500 block text-[10px] uppercase font-bold">{t('dashboard.expiring30d')}</span>
                         <span className="text-lg font-extrabold font-mono text-amber-700 tabular-nums">{nearExpiryItems.length}</span>
                       </button>
                       <button
@@ -1504,7 +1434,7 @@ export default function DashboardOverview({
                         }}
                         className="p-3 rounded-xl border border-rose-200 bg-rose-50/60 text-left cursor-pointer hover:border-rose-400"
                       >
-                        <span className="text-slate-500 block text-[10px] uppercase font-bold">Quarantine &amp; Hold</span>
+                        <span className="text-slate-500 block text-[10px] uppercase font-bold">{t('dashboard.quarantineHoldTile')}</span>
                         <span className="text-lg font-extrabold font-mono text-rose-700 tabular-nums">{quarantineCount}</span>
                       </button>
                       <button
@@ -1515,7 +1445,7 @@ export default function DashboardOverview({
                         }}
                         className="p-3 rounded-xl border border-indigo-200 bg-indigo-50/60 text-left cursor-pointer hover:border-indigo-400"
                       >
-                        <span className="text-slate-500 block text-[10px] uppercase font-bold">Pending IQC</span>
+                        <span className="text-slate-500 block text-[10px] uppercase font-bold">{t('dashboard.pendingIqcTile')}</span>
                         <span className="text-lg font-extrabold font-mono text-indigo-700 tabular-nums">{pendingIqcCount}</span>
                       </button>
                     </div>
@@ -1528,11 +1458,11 @@ export default function DashboardOverview({
                             <div className="min-w-0">
                               <span className="font-mono font-bold text-slate-900 mr-2">{item.partCode}</span>
                               <span className="text-slate-700">{item.description}</span>
-                              <span className="text-slate-400 ml-2 font-mono">Lot: {item.lotNumber}</span>
+                              <span className="text-slate-400 ml-2 font-mono">{item.lotNumber}</span>
                             </div>
                             <div className="text-right font-mono shrink-0 tabular-nums">
                               <span className={`font-bold ${isExpired ? 'text-rose-600' : 'text-amber-600'}`}>
-                                {isExpired ? 'EXPIRED' : `${diffDays} Days Left`}
+                                {isExpired ? t('dashboard.expiredTag') : t('dashboard.daysLeftTag', { days: diffDays })}
                               </span>
                               <span className="text-[10px] text-slate-400 block">Exp: {expirationDate}</span>
                             </div>
@@ -1541,7 +1471,7 @@ export default function DashboardOverview({
                       })}
                       {nearExpiryItems.length === 0 && (
                         <div className="p-6 text-center text-xs text-slate-500">
-                          All stored materials have healthy remaining shelf life.
+                          {t('dashboard.allHealthyShelfLife')}
                         </div>
                       )}
                     </div>
@@ -1556,14 +1486,14 @@ export default function DashboardOverview({
                     <div className="flex items-center gap-2">
                       <Bell className="h-5 w-5 text-rose-400" />
                       <h3 className="font-bold text-sm">
-                        Low-Stock &amp; Shelf-Life Alerts ({totalAlertCount})
+                        {t('dashboard.alertsModalTitle', { count: totalAlertCount })}
                       </h3>
                     </div>
                     <button
                       type="button"
                       onClick={() => setActivePopup(null)}
                       className="p-1 text-slate-400 hover:text-white rounded-lg cursor-pointer"
-                      aria-label="Close"
+                      aria-label={t('common.close')}
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -1580,7 +1510,7 @@ export default function DashboardOverview({
                               : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                           }`}
                         >
-                          All ({totalAlertCount})
+                          {t('dashboard.filterAllCount', { count: totalAlertCount })}
                         </button>
                         <button
                           type="button"
@@ -1591,7 +1521,7 @@ export default function DashboardOverview({
                               : 'bg-white text-rose-700 border-rose-200 hover:bg-rose-50'
                           }`}
                         >
-                          Low Stock ({lowStockCount})
+                          {t('dashboard.filterLowStockCount', { count: lowStockCount })}
                         </button>
                         <button
                           type="button"
@@ -1602,7 +1532,7 @@ export default function DashboardOverview({
                               : 'bg-white text-amber-700 border-amber-200 hover:bg-amber-50'
                           }`}
                         >
-                          Expiring &le; 30d ({shelfLifeCount})
+                          {t('dashboard.filterExpiringCount', { count: shelfLifeCount })}
                         </button>
                         {missingUnitCount > 0 && (
                           <button
@@ -1614,7 +1544,7 @@ export default function DashboardOverview({
                                 : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
                             }`}
                           >
-                            Missing Unit ({missingUnitCount})
+                            {t('dashboard.filterMissingUnitCount', { count: missingUnitCount })}
                           </button>
                         )}
                       </div>
@@ -1627,7 +1557,7 @@ export default function DashboardOverview({
                         }}
                         className="text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 px-3 py-1.5 rounded-lg transition cursor-pointer"
                       >
-                        Open Stock &amp; FIFO Bins &rarr;
+                        {t('dashboard.openStockBinsLink')} &rarr;
                       </button>
                     </div>
 
@@ -1644,7 +1574,7 @@ export default function DashboardOverview({
                                 </span>
                               </div>
                               <div className="text-[11px] text-slate-500 font-mono">
-                                Loc: {item.location || 'N/A'} · Lot: {item.lotNumber || 'N/A'} · Status: {item.status}
+                                {item.location || t('common.na')} · {item.lotNumber || t('common.na')} · {item.status}
                               </div>
                             </div>
                             <span className="font-mono font-bold text-rose-700 shrink-0 tabular-nums">
@@ -1671,7 +1601,7 @@ export default function DashboardOverview({
                                 )}
                                 {entry.isLowStock && (
                                   <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200 text-[10px] font-bold font-mono">
-                                    BELOW MIN QTY
+                                    {t('dashboard.belowMinQtyBadge')}
                                   </span>
                                 )}
                                 {entry.isExpiring && (
@@ -1682,15 +1612,15 @@ export default function DashboardOverview({
                                         : 'bg-amber-100 text-amber-800 border-amber-200'
                                     }`}
                                   >
-                                    {entry.isExpired ? 'EXPIRED' : `EXPIRING IN ${entry.diffDays}D`}
+                                    {entry.isExpired ? t('dashboard.expiredTag') : t('dashboard.expiringInDaysBadge', { days: entry.diffDays ?? 0 })}
                                   </span>
                                 )}
                               </div>
                               <div className="text-[11px] text-slate-500 font-mono flex flex-wrap items-center gap-x-3 gap-y-0.5">
-                                <span>Loc: {entry.location || 'N/A'}</span>
-                                {entry.lotNumber && <span>Lot: {entry.lotNumber}</span>}
-                                {entry.customer && <span>Customer: {entry.customer}</span>}
-                                {entry.status && <span>Status: {entry.status}</span>}
+                                <span>{entry.location || t('common.na')}</span>
+                                {entry.lotNumber && <span>{entry.lotNumber}</span>}
+                                {entry.customer && <span>{entry.customer}</span>}
+                                {entry.status && <span>{entry.status}</span>}
                               </div>
                             </div>
 
@@ -1701,14 +1631,14 @@ export default function DashboardOverview({
                                     {formatNumberForUnit(entry.currentQty)} / {formatQuantityWithUnit(entry.reorderMin, entry.unit)}
                                   </span>
                                   <span className="text-[10px] text-rose-600 block">
-                                    Shortage: -{formatQuantityWithUnit(entry.shortage ?? 0, entry.unit)}
+                                    {t('dashboard.shortageLabel', { amount: formatQuantityWithUnit(entry.shortage ?? 0, entry.unit) })}
                                   </span>
                                 </div>
                               )}
                               {entry.isExpiring && entry.expirationDate && (
                                 <div>
                                   <span className={`font-bold ${entry.isExpired ? 'text-rose-600' : 'text-amber-700'}`}>
-                                    {entry.isExpired ? 'EXPIRED' : `${entry.diffDays}d left`}
+                                    {entry.isExpired ? t('dashboard.expiredTag') : t('dashboard.daysLeftTag', { days: entry.diffDays ?? 0 })}
                                   </span>
                                   <span className="text-[10px] text-slate-500 block">
                                     Exp: {entry.expirationDate}
@@ -1725,7 +1655,7 @@ export default function DashboardOverview({
                         (alertsFilter !== 'MISSING_UNIT' && filteredAlerts.length === 0)) && (
                         <div className="p-6 text-center text-xs text-slate-500 flex items-center justify-center gap-2">
                           <CheckCircle className="h-4 w-4 text-emerald-500 shrink-0" />
-                          <span>No items below minimum quantity or expiring within 30 days.</span>
+                          <span>{t('dashboard.noAlertsInFilter')}</span>
                         </div>
                       )}
                     </div>
@@ -1733,19 +1663,19 @@ export default function DashboardOverview({
                 </>
               )}
 
-              {/* Pop-up: Online Operators, Live Transactions & Radio Dispatch */}
+              {/* Pop-up: Online Operators, Live Transactions */}
               {activePopup === 'operators' && (
                 <>
                   <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between shrink-0">
                     <div className="flex items-center gap-2">
                       <Users className="h-5 w-5 text-emerald-400" />
-                      <h3 className="font-bold text-sm">Online Operators, Live Feed &amp; Dispatch ({activeUsers.length})</h3>
+                      <h3 className="font-bold text-sm">{t('dashboard.operatorsModalTitle', { count: activeUsers.length })}</h3>
                     </div>
                     <button
                       type="button"
                       onClick={() => setActivePopup(null)}
                       className="p-1 text-slate-400 hover:text-white rounded-lg cursor-pointer"
-                      aria-label="Close"
+                      aria-label={t('common.close')}
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -1762,7 +1692,7 @@ export default function DashboardOverview({
                               : 'border-transparent text-slate-500 hover:text-slate-800'
                           }`}
                         >
-                          <Package className="h-3.5 w-3.5" /> Live Transactions
+                          <Package className="h-3.5 w-3.5" /> {t('dashboard.liveTransactionsTitle')}
                         </button>
                         <button
                           type="button"
@@ -1921,6 +1851,79 @@ export default function DashboardOverview({
           isRendering={isExportingPDF}
         />
       )}
+
+      {/* Selected Transaction Details Modal */}
+      {selectedTransaction &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4"
+            onClick={() => setSelectedTransaction(null)}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div
+              className="bg-white border border-slate-200 rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] flex flex-col overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-2">
+                  <Package className="h-5 w-5 text-indigo-400" />
+                  <h3 className="font-bold text-sm">
+                    {selectedTransaction.type === 'RECEIVING' ? t('dashboard.txReceivingDetailsTitle') : t('dashboard.txIssuanceDetailsTitle')}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedTransaction(null)}
+                  className="p-1 text-slate-400 hover:text-white rounded-lg cursor-pointer"
+                  aria-label={t('common.close')}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="p-5 overflow-y-auto space-y-3 text-xs">
+                {selectedTransaction.type === 'RECEIVING' ? (
+                  <div className="space-y-2 font-mono">
+                    <div className="flex justify-between border-b pb-1.5"><span className="text-slate-500">{t('dashboard.recordIdLabel')}</span> <span className="font-bold text-slate-900">{selectedTransaction.record.id}</span></div>
+                    <div className="flex justify-between border-b pb-1.5"><span className="text-slate-500">{t('common.partCode')}:</span> <span className="font-bold text-slate-900">{selectedTransaction.record.partCode}</span></div>
+                    <div className="flex justify-between border-b pb-1.5"><span className="text-slate-500">{t('common.description')}:</span> <span className="font-bold text-slate-900">{selectedTransaction.record.itemDescription}</span></div>
+                    <div className="flex justify-between border-b pb-1.5"><span className="text-slate-500">{t('common.quantity')}:</span> <span className="font-bold text-emerald-700">{formatQuantityWithUnit(selectedTransaction.record.quantity, selectedTransaction.record.unit)}</span></div>
+                    <div className="flex justify-between border-b pb-1.5"><span className="text-slate-500">{t('common.lotNumber')}:</span> <span className="font-bold text-slate-900">{selectedTransaction.record.lotNumber || t('common.na')}</span></div>
+                    <div className="flex justify-between border-b pb-1.5"><span className="text-slate-500">{t('receiving.arrivalClassLabel')}:</span> <span className="font-bold text-slate-900">{selectedTransaction.record.supplierOrDept || t('common.na')}</span></div>
+                    <div className="flex justify-between border-b pb-1.5"><span className="text-slate-500">{t('dashboard.vendorLabel')}</span> <span className="font-bold text-slate-900">{selectedTransaction.record.vendorSupplier || t('common.na')}</span></div>
+                    <div className="flex justify-between border-b pb-1.5"><span className="text-slate-500">{t('common.date')}:</span> <span className="font-bold text-slate-900">{selectedTransaction.record.date || selectedTransaction.record.receivedDate}</span></div>
+                    <div className="flex justify-between border-b pb-1.5"><span className="text-slate-500">{t('dashboard.iqcStatusLabel')}</span> <span className="font-bold text-indigo-700">{selectedTransaction.record.iqcStatus || 'APPROVED'}</span></div>
+                  </div>
+                ) : (
+                  <div className="space-y-2 font-mono">
+                    <div className="flex justify-between border-b pb-1.5"><span className="text-slate-500">{t('dashboard.recordIdLabel')}</span> <span className="font-bold text-slate-900">{selectedTransaction.record.id}</span></div>
+                    <div className="flex justify-between border-b pb-1.5"><span className="text-slate-500">{t('common.partCode')}:</span> <span className="font-bold text-slate-900">{selectedTransaction.record.partCode}</span></div>
+                    <div className="flex justify-between border-b pb-1.5"><span className="text-slate-500">{t('common.description')}:</span> <span className="font-bold text-slate-900">{selectedTransaction.record.description}</span></div>
+                    <div className="flex justify-between border-b pb-1.5"><span className="text-slate-500">{t('dashboard.qtyIssuedLabel')}</span> <span className="font-bold text-blue-700">{formatQuantityWithUnit(selectedTransaction.record.quantityIssued, selectedTransaction.record.unit)}</span></div>
+                    <div className="flex justify-between border-b pb-1.5"><span className="text-slate-500">{t('common.department')}:</span> <span className="font-bold text-slate-900">{selectedTransaction.record.department}</span></div>
+                    <div className="flex justify-between border-b pb-1.5"><span className="text-slate-500">{t('dashboard.reqNumLabel')}</span> <span className="font-bold text-slate-900">{selectedTransaction.record.requisitionNumber || t('common.na')}</span></div>
+                    <div className="flex justify-between border-b pb-1.5"><span className="text-slate-500">{t('common.date')}:</span> <span className="font-bold text-slate-900">{selectedTransaction.record.date}</span></div>
+                  </div>
+                )}
+              </div>
+              <div className="px-5 py-3 bg-slate-50 border-t border-slate-200 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const viewTarget = selectedTransaction.type === 'RECEIVING' ? 'receiving' : 'issuance';
+                    setSelectedTransaction(null);
+                    setView(viewTarget);
+                  }}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2 rounded-lg transition cursor-pointer"
+                >
+                  {selectedTransaction.type === 'RECEIVING' ? t('dashboard.openInReceiving') : t('dashboard.openInIssuance')} &rarr;
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }

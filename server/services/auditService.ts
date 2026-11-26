@@ -6,9 +6,18 @@
  */
 
 import fs from "fs";
-import type { AuditTrailEntry, BackupAuditEntry, PinAuditEntry } from "../../shared/types.ts";
+import type {
+  AuditTrailEntry,
+  BackupAuditEntry,
+  PinAuditEntry,
+  PrintCheckLogEntry,
+} from "../../shared/types.ts";
 import logger from "../../src/lib/logger.ts";
-import { MAX_AUDIT_TRAIL_ENTRIES, type ServerContext } from "./context.ts";
+import {
+  MAX_AUDIT_TRAIL_ENTRIES,
+  MAX_PRINT_CHECK_LOGS,
+  type ServerContext,
+} from "./context.ts";
 
 const AUDIT_IGNORED_FIELDS = new Set<string>([
   "updated_at",
@@ -107,6 +116,22 @@ export function persistAuditTrailLogs(ctx: ServerContext): void {
   } catch (err) {
     console.error("[AUDIT-TRAIL] Failed to persist audit trail to disk:", err);
   }
+}
+
+export function persistPrintCheckLogs(ctx: ServerContext): void {
+  try {
+    fs.writeFileSync(ctx.printCheckLogFile, JSON.stringify(ctx.printCheckLogs, null, 2), "utf-8");
+  } catch (err) {
+    console.error("[PRINT-CHECK] Failed to persist print check logs to disk:", err);
+  }
+}
+
+export function appendPrintCheckLog(ctx: ServerContext, entry: PrintCheckLogEntry): void {
+  ctx.printCheckLogs.unshift(entry);
+  if (ctx.printCheckLogs.length > MAX_PRINT_CHECK_LOGS) {
+    ctx.printCheckLogs = ctx.printCheckLogs.slice(0, MAX_PRINT_CHECK_LOGS);
+  }
+  persistPrintCheckLogs(ctx);
 }
 
 export function formatAuditValue(val: unknown): string {
