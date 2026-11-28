@@ -52,18 +52,6 @@ import { validateReceivingRecord } from '../../shared/validation';
 import { getManilaTodayString } from '../lib/businessDate';
 import { useI18n } from '../i18n';
 
-// Default Receiving and Return Categories
-export const DEFAULT_RECEIVING_CATEGORIES: string[] = [
-  "RESIN/RAW MATERIALS",
-  "INDIRECT BOM",
-  "DIRECT BOM",
-  "CONSUMABLES",
-  "PACKAGING MATERIALS",
-  "WIP (WORK IN PROGRESS)",
-  "FG (FINISHED GOOD)",
-  "OFFICE SUPPLIES"
-];
-
 interface ReceivingModuleProps {
   receiving: ReceivingRecord[];
   onAddReceiving: (record: ReceivingRecord) => void;
@@ -82,6 +70,9 @@ interface ReceivingModuleProps {
   onOpenRegisterModal?: (type?: RegistryType) => void;
   receivingCategories?: string[];
   onUpdateReceivingCategories?: (categories: string[], renameData?: { oldCat: string; newCat: string }) => void;
+  onRegisterCategoryItem?: (item: MasterRegistryItem) => void;
+  onUpdateCategoryItem?: (item: MasterRegistryItem) => void;
+  onDeleteCategoryItem?: (id: string) => void;
   fifoColorsByMonth?: FifoColorsMap;
 }
 
@@ -101,8 +92,11 @@ export default function ReceivingModule({
   canEdit = false,
   registries = [],
   onOpenRegisterModal: _onOpenRegisterModal,
-  receivingCategories,
+  receivingCategories: _receivingCategories,
   onUpdateReceivingCategories,
+  onRegisterCategoryItem,
+  onUpdateCategoryItem,
+  onDeleteCategoryItem,
   fifoColorsByMonth
 }: ReceivingModuleProps) {
   const { t, localizeValidation } = useI18n();
@@ -178,13 +172,20 @@ export default function ReceivingModule({
     onConfirm: () => void;
   } | null>(null);
 
-  // Centralized Managed Categories (Single source of truth)
+  // Centralized Master Data Categories (Single source of truth from Master Data CATEGORY entries)
+  const categoryRegistryItems = useMemo(() => {
+    return registries.filter(r => r.type === 'CATEGORY' && r.status !== 'INACTIVE');
+  }, [registries]);
+
   const managedCategories = useMemo(() => {
-    if (Array.isArray(receivingCategories) && receivingCategories.length > 0) {
-      return Array.from(new Set(receivingCategories.map(c => String(c || '').trim().toUpperCase()).filter(Boolean)));
-    }
-    return DEFAULT_RECEIVING_CATEGORIES;
-  }, [receivingCategories]);
+    return Array.from(
+      new Set(
+        categoryRegistryItems
+          .map(r => String(r.name || r.code || '').trim().toUpperCase())
+          .filter(Boolean)
+      )
+    );
+  }, [categoryRegistryItems]);
 
   // Manage Categories Modal States (Super Admin)
   const [showCategoriesModal, setShowCategoriesModal] = useState(false);
@@ -195,7 +196,7 @@ export default function ReceivingModule({
   const [categoryModalError, setCategoryModalError] = useState('');
   const [categoryModalSuccess, setCategoryModalSuccess] = useState('');
 
-  // Category Management Handlers
+  // Category Management Handlers (Backed by Master Data CATEGORY entries)
   const handleAddCategory = (catToAdd?: string): string | false => {
     const candidate = String(catToAdd !== undefined ? catToAdd : newCategoryInput).trim().toUpperCase();
     if (!candidate) {
@@ -208,6 +209,17 @@ export default function ReceivingModule({
     }
 
     const updated = [...managedCategories, candidate];
+    if (onRegisterCategoryItem) {
+      onRegisterCategoryItem({
+        id: generateAuthoritativeId('REG-CAT'),
+        type: 'CATEGORY',
+        code: candidate,
+        name: candidate,
+        description: 'Master Data Material Category',
+        status: 'ACTIVE',
+        dateRegistered: getManilaTodayString(),
+      });
+    }
     if (onUpdateReceivingCategories) {
       onUpdateReceivingCategories(updated);
     }
@@ -228,6 +240,17 @@ export default function ReceivingModule({
     if (cleanNew !== cleanOld && managedCategories.some(c => c.toUpperCase() === cleanNew)) {
       setCategoryModalError(t('receiving.catErrExists', { cat: cleanNew }));
       return;
+    }
+
+    const existingItem = categoryRegistryItems.find(
+      r => (r.name || r.code || '').trim().toUpperCase() === cleanOld
+    );
+    if (existingItem && onUpdateCategoryItem) {
+      onUpdateCategoryItem({
+        ...existingItem,
+        code: cleanNew,
+        name: cleanNew,
+      });
     }
 
     const updated = managedCategories.map(c => c.toUpperCase() === cleanOld ? cleanNew : c);
@@ -273,27 +296,17 @@ export default function ReceivingModule({
       confirmVariant: "danger",
       confirmLabel: t('receiving.confirmYesDelete'),
       onConfirm: () => {
+        const existingItem = categoryRegistryItems.find(
+          r => (r.name || r.code || '').trim().toUpperCase() === clean
+        );
+        if (existingItem && onDeleteCategoryItem) {
+          onDeleteCategoryItem(existingItem.id);
+        }
         const updated = managedCategories.filter(c => c.toUpperCase() !== clean);
         if (onUpdateReceivingCategories) {
           onUpdateReceivingCategories(updated);
         }
         setCategoryModalSuccess(t('receiving.catSuccessDelete', { cat: clean }));
-        setTimeout(() => setCategoryModalSuccess(''), 3000);
-      }
-    });
-  };
-
-  const handleResetCategoriesToDefaults = () => {
-    setConfirmAction({
-      title: t('receiving.confirmResetCatsTitle'),
-      message: t('receiving.confirmResetCatsMsg'),
-      confirmVariant: "danger",
-      confirmLabel: t('receiving.confirmYesReset'),
-      onConfirm: () => {
-        if (onUpdateReceivingCategories) {
-          onUpdateReceivingCategories([...DEFAULT_RECEIVING_CATEGORIES]);
-        }
-        setCategoryModalSuccess(t('receiving.catSuccessReset'));
         setTimeout(() => setCategoryModalSuccess(''), 3000);
       }
     });
@@ -379,9 +392,9 @@ export default function ReceivingModule({
     if (activeTab === 'external-internal') {
       setShowAddForm(true);
       if (matchedRegistry) {
-        setItemDescription(matchedRegistry.code); // 1. Item Code
-        setPartCode(matchedRegistry.description || matchedRegistry.name); // 2. Item Description
-        setLotNumber(matchedRegistry.name); // 3. Item Name
+        setPartCode(matchedRegistry.code);
+        setItemDescription(matchedRegistry.description || matchedRegistry.name);
+        setLotNumber(matchedRegistry.name);
         if (matchedRegistry.presetSource) setSource(matchedRegistry.presetSource);
         if (matchedRegistry.vendorSupplier) setVendorSupplier(matchedRegistry.vendorSupplier);
         if (matchedRegistry.category) setSupplierOrDept(matchedRegistry.category);
@@ -391,9 +404,8 @@ export default function ReceivingModule({
         const cust = getCustomerForPart(matchedRegistry.code, matchedRegistry.name);
         if (cust) setCustomer(cust);
       } else if (matchedStock) {
-        setItemDescription(matchedStock.partCode); // 1. Item Code
-        setPartCode(matchedStock.description); // 2. Item Description
-        setLotNumber(matchedStock.description || matchedStock.partCode); // 3. Item Name
+        setPartCode(matchedStock.partCode);
+        setItemDescription(matchedStock.description || matchedStock.partCode);
         const normStkUnit = resolveMasterDataUnit(matchedStock, registries, stocks).unit;
         if (normStkUnit) setUnit(normStkUnit);
         setLotNumber(matchedStock.lotNumber || `LOT-${cleanCode}`);
@@ -402,8 +414,8 @@ export default function ReceivingModule({
         const cust = getCustomerForPart(matchedStock.partCode);
         if (cust) setCustomer(cust);
       } else {
-        setItemDescription(cleanCode);
         setPartCode(cleanCode);
+        setItemDescription(cleanCode);
         setLotNumber(cleanCode);
       }
     } else {
@@ -1243,24 +1255,6 @@ export default function ReceivingModule({
 
               {/* Dynamic Category Fields */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">
-                      {(isDirectBomCategory || isIndirectBomCategory || isWipCategory) ? t('receiving.labelPartCodeReq') : (isPackagingCategory || isConsumableCategory || isOfficeSuppliesCategory) ? t('receiving.labelInternalCodeReq') : isRawCategory ? t('receiving.labelResinInternalCodeReq') : t('receiving.labelItemDescCodeReq')}
-                    </label>
-                    <input 
-                      type="text"
-                      required
-                      placeholder={isWipCategory ? 'E.G. WIP-PRT-001' : isDirectBomCategory ? 'E.G. DIR-PRT-001' : isIndirectBomCategory ? 'E.G. IND-PRT-001' : isConsumableCategory ? 'E.G. CON-INT-001' : isOfficeSuppliesCategory ? 'E.G. OFF-INT-001' : isPackagingCategory ? 'E.G. PKG-INT-001' : isRawCategory ? 'E.G. RSN-INT-001' : 'E.G. ITM-001'}
-                      value={itemDescription}
-                      onChange={e => {
-                        const val = e.target.value;
-                        setItemDescription(val);
-                        const presetUnit = findMasterPresetUnit({ partCode: partCode || val, description: val }, registries);
-                        if (presetUnit) setUnit(presetUnit);
-                      }}
-                      className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono focus:ring-1 focus:ring-slate-400 focus:outline-none"
-                    />
-                  </div>
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-500 mb-1 uppercase">
@@ -2205,12 +2199,6 @@ export default function ReceivingModule({
                                           <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
                                             <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">SI #:</span>
                                             <span className="font-mono font-semibold text-slate-800">{r.siNumber || t('common.na')}</span>
-                                          </div>
-                                          <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
-                                            <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">{t('receiving.cardInternalCodeLabel')}</span>
-                                            <span className="font-mono font-semibold text-slate-800 truncate block" title={r.itemDescription || t('common.na')}>
-                                              {r.itemDescription || t('common.na')}
-                                            </span>
                                           </div>
                                           <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
                                             <span className="text-slate-500 text-[11px] font-semibold block mb-0.5">{t('receiving.lotBatchLabel')}</span>
@@ -3207,7 +3195,7 @@ export default function ReceivingModule({
                 </div>
 
                 <div className="col-span-2">
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.editModalPartCodeDescLabel')}</label>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('receiving.itemDescriptionLabel')}</label>
                   <input 
                     type="text" 
                     value={editingReceiving.itemDescription}
@@ -4045,15 +4033,7 @@ export default function ReceivingModule({
             </div>
 
             {/* Modal Footer */}
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
-              <button
-                type="button"
-                onClick={handleResetCategoriesToDefaults}
-                className="text-xs text-slate-500 hover:text-slate-800 font-mono font-bold flex items-center gap-1.5 hover:underline cursor-pointer"
-                title={t('receiving.catConfirmResetTooltip')}
-              >
-                <RotateCcw className="h-3.5 w-3.5" /> {t('receiving.resetDefaultsBtn')}
-              </button>
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-3 shrink-0">
               <button
                 type="button"
                 onClick={() => {

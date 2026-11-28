@@ -27,6 +27,7 @@ import {
 import { MaterialStockItem, IssuanceRecord, MasterRegistryItem } from '../types';
 import BarcodeScannerModal, { ScannedItemPreview } from './BarcodeScannerModal';
 import PrintablePickingListModal, { DocViewMode } from './PrintablePickingListModal';
+import { ExportMenu } from './ExportMenu';
 import { showPrintToast } from '../utils/printDocument';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { motion, AnimatePresence } from 'motion/react';
@@ -501,40 +502,42 @@ export default function IssuanceModule({
               <ScanLine className="h-4 w-4" /> {t('issuance.scanBtn')}
             </button>
 
-            <button 
-              type="button"
-              onClick={() => {
-                const target = filteredIssuances[0] || issuances[0];
-                if (target) {
-                  setPrintInitialView('OFFICIAL_DOC');
-                  setSelectedPickingDocIssuance(target);
-                } else {
-                  showPrintToast(t('issuance.noRecordsToPrint'), 'warning');
-                }
-              }}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 px-3.5 rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer whitespace-nowrap shrink-0"
-              id="btn-print-active-mrs"
-              title={t('issuance.printMrsTooltip')}
-            >
-              <Printer className="h-4 w-4" /> {t('issuance.printPickingBtn')}
-            </button>
-
-            <button 
-              type="button"
-              onClick={() => {
-                if (filteredIssuances.length > 0 || issuances.length > 0) {
-                  setPrintInitialView('SUMMARY_LOG');
-                  setSelectedPickingDocIssuance(filteredIssuances[0] || issuances[0]);
-                } else {
-                  showPrintToast(t('issuance.noSummaryToPrint'), 'warning');
-                }
-              }}
-              className="bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-2 px-3.5 rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer whitespace-nowrap shrink-0"
-              id="btn-print-issuance-log"
-              title={t('issuance.printSummaryTooltip')}
-            >
-              <Printer className="h-4 w-4 text-slate-300" /> {t('issuance.printSummaryBtn')}
-            </button>
+            <ExportMenu
+              id="btn-issuance-export-menu"
+              variant="indigo"
+              menuAlign="left"
+              items={[
+                {
+                  id: 'btn-print-active-mrs',
+                  label: t('issuance.printPickingBtn'),
+                  title: t('issuance.printMrsTooltip'),
+                  icon: <Printer className="h-3.5 w-3.5 text-indigo-600" />,
+                  onClick: () => {
+                    const target = filteredIssuances[0] || issuances[0];
+                    if (target) {
+                      setPrintInitialView('OFFICIAL_DOC');
+                      setSelectedPickingDocIssuance(target);
+                    } else {
+                      showPrintToast(t('issuance.noRecordsToPrint'), 'warning');
+                    }
+                  },
+                },
+                {
+                  id: 'btn-print-issuance-log',
+                  label: t('issuance.printSummaryBtn'),
+                  title: t('issuance.printSummaryTooltip'),
+                  icon: <Printer className="h-3.5 w-3.5 text-slate-600" />,
+                  onClick: () => {
+                    if (filteredIssuances.length > 0 || issuances.length > 0) {
+                      setPrintInitialView('SUMMARY_LOG');
+                      setSelectedPickingDocIssuance(filteredIssuances[0] || issuances[0]);
+                    } else {
+                      showPrintToast(t('issuance.noSummaryToPrint'), 'warning');
+                    }
+                  },
+                },
+              ]}
+            />
           </div>
 
           <div className="flex items-center sm:ml-auto shrink-0">

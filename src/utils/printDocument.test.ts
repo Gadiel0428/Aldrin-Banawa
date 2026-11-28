@@ -10,8 +10,13 @@ import {
   A4_PORTRAIT_HEIGHT_PX,
   A4_PORTRAIT_WIDTH_PX,
   CLONE_WIDTH_PX,
+  LOT_LABEL_PAGE_SIZE_IDS,
+  PRINT_PAGE_SIZE_PRESETS,
+  getPageMarginsPx,
   planDocumentPageBreaks,
+  resolvePrintPageSize,
 } from './printDocument';
+import { resolveLotBarcodeValue } from '../components/LotLabelModal';
 
 describe('planDocumentPageBreaks (printDocument.ts)', () => {
   it('returns empty pages plan for zero or negative canvas dimensions', () => {
@@ -164,5 +169,35 @@ describe('planDocumentPageBreaks (printDocument.ts)', () => {
     const defaults = planDocumentPageBreaks({ canvasWidth: 1000, canvasHeight: 500 });
     expect(defaults.marginXPx).toBe(Math.round((10 / 210) * A4_PORTRAIT_WIDTH_PX));
     expect(defaults.marginYPx).toBe(Math.round((10 / 297) * A4_PORTRAIT_HEIGHT_PX));
+  });
+
+  it('provides 50 x 30 mm thermal label preset and accurate margin pixels', () => {
+    const label50x30 = resolvePrintPageSize('LABEL_50X30');
+    expect(label50x30).toMatchObject({
+      id: 'LABEL_50X30',
+      widthMm: 50,
+      heightMm: 30,
+      isLabel: true,
+    });
+    expect(label50x30.widthPx / label50x30.heightPx).toBeCloseTo(50 / 30, 3);
+    expect(LOT_LABEL_PAGE_SIZE_IDS).toContain('LABEL_50X30');
+    expect(LOT_LABEL_PAGE_SIZE_IDS).toContain('A4_PORTRAIT');
+
+    const margins = getPageMarginsPx(PRINT_PAGE_SIZE_PRESETS.LABEL_50X30);
+    expect(margins.marginXPx).toBe(36);
+    expect(margins.marginYPx).toBe(36);
+    expect(resolvePrintPageSize(undefined).id).toBe('A4_PORTRAIT');
+  });
+
+  it('resolves valid Code 128 ASCII barcode values for lot labels', () => {
+    expect(
+      resolveLotBarcodeValue({ id: 'STK-1', partCode: 'RAW-ABS-01', lotNumber: 'LOT-2026-A1' })
+    ).toBe('LOT-2026-A1');
+    expect(
+      resolveLotBarcodeValue({ id: 'STK-2', partCode: 'RAW-ABS-02', lotNumber: '批次号' })
+    ).toBe('RAW-ABS-02');
+    expect(
+      resolveLotBarcodeValue({ id: 'STK-3', partCode: '', lotNumber: '' })
+    ).toBe('STK-3');
   });
 });

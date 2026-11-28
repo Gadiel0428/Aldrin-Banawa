@@ -30,13 +30,28 @@ import {
   RotateCcw,
   Archive,
   AlertTriangle,
-  Loader2
+  Loader2,
+  Monitor,
+  Unlink
 } from 'lucide-react';
 import AccountQRBadgeModal from './AccountQRBadgeModal';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
-import { RegisteredAccount } from '../types';
-import { updateCentralPin } from '../lib/centralApi';
+import { AuthorizedDevice, RegisteredAccount } from '../types';
+import {
+  fetchAuthorizedDevices,
+  unbindAuthorizedDevice,
+  updateCentralPin,
+} from '../lib/centralApi';
 import { useI18n } from '../i18n';
+import { showPrintToast } from '../utils/printDocument';
+import {
+  countBoundAuthorizedDevicesForEmployee,
+  DEFAULT_MAX_DEVICES,
+  MAX_MAX_DEVICES,
+  MIN_MAX_DEVICES,
+  resolveEffectiveMaxDevices,
+  validateMaxDevices,
+} from '../../shared/deviceLimit';
 export type { RegisteredAccount };
 
 // Centralized default operational roles
@@ -73,7 +88,8 @@ interface RegisteredAccountsModuleProps {
     permission: string, 
     phoneNumber?: string, 
     customPin?: string,
-    status?: 'ACTIVE' | 'PENDING' | 'INACTIVE'
+    status?: 'ACTIVE' | 'PENDING' | 'INACTIVE',
+    maxDevices?: number
   ) => RegisteredAccount | boolean | null;
   onUpdateAccount: (oldEmpId: string, updated: RegisteredAccount) => void;
   onRemoveAccount: (employeeId: string) => void;
@@ -149,7 +165,120 @@ export default function RegisteredAccountsModule({
   const [newRole, setNewRole] = useState(() => managedRoles[4] || 'WAREHOUSE CLERK');
   const [newPermission, setNewPermission] = useState('LIMITED_ACCESS');
   const [newStatus, setNewStatus] = useState<'ACTIVE' | 'PENDING' | 'INACTIVE'>('ACTIVE');
+  const [newMaxDevicesInput, setNewMaxDevicesInput] = useState<string>(String(DEFAULT_MAX_DEVICES));
+  const [editMaxDevicesInput, setEditMaxDevicesInput] = useState<string>(String(DEFAULT_MAX_DEVICES));
   const [addError, setAddError] = useState<string>('');
+  const [editError, setEditError] = useState<string>('');
+
+  // Tabs & Devices Screen State
+  const [activeTab, setActiveTab] = useState<'operators' | 'devices'>('operators');
+  const [authorizedDevices, setAuthorizedDevices] = useState<AuthorizedDevice[]>([]);
+  const [isLoadingDevices, setIsLoadingDevices] = useState<boolean>(false);
+  const [unbindingDeviceId, setUnbindingDeviceId] = useState<string | null>(null);
+  const [deviceFilterEmployeeId, setDeviceFilterEmployeeId] = useState<string>('');
+
+  const loadAuthorizedDevices = React.useCallback(async () => {
+    setIsLoadingDevices(true);
+    try {
+      const res = await fetchAuthorizedDevices();
+      setAuthorizedDevices(Array.isArray(res.devices) ? res.devices : []);
+    } finally {
+      setIsLoadingDevices(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    loadAuthorizedDevices();
+  }, [loadAuthorizedDevices, accounts.length]);
+
+  React.useEffect(() => {
+    const handleDeviceUpdateEvent = () => {
+      loadAuthorizedDevices();
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('authorized_devices_updated', handleDeviceUpdateEvent);
+      return () => {
+        window.removeEventListener('authorized_devices_updated', handleDeviceUpdateEvent);
+      };
+    }
+    return undefined;
+  }, [loadAuthorizedDevices]);
+
+  const newMaxDevicesValidation = useMemo(
+    () => validateMaxDevices(newMaxDevicesInput, { defaultIfEmpty: false }),
+    [newMaxDevicesInput]
+  );
+
+  const editMaxDevicesValidation = useMemo(
+    () => validateMaxDevices(editMaxDevicesInput, { defaultIfEmpty: false }),
+    [editMaxDevicesInput]
+  );
+
+  const boundCountByEmployeeId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const acc of accounts) {
+      const empId = String(acc.employeeId || '').trim().toUpperCase();
+      if (!empId) continue;
+      map.set(empId, countBoundAuthorizedDevicesForEmployee(authorizedDevices, empId));
+    }
+    return map;
+  }, [accounts, authorizedDevices]);
+
+  const filteredDevices = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    const filterEmpUpper = deviceFilterEmployeeId.trim().toUpperCase();
+    return authorizedDevices.filter((dev) => {
+      const boundEmp = String(dev.boundEmployeeId || '').trim().toUpperCase();
+      if (filterEmpUpper && boundEmp !== filterEmpUpper) return false;
+      if (!query) return true;
+      return (
+        (dev.deviceName || '').toLowerCase().includes(query) ||
+        (dev.deviceId || '').toLowerCase().includes(query) ||
+        (dev.username || '').toLowerCase().includes(query) ||
+        boundEmp.toLowerCase().includes(query)
+      );
+    });
+  }, [authorizedDevices, searchQuery, deviceFilterEmployeeId]);
+
+  const handleRequestUnbindDevice = (dev: AuthorizedDevice) => {
+    if (!isSuperAdmin) return;
+    const opLabel = dev.username
+      ? `${dev.username} (${dev.boundEmployeeId || dev.employeeId || ''})`
+      : dev.boundEmployeeId || dev.employeeId || 'this operator';
+    setConfirmAction({
+      title: t('accounts.unbindConfirmTitle'),
+      message: t('accounts.unbindConfirmMsg', {
+        deviceName: dev.deviceName || dev.deviceId,
+        deviceId: dev.deviceId,
+        operator: opLabel,
+      }),
+      confirmVariant: 'danger',
+      confirmLabel: t('accounts.unbindConfirmBtn'),
+      onConfirm: async () => {
+        setUnbindingDeviceId(dev.deviceId);
+        try {
+          const result = await unbindAuthorizedDevice(
+            dev.deviceId,
+            `${currentUser || 'SUPER ADMINISTRATOR'} (${currentEmployeeId || 'JPMP-002'})`
+          );
+          if (result.success) {
+            await loadAuthorizedDevices();
+            showPrintToast(
+              t('accounts.unbindSuccess', {
+                deviceName: dev.deviceName || dev.deviceId,
+                operator: opLabel,
+              }),
+              'info'
+            );
+          } else {
+            showPrintToast(result.error || t('accounts.unbindError'), 'error');
+          }
+        } finally {
+          setUnbindingDeviceId(null);
+        }
+      },
+    });
+  };
 
   // Compromised PIN Detection: Any account flagged as isPinCompromised by server
   const compromisedAccounts = useMemo(() => {
@@ -474,6 +603,7 @@ export default function RegisteredAccountsModule({
     setNewRole('WAREHOUSE CLERK');
     setNewPermission('LIMITED_ACCESS');
     setNewStatus('ACTIVE');
+    setNewMaxDevicesInput(String(DEFAULT_MAX_DEVICES));
     setAddError('');
     setShowAddModal(false);
   };
@@ -519,6 +649,11 @@ export default function RegisteredAccountsModule({
       }
     }
 
+    if (!newMaxDevicesValidation.valid) {
+      setAddError(newMaxDevicesValidation.error || t('accounts.maxDevicesRangeError'));
+      return;
+    }
+
     const formattedPhone = newPhoneNumber.trim() ? formatPhoneNumber(newPhoneNumber.trim()) : '';
     const cleanCustomPin = newCustomPin ? newCustomPin.replace(/\D/g, '').slice(0, 4) : undefined;
     
@@ -529,7 +664,8 @@ export default function RegisteredAccountsModule({
       newPermission, 
       formattedPhone, 
       cleanCustomPin,
-      newStatus
+      newStatus,
+      newMaxDevicesValidation.value
     );
     
     if (result) {
@@ -539,6 +675,7 @@ export default function RegisteredAccountsModule({
         employeeId: empId,
         phoneNumber: formattedPhone,
         permission: newPermission,
+        maxDevices: newMaxDevicesValidation.value,
         pin: cleanCustomPin || (typeof result === 'object' && (result as any)?.pin) || '',
         status: newStatus
       };
@@ -578,6 +715,12 @@ export default function RegisteredAccountsModule({
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingAccount) return;
+    setEditError('');
+
+    if (!editMaxDevicesValidation.valid) {
+      setEditError(editMaxDevicesValidation.error || t('accounts.maxDevicesRangeError'));
+      return;
+    }
 
     let cleanEmpId = (editingAccount.employeeId || '').trim().toUpperCase();
     if (cleanEmpId && !cleanEmpId.startsWith('JPMP-')) {
@@ -593,11 +736,13 @@ export default function RegisteredAccountsModule({
       ...editingAccount,
       employeeId: cleanEmpId,
       phoneNumber: formatted,
+      maxDevices: editMaxDevicesValidation.value,
       status: editingAccount.status || 'ACTIVE'
     });
 
     setEditingAccount(null);
     setOriginalEmployeeId('');
+    setEditError('');
   };
 
   return (
@@ -758,7 +903,203 @@ export default function RegisteredAccountsModule({
         )}
       </div>
 
+      {/* Operators / Devices Segmented Tabs */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="inline-flex bg-slate-200/80 p-1 rounded-xl border border-slate-300/60" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'operators'}
+            onClick={() => setActiveTab('operators')}
+            className={`px-4 py-1.5 rounded-lg text-xs font-bold font-mono uppercase transition flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'operators'
+                ? 'bg-white text-indigo-700 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+            id="tab-operators"
+          >
+            <Users className="h-3.5 w-3.5" />
+            <span>{t('accounts.tabOperators')} ({accounts.length})</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'devices'}
+            onClick={() => {
+              setActiveTab('devices');
+              loadAuthorizedDevices();
+            }}
+            className={`px-4 py-1.5 rounded-lg text-xs font-bold font-mono uppercase transition flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'devices'
+                ? 'bg-white text-indigo-700 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+            id="tab-devices"
+          >
+            <Monitor className="h-3.5 w-3.5" />
+            <span>{t('accounts.tabDevices')} ({authorizedDevices.length})</span>
+          </button>
+        </div>
+
+        {activeTab === 'devices' && (
+          <div className="flex items-center gap-2">
+            {deviceFilterEmployeeId && (
+              <div className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 text-indigo-700 px-3 py-1 rounded-lg text-[11px] font-mono font-bold">
+                <span>{t('accounts.filterByOperatorNotice', { id: deviceFilterEmployeeId })}</span>
+                <button
+                  type="button"
+                  onClick={() => setDeviceFilterEmployeeId('')}
+                  className="text-indigo-500 hover:text-indigo-900 underline cursor-pointer"
+                >
+                  {t('accounts.clearOperatorFilter')}
+                </button>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={loadAuthorizedDevices}
+              disabled={isLoadingDevices}
+              className="bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 px-3 py-1.5 rounded-xl text-xs font-bold font-mono uppercase flex items-center gap-1.5 shadow-2xs cursor-pointer disabled:opacity-50"
+              id="btn-refresh-devices"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isLoadingDevices ? 'animate-spin' : ''}`} />
+              <span>{t('accounts.refreshDevices')}</span>
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Devices Screen View */}
+      {activeTab === 'devices' && (
+        <div className="bg-white rounded-xl shadow-xs border border-slate-200 overflow-hidden" id="devices-screen-panel">
+          <div className="p-4 border-b border-slate-100 bg-slate-50/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <Monitor className="h-4 w-4 text-indigo-600" />
+                <span>{t('accounts.devicesTitle')}</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">{t('accounts.devicesSubtitle')}</p>
+            </div>
+            <div className="relative w-full sm:w-64">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+              <input
+                type="text"
+                placeholder={t('accounts.searchPlaceholder')}
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className="w-full pl-8.5 pr-8 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+              />
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-100/80 text-slate-600 uppercase font-mono text-[10px] tracking-wider border-b border-slate-200">
+                  <th className="py-2.5 px-3 font-bold">{t('accounts.colDevice')}</th>
+                  <th className="py-2.5 px-3 font-bold">{t('accounts.colDeviceStatus')}</th>
+                  <th className="py-2.5 px-3 font-bold">{t('accounts.colAssignedOperator')}</th>
+                  <th className="py-2.5 px-3 font-bold">{t('accounts.colBoundAt')}</th>
+                  <th className="py-2.5 px-3 font-bold text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredDevices.map((dev) => {
+                  const boundEmpId = String(dev.boundEmployeeId || '').trim().toUpperCase();
+                  const boundAccount = boundEmpId
+                    ? accounts.find(a => (a.employeeId || '').toUpperCase().trim() === boundEmpId)
+                    : undefined;
+                  const assignedDisplayName = boundAccount?.username || dev.username || '';
+                  const isBound = Boolean(boundEmpId);
+
+                  return (
+                    <tr key={dev.deviceId} className="hover:bg-slate-50/90 transition-colors">
+                      <td className="py-2.5 px-3">
+                        <div className="flex items-center gap-2">
+                          <div className="h-7 w-7 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center shrink-0 text-slate-600">
+                            <Monitor className="h-3.5 w-3.5" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold text-slate-900 text-xs">
+                                {dev.deviceName || dev.deviceId}
+                              </span>
+                              {dev.isPrimaryAdminDevice && (
+                                <span className="bg-amber-100 text-amber-800 border border-amber-300 text-[9px] px-1.5 py-0.2 rounded font-mono font-bold uppercase">
+                                  {t('accounts.primaryDeviceBadge')}
+                                </span>
+                              )}
+                            </div>
+                            <span className="font-mono text-[10px] text-slate-500">{dev.deviceId}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold font-mono uppercase border ${
+                          dev.status === 'AUTHORIZED'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : dev.status === 'REVOKED'
+                            ? 'bg-rose-50 text-rose-700 border-rose-200'
+                            : 'bg-amber-50 text-amber-700 border-amber-200'
+                        }`}>
+                          {dev.status}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3">
+                        {isBound ? (
+                          <div>
+                            <div className="font-bold text-slate-900 uppercase text-xs">
+                              {assignedDisplayName || boundEmpId}
+                            </div>
+                            <div className="font-mono text-[10px] text-indigo-600 font-bold">
+                              {boundEmpId}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-slate-400 font-mono italic">
+                            {t('accounts.unassignedSlot')}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap font-mono text-[11px] text-slate-600">
+                        {dev.boundAt ? formatLastActive(dev.boundAt).full : '—'}
+                      </td>
+                      <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                        {isSuperAdmin && isBound && (
+                          <button
+                            type="button"
+                            disabled={unbindingDeviceId === dev.deviceId}
+                            onClick={() => handleRequestUnbindDevice(dev)}
+                            className="inline-flex items-center gap-1 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 px-2.5 py-1 rounded-md text-[10px] font-bold font-mono uppercase transition cursor-pointer disabled:opacity-50"
+                            title={t('accounts.unbindBtn')}
+                          >
+                            {unbindingDeviceId === dev.deviceId ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Unlink className="h-3 w-3" />
+                            )}
+                            <span>{t('accounts.unbindBtn')}</span>
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {filteredDevices.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="py-10 px-4 text-center text-slate-400 text-xs font-mono">
+                      {t('accounts.noDevicesFound')}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Main Table Card */}
+      {activeTab === 'operators' && (
       <div className="bg-white rounded-xl shadow-xs border border-slate-200 overflow-hidden">
         {/* Search, Filter & Quick Actions Bar */}
         <div className="p-3.5 border-b border-slate-100 bg-slate-50/50 flex flex-col lg:flex-row justify-between items-stretch lg:items-center gap-3">
@@ -1004,10 +1345,35 @@ export default function RegisteredAccountsModule({
                                 )}
                               </button>
                             </div>
-                            <div className="flex items-center gap-1 mt-0.5">
+                            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                               <span className="inline-flex items-center gap-0.5 text-[8.5px] font-mono font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-1 py-0.2 rounded" title="Registered & authorized by Super Administrator (ALDRIN BANAWA) on master computer">
                                 <ShieldCheck className="h-2.5 w-2.5 text-emerald-600" /> Super Admin Authorized
                               </span>
+                              {(() => {
+                                const empUpper = String(acc.employeeId || '').trim().toUpperCase();
+                                const boundCount = boundCountByEmployeeId.get(empUpper) ?? 0;
+                                const maxDev = resolveEffectiveMaxDevices(acc);
+                                const atLimit = boundCount >= maxDev;
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setDeviceFilterEmployeeId(empUpper);
+                                      setActiveTab('devices');
+                                      loadAuthorizedDevices();
+                                    }}
+                                    className={`inline-flex items-center gap-1 text-[9.5px] font-mono font-bold px-1.5 py-0.2 rounded border cursor-pointer transition ${
+                                      atLimit
+                                        ? 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                                        : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-indigo-50 hover:text-indigo-700'
+                                    }`}
+                                    title={t('accounts.maxDevicesHelp')}
+                                  >
+                                    <Monitor className="h-2.5 w-2.5" />
+                                    <span>{t('accounts.devicesCount', { bound: boundCount, max: maxDev })}</span>
+                                  </button>
+                                );
+                              })()}
                             </div>
                           </div>
                         </div>
@@ -1182,6 +1548,8 @@ export default function RegisteredAccountsModule({
                               onClick={() => {
                                 setEditingAccount({ ...acc });
                                 setOriginalEmployeeId(acc.employeeId);
+                                setEditMaxDevicesInput(String(resolveEffectiveMaxDevices(acc)));
+                                setEditError('');
                               }}
                               className="bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 px-2 py-1 rounded-md text-[10px] font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs"
                               title="Edit Operator Information & Access"
@@ -1282,6 +1650,7 @@ export default function RegisteredAccountsModule({
           </div>
         </div>
       </div>
+      )}
 
       {/* Modal: Add New Operator Account */}
       {showAddModal && typeof document !== 'undefined' && createPortal(
@@ -1536,6 +1905,38 @@ export default function RegisteredAccountsModule({
                 </div>
               </div>
 
+              {/* Maximum Devices Field */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
+                  {t('accounts.maxDevicesLabel')}
+                </label>
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
+                  <input
+                    type="number"
+                    min={MIN_MAX_DEVICES}
+                    max={MAX_MAX_DEVICES}
+                    step={1}
+                    value={newMaxDevicesInput}
+                    onChange={e => setNewMaxDevicesInput(e.target.value)}
+                    className={`w-28 px-3.5 py-2 border rounded-xl focus:ring-2 focus:outline-none font-mono font-bold text-xs bg-white ${
+                      newMaxDevicesValidation.valid
+                        ? 'border-slate-200 focus:ring-indigo-500 text-slate-800'
+                        : 'border-rose-400 focus:ring-rose-500 text-rose-700 bg-rose-50/40'
+                    }`}
+                    aria-invalid={!newMaxDevicesValidation.valid}
+                  />
+                  {!newMaxDevicesValidation.valid && (
+                    <span className="text-xs font-semibold text-rose-600 flex items-center gap-1" role="alert">
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                      <span>{t('accounts.maxDevicesRangeError')}</span>
+                    </span>
+                  )}
+                </div>
+                <span className="text-[10px] text-slate-500 mt-1 block">
+                  {t('accounts.maxDevicesHelp')}
+                </span>
+              </div>
+
               {/* Multi-PC Sync Info Notice */}
               <div className="bg-slate-50 border border-slate-200/80 p-3.5 rounded-xl text-slate-600 flex items-start gap-3">
                 <ShieldCheck className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
@@ -1756,6 +2157,48 @@ export default function RegisteredAccountsModule({
                   <option value="VIEW_ONLY">VIEW ONLY (Read Only)</option>
                 </select>
               </div>
+
+              {/* Maximum Devices Field (Edit) */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 uppercase font-mono mb-1.5">
+                  {t('accounts.maxDevicesLabel')}
+                </label>
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
+                  <input
+                    type="number"
+                    min={MIN_MAX_DEVICES}
+                    max={MAX_MAX_DEVICES}
+                    step={1}
+                    value={editMaxDevicesInput}
+                    onChange={e => {
+                      setEditMaxDevicesInput(e.target.value);
+                      setEditError('');
+                    }}
+                    className={`w-28 px-3.5 py-2 border rounded-xl focus:ring-2 focus:outline-none font-mono font-bold text-xs bg-white ${
+                      editMaxDevicesValidation.valid
+                        ? 'border-slate-200 focus:ring-indigo-500 text-slate-800'
+                        : 'border-rose-400 focus:ring-rose-500 text-rose-700 bg-rose-50/40'
+                    }`}
+                    aria-invalid={!editMaxDevicesValidation.valid}
+                  />
+                  {!editMaxDevicesValidation.valid && (
+                    <span className="text-xs font-semibold text-rose-600 flex items-center gap-1" role="alert">
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                      <span>{t('accounts.maxDevicesRangeError')}</span>
+                    </span>
+                  )}
+                </div>
+                <span className="text-[10px] text-slate-500 mt-1 block">
+                  {t('accounts.maxDevicesHelp')}
+                </span>
+              </div>
+
+              {editError && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs p-3 rounded-xl flex items-start gap-2">
+                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-rose-500" />
+                  <span className="font-medium">{editError}</span>
+                </div>
+              )}
 
               <div className="flex justify-end gap-3 text-xs font-semibold pt-4 border-t border-slate-100 shrink-0">
                 <button 

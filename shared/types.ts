@@ -271,6 +271,7 @@ export interface AuthorizedDevice {
   status: 'AUTHORIZED' | 'PENDING' | 'REVOKED';
   authorizedBy?: string;
   authorizedAt?: string;
+  boundEmployeeId?: string;
   employeeId?: string;
   username?: string;
   role?: string;
@@ -285,6 +286,7 @@ export interface RegisteredAccount {
   employeeId: string;
   phoneNumber?: string;
   permission?: string;
+  maxDevices?: number;
   pin?: string;
   pinHash?: string;
   pinSalt?: string;

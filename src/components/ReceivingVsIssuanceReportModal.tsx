@@ -19,6 +19,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { PrintPreviewModal } from './PrintPreviewModal';
+import { ExportMenu } from './ExportMenu';
 import {
   renderDocumentPages,
   printPages,
@@ -86,13 +87,18 @@ export default function ReceivingVsIssuanceReportModal({
     approvedByDate: todayStr,
   });
 
-  // Extract unique customers
+  // Extract unique customers only when the company has active Master Data customer entries
+  const hasCustomers = useMemo(() => {
+    return Array.isArray(registries) && registries.some(r => r.type === 'CUSTOMER' && r.status !== 'INACTIVE');
+  }, [registries]);
+
   const customers = useMemo(() => {
+    if (!hasCustomers) return [];
     const custSet = new Set<string>();
     stocks.forEach(s => { if (s.customer) custSet.add(s.customer); });
     receiving.forEach(r => { if (r.customer) custSet.add(r.customer); });
     return Array.from(custSet).sort();
-  }, [stocks, receiving]);
+  }, [stocks, receiving, hasCustomers]);
 
   const filterOptions: ReportFilterOptions = useMemo(() => ({
     dateRange,
@@ -804,42 +810,44 @@ export default function ReceivingVsIssuanceReportModal({
           </div>
 
           <div className="flex items-center gap-2 self-end sm:self-auto">
-            <button
-              onClick={handleExportPDF}
-              disabled={isExporting}
-              className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition shadow-sm flex items-center gap-1.5 cursor-pointer"
-              title={t('modals.printChrome.btnPdfPreview')}
-            >
-              {isExporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-              {isExporting ? t('modals.printChrome.btnRenderingPdf') : t('modals.printChrome.btnPdfPreview')}
-            </button>
-            <button
-              onClick={handleOpenPreview}
-              disabled={isGeneratingPreview}
-              className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-indigo-300 hover:text-white text-xs font-bold px-3.5 py-2 rounded-xl transition border border-slate-700 flex items-center gap-1.5 cursor-pointer"
-              title={t('common.printPreview')}
-            >
-              {isGeneratingPreview ? <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" /> : <Eye className="h-3.5 w-3.5 text-indigo-400" />}
-              {isGeneratingPreview ? t('modals.printChrome.btnRenderingPdf') : t('common.printPreview')}
-            </button>
-            <button
-              onClick={handlePrint}
-              disabled={isExportingPrintPDF}
-              className={`bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold px-3.5 py-2 rounded-xl transition border border-slate-700 flex items-center gap-1.5 ${isExportingPrintPDF ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
-              title={t('common.print')}
-            >
-              {isExportingPrintPDF ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300" />
-                  {t('modals.printChrome.btnPreparingPrint')}
-                </>
-              ) : (
-                <>
-                  <Printer className="h-3.5 w-3.5" />
-                  {t('common.print')}
-                </>
-              )}
-            </button>
+            <ExportMenu
+              id="btn-flow-report-export-header"
+              variant="indigo"
+              disabled={isExporting || isGeneratingPreview || isExportingPrintPDF}
+              icon={
+                isExporting || isGeneratingPreview || isExportingPrintPDF ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Download className="h-3.5 w-3.5" />
+                )
+              }
+              items={[
+                {
+                  id: 'btn-flow-export-pdf-hdr',
+                  label: isExporting ? t('modals.printChrome.btnRenderingPdf') : t('modals.printChrome.btnPdfPreview'),
+                  title: t('modals.printChrome.btnPdfPreview'),
+                  icon: <Download className="h-3.5 w-3.5 text-indigo-600" />,
+                  onClick: handleExportPDF,
+                  disabled: isExporting,
+                },
+                {
+                  id: 'btn-flow-preview-hdr',
+                  label: isGeneratingPreview ? t('modals.printChrome.btnRenderingPdf') : t('common.printPreview'),
+                  title: t('common.printPreview'),
+                  icon: <Eye className="h-3.5 w-3.5 text-slate-600" />,
+                  onClick: handleOpenPreview,
+                  disabled: isGeneratingPreview,
+                },
+                {
+                  id: 'btn-flow-print-hdr',
+                  label: isExportingPrintPDF ? t('modals.printChrome.btnPreparingPrint') : t('common.print'),
+                  title: t('common.print'),
+                  icon: <Printer className="h-3.5 w-3.5 text-slate-600" />,
+                  onClick: handlePrint,
+                  disabled: isExportingPrintPDF,
+                },
+              ]}
+            />
             <button
               onClick={onClose}
               className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition cursor-pointer"
@@ -902,7 +910,7 @@ export default function ReceivingVsIssuanceReportModal({
 
             {/* Filter by Customer & Part Code */}
             <div className="flex items-center gap-2 flex-1 sm:justify-end min-w-[240px]">
-              {customers.length > 0 && (
+              {hasCustomers && customers.length > 0 && (
                 <select
                   value={customerFilter}
                   onChange={e => setCustomerFilter(e.target.value)}
@@ -940,39 +948,34 @@ export default function ReceivingVsIssuanceReportModal({
             {t('modals.printChrome.auditCompliantFooter')}
           </p>
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleOpenPreview}
-              disabled={isGeneratingPreview}
-              className="bg-white hover:bg-slate-100 disabled:opacity-50 text-slate-700 text-xs font-bold px-4 py-2 rounded-xl transition border border-slate-300 flex items-center gap-1.5 cursor-pointer"
-            >
-              {isGeneratingPreview ? <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-600" /> : <Eye className="h-3.5 w-3.5 text-indigo-600" />}
-              {isGeneratingPreview ? t('modals.printChrome.btnRenderingPdf') : t('common.printPreview')}
-            </button>
-            <button
-              onClick={handlePrint}
-              disabled={isExportingPrintPDF}
-              className={`bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition flex items-center gap-1.5 ${isExportingPrintPDF ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
-            >
-              {isExportingPrintPDF ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300" />
-                  {t('modals.printChrome.btnPreparingPrint')}
-                </>
-              ) : (
-                <>
-                  <Printer className="h-3.5 w-3.5" />
-                  {t('common.print')}
-                </>
-              )}
-            </button>
-            <button
-              onClick={handleExportPDF}
-              disabled={isExporting}
-              className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold px-4 py-2 rounded-xl transition shadow-sm flex items-center gap-1.5 cursor-pointer"
-            >
-              {isExporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-              {isExporting ? t('modals.printChrome.btnRenderingPdf') : t('modals.printChrome.btnPreviewSavePdf')}
-            </button>
+            <ExportMenu
+              id="btn-flow-report-export-footer"
+              variant="indigo"
+              disabled={isExporting || isGeneratingPreview || isExportingPrintPDF}
+              items={[
+                {
+                  id: 'btn-flow-export-pdf-ftr',
+                  label: isExporting ? t('modals.printChrome.btnRenderingPdf') : t('modals.printChrome.btnPreviewSavePdf'),
+                  icon: <Download className="h-3.5 w-3.5 text-indigo-600" />,
+                  onClick: handleExportPDF,
+                  disabled: isExporting,
+                },
+                {
+                  id: 'btn-flow-preview-ftr',
+                  label: isGeneratingPreview ? t('modals.printChrome.btnRenderingPdf') : t('common.printPreview'),
+                  icon: <Eye className="h-3.5 w-3.5 text-slate-600" />,
+                  onClick: handleOpenPreview,
+                  disabled: isGeneratingPreview,
+                },
+                {
+                  id: 'btn-flow-print-ftr',
+                  label: isExportingPrintPDF ? t('modals.printChrome.btnPreparingPrint') : t('common.print'),
+                  icon: <Printer className="h-3.5 w-3.5 text-slate-600" />,
+                  onClick: handlePrint,
+                  disabled: isExportingPrintPDF,
+                },
+              ]}
+            />
           </div>
         </div>
 

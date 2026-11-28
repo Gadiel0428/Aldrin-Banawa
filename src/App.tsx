@@ -9,7 +9,6 @@ import {
   ArrowLeftRight,
   PackageSearch,
   RotateCcw,
-  Trash2,
   Truck,
   Download,
   Upload,
@@ -64,8 +63,6 @@ import { useReceivingActions, ReceivingFeature, RecyclingFeature } from './featu
 import {
   useStockActions,
   StockFeature,
-  StockMovementsFeature,
-  ProductsFeature,
   InventoryMatrixFeature
 } from './features/stock';
 import { useIssuanceActions, IssuanceFeature } from './features/issuance';
@@ -78,8 +75,6 @@ import {
 } from './features/accounts';
 import { useMasterDataActions, MasterDataFeature } from './features/master-data';
 import { ServerBackupsModal } from './components/ServerBackupsModal';
-import { ConfirmModal, ConfirmActionConfig } from './components/ConfirmModal';
-import DesktopInstallModal from './components/DesktopInstallModal';
 import CentralDatabaseModal from './components/CentralDatabaseModal';
 import StartupDiagnosticsModal from './components/StartupDiagnosticsModal';
 import ActiveUsersModal from './components/ActiveUsersModal';
@@ -132,7 +127,6 @@ export default function App() {
 function AppWorkspace({ onAuthUserChange }: { onAuthUserChange: (userKey: string) => void }) {
   const { t } = useI18n();
   const [view, setView] = useState<string>('dashboard');
-  const [showDesktopInstallModal, setShowDesktopInstallModal] = useState<boolean>(false);
 
   // Quick Record Lookup via Header Barcode / QR Scanner
   const [showQuickLookupScanner, setShowQuickLookupScanner] = useState<boolean>(false);
@@ -237,7 +231,6 @@ function AppWorkspace({ onAuthUserChange }: { onAuthUserChange: (userKey: string
   const [qrBadgeAccount, setQrBadgeAccount] = useState<RegisteredAccount | null>(null);
   const [newlyRegisteredUser, setNewlyRegisteredUser] = useState<RegisteredAccount | null>(null);
   const [showNewlyRegisteredPin, setShowNewlyRegisteredPin] = useState<boolean>(false);
-  const [confirmActionApp, setConfirmActionApp] = useState<ConfirmActionConfig | null>(null);
   const [oneTimeSetupPinNotice, setOneTimeSetupPinNotice] = useState<{ employeeId: string; initialPin: string } | null>(null);
   const [pendingFirstLoginPinChange, setPendingFirstLoginPinChange] = useState<{ user: any; currentPin: string } | null>(null);
   const [firstLoginNewPin, setFirstLoginNewPin] = useState<string>('');
@@ -282,7 +275,6 @@ function AppWorkspace({ onAuthUserChange }: { onAuthUserChange: (userKey: string
     registeredUsers,
     setRegisteredUsers,
     operationalRoles,
-    receivingCategories,
     fifoColorsByMonth,
     chatMessages,
     socket,
@@ -312,15 +304,12 @@ function AppWorkspace({ onAuthUserChange }: { onAuthUserChange: (userKey: string
     upsertRecordLocallyAndRemotely,
     deleteRecordLocallyAndRemotely,
     handleManualSync,
-    resetStateToDefaults,
-    resetAccountsToDefaults,
     handleDeviceRevoked,
     sendSystemActivity,
     sendChatMessage,
     handleResolveConflictKeepMine,
     handleResolveConflictAcceptServer,
     handleUpdateOperationalRoles,
-    handleUpdateReceivingCategories,
     handleUpdateFifoColors
   } = sync;
 
@@ -751,6 +740,11 @@ function AppWorkspace({ onAuthUserChange }: { onAuthUserChange: (userKey: string
         setLoginError(t('auth.deviceRevoked'));
         return;
       }
+      if (authErr?.code === 'DEVICE_LIMIT_REACHED' || authErr?.code === 'DEVICE_BOUND_TO_OTHER') {
+        setIsLoggingIn(false);
+        setLoginError(authErr.message);
+        return;
+      }
       console.warn('Authoritative login verification error:', authErr);
     }
 
@@ -813,6 +807,12 @@ function AppWorkspace({ onAuthUserChange }: { onAuthUserChange: (userKey: string
         setLoginError(t('auth.deviceRevoked'));
         return;
       }
+      if (err?.code === 'DEVICE_LIMIT_REACHED' || err?.code === 'DEVICE_BOUND_TO_OTHER') {
+        setShowLoginQrScanner(false);
+        setIsLoggingIn(false);
+        setLoginError(err.message);
+        return;
+      }
     }
     setIsLoggingIn(false);
     setLoginError(t('auth.incorrectQrPin', { id: searchEmpId }));
@@ -838,6 +838,8 @@ function AppWorkspace({ onAuthUserChange }: { onAuthUserChange: (userKey: string
     }
   };
 
+  const hasRealCapacityData = false;
+  const hasMultipleWarehouses = false;
   const isAdminSession = canAccessAdminModules(currentPermission, currentEmployeeId, currentUser, currentRole);
   const isSuperAdminFlag = currentPermission === 'FULL_ACCESS' || currentEmployeeId === 'JPMP-002';
   const canEditFlag = currentPermission === 'FULL_ACCESS' || currentPermission === 'LIMITED_ACCESS';
@@ -1429,7 +1431,7 @@ function AppWorkspace({ onAuthUserChange }: { onAuthUserChange: (userKey: string
             <button
               onClick={() => setView('stock')}
               className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all duration-300 cursor-pointer ${
-                view === 'stock'
+                view === 'stock' || view === 'stock-movements'
                   ? 'bg-indigo-600/95 text-white font-semibold shadow-lg shadow-indigo-600/25 border border-indigo-400/30 backdrop-blur-md'
                   : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
               }`}
@@ -1470,52 +1472,32 @@ function AppWorkspace({ onAuthUserChange }: { onAuthUserChange: (userKey: string
               <Truck className="h-4 w-4 shrink-0" /> {t('nav.delivery')}
             </button>
 
-            <button
-              onClick={() => setView('environmental')}
-              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all duration-300 cursor-pointer ${
-                view === 'environmental'
-                  ? 'bg-indigo-600/95 text-white font-semibold shadow-lg shadow-indigo-600/25 border border-indigo-400/30 backdrop-blur-md'
-                  : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
-              }`}
-            >
-              <Boxes className="h-4 w-4 shrink-0" /> {t('nav.environmental')}
-            </button>
+            {hasRealCapacityData && (
+              <button
+                onClick={() => setView('environmental')}
+                className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all duration-300 cursor-pointer ${
+                  view === 'environmental'
+                    ? 'bg-indigo-600/95 text-white font-semibold shadow-lg shadow-indigo-600/25 border border-indigo-400/30 backdrop-blur-md'
+                    : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
+                }`}
+              >
+                <Boxes className="h-4 w-4 shrink-0" /> {t('nav.environmental')}
+              </button>
+            )}
 
-            <button
-              onClick={() => setView('stock-movements')}
-              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all duration-300 cursor-pointer ${
-                view === 'stock-movements'
-                  ? 'bg-indigo-600/95 text-white font-semibold shadow-lg shadow-indigo-600/25 border border-indigo-400/30 backdrop-blur-md'
-                  : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
-              }`}
-              id="nav-stock-movements"
-            >
-              <ArrowLeftRight className="h-4 w-4 shrink-0" /> {t('nav.stockMovements')}
-            </button>
-
-            <button
-              onClick={() => setView('products')}
-              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all duration-300 cursor-pointer ${
-                view === 'products'
-                  ? 'bg-indigo-600/95 text-white font-semibold shadow-lg shadow-indigo-600/25 border border-indigo-400/30 backdrop-blur-md'
-                  : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
-              }`}
-              id="nav-products"
-            >
-              <PackageSearch className="h-4 w-4 shrink-0" /> {t('nav.products')}
-            </button>
-
-            <button
-              onClick={() => setView('inventory-matrix')}
-              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all duration-300 cursor-pointer ${
-                view === 'inventory-matrix'
-                  ? 'bg-indigo-600/95 text-white font-semibold shadow-lg shadow-indigo-600/25 border border-indigo-400/30 backdrop-blur-md'
-                  : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
-              }`}
-              id="nav-inventory-matrix"
-            >
-              <Boxes className="h-4 w-4 shrink-0" /> {t('nav.inventoryMatrix')}
-            </button>
+            {hasMultipleWarehouses && (
+              <button
+                onClick={() => setView('inventory-matrix')}
+                className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-3 transition-all duration-300 cursor-pointer ${
+                  view === 'inventory-matrix'
+                    ? 'bg-indigo-600/95 text-white font-semibold shadow-lg shadow-indigo-600/25 border border-indigo-400/30 backdrop-blur-md'
+                    : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100 font-medium'
+                }`}
+                id="nav-inventory-matrix"
+              >
+                <Boxes className="h-4 w-4 shrink-0" /> {t('nav.inventoryMatrix')}
+              </button>
+            )}
 
             <button
               onClick={() => setView('master-registry')}
@@ -1596,36 +1578,6 @@ function AppWorkspace({ onAuthUserChange }: { onAuthUserChange: (userKey: string
                   <Upload className="h-3.5 w-3.5 text-indigo-400" /> {t('sidebar.importDbRestore')}
                   <input type="file" accept=".json" onChange={backupActions.handleImportBackup} className="hidden" />
                 </label>
-
-                <button
-                  onClick={() => {
-                    setConfirmActionApp({
-                      title: t('sidebar.resetDefaultDbTitle'),
-                      message: t('sidebar.resetDefaultDbMsg'),
-                      confirmLabel: t('sidebar.resetDefaultDbConfirm'),
-                      confirmVariant: 'danger',
-                      onConfirm: () => resetStateToDefaults()
-                    });
-                  }}
-                  className="w-full text-rose-400/80 hover:text-rose-300 py-1 text-[10px] font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors"
-                >
-                  <Trash2 className="h-3 w-3" /> {t('sidebar.resetDefaultDb')}
-                </button>
-
-                <button
-                  onClick={() => {
-                    setConfirmActionApp({
-                      title: t('sidebar.wipeAccountsTitle'),
-                      message: t('sidebar.wipeAccountsMsg'),
-                      confirmLabel: t('sidebar.wipeAccountsConfirm'),
-                      confirmVariant: 'danger',
-                      onConfirm: () => resetAccountsToDefaults()
-                    });
-                  }}
-                  className="w-full text-rose-400/70 hover:text-rose-300 py-1 text-[10px] font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors"
-                >
-                  <Trash2 className="h-3 w-3" /> {t('sidebar.wipeAccounts')}
-                </button>
               </>
             )}
           </div>
@@ -1763,6 +1715,7 @@ function AppWorkspace({ onAuthUserChange }: { onAuthUserChange: (userKey: string
                   canEdit={canEditFlag}
                   registries={registries}
                   openAlertsSignal={openDashboardAlertsSignal}
+                  canAccessAudit={isAdminSession}
                 />
               )}
 
@@ -1783,13 +1736,14 @@ function AppWorkspace({ onAuthUserChange }: { onAuthUserChange: (userKey: string
                   isSuperAdmin={isSuperAdminFlag}
                   canEdit={canEditFlag}
                   onOpenRegisterModal={() => setView('master-registry')}
-                  receivingCategories={receivingCategories}
-                  onUpdateReceivingCategories={handleUpdateReceivingCategories}
+                  onRegisterCategoryItem={masterDataActions.handleRegisterMasterItem}
+                  onUpdateCategoryItem={masterDataActions.handleUpdateMasterItem}
+                  onDeleteCategoryItem={masterDataActions.handleDeleteMasterItem}
                   fifoColorsByMonth={fifoColorsByMonth}
                 />
               )}
 
-              {view === 'stock' && (
+              {(view === 'stock' || view === 'stock-movements') && (
                 <StockFeature
                   stocks={stocks}
                   onAddStock={stockActions.handleAddStock}
@@ -1805,6 +1759,9 @@ function AppWorkspace({ onAuthUserChange }: { onAuthUserChange: (userKey: string
                   registries={registries}
                   fifoColorsByMonth={fifoColorsByMonth}
                   onUpdateFifoColors={handleUpdateFifoColors}
+                  currentUser={{ id: currentEmployeeId, name: currentUser, username: currentUser }}
+                  onStockUpdated={() => handleManualSync()}
+                  initialTab={view === 'stock-movements' ? 'movements' : 'bins'}
                 />
               )}
 
@@ -1873,16 +1830,6 @@ function AppWorkspace({ onAuthUserChange }: { onAuthUserChange: (userKey: string
                 />
               )}
 
-              {view === 'stock-movements' && (
-                <StockMovementsFeature
-                  stocks={stocks}
-                  currentUser={{ id: currentEmployeeId, name: currentUser, username: currentUser }}
-                  onStockUpdated={() => handleManualSync()}
-                />
-              )}
-
-              {view === 'products' && <ProductsFeature />}
-
               {view === 'inventory-matrix' && <InventoryMatrixFeature />}
 
               {view === 'master-registry' && (
@@ -1895,7 +1842,6 @@ function AppWorkspace({ onAuthUserChange }: { onAuthUserChange: (userKey: string
                   isSuperAdmin={isSuperAdminFlag}
                   canEdit={canEditFlag}
                   defaultType="ALL"
-                  categories={receivingCategories}
                 />
               )}
 
@@ -1948,16 +1894,6 @@ function AppWorkspace({ onAuthUserChange }: { onAuthUserChange: (userKey: string
           onClose={() => setQrBadgeAccount(null)}
         />
       )}
-
-      <ConfirmModal
-        config={confirmActionApp}
-        onClose={() => setConfirmActionApp(null)}
-      />
-
-      <DesktopInstallModal
-        isOpen={showDesktopInstallModal}
-        onClose={() => setShowDesktopInstallModal(false)}
-      />
 
       <CentralDatabaseModal
         isOpen={showCentralDatabaseModal}

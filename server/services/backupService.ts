@@ -8,6 +8,7 @@
 import fs from "fs";
 import path from "path";
 import type { AuthorizedDevice, BackupItemRecord, RegisteredAccount } from "../../shared/types.ts";
+import { resolveEffectiveMaxDevices } from "../../shared/deviceLimit.ts";
 import logger from "../../src/lib/logger.ts";
 import { mapRecordFromApi } from "../api/mapper.ts";
 import {
@@ -32,6 +33,7 @@ import {
   DEFAULT_OPERATIONAL_ROLES,
   DEFAULT_RECEIVING_CATEGORIES,
   STARTER_BARCODE_PRESETS,
+  STARTER_CATEGORY_REGISTRIES,
   normalizeBaseRecord,
   type ServerContext,
 } from "./context.ts";
@@ -273,7 +275,13 @@ export function applyDatabaseObject(ctx: ServerContext, parsed: any): boolean {
     if (Array.isArray(parsed.authorizedDevices)) {
       ctx.authorizedDevicesMap.clear();
       parsed.authorizedDevices.forEach((dev: AuthorizedDevice) => {
-        if (dev && dev.deviceId) ctx.authorizedDevicesMap.set(dev.deviceId, dev);
+        if (dev && dev.deviceId) {
+          const normalizedBound = dev.boundEmployeeId || dev.employeeId;
+          ctx.authorizedDevicesMap.set(dev.deviceId, {
+            ...dev,
+            ...(normalizedBound ? { boundEmployeeId: String(normalizedBound).trim().toUpperCase() } : {}),
+          });
+        }
       });
     }
 
@@ -352,7 +360,7 @@ export function applyDatabaseObject(ctx: ServerContext, parsed: any): boolean {
       ctx.state.fifoColorsByMonth = { ...DEFAULT_FIFO_COLORS_BY_MONTH };
     }
     if (!Array.isArray(ctx.state.registries) || ctx.state.registries.length === 0) {
-      ctx.state.registries = [...STARTER_BARCODE_PRESETS];
+      ctx.state.registries = [...STARTER_CATEGORY_REGISTRIES, ...STARTER_BARCODE_PRESETS];
     } else {
       for (const preset of STARTER_BARCODE_PRESETS) {
         if (
@@ -361,6 +369,28 @@ export function applyDatabaseObject(ctx: ServerContext, parsed: any): boolean {
           )
         ) {
           ctx.state.registries.push(preset);
+        }
+      }
+      const hasAnyCategoryRegistry = ctx.state.registries.some((r: any) => r.type === "CATEGORY");
+      if (!hasAnyCategoryRegistry) {
+        const legacyCats = Array.isArray(ctx.state.receivingCategories) && ctx.state.receivingCategories.length > 0
+          ? ctx.state.receivingCategories
+          : DEFAULT_RECEIVING_CATEGORIES;
+        for (const catName of legacyCats) {
+          const clean = String(catName || "").trim().toUpperCase();
+          if (!clean) continue;
+          const matchingStarter = STARTER_CATEGORY_REGISTRIES.find((c) => c.name === clean);
+          ctx.state.registries.push(
+            matchingStarter || {
+              id: `REG-CAT-${clean.replace(/[^A-Z0-9]+/g, "-").replace(/^-|-$/g, "")}`,
+              type: "CATEGORY",
+              code: clean,
+              name: clean,
+              description: "Master Data Material Category",
+              status: "ACTIVE",
+              dateRegistered: "2026-10-02",
+            }
+          );
         }
       }
     }
@@ -381,6 +411,7 @@ export function applyDatabaseObject(ctx: ServerContext, parsed: any): boolean {
 
     let compromisedAccountsCount = 0;
     ctx.state.registeredUsers.forEach((u: RegisteredAccount) => {
+      u.maxDevices = resolveEffectiveMaxDevices(u);
       const cleanPin = String(u.pin || "").trim();
       if (cleanPin === "1234" || verifyUserPin(u, "1234").matched) {
         u.isPinCompromised = true;

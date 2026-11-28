@@ -1,7 +1,26 @@
 import fs from "fs";
 import path from "path";
+import readline from "readline/promises";
+import { stdin as input, stdout as output } from "process";
 
-console.log("Resetting JUWEI WMS central database to brand new factory state...");
+async function promptForConfirm(actionDescription: string): Promise<void> {
+  if (!input.isTTY) {
+    console.error(`[ABORTED] Interactive confirmation required. Run in a terminal and type CONFIRM to ${actionDescription}.`);
+    process.exit(1);
+  }
+  const rl = readline.createInterface({ input, output });
+  try {
+    const answer = await rl.question(
+      `DANGER: You are about to ${actionDescription}.\nType the word CONFIRM to proceed: `
+    );
+    if (answer.trim() !== "CONFIRM") {
+      console.error("[ABORTED] Confirmation mismatch. No changes were made.");
+      process.exit(1);
+    }
+  } finally {
+    rl.close();
+  }
+}
 
 function getStorageFilePath(filename: string): string {
   const customDir = process.env.JUWEI_DATA_DIR;
@@ -15,6 +34,8 @@ function getStorageFilePath(filename: string): string {
 }
 
 async function resetAllData() {
+  await promptForConfirm("reset the JUWEI WMS central database to factory brand-new state");
+  console.log("Resetting JUWEI WMS central database to brand new factory state...");
   const DATA_FILE = path.join(process.cwd(), "data-store.json");
   const timestamp = new Date().toISOString();
   const fileTimestamp = timestamp.replace(/[:.]/g, "-");

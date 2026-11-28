@@ -21,14 +21,15 @@ import {
   AlertTriangle,
   AlertOctagon,
   X,
-  Warehouse
+  Warehouse,
+  PackageSearch
 } from 'lucide-react';
 import { MasterRegistryItem, RegistryType, PresetSourceType } from '../types';
 import { ConfirmActionConfig } from './ConfirmModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAuthoritativeId } from '../lib/idGenerator';
-import { DEFAULT_RECEIVING_CATEGORIES } from './ReceivingModule';
 import { showPrintToast } from '../utils/printDocument';
+import { ProductList } from './ProductList';
 import {
   MISSING_UNIT_LABEL,
   getAllSelectUomOptions,
@@ -151,7 +152,21 @@ export const STARTER_BARCODE_PRESETS: MasterRegistryItem[] = [
   }
 ];
 
-export const DEFAULT_MASTER_REGISTRIES: MasterRegistryItem[] = [...STARTER_BARCODE_PRESETS];
+export const STARTER_CATEGORY_REGISTRIES: MasterRegistryItem[] = [
+  { id: 'REG-CAT-RESIN', type: 'CATEGORY', code: 'CAT-RESIN', name: 'RESIN/RAW MATERIALS', description: 'Primary molding resin & raw material classification', status: 'ACTIVE', dateRegistered: '2026-10-02' },
+  { id: 'REG-CAT-INDIRECT', type: 'CATEGORY', code: 'CAT-INDIRECT', name: 'INDIRECT BOM', description: 'Indirect production consumables & engineering supplies', status: 'ACTIVE', dateRegistered: '2026-10-02' },
+  { id: 'REG-CAT-DIRECT', type: 'CATEGORY', code: 'CAT-DIRECT', name: 'DIRECT BOM', description: 'Direct assembly bill-of-material components', status: 'ACTIVE', dateRegistered: '2026-10-02' },
+  { id: 'REG-CAT-CON', type: 'CATEGORY', code: 'CAT-CON', name: 'CONSUMABLES', description: 'Cleanroom & shop-floor consumables', status: 'ACTIVE', dateRegistered: '2026-10-02' },
+  { id: 'REG-CAT-PKG', type: 'CATEGORY', code: 'CAT-PKG', name: 'PACKAGING MATERIALS', description: 'Cartons, liners, bags & protective packaging', status: 'ACTIVE', dateRegistered: '2026-10-02' },
+  { id: 'REG-CAT-WIP', type: 'CATEGORY', code: 'CAT-WIP', name: 'WIP (WORK IN PROGRESS)', description: 'Semi-finished & sub-assembly transfers', status: 'ACTIVE', dateRegistered: '2026-10-02' },
+  { id: 'REG-CAT-FG', type: 'CATEGORY', code: 'CAT-FG', name: 'FG (FINISHED GOOD)', description: 'Completed outbound finished goods', status: 'ACTIVE', dateRegistered: '2026-10-02' },
+  { id: 'REG-CAT-OFFICE', type: 'CATEGORY', code: 'CAT-OFFICE', name: 'OFFICE SUPPLIES', description: 'Administrative & label stationery', status: 'ACTIVE', dateRegistered: '2026-10-02' },
+];
+
+export const DEFAULT_MASTER_REGISTRIES: MasterRegistryItem[] = [
+  ...STARTER_CATEGORY_REGISTRIES,
+  ...STARTER_BARCODE_PRESETS,
+];
 
 interface MasterRegistryModuleProps {
   registries: MasterRegistryItem[];
@@ -162,7 +177,7 @@ interface MasterRegistryModuleProps {
   isSuperAdmin?: boolean;
   canEdit?: boolean;
   defaultType?: RegistryType | 'ALL';
-  categories?: string[];
+  defaultView?: 'registry' | 'products';
 }
 
 export default function MasterRegistryModule({
@@ -174,24 +189,27 @@ export default function MasterRegistryModule({
   isSuperAdmin = false,
   canEdit: _canEdit = false,
   defaultType = 'ALL',
-  categories
+  defaultView = 'registry',
 }: MasterRegistryModuleProps) {
   const { t } = useI18n();
+  const [activeView, setActiveView] = useState<'registry' | 'products'>(defaultView);
   const [selectedType, setSelectedType] = useState<RegistryType | 'ALL'>(defaultType);
   const [searchQuery, setSearchQuery] = useState('');
 
   const unifiedCategories = React.useMemo(() => {
     const list = new Set<string>();
-    if (categories && Array.isArray(categories)) {
-      categories.forEach(c => { if (c) list.add(c.trim().toUpperCase()); });
-    }
-    registries.filter(r => r.type === 'CATEGORY').forEach(r => {
-      if (r.name) list.add(r.name.trim().toUpperCase());
-      else if (r.code) list.add(r.code.trim().toUpperCase());
-    });
-    DEFAULT_RECEIVING_CATEGORIES.forEach(c => list.add(c));
+    registries
+      .filter(r => r.type === 'CATEGORY' && r.status !== 'INACTIVE')
+      .forEach(r => {
+        const val = (r.name || r.code || '').trim().toUpperCase();
+        if (val) list.add(val);
+      });
     return Array.from(list);
-  }, [categories, registries]);
+  }, [registries]);
+
+  useEffect(() => {
+    setActiveView(defaultView);
+  }, [defaultView]);
 
   useEffect(() => {
     setSelectedType(defaultType);
@@ -221,15 +239,14 @@ export default function MasterRegistryModule({
   // Open modal for new registration
   const handleOpenNew = (type?: RegistryType) => {
     setEditingItem(null);
-    let targetType = type || (selectedType !== 'ALL' && selectedType !== 'CATEGORY' ? selectedType : 'BARCODE_PRESET');
-    if (targetType === 'CATEGORY') targetType = 'BARCODE_PRESET';
+    const targetType: RegistryType = type || (selectedType !== 'ALL' ? selectedType : 'BARCODE_PRESET');
     setFormType(targetType);
     setFormCode('');
     setFormName('');
     setFormDesc('');
     setFormStatus('ACTIVE');
     setFormPresetSource('EXTERNAL');
-    setFormCategory(unifiedCategories[0] || 'RESIN/RAW MATERIALS');
+    setFormCategory(unifiedCategories[0] || '');
     setFormVendorSupplier('');
     setFormUnit('PCS');
     setFormLocation('');
@@ -275,12 +292,14 @@ export default function MasterRegistryModule({
 
     const todayStr = new Date().toISOString().split('T')[0];
 
+    const normalizedName = formType === 'CATEGORY' ? formName.trim().toUpperCase() : formName.trim();
+
     if (editingItem) {
       const updated: MasterRegistryItem = {
         ...editingItem,
         type: formType,
         code: formCode.trim() ? formCode.trim().toUpperCase() : undefined,
-        name: formName.trim(),
+        name: normalizedName,
         description: formDesc.trim() || undefined,
         status: formStatus,
         presetSource: formType === 'BARCODE_PRESET' ? formPresetSource : undefined,
@@ -296,7 +315,7 @@ export default function MasterRegistryModule({
         id: generateAuthoritativeId(`REG-${typePrefix}`),
         type: formType,
         code: formCode.trim() ? formCode.trim().toUpperCase() : generateAuthoritativeId(`REG-${typePrefix}`),
-        name: formName.trim(),
+        name: normalizedName,
         description: formDesc.trim() || undefined,
         status: formStatus,
         dateRegistered: todayStr,
@@ -367,8 +386,36 @@ export default function MasterRegistryModule({
           </p>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
-          {isSuperAdmin ? (
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {/* Sub-view Switcher: Registry vs Products Catalog */}
+          <div className="flex bg-slate-950/70 p-1 rounded-xl border border-slate-700/80">
+            <button
+              type="button"
+              id="btn-master-view-registry"
+              onClick={() => setActiveView('registry')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                activeView === 'registry'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
+              }`}
+            >
+              <FolderPlus className="h-3.5 w-3.5" /> {t('masterRegistry.tabRegistry')}
+            </button>
+            <button
+              type="button"
+              id="btn-master-view-products"
+              onClick={() => setActiveView('products')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                activeView === 'products'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
+              }`}
+            >
+              <PackageSearch className="h-3.5 w-3.5" /> {t('masterRegistry.tabProducts')}
+            </button>
+          </div>
+
+          {activeView === 'registry' && (isSuperAdmin ? (
             <>
               {onResetDefaults && (
                 <button
@@ -400,10 +447,14 @@ export default function MasterRegistryModule({
             <span className="text-[10px] font-mono text-indigo-400 bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg font-bold uppercase">
               {t('masterRegistry.viewOnlyBadge')}
             </span>
-          )}
+          ))}
         </div>
       </div>
 
+      {activeView === 'products' ? (
+        <ProductList categories={unifiedCategories} />
+      ) : (
+      <>
       {/* Location Registration Relocation Banner */}
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-900 flex items-center justify-between gap-3 shadow-xs">
         <div className="flex items-center gap-2.5">
@@ -416,7 +467,7 @@ export default function MasterRegistryModule({
       </div>
 
       {/* Quick Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         {/* 1. Barcode Presets */}
         <div 
           onClick={() => setSelectedType(selectedType === 'BARCODE_PRESET' ? 'ALL' : 'BARCODE_PRESET')}
@@ -508,6 +559,28 @@ export default function MasterRegistryModule({
             <span className="text-base font-mono font-bold text-slate-800 shrink-0">{countByType.LOCATION}</span>
           </div>
         </div>
+        {/* 5. Category */}
+        <div 
+          onClick={() => setSelectedType(selectedType === 'CATEGORY' ? 'ALL' : 'CATEGORY')}
+          className={`p-3 rounded-xl border transition cursor-pointer ${
+            selectedType === 'CATEGORY' 
+              ? 'bg-indigo-50 border-indigo-400 ring-2 ring-indigo-400/20 shadow-sm' 
+              : 'bg-white border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/30'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="p-1.5 bg-indigo-100 text-indigo-700 rounded-lg shrink-0">
+                <Tag className="h-3.5 w-3.5" />
+              </span>
+              <div className="min-w-0">
+                <span className="text-xs font-bold text-slate-700 block truncate">{t('masterRegistry.cardCategoryTitle')}</span>
+                <span className="text-[10px] text-slate-500 block truncate">{t('masterRegistry.cardCategorySub')}</span>
+              </div>
+            </div>
+            <span className="text-base font-mono font-bold text-slate-800 shrink-0">{countByType.CATEGORY}</span>
+          </div>
+        </div>
       </div>
 
       {/* Filter and Search Toolbar */}
@@ -535,6 +608,7 @@ export default function MasterRegistryModule({
           >
             <option value="ALL">{t('masterRegistry.filterAll', { count: registries.length })}</option>
             <option value="BARCODE_PRESET">{t('masterRegistry.filterPresets', { count: countByType.BARCODE_PRESET })}</option>
+            <option value="CATEGORY">{t('masterRegistry.filterCategories', { count: countByType.CATEGORY })}</option>
             <option value="CUSTOMER">{t('masterRegistry.filterCustomers', { count: countByType.CUSTOMER })}</option>
             <option value="SUPPLIER">{t('masterRegistry.filterSuppliers', { count: countByType.SUPPLIER })}</option>
             <option value="LOCATION">{t('masterRegistry.filterLocations', { count: countByType.LOCATION })}</option>
@@ -687,6 +761,8 @@ export default function MasterRegistryModule({
           </table>
         </div>
       </div>
+      </>
+      )}
 
       {/* Registration Modal */}
       {typeof document !== 'undefined' && showRegisterModal && createPortal(
@@ -725,8 +801,8 @@ export default function MasterRegistryModule({
               <form onSubmit={handleSubmit} className="p-5 space-y-4 max-h-[85vh] overflow-y-auto">
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">{t('masterRegistry.regTargetLabel')}</label>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {(['BARCODE_PRESET', 'CUSTOMER', 'SUPPLIER', 'LOCATION'] as RegistryType[]).map(regType => (
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                    {(['BARCODE_PRESET', 'CATEGORY', 'CUSTOMER', 'SUPPLIER', 'LOCATION'] as RegistryType[]).map(regType => (
                       <button
                         key={regType}
                         type="button"
@@ -738,7 +814,7 @@ export default function MasterRegistryModule({
                         }`}
                       >
                         {getTypeIcon(regType)}
-                        {regType === 'BARCODE_PRESET' ? t('masterRegistry.cardPresetTitle') : regType === 'CUSTOMER' ? t('masterRegistry.cardCustomerTitle') : regType === 'SUPPLIER' ? t('masterRegistry.cardSupplierTitle') : t('masterRegistry.cardLocationTitle')}
+                        {regType === 'BARCODE_PRESET' ? t('masterRegistry.cardPresetTitle') : regType === 'CATEGORY' ? t('masterRegistry.cardCategoryTitle') : regType === 'CUSTOMER' ? t('masterRegistry.cardCustomerTitle') : regType === 'SUPPLIER' ? t('masterRegistry.cardSupplierTitle') : t('masterRegistry.cardLocationTitle')}
                       </button>
                     ))}
                   </div>
@@ -780,6 +856,8 @@ export default function MasterRegistryModule({
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
                     {formType === 'BARCODE_PRESET'
                       ? t('masterRegistry.codeLabelPreset')
+                      : formType === 'CATEGORY'
+                      ? t('masterRegistry.codeLabelCategory')
                       : formType === 'CUSTOMER'
                       ? t('masterRegistry.codeLabelCustomer')
                       : formType === 'SUPPLIER'
@@ -791,6 +869,7 @@ export default function MasterRegistryModule({
                     required={formType === 'BARCODE_PRESET'}
                     placeholder={
                       formType === 'BARCODE_PRESET' ? t('masterRegistry.codePlaceholderPreset')
+                      : formType === 'CATEGORY' ? t('masterRegistry.codePlaceholderCategory')
                       : formType === 'CUSTOMER' ? t('masterRegistry.codePlaceholderCustomer')
                       : formType === 'SUPPLIER' ? t('masterRegistry.codePlaceholderSupplier')
                       : t('masterRegistry.codePlaceholderLocation')
@@ -804,6 +883,7 @@ export default function MasterRegistryModule({
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
                     {formType === 'BARCODE_PRESET' ? t('masterRegistry.nameLabelPreset')
+                      : formType === 'CATEGORY' ? t('masterRegistry.nameLabelCategory')
                       : formType === 'CUSTOMER' ? t('masterRegistry.nameLabelCustomer')
                       : formType === 'SUPPLIER' ? t('masterRegistry.nameLabelSupplier')
                       : t('masterRegistry.nameLabelLocation')}
@@ -813,6 +893,7 @@ export default function MasterRegistryModule({
                     required
                     placeholder={
                       formType === 'BARCODE_PRESET' ? t('masterRegistry.namePlaceholderPreset')
+                      : formType === 'CATEGORY' ? t('masterRegistry.namePlaceholderCategory')
                       : formType === 'CUSTOMER' ? t('masterRegistry.namePlaceholderCustomer')
                       : formType === 'SUPPLIER' ? t('masterRegistry.namePlaceholderSupplier')
                       : t('masterRegistry.namePlaceholderLocation')

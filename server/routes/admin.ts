@@ -43,6 +43,10 @@ import {
 } from "../services/authService.ts";
 import { commitDatabase } from "../services/backupService.ts";
 import {
+  bindAuthorizedDeviceRecord,
+  unbindDeviceFromOperator,
+} from "../services/deviceLimitService.ts";
+import {
   broadcast,
   closeDeviceSockets,
   getActiveOperatorsCount,
@@ -275,8 +279,12 @@ export function registerAdminRoutes(app: Express, ctx: ServerContext): void {
     const nowIso = new Date().toISOString();
 
     const existing = ctx.authorizedDevicesMap.get(cleanDeviceId);
+    const prevBoundEmpId = String(existing?.boundEmployeeId || existing?.employeeId || "")
+      .trim()
+      .toUpperCase();
     const reqEmpId = (
       devAuth.employeeId ||
+      existing?.boundEmployeeId ||
       existing?.employeeId ||
       (cleanDeviceId === ctx.primaryDeviceId ? "JPMP-002" : "")
     )
@@ -295,18 +303,12 @@ export function registerAdminRoutes(app: Express, ctx: ServerContext): void {
       deviceName: cleanDeviceName,
       isPrimaryAdminDevice: cleanDeviceId === ctx.primaryDeviceId,
       status: finalStatus,
-      ...(boundAccount
-        ? {
-            employeeId: boundAccount.employeeId,
-            username: boundAccount.username,
-            role: boundAccount.role,
-            permission: boundAccount.permission,
-            boundAt: nowIso,
-          }
-        : {}),
       authorizedBy: devAuth.authorId || "ALDRIN BANAWA (JPMP-002)",
       authorizedAt: nowIso,
     };
+    if (boundAccount) {
+      bindAuthorizedDeviceRecord(deviceRecord, boundAccount, existing?.boundAt || nowIso);
+    }
 
     ctx.authorizedDevicesMap.set(cleanDeviceId, deviceRecord);
     commitDatabase(ctx);
@@ -321,6 +323,23 @@ export function registerAdminRoutes(app: Express, ctx: ServerContext): void {
       deviceId: cleanDeviceId,
     });
 
+    if (
+      boundAccount &&
+      prevBoundEmpId !== String(boundAccount.employeeId || "").trim().toUpperCase()
+    ) {
+      recordAuditTrail(ctx, {
+        timestamp: nowIso,
+        actor: devAuth.authorId || "SUPER ADMINISTRATOR",
+        actorId: "JPMP-002",
+        action: "DEVICE_BOUND",
+        recordType: "authorizedDevices",
+        recordId: cleanDeviceId,
+        summary: `Bound device ${cleanDeviceName} (${cleanDeviceId}) to ${boundAccount.username} (${boundAccount.employeeId})`,
+        details: `Operator: ${boundAccount.username} (${boundAccount.employeeId}) | Device: ${cleanDeviceName} (${cleanDeviceId})`,
+        deviceId: cleanDeviceId,
+      });
+    }
+
     broadcast(ctx, {
       type: "DEVICE_AUTHORIZATION_UPDATED",
       device: deviceRecord,
@@ -328,6 +347,38 @@ export function registerAdminRoutes(app: Express, ctx: ServerContext): void {
     });
 
     return res.json({ success: true, device: deviceRecord });
+  });
+
+  app.post("/api/devices/unbind", (req: Request, res: Response) => {
+    if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
+    if (!isAuthorizedSuperAdmin(ctx, req, commitDatabase)) {
+      return res
+        .status(403)
+        .json({ error: "PERMISSION_DENIED: Only Super Administrator can unbind devices." });
+    }
+
+    const targetDeviceId = String(req.body?.deviceId ?? req.body?.device_id ?? "").trim();
+    if (!targetDeviceId) {
+      return res.status(400).json({ error: "deviceId required" });
+    }
+
+    const auth = resolveRequestAuthContext(ctx, req);
+    const result = unbindDeviceFromOperator(ctx, {
+      deviceId: targetDeviceId,
+      actorName: auth.account?.username || req.body?.author || "SUPER ADMINISTRATOR",
+      actorEmployeeId: auth.employeeId || "JPMP-002",
+    });
+
+    if (!result.success) {
+      return res.status(result.status).json({ success: false, error: result.error });
+    }
+
+    return res.json({
+      success: true,
+      device: result.device,
+      previousEmployeeId: result.previousEmployeeId,
+      previousUsername: result.previousUsername,
+    });
   });
 
   app.post("/api/devices/revoke", (req: Request, res: Response) => {
@@ -441,9 +492,10 @@ export function registerAdminRoutes(app: Express, ctx: ServerContext): void {
     try {
       if (rejectIfDeviceRevokedHttp(ctx, req, res)) return;
 
-      if (!req.body?.confirmed) {
+      const confirmText = String(req.body?.confirmText || "").trim();
+      if (!req.body?.confirmed || confirmText !== "CONFIRM") {
         return res.status(400).json({
-          error: "CONFIRMATION_REQUIRED: Global reset requires explicit 'confirmed: true'.",
+          error: "CONFIRMATION_REQUIRED: Global reset requires confirmed: true and confirmText: 'CONFIRM'.",
         });
       }
 

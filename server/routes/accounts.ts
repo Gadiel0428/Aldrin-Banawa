@@ -35,7 +35,12 @@ import {
   unmarkUserTombstone,
   verifyUserPin,
 } from "../services/authService.ts";
+import { resolveEffectiveMaxDevices, validateMaxDevices } from "../../shared/deviceLimit.ts";
 import { commitDatabase } from "../services/backupService.ts";
+import {
+  evaluateSignInDeviceBinding,
+  recordMaxDevicesChangeAudit,
+} from "../services/deviceLimitService.ts";
 import { broadcast, sanitizeUserForClient } from "../services/realtimeService.ts";
 
 export function registerAccountsRoutes(app: Express, ctx: ServerContext): void {
@@ -125,6 +130,15 @@ export function registerAccountsRoutes(app: Express, ctx: ServerContext): void {
       }
 
       if (matchedUser) {
+        const deviceBindingCheck = evaluateSignInDeviceBinding(ctx, matchedUser, reqDevId);
+        if (!deviceBindingCheck.allowed) {
+          return res.status(deviceBindingCheck.status || 403).json({
+            success: false,
+            errorCode: deviceBindingCheck.errorCode,
+            error: deviceBindingCheck.error,
+          });
+        }
+
         matchedUser.lastActive = new Date().toISOString();
         if (enteredPin === "1234") {
           matchedUser.isPinCompromised = true;
@@ -138,14 +152,6 @@ export function registerAccountsRoutes(app: Express, ctx: ServerContext): void {
         });
 
         if (reqDevId) {
-          const devRec = ctx.authorizedDevicesMap.get(reqDevId);
-          if (devRec && devRec.status === "AUTHORIZED") {
-            devRec.employeeId = matchedUser.employeeId;
-            devRec.username = matchedUser.username;
-            devRec.role = matchedUser.role;
-            devRec.permission = matchedUser.permission;
-            devRec.boundAt = new Date().toISOString();
-          }
           for (const conn of ctx.connectionRegistry.values()) {
             if (conn.device_id === reqDevId || conn.deviceId === reqDevId) {
               conn.employeeId = matchedUser.employeeId;
@@ -373,6 +379,12 @@ export function registerAccountsRoutes(app: Express, ctx: ServerContext): void {
           .json({ error: `Account with ID ${cleanEmpId} already exists in the central database.` });
       }
 
+      const rawMaxDevices = req.body?.maxDevices ?? req.body?.max_devices;
+      const maxDevCheck = validateMaxDevices(rawMaxDevices, { defaultIfEmpty: true });
+      if (!maxDevCheck.valid) {
+        return res.status(400).json({ error: maxDevCheck.error });
+      }
+
       unmarkUserTombstone(ctx, cleanEmpId);
 
       const { pinHash, pinSalt } = hashPinScrypt(cleanPin);
@@ -385,6 +397,7 @@ export function registerAccountsRoutes(app: Express, ctx: ServerContext): void {
         role: String(role || "WAREHOUSE CLERK").trim().toUpperCase(),
         phoneNumber: phoneNumber ? String(phoneNumber).trim() : "",
         permission: String(permission || "LIMITED_ACCESS").trim(),
+        maxDevices: maxDevCheck.value,
         pinHash,
         pinSalt,
         status: "ACTIVE",
@@ -411,7 +424,8 @@ export function registerAccountsRoutes(app: Express, ctx: ServerContext): void {
         action: "CREATE",
         recordType: "registeredUsers",
         recordId: cleanEmpId,
-        summary: `Registered account ${cleanUsername} (${cleanEmpId}) — Role: ${newUser.role}, Permission: ${newUser.permission}`,
+        summary: `Registered account ${cleanUsername} (${cleanEmpId}) — Role: ${newUser.role}, Permission: ${newUser.permission}, Max Devices: ${newUser.maxDevices}`,
+        details: `Account: ${cleanUsername} (${cleanEmpId}) | maxDevices: ${newUser.maxDevices}`,
         deviceId: authCtx.deviceId || undefined,
       });
 
@@ -495,6 +509,25 @@ export function registerAccountsRoutes(app: Express, ctx: ServerContext): void {
         }
       }
 
+      const oldMaxDevices = resolveEffectiveMaxDevices(existing);
+      const rawUpdatedMaxDevices =
+        req.body?.updatedUser?.maxDevices ??
+        req.body?.updatedUser?.max_devices ??
+        req.body?.maxDevices ??
+        req.body?.max_devices;
+      const hasMaxDevicesField =
+        rawUpdatedMaxDevices !== undefined &&
+        rawUpdatedMaxDevices !== null &&
+        String(rawUpdatedMaxDevices).trim() !== "";
+      let nextMaxDevices = oldMaxDevices;
+      if (hasMaxDevicesField) {
+        const maxDevCheck = validateMaxDevices(rawUpdatedMaxDevices, { defaultIfEmpty: false });
+        if (!maxDevCheck.valid) {
+          return res.status(400).json({ error: maxDevCheck.error });
+        }
+        nextMaxDevices = maxDevCheck.value;
+      }
+
       const mergedUser: RegisteredAccount = {
         ...existing,
         ...updatedUser,
@@ -506,6 +539,7 @@ export function registerAccountsRoutes(app: Express, ctx: ServerContext): void {
         permission: isSuper
           ? "FULL_ACCESS"
           : String(updatedUser.permission || existing.permission).trim(),
+        maxDevices: nextMaxDevices,
         pinHash: existing.pinHash,
         pinSalt: existing.pinSalt,
         ...(existing.pin && !existing.pinHash ? { pin: existing.pin } : {}),
@@ -527,16 +561,36 @@ export function registerAccountsRoutes(app: Express, ctx: ServerContext): void {
         return res.status(500).json({ error: "Failed to persist account update to central database" });
       }
 
+      const verifiedSuperAdmin = isAuthorizedSuperAdmin(ctx, req, commitDatabase);
+      const actorName =
+        auth.account?.username ||
+        req.body.author ||
+        (verifiedSuperAdmin ? "ALDRIN BANAWA" : "Admin");
+      const actorEmployeeId =
+        auth.employeeId || (verifiedSuperAdmin ? "JPMP-002" : "ADMIN");
+
       const accountDiff = describeRecordDiff(existing, mergedUser);
       recordAuditTrail(ctx, {
-        actor: auth.account?.username || req.body.author || "Admin",
-        actorId: auth.employeeId || "ADMIN",
+        actor: actorName,
+        actorId: actorEmployeeId,
         action: "UPDATE",
         recordType: "registeredUsers",
         recordId: mergedUser.employeeId,
         summary: `Updated account ${mergedUser.username} (${mergedUser.employeeId})${accountDiff ? ` — ${accountDiff}` : ""}`,
         deviceId: auth.deviceId || undefined,
       });
+
+      if (oldMaxDevices !== nextMaxDevices) {
+        recordMaxDevicesChangeAudit(ctx, {
+          actorName,
+          actorEmployeeId,
+          targetAccount: mergedUser,
+          oldMaxDevices,
+          newMaxDevices: nextMaxDevices,
+          deviceId: auth.deviceId || undefined,
+          timestamp: mergedUser.updated_at,
+        });
+      }
 
       const safeUser = mapAccountToApi(mergedUser);
 

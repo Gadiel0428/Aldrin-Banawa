@@ -16,7 +16,7 @@ export interface MasterDataFeatureProps {
   isSuperAdmin: boolean;
   canEdit: boolean;
   defaultType?: RegistryType | 'ALL';
-  categories?: string[];
+  defaultView?: 'registry' | 'products';
 }
 
 export const MasterDataFeature: React.FC<MasterDataFeatureProps> = (props) => {

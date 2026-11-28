@@ -36,6 +36,7 @@ export interface DashboardFeatureProps {
   canEdit: boolean;
   registries: MasterRegistryItem[];
   openAlertsSignal: number;
+  canAccessAudit?: boolean;
 }
 
 export const DashboardFeature: React.FC<DashboardFeatureProps> = ({
@@ -55,7 +56,8 @@ export const DashboardFeature: React.FC<DashboardFeatureProps> = ({
   isSuperAdmin,
   canEdit,
   registries,
-  openAlertsSignal
+  openAlertsSignal,
+  canAccessAudit = false
 }) => {
   return (
     <DashboardOverview
@@ -76,6 +78,7 @@ export const DashboardFeature: React.FC<DashboardFeatureProps> = ({
       canEdit={canEdit}
       registries={registries}
       openAlertsSignal={openAlertsSignal}
+      canAccessAudit={canAccessAudit}
     />
   );
 };

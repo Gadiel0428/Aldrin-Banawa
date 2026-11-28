@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { RegisteredAccount } from '../types';
+import { AuthorizedDevice, RegisteredAccount } from '../types';
 import { getApiBaseUrl, getAuthHeaders } from '../config/serverConfig';
 
 function getLocalDeviceId(): string {
@@ -49,6 +49,15 @@ export async function verifyCentralCredentials(
         notifyDeviceRevoked(deviceId);
         throw new Error('DEVICE_REVOKED');
       }
+      if (
+        errJson?.errorCode === 'DEVICE_LIMIT_REACHED' ||
+        errJson?.errorCode === 'DEVICE_BOUND_TO_OTHER' ||
+        errJson?.error
+      ) {
+        const authErr: any = new Error(errJson?.error || 'Authentication denied.');
+        if (errJson?.errorCode) authErr.code = errJson.errorCode;
+        throw authErr;
+      }
       return null;
     }
     if (res.ok) {
@@ -72,7 +81,11 @@ export async function verifyCentralCredentials(
       }
     }
   } catch (apiErr: any) {
-    if (apiErr?.message === 'DEVICE_REVOKED') {
+    if (
+      apiErr?.message === 'DEVICE_REVOKED' ||
+      apiErr?.code === 'DEVICE_LIMIT_REACHED' ||
+      apiErr?.code === 'DEVICE_BOUND_TO_OTHER'
+    ) {
       throw apiErr;
     }
     console.warn('Central API verify account credentials error:', apiErr);
@@ -118,5 +131,56 @@ export async function updateCentralPin(
     return data;
   } catch (err: any) {
     return { success: false, error: err?.message || 'Network error updating PIN' };
+  }
+}
+
+export async function fetchAuthorizedDevices(): Promise<{
+  devices: AuthorizedDevice[];
+  primaryDeviceId?: string;
+}> {
+  try {
+    const baseUrl = getApiBaseUrl();
+    const res = await fetch(`${baseUrl}/api/devices/authorized`, {
+      method: 'GET',
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+    });
+    if (!res.ok) return { devices: [] };
+    const body = await res.json().catch(() => ({}));
+    return {
+      devices: Array.isArray(body?.devices) ? body.devices : [],
+      primaryDeviceId: body?.primaryDeviceId,
+    };
+  } catch {
+    return { devices: [] };
+  }
+}
+
+export async function unbindAuthorizedDevice(
+  deviceId: string,
+  author?: string
+): Promise<{
+  success: boolean;
+  device?: AuthorizedDevice;
+  previousEmployeeId?: string;
+  error?: string;
+}> {
+  try {
+    const baseUrl = getApiBaseUrl();
+    const localDevId = getLocalDeviceId();
+    const res = await fetch(`${baseUrl}/api/devices/unbind`, {
+      method: 'POST',
+      headers: getAuthHeaders({
+        'Content-Type': 'application/json',
+        ...(localDevId ? { 'x-device-id': localDevId } : {}),
+      }),
+      body: JSON.stringify({ deviceId, author }),
+    });
+    const data = await res.json().catch(() => ({ success: false, error: `HTTP ${res.status}` }));
+    if (res.status === 403 && data?.error === 'DEVICE_REVOKED') {
+      notifyDeviceRevoked(localDevId);
+    }
+    return data;
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error unbinding device' };
   }
 }

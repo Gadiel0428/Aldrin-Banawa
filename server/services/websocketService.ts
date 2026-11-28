@@ -28,7 +28,9 @@ import {
   markUserTombstone,
   unmarkUserTombstone,
 } from "./authService.ts";
+import { resolveEffectiveMaxDevices, validateMaxDevices } from "../../shared/deviceLimit.ts";
 import { commitDatabase } from "./backupService.ts";
+import { recordMaxDevicesChangeAudit } from "./deviceLimitService.ts";
 import {
   DEFAULT_FIFO_COLORS_BY_MONTH,
   type ActiveConnectionRecord,
@@ -1390,6 +1392,12 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
                   }
                   if (existing.pinChangedAt) updatedRec.pinChangedAt = existing.pinChangedAt;
                   if (existing.pinChangedBy) updatedRec.pinChangedBy = existing.pinChangedBy;
+                  const oldMaxDevices = resolveEffectiveMaxDevices(existing);
+                  const check =
+                    item.maxDevices !== undefined
+                      ? validateMaxDevices(item.maxDevices, { defaultIfEmpty: false })
+                      : { valid: true, value: oldMaxDevices };
+                  updatedRec.maxDevices = check.valid ? check.value : oldMaxDevices;
                 }
 
                 listMap.set(recId, updatedRec);
@@ -1761,6 +1769,14 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
             }
             const { pinHash, pinSalt } = hashPinScrypt(cleanPin);
 
+            const maxDevCheck = validateMaxDevices(newUser.maxDevices ?? newUser.max_devices, {
+              defaultIfEmpty: true,
+            });
+            if (!maxDevCheck.valid) {
+              ws.send(JSON.stringify({ type: "ERROR", error: maxDevCheck.error, status: 400 }));
+              break;
+            }
+
             const userToStore: RegisteredAccount = {
               id: newUser.id || `USR-${cleanEmpId}`,
               employeeId: cleanEmpId,
@@ -1768,6 +1784,7 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
               role: String(newUser.role || "WAREHOUSE CLERK").trim().toUpperCase(),
               phoneNumber: newUser.phoneNumber ? String(newUser.phoneNumber).trim() : "",
               permission: String(newUser.permission || "LIMITED_ACCESS").trim(),
+              maxDevices: maxDevCheck.value,
               pinHash,
               pinSalt,
               isPinCompromised: false,
@@ -1790,6 +1807,16 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
             commitDatabase(ctx);
 
             const authorName = payload.author || "Super Administrator";
+            recordAuditTrail(ctx, {
+              actor: conn?.username || authorName,
+              actorId: conn?.employeeId || payload.requesterEmployeeId || "JPMP-002",
+              action: "CREATE",
+              recordType: "registeredUsers",
+              recordId: cleanEmpId,
+              summary: `Registered account ${cleanUsername} (${cleanEmpId}) — Role: ${userToStore.role}, Permission: ${userToStore.permission}, Max Devices: ${userToStore.maxDevices}`,
+              details: `Account: ${cleanUsername} (${cleanEmpId}) | maxDevices: ${userToStore.maxDevices}`,
+              deviceId: conn?.deviceId || payload.device_id || undefined,
+            });
             broadcast(ctx, {
               type: "account_registered",
               user: sanitizeUserForClient(userToStore),
@@ -1831,6 +1858,22 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
 
             const existing = ctx.state.registeredUsers[existingIdx];
             const isSuper = cleanEmpId === "JPMP-002";
+            const oldMaxDevices = resolveEffectiveMaxDevices(existing);
+            const rawMaxDevices = updated.maxDevices ?? updated.max_devices;
+            let nextMaxDevices = oldMaxDevices;
+            if (
+              rawMaxDevices !== undefined &&
+              rawMaxDevices !== null &&
+              String(rawMaxDevices).trim() !== ""
+            ) {
+              const maxDevCheck = validateMaxDevices(rawMaxDevices, { defaultIfEmpty: false });
+              if (!maxDevCheck.valid) {
+                ws.send(JSON.stringify({ type: "ERROR", error: maxDevCheck.error, status: 400 }));
+                break;
+              }
+              nextMaxDevices = maxDevCheck.value;
+            }
+
             const mergedUser: RegisteredAccount = {
               ...existing,
               ...updated,
@@ -1842,6 +1885,7 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
               permission: isSuper
                 ? "FULL_ACCESS"
                 : String(updated.permission || existing.permission).trim(),
+              maxDevices: nextMaxDevices,
               pinHash: existing.pinHash,
               pinSalt: existing.pinSalt,
               ...(existing.pin && !existing.pinHash ? { pin: existing.pin } : {}),
@@ -1859,12 +1903,24 @@ export function setupWebSocketServer(server: http.Server, ctx: ServerContext): v
             ctx.stateRevision++;
             commitDatabase(ctx);
 
-            const authorName = payload.author || "Admin";
+            const authorName = conn?.username || payload.author || "Admin";
+            if (oldMaxDevices !== nextMaxDevices) {
+              recordMaxDevicesChangeAudit(ctx, {
+                actorName: authorName,
+                actorEmployeeId: conn?.employeeId || "JPMP-002",
+                targetAccount: mergedUser,
+                oldMaxDevices,
+                newMaxDevices: nextMaxDevices,
+                deviceId: conn?.deviceId || payload.device_id || undefined,
+                timestamp: mergedUser.updated_at,
+              });
+            }
+
             broadcast(ctx, {
               type: "account_updated",
               user: sanitizeUserForClient(mergedUser),
               account: sanitizeUserForClient(mergedUser),
-              author: authorName,
+              author: payload.author || "Admin",
               systemResetVersion: ctx.systemResetVersion,
             });
             broadcast(ctx, {

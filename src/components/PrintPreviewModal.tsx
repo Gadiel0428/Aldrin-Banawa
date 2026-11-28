@@ -16,7 +16,10 @@ import {
   printPages,
   savePagesAsPdf,
   showPrintToast,
-  formatPrintErrorMessage
+  formatPrintErrorMessage,
+  PrintPageSizeId,
+  PrintPageSizeSpec,
+  resolvePrintPageSize,
 } from '../utils/printDocument';
 import { useI18n } from '../i18n';
 
@@ -30,6 +33,7 @@ export interface PrintPreviewModalProps {
   pages: string[];
   isRendering?: boolean;
   extraToolbarControls?: React.ReactNode;
+  pageSize?: PrintPageSizeId | PrintPageSizeSpec;
 }
 
 export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
@@ -41,7 +45,8 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   filename,
   pages,
   isRendering = false,
-  extraToolbarControls
+  extraToolbarControls,
+  pageSize,
 }) => {
   const { t } = useI18n();
   const [scale, setScale] = useState<number>(1.0);
@@ -52,8 +57,13 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
   const [isSavingPdf, setIsSavingPdf] = useState<boolean>(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
+  const resolvedPageSpec = pageSize ? resolvePrintPageSize(pageSize) : null;
   const totalPages = pages.length;
-  const baseWidthPx = isLandscapePages ? 1050 : 760;
+  const baseWidthPx = resolvedPageSpec?.isLabel
+    ? Math.min(620, Math.max(440, resolvedPageSpec.cloneWidthPx + 80))
+    : isLandscapePages
+      ? 1050
+      : 760;
 
   // Detect portrait vs landscape page aspect from the first rendered page
   useEffect(() => {
@@ -105,7 +115,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     if (isPrinting || isRendering || pages.length === 0) return;
     setIsPrinting(true);
     try {
-      await printPages(pages);
+      await printPages(pages, resolvedPageSpec ? { pageSize: resolvedPageSpec } : undefined);
     } catch (err) {
       console.error('[PrintPreviewModal] Print error:', err);
       showPrintToast(
@@ -115,13 +125,17 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     } finally {
       setIsPrinting(false);
     }
-  }, [isPrinting, isRendering, pages]);
+  }, [isPrinting, isRendering, pages, resolvedPageSpec]);
 
   const handleSavePdf = useCallback(async () => {
     if (isSavingPdf || isRendering || pages.length === 0) return;
     setIsSavingPdf(true);
     try {
-      await savePagesAsPdf(pages, resolvedFilename);
+      await savePagesAsPdf(
+        pages,
+        resolvedFilename,
+        resolvedPageSpec ? { pageSize: resolvedPageSpec } : undefined
+      );
     } catch (err) {
       console.error('[PrintPreviewModal] Save PDF error:', err);
       showPrintToast(
@@ -131,7 +145,7 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
     } finally {
       setIsSavingPdf(false);
     }
-  }, [isSavingPdf, isRendering, pages, resolvedFilename]);
+  }, [isSavingPdf, isRendering, pages, resolvedFilename, resolvedPageSpec]);
 
   // Keyboard shortcuts: Escape to close, Ctrl/Cmd+P to print
   useEffect(() => {
@@ -222,7 +236,11 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
                 <span>{documentSubtitle}</span>
                 <span aria-hidden="true" className="text-slate-600">·</span>
                 <span className="text-slate-300 font-semibold">
-                  {isLandscapePages ? 'ISO A4 Landscape (297 × 210 mm)' : 'ISO A4 (210 × 297 mm)'}
+                  {resolvedPageSpec
+                    ? resolvedPageSpec.label
+                    : isLandscapePages
+                      ? 'ISO A4 Landscape (297 × 210 mm)'
+                      : 'ISO A4 (210 × 297 mm)'}
                 </span>
                 <span aria-hidden="true" className="text-slate-600">·</span>
                 <span className="text-emerald-400 font-bold">
@@ -232,9 +250,9 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
             </div>
           </div>
 
-          {/* Optional Document Switcher Controls */}
+          {/* Optional Document / Page Size Switcher Controls */}
           {extraToolbarControls && (
-            <div className="hidden lg:flex items-center">
+            <div className="flex flex-wrap items-center">
               {extraToolbarControls}
             </div>
           )}
@@ -391,7 +409,9 @@ export const PrintPreviewModal: React.FC<PrintPreviewModalProps> = ({
           {isRendering ? (
             <div className="my-auto flex flex-col items-center gap-3 text-slate-300 py-16">
               <Loader2 className="h-10 w-10 animate-spin text-indigo-400" />
-              <p className="text-sm font-mono font-bold text-white">RENDERING A4 PRINT PAGES...</p>
+              <p className="text-sm font-mono font-bold text-white">
+                {resolvedPageSpec?.isLabel ? 'RENDERING LABEL PRINT PAGE...' : 'RENDERING A4 PRINT PAGES...'}
+              </p>
               <p className="text-xs text-slate-400">Formatting tables, signatories, and pagination</p>
             </div>
           ) : pages.length === 0 ? (

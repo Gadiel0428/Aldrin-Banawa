@@ -29,8 +29,11 @@ export interface ReceivingFeatureProps {
   isSuperAdmin: boolean;
   canEdit: boolean;
   onOpenRegisterModal: () => void;
-  receivingCategories: string[];
-  onUpdateReceivingCategories: (newCategories: string[], renameData?: { oldCat: string; newCat: string }) => void;
+  receivingCategories?: string[];
+  onUpdateReceivingCategories?: (newCategories: string[], renameData?: { oldCat: string; newCat: string }) => void;
+  onRegisterCategoryItem?: (item: MasterRegistryItem) => void;
+  onUpdateCategoryItem?: (item: MasterRegistryItem) => void;
+  onDeleteCategoryItem?: (id: string) => void;
   fifoColorsByMonth: FifoColorsMap;
 }
 

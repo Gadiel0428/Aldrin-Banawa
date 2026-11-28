@@ -17,7 +17,11 @@ import { subscribeToProducts } from '../database/realtime';
 import { getAllSelectUomOptions, MISSING_UNIT_LABEL, normalizeUnitCode } from '../../shared/units';
 import { useI18n } from '../i18n';
 
-export const ProductList: React.FC = () => {
+export interface ProductListProps {
+  categories?: string[];
+}
+
+export const ProductList: React.FC<ProductListProps> = ({ categories = [] }) => {
   const { t } = useI18n();
   const [products, setProducts] = useState<Product[]>([]);
   const [search, setSearch] = useState('');
@@ -30,8 +34,14 @@ export const ProductList: React.FC = () => {
   const [name, setName] = useState('');
   const [barcode, setBarcode] = useState('');
   const [unit, setUnit] = useState('PCS');
-  const [category, setCategory] = useState('RAW');
+  const [category, setCategory] = useState(categories[0] || '');
   const [minStock, setMinStock] = useState(10);
+
+  useEffect(() => {
+    if (!category && categories.length > 0) {
+      setCategory(categories[0]);
+    }
+  }, [categories, category]);
 
   const loadProducts = async () => {
     setLoading(true);
@@ -129,7 +139,7 @@ export const ProductList: React.FC = () => {
               <div className="flex items-start justify-between gap-2">
                 <div className="font-bold text-sm text-slate-900 dark:text-slate-100">{prod.name}</div>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
-                  {prod.category || 'RAW'}
+                  {prod.category || t('common.na')}
                 </span>
               </div>
               <div className="font-mono text-xs text-indigo-600 dark:text-indigo-400 font-semibold mt-1">
@@ -228,13 +238,13 @@ export const ProductList: React.FC = () => {
                   <select
                     value={category}
                     onChange={(e) => setCategory(e.target.value)}
+                    required
                     className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800"
                   >
-                    <option value="RAW">RAW</option>
-                    <option value="PACKAGING">PACKAGING</option>
-                    <option value="CONSUMABLE">CONSUMABLE</option>
-                    <option value="WIP">WIP</option>
-                    <option value="FG">FG</option>
+                    <option value="">{t('masterRegistry.selectUnifiedCategoryOpt')}</option>
+                    {categories.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
                   </select>
                 </div>
                 <div>

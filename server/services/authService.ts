@@ -7,6 +7,7 @@
 
 import crypto from "crypto";
 import type { Request, Response } from "express";
+import { resolveEffectiveMaxDevices } from "../../shared/deviceLimit.ts";
 import type { AuthorizedDevice, RegisteredAccount } from "../../shared/types.ts";
 import logger from "../../src/lib/logger.ts";
 import { mapRequestMetaFromApi } from "../api/mapper.ts";
@@ -142,7 +143,8 @@ export function resolveRequestAuthContext(
   let boundEmpId = "";
   if (deviceRecord && deviceRecord.status === "AUTHORIZED") {
     boundEmpId = String(
-      deviceRecord.employeeId ||
+      deviceRecord.boundEmployeeId ||
+        deviceRecord.employeeId ||
         (deviceRecord.isPrimaryAdminDevice ? "JPMP-002" : "") ||
         tokenSess?.employeeId ||
         ""
@@ -228,6 +230,7 @@ export function ensureSuperAdminSeed(ctx: ServerContext, isFreshInstall: boolean
     const existing = ctx.state.registeredUsers[idx];
     const updated: RegisteredAccount = {
       ...existing,
+      maxDevices: resolveEffectiveMaxDevices(existing),
       deviceId: existing.deviceId || ctx.primaryDeviceId,
       isPrimaryAdminDevice: true,
       authorizedDevices: Array.from(

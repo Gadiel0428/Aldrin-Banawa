@@ -13,6 +13,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { PrintPreviewModal } from './PrintPreviewModal';
+import { ExportMenu } from './ExportMenu';
 import {
   renderDocumentPages,
   printPages,
@@ -1257,42 +1258,36 @@ export default function PrintablePickingListModal({
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleOpenPreview}
+            <ExportMenu
+              id="btn-picking-modal-export-header"
+              variant="indigo"
               disabled={isExportingPDF || isGeneratingPreview}
-              className={`px-3.5 py-2 ${isExportingPDF || isGeneratingPreview ? 'bg-slate-800/60 text-slate-500 border-slate-800 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white border-slate-700 hover:border-indigo-500/50 cursor-pointer active:scale-95'} border text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5`}
-              title={t('modals.printChrome.btnPreview')}
-              id="btn-print-preview"
-            >
-              {isGeneratingPreview ? (
-                <Loader2 className="h-4 w-4 animate-spin text-indigo-400" />
-              ) : (
-                <Eye className="h-4 w-4 text-indigo-400" />
-              )}
-              <span>{isGeneratingPreview ? t('modals.printChrome.btnRendering') : t('modals.printChrome.btnPreview')}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handlePrint}
-              disabled={isExportingPDF}
-              className={`px-4 py-2 ${isExportingPDF ? 'bg-indigo-800 text-indigo-300 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white cursor-pointer'} text-xs font-bold rounded-xl shadow-lg transition flex items-center gap-2`}
-              id="btn-print-document-sheet"
-              title={t('modals.printChrome.btnPrint')}
-            >
-              {isExportingPDF ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin text-amber-300" />
-                  <span>{t('modals.printChrome.btnPreparingPrint')}</span>
-                </>
-              ) : (
-                <>
-                  <Printer className="h-4 w-4" />
-                  <span>{t('modals.printChrome.btnPrint')}</span>
-                </>
-              )}
-            </button>
+              icon={
+                isExportingPDF || isGeneratingPreview ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                ) : (
+                  <Printer className="h-3.5 w-3.5 shrink-0" />
+                )
+              }
+              items={[
+                {
+                  id: 'btn-print-document-sheet',
+                  label: isExportingPDF ? t('modals.printChrome.btnPreparingPrint') : t('modals.printChrome.btnPrint'),
+                  title: t('modals.printChrome.btnPrint'),
+                  icon: <Printer className="h-3.5 w-3.5 text-indigo-600" />,
+                  onClick: handlePrint,
+                  disabled: isExportingPDF,
+                },
+                {
+                  id: 'btn-print-preview',
+                  label: isGeneratingPreview ? t('modals.printChrome.btnRendering') : t('modals.printChrome.btnPreview'),
+                  title: t('modals.printChrome.btnPreview'),
+                  icon: <Eye className="h-3.5 w-3.5 text-slate-600" />,
+                  onClick: handleOpenPreview,
+                  disabled: isExportingPDF || isGeneratingPreview,
+                },
+              ]}
+            />
             <button
               type="button"
               onClick={onClose}
@@ -1315,42 +1310,28 @@ export default function PrintablePickingListModal({
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleOpenPreview}
+            <ExportMenu
+              id="btn-picking-banner-export"
+              variant="light"
               disabled={isExportingPDF || isGeneratingPreview}
-              className={`px-2.5 py-1 ${isExportingPDF || isGeneratingPreview ? 'bg-amber-100/70 text-amber-700/60 border-amber-200 cursor-not-allowed' : 'bg-amber-200/80 hover:bg-amber-200 text-amber-950 cursor-pointer border-amber-300'} font-bold rounded-lg text-xs transition flex items-center gap-1 shadow-xs border`}
-            >
-              {isGeneratingPreview ? (
-                <>
-                  <Loader2 className="h-3 w-3 animate-spin text-amber-700" />
-                  <span>{t('modals.printChrome.btnPreparing')}</span>
-                </>
-              ) : (
-                <>
-                  <Eye className="h-3 w-3 text-amber-800" />
-                  <span>{t('modals.printChrome.btnPreviewA4')}</span>
-                </>
-              )}
-            </button>
-            <button
-              type="button"
-              onClick={handlePrint}
-              disabled={isExportingPDF}
-              className={`px-3 py-1 ${isExportingPDF ? 'bg-amber-900/80 text-amber-300 cursor-not-allowed' : 'bg-amber-700 hover:bg-amber-800 text-white cursor-pointer'} font-bold rounded-lg text-xs transition flex items-center gap-1.5 shadow-xs`}
-            >
-              {isExportingPDF ? (
-                <>
-                  <Loader2 className="h-3 w-3 animate-spin text-amber-300" />
-                  <span>{t('modals.printChrome.btnPreparingPrint')}</span>
-                </>
-              ) : (
-                <>
-                  <Printer className="h-3 w-3" />
-                  <span>{t('modals.printChrome.btnConfirmPrint')}</span>
-                </>
-              )}
-            </button>
+              icon={<Printer className="h-3.5 w-3.5 text-amber-700" />}
+              items={[
+                {
+                  id: 'btn-banner-confirm-print',
+                  label: isExportingPDF ? t('modals.printChrome.btnPreparingPrint') : t('modals.printChrome.btnConfirmPrint'),
+                  icon: <Printer className="h-3.5 w-3.5 text-amber-700" />,
+                  onClick: handlePrint,
+                  disabled: isExportingPDF,
+                },
+                {
+                  id: 'btn-banner-preview-a4',
+                  label: isGeneratingPreview ? t('modals.printChrome.btnPreparing') : t('modals.printChrome.btnPreviewA4'),
+                  icon: <Eye className="h-3.5 w-3.5 text-slate-600" />,
+                  onClick: handleOpenPreview,
+                  disabled: isExportingPDF || isGeneratingPreview,
+                },
+              ]}
+            />
           </div>
         </div>
 

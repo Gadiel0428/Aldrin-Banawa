@@ -37,7 +37,6 @@ import {
   DEFAULT_FIFO_COLORS_BY_MONTH,
   normalizeFifoColor
 } from '../data';
-import { DEFAULT_RECEIVING_CATEGORIES } from '../components/ReceivingModule';
 import { DEFAULT_OPERATIONAL_ROLES } from '../components/RegisteredAccountsModule';
 import {
   getCentralServerUrl,
@@ -153,6 +152,7 @@ export const SUPER_ADMIN_ACCOUNT: RegisteredAccount = {
   employeeId: 'JPMP-002',
   phoneNumber: '+639669858846',
   permission: 'FULL_ACCESS',
+  maxDevices: 2,
   hasPin: true,
   status: 'ACTIVE'
 };
@@ -637,7 +637,7 @@ export function useSync({
         }
       }
     } catch (e) {}
-    return DEFAULT_RECEIVING_CATEGORIES;
+    return [];
   });
 
   // FIFO Color Coding Calendar (12 Months) centrally managed and synced
@@ -3775,9 +3775,19 @@ export function useSync({
               }
               break;
             }
+            case 'DEVICE_AUTHORIZATION_UPDATED':
+            case 'DEVICE_UNBOUND': {
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('authorized_devices_updated', { detail: payload }));
+              }
+              break;
+            }
             case 'DEVICE_REVOKED': {
               handleDeviceRevoked(payload.deviceId);
               if (httpPollInterval) clearInterval(httpPollInterval);
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('authorized_devices_updated', { detail: payload }));
+              }
               break;
             }
             case 'ERROR': {

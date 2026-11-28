@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -33,11 +33,15 @@ import {
   Activity,
   CheckCircle2,
   FileText,
-  Loader2
+  Loader2,
+  Printer
 } from 'lucide-react';
 import { MaterialStockItem, MaterialType, getCustomerForPart, ReceivingRecord, IssuanceRecord, ReturnRecord, MasterRegistryItem, FifoColorsMap, FifoMonthColor } from '../types';
 import { FIFO_COLORS_BY_MONTH, DEFAULT_FIFO_COLORS_BY_MONTH, FIFO_COLOR_PRESETS, resolveFifoColor, getFifoColorForDate, normalizeFifoColor } from '../data';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
+import { LotLabelModal } from './LotLabelModal';
+import { ExportMenu } from './ExportMenu';
+import { StockMovementView } from './StockMovement';
 import { generateAuthoritativeId } from '../lib/idGenerator';
 import { showPrintToast } from '../utils/printDocument';
 import {
@@ -66,6 +70,9 @@ interface StockFIFOControlProps {
   registries?: MasterRegistryItem[];
   fifoColorsByMonth?: FifoColorsMap;
   onUpdateFifoColors?: (newColors: FifoColorsMap | { month: number; color: FifoMonthColor }) => Promise<void> | void;
+  currentUser?: { id: string; name: string; username: string };
+  onStockUpdated?: () => void;
+  initialTab?: 'bins' | 'movements';
 }
 
 export default function StockFIFOControl({
@@ -82,11 +89,24 @@ export default function StockFIFOControl({
   returns = [],
   registries = [],
   fifoColorsByMonth,
-  onUpdateFifoColors
+  onUpdateFifoColors,
+  currentUser,
+  onStockUpdated,
+  initialTab = 'bins'
 }: StockFIFOControlProps) {
   const { t, dateLocale } = useI18n();
   const effectiveCanEdit = canEdit || isSuperAdmin;
   const effectiveCalendar: FifoColorsMap = fifoColorsByMonth || FIFO_COLORS_BY_MONTH;
+  const [activeTab, setActiveTab] = useState<'bins' | 'movements'>(initialTab);
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
+
+  // Show Customer/Client fields only when the company has registered active customers
+  const hasCustomers = useMemo(() => {
+    return Array.isArray(registries) && registries.some(r => r.type === 'CUSTOMER' && r.status !== 'INACTIVE');
+  }, [registries]);
 
   // Calendar Management Modal States
   const [showEditCalendarModal, setShowEditCalendarModal] = useState<boolean>(false);
@@ -115,8 +135,9 @@ export default function StockFIFOControl({
     }
   };
   
-  // State for Item History Modal & Inline Row Expansion
+  // State for Item History Modal, Lot Label Modal & Inline Row Expansion
   const [historyStockItem, setHistoryStockItem] = useState<MaterialStockItem | null>(null);
+  const [printLabelStockItem, setPrintLabelStockItem] = useState<MaterialStockItem | null>(null);
   const [expandedStockId, setExpandedStockId] = useState<string | null>(null);
   const [inlineHistoryFilter, setInlineHistoryFilter] = useState<'ALL' | 'RECEIVING' | 'ISSUANCE' | 'RETURN'>('ALL');
 
@@ -256,7 +277,7 @@ export default function StockFIFOControl({
         : item.status === selectedStatus;
     
     const itemCustomer = item.customer || getCustomerForPart(item.partCode, item.description);
-    const matchesCustomer = selectedCustomer === 'ALL' || itemCustomer === selectedCustomer;
+    const matchesCustomer = !hasCustomers || selectedCustomer === 'ALL' || itemCustomer === selectedCustomer;
     
     return matchesSearch && matchesType && matchesStatus && matchesCustomer;
   });
@@ -343,7 +364,7 @@ export default function StockFIFOControl({
       'Part Code',
       'Description',
       'Material Type',
-      'Customer',
+      ...(hasCustomers ? ['Customer'] : []),
       'Location / Bin',
       'Available Quantity',
       'Unit',
@@ -362,7 +383,7 @@ export default function StockFIFOControl({
       `"${(item.partCode || '').replace(/"/g, '""')}"`,
       `"${(item.description || '').replace(/"/g, '""')}"`,
       `"${(item.type || '').replace(/"/g, '""')}"`,
-      `"${(item.customer || getCustomerForPart(item.partCode, item.description) || '').replace(/"/g, '""')}"`,
+      ...(hasCustomers ? [`"${(item.customer || getCustomerForPart(item.partCode, item.description) || '').replace(/"/g, '""')}"`] : []),
       `"${(item.location || '').replace(/"/g, '""')}"`,
       item.quantity,
       `"${(unitInfo.unit || MISSING_UNIT_LABEL).replace(/"/g, '""')}"`,
@@ -406,7 +427,40 @@ export default function StockFIFOControl({
             {t('stocks.moduleSubtitle')}
           </p>
         </div>
+
+        {/* Module Tabs: Stock & FIFO Bins | Movements */}
+        <div className="flex bg-slate-950/60 p-1.5 rounded-xl border border-slate-700/60 self-start md:self-auto shrink-0">
+          <button
+            type="button"
+            id="btn-stock-tab-bins"
+            onClick={() => setActiveTab('bins')}
+            className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 cursor-pointer ${
+              activeTab === 'bins' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
+            }`}
+          >
+            <Boxes className="h-4 w-4" /> {t('stocks.tabBins')}
+          </button>
+          <button
+            type="button"
+            id="btn-stock-tab-movements"
+            onClick={() => setActiveTab('movements')}
+            className={`px-4 py-2 text-xs font-bold rounded-lg transition-all flex items-center gap-2 cursor-pointer ${
+              activeTab === 'movements' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'
+            }`}
+          >
+            <History className="h-4 w-4" /> {t('stocks.tabMovements')}
+          </button>
+        </div>
       </div>
+
+      {activeTab === 'movements' ? (
+        <StockMovementView
+          stocks={stocks}
+          currentUser={currentUser}
+          onStockUpdated={onStockUpdated}
+        />
+      ) : (
+      <>
 
       {/* FIFO Color Coding Legend Section */}
       <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-4" id="fifo-legend-panel">
@@ -576,30 +630,38 @@ export default function StockFIFOControl({
           </div>
 
           {/* Filter Customer with Registered SKU Count */}
-          <div className="flex items-center border border-slate-200 rounded-lg bg-white px-2.5 py-1 text-xs" id="customer-filter-container">
-            <Users className="h-3 w-3 text-slate-400 mr-1.5" />
-            <select 
-              value={selectedCustomer}
-              onChange={e => setSelectedCustomer(e.target.value)}
-              className="bg-transparent focus:outline-none font-semibold text-slate-700 cursor-pointer max-w-[160px] truncate"
-              title={t('stocks.filterAllCustomers')}
-            >
-              <option value="ALL">{t('stocks.filterAllCustomers')}</option>
-              {customersWithSkuCounts.map(item => (
-                <option key={item.customer} value={item.customer}>
-                  {item.customer} ({item.skuCount} SKU)
-                </option>
-              ))}
-            </select>
-          </div>
+          {hasCustomers && (
+            <div className="flex items-center border border-slate-200 rounded-lg bg-white px-2.5 py-1 text-xs" id="customer-filter-container">
+              <Users className="h-3 w-3 text-slate-400 mr-1.5" />
+              <select 
+                value={selectedCustomer}
+                onChange={e => setSelectedCustomer(e.target.value)}
+                className="bg-transparent focus:outline-none font-semibold text-slate-700 cursor-pointer max-w-[160px] truncate"
+                title={t('stocks.filterAllCustomers')}
+              >
+                <option value="ALL">{t('stocks.filterAllCustomers')}</option>
+                {customersWithSkuCounts.map(item => (
+                  <option key={item.customer} value={item.customer}>
+                    {item.customer} ({item.skuCount} SKU)
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
-          <button 
-            onClick={handleDownloadCSV}
-            className="bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold py-1.5 px-3 rounded-lg flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
-            title={t('stocks.exportCsvTitle')}
-          >
-            <Download className="h-3.5 w-3.5" /> {t('stocks.exportCsvBtn')}
-          </button>
+          <ExportMenu
+            id="btn-stock-export-menu"
+            variant="emerald"
+            items={[
+              {
+                id: 'btn-stock-export-csv',
+                label: t('stocks.exportCsvBtn'),
+                title: t('stocks.exportCsvTitle'),
+                icon: <Download className="h-3.5 w-3.5 text-emerald-600" />,
+                onClick: handleDownloadCSV,
+              },
+            ]}
+          />
 
           {effectiveCanEdit && (
             <button 
@@ -714,18 +776,20 @@ export default function StockFIFOControl({
                 className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs"
               />
             </div>
-            <div>
-              <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('stocks.manualCustomerLabel')}</label>
-              <select 
-                value={newCustomer} onChange={e => setNewCustomer(e.target.value)}
-                className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs"
-              >
-                <option value="">{t('stocks.manualSelectCustomerOpt')}</option>
-                {registeredCustomers.map(cust => (
-                  <option key={cust} value={cust}>{cust}</option>
-                ))}
-              </select>
-            </div>
+            {hasCustomers && (
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-500 mb-1">{t('stocks.manualCustomerLabel')}</label>
+                <select 
+                  value={newCustomer} onChange={e => setNewCustomer(e.target.value)}
+                  className="w-full px-3 py-1.5 border border-slate-200 rounded text-xs"
+                >
+                  <option value="">{t('stocks.manualSelectCustomerOpt')}</option>
+                  {registeredCustomers.map(cust => (
+                    <option key={cust} value={cust}>{cust}</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -804,15 +868,6 @@ export default function StockFIFOControl({
             <span className="text-[11px] text-slate-500 font-medium hidden md:inline">
               &bull; {t('stocks.sortedByText')} <strong className="text-indigo-700 font-semibold">{sortField}</strong> ({sortDirection === 'asc' ? t('stocks.ascText') : t('stocks.descText')})
             </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleDownloadCSV}
-              className="bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold py-1.5 px-3 rounded-lg flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer"
-              title={t('stocks.exportCsvSummaryTitle')}
-            >
-              <Download className="h-3.5 w-3.5" /> {t('stocks.exportCsvSummaryBtn')}
-            </button>
           </div>
         </div>
 
@@ -1088,9 +1143,11 @@ export default function StockFIFOControl({
                               {t('stocks.sackRiskBadge')}
                             </span>
                           )}
-                          <span className="bg-indigo-50 text-indigo-700 text-[8px] font-bold px-1.5 py-0.5 rounded-sm border border-indigo-100 shrink-0 font-sans">
-                            {item.customer || getCustomerForPart(item.partCode, item.description)}
-                          </span>
+                          {hasCustomers && (item.customer || getCustomerForPart(item.partCode, item.description)) && (
+                            <span className="bg-indigo-50 text-indigo-700 text-[8px] font-bold px-1.5 py-0.5 rounded-sm border border-indigo-100 shrink-0 font-sans">
+                              {item.customer || getCustomerForPart(item.partCode, item.description)}
+                            </span>
+                          )}
                         </div>
                         <div className="text-slate-500 text-[11px] truncate max-w-[180px]">{item.description}</div>
                         {item.bom && item.bom.length > 0 && (
@@ -1195,6 +1252,20 @@ export default function StockFIFOControl({
                               <span>{isExpanded ? t('stocks.hideCardBtn') : t('stocks.detailsBtn')}</span>
                             </button>
 
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPrintLabelStockItem(item);
+                              }}
+                              className="flex items-center gap-1 text-[11px] font-semibold py-1 px-2.5 rounded-lg border bg-white hover:bg-indigo-50 text-slate-800 border-slate-300 hover:border-indigo-300 transition-colors cursor-pointer shrink-0"
+                              title={t('stocks.printLabelTooltip')}
+                              id={`btn-print-label-${item.id}`}
+                            >
+                              <Printer className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+                              <span>{t('stocks.printLabelBtn')}</span>
+                            </button>
+
                             {(effectiveCanEdit || isSuperAdmin) ? (
                               <select
                                 defaultValue=""
@@ -1202,7 +1273,9 @@ export default function StockFIFOControl({
                                 onChange={(e) => {
                                   e.stopPropagation();
                                   const val = e.target.value;
-                                  if (val === 'HISTORY') {
+                                  if (val === 'PRINT_LABEL') {
+                                    setPrintLabelStockItem(item);
+                                  } else if (val === 'HISTORY') {
                                     setHistoryStockItem(item);
                                   } else if (val === 'ADJUST') {
                                     if (!effectiveCanEdit) return;
@@ -1245,6 +1318,7 @@ export default function StockFIFOControl({
                                 id={`action-select-stock-${item.id}`}
                               >
                                 <option value="" disabled>{t('common.actions')}...</option>
+                                <option value="PRINT_LABEL">🏷️ {t('stocks.printLabelBtn')}</option>
                                 <option value="HISTORY">📜 {t('stocks.viewHistoryBtn')}</option>
                                 {effectiveCanEdit && (
                                   <>
@@ -1303,15 +1377,25 @@ export default function StockFIFOControl({
                                     <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-200 text-slate-700 uppercase">
                                       {item.type}
                                     </span>
-                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                      {item.customer || getCustomerForPart(item.partCode, item.description)}
-                                    </span>
+                                    {hasCustomers && (item.customer || getCustomerForPart(item.partCode, item.description)) && (
+                                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                        {item.customer || getCustomerForPart(item.partCode, item.description)}
+                                      </span>
+                                    )}
                                   </div>
                                   <p className="text-xs text-slate-600 mt-0.5">{item.description}</p>
                                 </div>
                               </div>
 
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <button
+                                  type="button"
+                                  onClick={() => setPrintLabelStockItem(item)}
+                                  className="px-3 py-1.5 bg-white hover:bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+                                >
+                                  <Printer className="h-3.5 w-3.5 text-indigo-600" />
+                                  <span>{t('stocks.printLabelBtn')}</span>
+                                </button>
                                 {effectiveCanEdit && (
                                   <>
                                     <button
@@ -1813,16 +1897,18 @@ export default function StockFIFOControl({
                   />
                 </div>
 
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('stocks.editCustomerLabel')}</label>
-                  <input 
-                    type="text" 
-                    value={editingStockItem.customer || ''}
-                    onChange={e => setEditingStockItem({ ...editingStockItem, customer: e.target.value })}
-                    placeholder={t('stocks.editCustomerPlaceholder')}
-                    className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
-                  />
-                </div>
+                {hasCustomers && (
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-1">{t('stocks.editCustomerLabel')}</label>
+                    <input 
+                      type="text" 
+                      value={editingStockItem.customer || ''}
+                      onChange={e => setEditingStockItem({ ...editingStockItem, customer: e.target.value })}
+                      placeholder={t('stocks.editCustomerPlaceholder')}
+                      className="w-full border border-slate-200 px-3 py-1.5 rounded focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="flex justify-end gap-2 text-xs font-semibold pt-3 border-t border-slate-100">
@@ -2130,13 +2216,18 @@ export default function StockFIFOControl({
                     >
                       {t('common.close')}
                     </button>
-                    <button
-                      onClick={downloadHistoryCSV}
-                      className="flex items-center gap-1.5 px-4 py-2 bg-blue-900 hover:bg-blue-950 text-white rounded-lg text-xs font-bold cursor-pointer transition shadow-xs"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      {t('stocks.exportHistoryCsvBtn')}
-                    </button>
+                    <ExportMenu
+                      id="btn-stock-history-export-menu"
+                      variant="slate"
+                      items={[
+                        {
+                          id: 'btn-stock-history-export-csv',
+                          label: t('stocks.exportHistoryCsvBtn'),
+                          icon: <Download className="h-3.5 w-3.5 text-indigo-600" />,
+                          onClick: downloadHistoryCSV,
+                        },
+                      ]}
+                    />
                   </div>
                 </div>
 
@@ -2146,9 +2237,20 @@ export default function StockFIFOControl({
           ) : null;
         })()}
       </AnimatePresence>
+      </>
+      )}
 
       {/* Reusable Confirmation Modal with YES / NO options */}
       <ConfirmModal config={confirmAction} onClose={() => setConfirmAction(null)} />
+
+      {/* Lot Label Print Modal (Code 128 Barcode + FIFO Tag + 50x30mm Thermal / A4 Options) */}
+      <LotLabelModal
+        stock={printLabelStockItem}
+        onClose={() => setPrintLabelStockItem(null)}
+        registries={registries}
+        stocks={stocks}
+        fifoColorsByMonth={effectiveCalendar}
+      />
 
       {/* Super Admin Edit FIFO Color Coding Calendar Modal */}
       {typeof document !== 'undefined' && showEditCalendarModal && isSuperAdmin && createPortal(

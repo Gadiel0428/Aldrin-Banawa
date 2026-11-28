@@ -18,7 +18,8 @@ export interface AccountsFeatureProps {
     permission?: string,
     phoneNumber?: string,
     customPin?: string,
-    status?: 'ACTIVE' | 'PENDING' | 'INACTIVE'
+    status?: 'ACTIVE' | 'PENDING' | 'INACTIVE',
+    maxDevices?: number
   ) => RegisteredAccount | null;
   onUpdateAccount: (oldEmployeeId: string, updated: RegisteredAccount) => void;
   onRemoveAccount: (employeeId: string) => void;

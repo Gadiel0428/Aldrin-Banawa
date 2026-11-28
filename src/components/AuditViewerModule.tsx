@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { getApiBaseUrl, getAuthHeaders } from '../config/serverConfig';
 import { useI18n } from '../i18n';
+import { ExportMenu } from './ExportMenu';
 import type { AuditTrailEntry } from '../types';
 
 export type { AuditTrailEntry };
@@ -49,16 +50,16 @@ function formatRecordTypeLabel(recordType: string): string {
 
 function getActionBadgeClasses(action: string): string {
   const upper = (action || '').toUpperCase();
-  if (upper === 'CREATE' || upper === 'DEVICE_AUTHORIZED') {
+  if (upper === 'CREATE' || upper === 'DEVICE_AUTHORIZED' || upper === 'DEVICE_BOUND') {
     return 'bg-emerald-50 text-emerald-700 border-emerald-200';
   }
   if (upper === 'DELETE' || upper === 'PURGE' || upper === 'DEVICE_REVOKED' || upper === 'GLOBAL_RESET') {
     return 'bg-rose-50 text-rose-700 border-rose-200';
   }
-  if (upper === 'STOCK_MOVEMENT' || upper === 'DEVICE_PENDING' || upper === 'COMPROMISED_PIN_RESOLVED') {
+  if (upper === 'STOCK_MOVEMENT' || upper === 'DEVICE_PENDING' || upper === 'DEVICE_UNBOUND' || upper === 'COMPROMISED_PIN_RESOLVED') {
     return 'bg-amber-50 text-amber-800 border-amber-200';
   }
-  if (upper.startsWith('PIN_') || upper === 'DATABASE_RESTORED' || upper === 'BACKUP_CREATED') {
+  if (upper.startsWith('PIN_') || upper === 'MAX_DEVICES_UPDATED' || upper === 'DATABASE_RESTORED' || upper === 'BACKUP_CREATED') {
     return 'bg-purple-50 text-purple-700 border-purple-200';
   }
   return 'bg-indigo-50 text-indigo-700 border-indigo-200';
@@ -318,17 +319,21 @@ export default function AuditViewerModule({
             <span>{isLoading ? t('audit.refreshingBtn') : t('audit.refreshBtn')}</span>
           </button>
 
-          <button
-            type="button"
-            onClick={handleExportCsv}
-            disabled={filteredLogs.length === 0}
+          <ExportMenu
             id="btn-audit-export-csv"
-            className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white border border-emerald-400/30 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-xs"
-            title="Export the currently filtered audit view to CSV"
-          >
-            <Download className="h-3.5 w-3.5" />
-            <span>{t('audit.exportCsvBtn')}</span>
-          </button>
+            variant="emerald"
+            disabled={filteredLogs.length === 0}
+            title="Export the currently filtered audit view"
+            items={[
+              {
+                id: 'btn-audit-export-csv-item',
+                label: t('audit.exportCsvBtn'),
+                icon: <Download className="h-3.5 w-3.5 text-emerald-600" />,
+                onClick: handleExportCsv,
+                disabled: filteredLogs.length === 0,
+              },
+            ]}
+          />
         </div>
       </div>
 

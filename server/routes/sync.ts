@@ -25,7 +25,9 @@ import {
   rejectIfDeviceRevokedHttp,
   resolveRequestAuthContext,
 } from "../services/authService.ts";
+import { resolveEffectiveMaxDevices, validateMaxDevices } from "../../shared/deviceLimit.ts";
 import { commitDatabase } from "../services/backupService.ts";
+import { recordMaxDevicesChangeAudit } from "../services/deviceLimitService.ts";
 import {
   broadcast,
   closeDeviceSockets,
@@ -283,6 +285,11 @@ export function registerSyncRoutes(app: Express, ctx: ServerContext): void {
       const effectiveDevId = reqDevId || "DEV-CENTRAL";
       const effectiveUserId =
         meta.userId || (meta.employeeId ? `USR-${meta.employeeId}` : `USR-${effectiveAuthor}`);
+      const pendingMaxDevicesChanges: Array<{
+        targetAccount: any;
+        oldMaxDevices: number;
+        newMaxDevices: number;
+      }> = [];
 
       for (const item of items) {
         if (!item) continue;
@@ -337,6 +344,24 @@ export function registerSyncRoutes(app: Express, ctx: ServerContext): void {
               updatedRec.isPinCompromised = existing.isPinCompromised;
             if (existing.pinChangedAt) updatedRec.pinChangedAt = existing.pinChangedAt;
             if (existing.pinChangedBy) updatedRec.pinChangedBy = existing.pinChangedBy;
+
+            const oldMaxDevices = resolveEffectiveMaxDevices(existing);
+            if (item.maxDevices !== undefined) {
+              const check = validateMaxDevices(item.maxDevices, { defaultIfEmpty: false });
+              if (!check.valid) {
+                return res.status(400).json({ error: check.error, recordId: recId });
+              }
+              updatedRec.maxDevices = check.value;
+            } else {
+              updatedRec.maxDevices = oldMaxDevices;
+            }
+            if (oldMaxDevices !== updatedRec.maxDevices) {
+              pendingMaxDevicesChanges.push({
+                targetAccount: updatedRec,
+                oldMaxDevices,
+                newMaxDevices: updatedRec.maxDevices,
+              });
+            }
           }
 
           const tempReceivingList = collection === "receiving" ? Array.from(listMap.values()) : undefined;
@@ -437,6 +462,18 @@ export function registerSyncRoutes(app: Express, ctx: ServerContext): void {
           summary: `Synced ${collection} (${modifiedCount} item(s) modified)`,
           deviceId: effectiveDevId,
         });
+
+        for (const chg of pendingMaxDevicesChanges) {
+          recordMaxDevicesChangeAudit(ctx, {
+            actorName: auth.account?.username || effectiveAuthor,
+            actorEmployeeId: auth.employeeId || meta.employeeId || effectiveUserId,
+            targetAccount: chg.targetAccount,
+            oldMaxDevices: chg.oldMaxDevices,
+            newMaxDevices: chg.newMaxDevices,
+            deviceId: effectiveDevId,
+            timestamp: serverTime,
+          });
+        }
 
         logger.debug(
           `[CENTRAL-DB] [REST-POST-SYNC] Collection: ${collection} | Items received: ${items.length} | Modified: ${modifiedCount} | User: ${effectiveUserId} | Device: ${effectiveDevId}`

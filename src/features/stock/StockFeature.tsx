@@ -33,6 +33,9 @@ export interface StockFeatureProps {
   registries: MasterRegistryItem[];
   fifoColorsByMonth: FifoColorsMap;
   onUpdateFifoColors: (updated: FifoColorsMap | { month: number; color: FifoMonthColor }) => void;
+  currentUser?: { id: string; name: string; username: string };
+  onStockUpdated?: () => void;
+  initialTab?: 'bins' | 'movements';
 }
 
 export const StockFeature: React.FC<StockFeatureProps> = (props) => {

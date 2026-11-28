@@ -231,12 +231,16 @@ export function generateInventoryReportPDF(
   doc.text(`GENERATED: ${generatedTimestamp}`, pageWidth - 14, 14, { align: 'right' });
   doc.text(`OPERATOR: ${options.generatedBy || 'Aldrin Banawa'} (${options.employeeId || 'JPMP-002'})`, pageWidth - 14, 19, { align: 'right' });
 
+  const hasCustomers = Array.isArray(options.registries) && options.registries.some(r => r.type === 'CUSTOMER' && r.status !== 'INACTIVE');
+
   // Subheader & Scope Description
   let yPos = 31;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
   doc.setTextColor(15, 23, 42); // slate-900
-  const scopeCustomer = options.customerFilter && options.customerFilter !== 'ALL' ? `Customer: ${options.customerFilter}` : 'All Customers (Canon, Brother, Dyson, General)';
+  const scopeCustomer = hasCustomers
+    ? (options.customerFilter && options.customerFilter !== 'ALL' ? `Customer: ${options.customerFilter}` : 'All Customers')
+    : '';
   const scopeStatus = options.statusFilter === 'APPROVED' ? 'Approved Stock Only' :
     options.statusFilter === 'LOW_STOCK' ? 'Low Stock / Reorder Critical Items' :
     options.statusFilter === 'MISSING_UNIT' ? 'Missing Unit Records Flagged' :
@@ -248,7 +252,13 @@ export function generateInventoryReportPDF(
   doc.setFontSize(8);
   doc.setTextColor(100, 116, 139); // slate-500
   const missingFlagSummary = data.missingUnitCount > 0 ? `   |   MISSING UNIT FLAGS: ${data.missingUnitCount}` : '';
-  doc.text(`Report Scope: ${scopeCustomer}   |   Status Filter: ${scopeStatus}   |   Active Lot Records: ${data.items.length} lots   |   Unique SKUs: ${data.uniquePartCount}${missingFlagSummary}`, 14, yPos);
+  const scopeParts = [
+    ...(scopeCustomer ? [`Report Scope: ${scopeCustomer}`] : []),
+    `Status Filter: ${scopeStatus}`,
+    `Active Lot Records: ${data.items.length} lots`,
+    `Unique SKUs: ${data.uniquePartCount}${missingFlagSummary}`,
+  ];
+  doc.text(scopeParts.join('   |   '), 14, yPos);
 
   // KPI Summary Cards
   yPos += 5.5;
@@ -355,7 +365,7 @@ export function generateInventoryReportPDF(
     { header: 'PART CODE', dataKey: 'partCode' },
     { header: 'DESCRIPTION', dataKey: 'description' },
     { header: 'CATEGORY', dataKey: 'type' },
-    { header: 'CUSTOMER', dataKey: 'resolvedCustomer' },
+    ...(hasCustomers ? [{ header: 'CUSTOMER', dataKey: 'resolvedCustomer' }] : []),
     { header: 'LOCATION', dataKey: 'location' },
     { header: 'LOT NUMBER', dataKey: 'lotNumber' },
     { header: 'QTY', dataKey: 'quantityFormatted' },
@@ -408,9 +418,9 @@ export function generateInventoryReportPDF(
     },
     columnStyles: {
       partCode: { font: 'courier', fontStyle: 'bold', cellWidth: 26 },
-      description: { cellWidth: 48 },
+      description: { cellWidth: hasCustomers ? 48 : 72 },
       type: { cellWidth: 18 },
-      resolvedCustomer: { cellWidth: 24, fontStyle: 'bold' },
+      ...(hasCustomers ? { resolvedCustomer: { cellWidth: 24, fontStyle: 'bold' as const } } : {}),
       location: { cellWidth: 20 },
       lotNumber: { font: 'courier', cellWidth: 24 },
       quantityFormatted: { font: 'courier', fontStyle: 'bold', halign: 'right', cellWidth: 22 },
@@ -549,12 +559,13 @@ export function generateInventoryReportCSV(
   options: InventoryReportOptions
 ): string {
   const data = filterInventoryData(stocks, options);
+  const hasCustomers = Array.isArray(options.registries) && options.registries.some(r => r.type === 'CUSTOMER' && r.status !== 'INACTIVE');
 
   const headers = [
     'Part Code',
     'Description',
     'Category',
-    'Customer',
+    ...(hasCustomers ? ['Customer'] : []),
     'Location',
     'Lot Number',
     'Quantity',
@@ -582,7 +593,7 @@ export function generateInventoryReportCSV(
     escapeCSV(item.partCode),
     escapeCSV(item.description),
     escapeCSV(item.type || 'RAW'),
-    escapeCSV(item.resolvedCustomer),
+    ...(hasCustomers ? [escapeCSV(item.resolvedCustomer)] : []),
     escapeCSV(item.location),
     escapeCSV(item.lotNumber),
     item.quantity ?? 0,

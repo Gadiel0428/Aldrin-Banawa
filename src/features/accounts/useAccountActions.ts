@@ -13,6 +13,7 @@ import {
 } from '../../hooks/useSync';
 import { showPrintToast } from '../../utils/printDocument';
 import { translate } from '../../i18n';
+import { resolveEffectiveMaxDevices, validateMaxDevices } from '../../../shared/deviceLimit';
 
 export function canAccessAdminModules(
   currentPermission: string,
@@ -66,7 +67,8 @@ export function useAccountActions({
     permission?: string,
     phoneNumber?: string,
     customPin?: string,
-    status?: 'ACTIVE' | 'PENDING' | 'INACTIVE'
+    status?: 'ACTIVE' | 'PENDING' | 'INACTIVE',
+    maxDevices?: number
   ): RegisteredAccount | null => {
     const isSuperAdminOperating =
       currentEmployeeId === 'JPMP-002' ||
@@ -123,6 +125,12 @@ export function useAccountActions({
       }
     }
 
+    const maxDevCheck = validateMaxDevices(maxDevices, { defaultIfEmpty: true });
+    if (!maxDevCheck.valid) {
+      showPrintToast(maxDevCheck.error || translate('accounts.maxDevicesRangeError'), 'warning');
+      return null;
+    }
+
     const cleanPermission = permission || (cleanEmployeeId === 'JPMP-002' ? 'FULL_ACCESS' : 'LIMITED_ACCESS');
     const newUserWithOneTimePin: RegisteredAccount = {
       username: cleanUsername,
@@ -130,6 +138,7 @@ export function useAccountActions({
       employeeId: cleanEmployeeId,
       phoneNumber: phoneNumber ? phoneNumber.trim() : '',
       permission: cleanPermission,
+      maxDevices: maxDevCheck.value,
       pin: finalPin,
       hasPin: true,
       status: status || 'ACTIVE',
@@ -191,6 +200,11 @@ export function useAccountActions({
           const errJson = await res.json().catch(() => ({}));
           if (errJson?.error === 'DEVICE_REVOKED') {
             handleDeviceRevoked(persistentDevId);
+          }
+        } else if (res.status === 400) {
+          const errJson = await res.json().catch(() => ({}));
+          if (errJson?.error) {
+            showPrintToast(errJson.error, 'error');
           }
         }
       }).catch(() => {});
@@ -320,6 +334,10 @@ export function useAccountActions({
       if ((u.employeeId || '').toUpperCase() === cleanOldId) {
         const { pin: _dropIncomingPin, ...restUpdated } = updated;
         const { pin: _dropExistingPin, ...restExisting } = u;
+        const resolvedMaxDevices =
+          updated.maxDevices !== undefined
+            ? validateMaxDevices(updated.maxDevices, { defaultIfEmpty: true }).value
+            : resolveEffectiveMaxDevices(u);
         return {
           ...restExisting,
           ...restUpdated,
@@ -328,6 +346,7 @@ export function useAccountActions({
           role: (updated.role || '').toUpperCase(),
           phoneNumber: updated.phoneNumber !== undefined ? updated.phoneNumber : (u.phoneNumber || ''),
           permission: updated.permission || u.permission || 'LIMITED_ACCESS',
+          maxDevices: resolvedMaxDevices,
           hasPin: Boolean(updated.hasPin ?? u.hasPin ?? true),
           mustChangePin: updated.mustChangePin !== undefined ? updated.mustChangePin : u.mustChangePin,
           isPinCompromised: updated.isPinCompromised !== undefined ? updated.isPinCompromised : u.isPinCompromised,
@@ -400,6 +419,11 @@ export function useAccountActions({
             const errJson = await res.json().catch(() => ({}));
             if (errJson?.error === 'DEVICE_REVOKED') {
               handleDeviceRevoked(persistentDevId);
+            }
+          } else if (res.status === 400) {
+            const errJson = await res.json().catch(() => ({}));
+            if (errJson?.error) {
+              showPrintToast(errJson.error, 'error');
             }
           }
         }).catch(() => {});

@@ -31,13 +31,12 @@ import {
   Users,
   FileText,
   FileSpreadsheet,
-  Download,
-  Printer,
   Info,
   X,
   ShieldCheck,
   Bell
 } from 'lucide-react';
+import { ExportMenu } from './ExportMenu';
 import {
   MaterialStockItem,
   ReceivingRecord,
@@ -54,9 +53,6 @@ import { computeDashboardTotals } from '../utils/dashboardTotals';
 import { getManilaTodayString } from '../lib/businessDate';
 import ReceivingVsIssuanceReportModal from './ReceivingVsIssuanceReportModal';
 import InventoryReportModal from './InventoryReportModal';
-import { PrintPreviewModal } from './PrintPreviewModal';
-import { generateReceivingVsIssuanceReportPages } from '../utils/reportGenerator';
-import { showPrintToast, formatPrintErrorMessage } from '../utils/printDocument';
 import {
   MISSING_UNIT_KEY,
   MISSING_UNIT_LABEL,
@@ -87,9 +83,10 @@ interface DashboardOverviewProps {
   canEdit?: boolean;
   registries?: MasterRegistryItem[];
   openAlertsSignal?: number;
+  canAccessAudit?: boolean;
 }
 
-type DashboardPopup = 'safety' | 'iso' | 'flow' | 'lowStock' | 'shelfLife' | 'alerts' | 'operators' | null;
+type DashboardPopup = 'safety' | 'iso' | 'lowStock' | 'shelfLife' | 'alerts' | 'operators' | null;
 
 export default function DashboardOverview({
   stocks,
@@ -108,7 +105,8 @@ export default function DashboardOverview({
   isSuperAdmin = false,
   canEdit: _canEdit = false,
   registries = [],
-  openAlertsSignal = 0
+  openAlertsSignal = 0,
+  canAccessAudit = false
 }: DashboardOverviewProps) {
   const { t, dateLocale } = useI18n();
   const [activePopup, setActivePopup] = useState<DashboardPopup>(null);
@@ -119,10 +117,6 @@ export default function DashboardOverview({
   const [selectedTransaction, setSelectedTransaction] = useState<{ type: 'RECEIVING' | 'ISSUANCE'; record: any } | null>(null);
   const [showReportModal, setShowReportModal] = useState(false);
   const [showInventoryReportModal, setShowInventoryReportModal] = useState(false);
-  const [isExportingPDF, setIsExportingPDF] = useState(false);
-  const [showDirectPreview, setShowDirectPreview] = useState(false);
-  const [directPreviewPages, setDirectPreviewPages] = useState<string[]>([]);
-  const [directPreviewFilename, setDirectPreviewFilename] = useState('Juwei_Receiving_vs_Issuance_Report.pdf');
   const [viewportHeight, setViewportHeight] = useState<number>(() =>
     typeof window !== 'undefined' ? window.innerHeight : 900
   );
@@ -175,8 +169,6 @@ export default function DashboardOverview({
     resolvedDeliveries,
     receivedGrouped,
     issuedGrouped,
-    flowVelocityByUnit,
-    topFlowSkus,
     quarantineCount,
     pendingIqcCount,
     brokenResinSacks,
@@ -236,32 +228,6 @@ export default function DashboardOverview({
 
   const todayManilaStr = getManilaTodayString();
   const futureTransactionsCount = liveTransactions.filter(tx => tx.date > todayManilaStr).length;
-
-  const handleDirectExportPDF = async () => {
-    if (isExportingPDF) return;
-    setIsExportingPDF(true);
-    setShowDirectPreview(true);
-    try {
-      const { pages, filename } = await generateReceivingVsIssuanceReportPages(receiving, issuances, stocks, {
-        dateRange: 'all',
-        registries,
-        generatedBy: currentUser,
-        employeeId: 'JPMP-002',
-        userRole: isSuperAdmin ? 'Super Administrator' : 'Warehouse Manager'
-      });
-      setDirectPreviewPages(pages);
-      setDirectPreviewFilename(filename);
-    } catch (err) {
-      console.error('Failed to render PDF report:', err);
-      setShowDirectPreview(false);
-      showPrintToast(
-        `Failed to generate PDF report: ${formatPrintErrorMessage(err)}`,
-        'error'
-      );
-    } finally {
-      setIsExportingPDF(false);
-    }
-  };
 
   // Auto-scroll chat to bottom when Dispatch pop-up is open
   useEffect(() => {
@@ -601,27 +567,41 @@ export default function DashboardOverview({
             </span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => setShowInventoryReportModal(true)}
-            id="btn-generate-inventory-report"
-            className="bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 xl:px-3 py-1.5 rounded-lg text-[11px] xl:text-xs font-bold transition shadow-xs flex items-center gap-1.5 cursor-pointer border border-emerald-400/30 whitespace-nowrap shrink-0"
-            title={t('dashboard.generateReportTooltip')}
-          >
-            <FileSpreadsheet className="h-3.5 w-3.5 shrink-0" />
-            <span>{t('dashboard.generateReportBtn')}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setShowReportModal(true)}
-            id="btn-receiving-vs-issuance-report"
-            className="bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 xl:px-3 py-1.5 rounded-lg text-[11px] xl:text-xs font-bold transition shadow-xs flex items-center gap-1.5 cursor-pointer border border-indigo-400/30 whitespace-nowrap shrink-0"
-            title={t('dashboard.rxVsIssPdfTooltip')}
-          >
-            <FileText className="h-3.5 w-3.5 shrink-0" />
-            <span>{t('dashboard.rxVsIssPdfBtn')}</span>
-          </button>
+          <ExportMenu
+            id="btn-dashboard-reports-menu"
+            label={t('dashboard.reportsBtn')}
+            title={t('dashboard.reportsTooltip')}
+            variant="indigo"
+            icon={<FileSpreadsheet className="h-3.5 w-3.5 shrink-0" />}
+            items={[
+              {
+                id: 'generate-report',
+                label: t('dashboard.generateReportBtn'),
+                title: t('dashboard.generateReportTooltip'),
+                icon: <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />,
+                onClick: () => setShowInventoryReportModal(true),
+              },
+              {
+                id: 'rx-vs-iss',
+                label: t('dashboard.rxVsIssPdfBtn'),
+                title: t('dashboard.rxVsIssPdfTooltip'),
+                icon: <FileText className="h-3.5 w-3.5 text-indigo-600" />,
+                onClick: () => setShowReportModal(true),
+              },
+              {
+                id: 'full-audit',
+                label: t('dashboard.fullAuditReport'),
+                icon: <ShieldCheck className="h-3.5 w-3.5 text-slate-700" />,
+                onClick: () => {
+                  if (canAccessAudit || isSuperAdmin) {
+                    setView('audit');
+                  } else {
+                    setShowReportModal(true);
+                  }
+                },
+              },
+            ]}
+          />
 
           <span className="text-[10px] font-bold text-white font-mono bg-slate-800/90 px-2.5 py-1.5 rounded-lg border border-slate-700 whitespace-nowrap shrink-0">
             {t('dashboard.plantBadge')}
@@ -1206,116 +1186,6 @@ export default function DashboardOverview({
                 </>
               )}
 
-              {/* Pop-up: Material Flow & Top Velocity */}
-              {activePopup === 'flow' && (
-                <>
-                  <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between shrink-0">
-                    <div className="flex items-center gap-2">
-                      <FileText className="h-5 w-5 text-indigo-400" />
-                      <h3 className="font-bold text-sm">{t('dashboard.flowModalTitle')}</h3>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setActivePopup(null)}
-                      className="p-1 text-slate-400 hover:text-white rounded-lg cursor-pointer"
-                      aria-label={t('common.close')}
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                  <div className="p-5 overflow-y-auto space-y-4">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-xs text-slate-600">
-                        {t('dashboard.flowModalDesc')}
-                      </p>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={handleDirectExportPDF}
-                          disabled={isExportingPDF}
-                          className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer"
-                        >
-                          <Download className="h-3.5 w-3.5" />
-                          {isExportingPDF ? t('dashboard.generating') : t('common.exportPdf')}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setActivePopup(null);
-                            setShowReportModal(true);
-                          }}
-                          className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer border border-slate-200"
-                        >
-                          <Printer className="h-3.5 w-3.5" />
-                          <span>{t('dashboard.fullAuditReport')}</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2.5 bg-slate-50 p-3 rounded-xl border border-slate-200">
-                      <div className="text-[10px] font-mono font-bold uppercase text-slate-500 flex justify-between">
-                        <span>{t('dashboard.flowVelocityByUnit')}</span>
-                        <span>{t('dashboard.separateUnitBuckets')}</span>
-                      </div>
-                      {flowVelocityByUnit.length === 0 ? (
-                        <div className="text-xs text-slate-400 italic">{t('dashboard.noFlowTransactions')}</div>
-                      ) : (
-                        flowVelocityByUnit.map(row => (
-                          <div key={`popup-vel-${row.key}`} className="space-y-1">
-                            <div className="flex justify-between text-xs font-bold gap-2 flex-wrap">
-                              <span className="text-emerald-700 font-mono">
-                                {t('dashboard.inboundLabel')} [{row.displayUnit}]: {formatNumberForUnit(row.rx)} {row.displayUnit} ({row.rxPct}%)
-                              </span>
-                              <span className="text-blue-700 font-mono">
-                                {t('dashboard.outboundLabel')} [{row.displayUnit}]: {formatNumberForUnit(row.iss)} {row.displayUnit} ({row.issPct}%)
-                              </span>
-                            </div>
-                            <div className="w-full bg-slate-200 rounded-full h-2.5 flex overflow-hidden">
-                              <div className="bg-emerald-500" style={{ width: `${row.rxPct}%` }} />
-                              <div className="bg-blue-600" style={{ width: `${row.issPct}%` }} />
-                            </div>
-                          </div>
-                        ))
-                      )}
-                    </div>
-
-                    {topFlowSkus.length > 0 && (
-                      <div className="space-y-2">
-                        <h4 className="text-xs font-bold text-slate-700 uppercase">
-                          {t('dashboard.topMaterialVelocity')}
-                        </h4>
-                        <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden">
-                          {topFlowSkus.map((sku, idx) => {
-                            const delta = sku.rx - sku.iss;
-                            const unitStr = sku.unit || MISSING_UNIT_LABEL;
-                            return (
-                              <div key={`popup-flow-sku-${sku.partCode}-${idx}`} className="px-3 py-2 text-xs flex items-center justify-between gap-3 bg-white">
-                                <div className="min-w-0 flex-1">
-                                  <span className="font-mono font-bold text-slate-900 mr-2">{sku.partCode}</span>
-                                  <span className="text-slate-600 truncate">{sku.description}</span>
-                                  {sku.unitMissing && (
-                                    <span className="ml-1.5 text-[9px] font-mono font-bold bg-rose-100 text-rose-700 border border-rose-200 px-1 py-0.5 rounded">
-                                      {MISSING_UNIT_LABEL}
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="flex items-center gap-3 font-mono text-[11px] shrink-0 tabular-nums">
-                                  <span className="text-emerald-700 font-bold">Rx: {formatNumberForUnit(sku.rx)} {unitStr}</span>
-                                  <span className="text-blue-700 font-bold">Iss: {formatNumberForUnit(sku.iss)} {unitStr}</span>
-                                  <span className={`font-bold ${delta >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                                    {delta > 0 ? `+${formatNumberForUnit(delta)}` : formatNumberForUnit(delta)} {unitStr}
-                                  </span>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-
               {/* Pop-up: Low Stock Reorder Alerts */}
               {activePopup === 'lowStock' && (
                 <>
@@ -1835,20 +1705,6 @@ export default function DashboardOverview({
           isSuperAdmin={isSuperAdmin}
           initialCustomerFilter="ALL"
           onClose={() => setShowInventoryReportModal(false)}
-        />
-      )}
-
-      {/* In-App Preview for Direct Dashboard PDF Report */}
-      {showDirectPreview && (
-        <PrintPreviewModal
-          isOpen={showDirectPreview}
-          onClose={() => setShowDirectPreview(false)}
-          documentTitle="Receiving vs Issuance Audit Snapshot"
-          documentNumber="DOC REF: JPM-WMS-REP-008"
-          documentSubtitle="All-Time Historical Material Flow Report"
-          filename={directPreviewFilename}
-          pages={directPreviewPages}
-          isRendering={isExportingPDF}
         />
       )}
 

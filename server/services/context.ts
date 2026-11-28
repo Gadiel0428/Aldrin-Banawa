@@ -8,6 +8,7 @@
 import fs from "fs";
 import type { WebSocket, WebSocketServer } from "ws";
 import type { ServerConfig } from "../config.ts";
+import { DEFAULT_MAX_DEVICES } from "../../shared/deviceLimit.ts";
 import type {
   AuditTrailEntry,
   AuthorizedDevice,
@@ -98,6 +99,17 @@ export const FIFO_KNOWN_COLOR_NAMES = new Set<string>(
     "Purple", "Indigo", "Amber", "Gold", "White",
   ].map((s: string) => s.toLowerCase())
 );
+
+export const STARTER_CATEGORY_REGISTRIES: MasterRegistryItem[] = [
+  { id: "REG-CAT-RESIN", type: "CATEGORY", code: "CAT-RESIN", name: "RESIN/RAW MATERIALS", description: "Primary molding resin & raw material classification", status: "ACTIVE", dateRegistered: "2026-10-02" },
+  { id: "REG-CAT-INDIRECT", type: "CATEGORY", code: "CAT-INDIRECT", name: "INDIRECT BOM", description: "Indirect production consumables & engineering supplies", status: "ACTIVE", dateRegistered: "2026-10-02" },
+  { id: "REG-CAT-DIRECT", type: "CATEGORY", code: "CAT-DIRECT", name: "DIRECT BOM", description: "Direct assembly bill-of-material components", status: "ACTIVE", dateRegistered: "2026-10-02" },
+  { id: "REG-CAT-CON", type: "CATEGORY", code: "CAT-CON", name: "CONSUMABLES", description: "Cleanroom & shop-floor consumables", status: "ACTIVE", dateRegistered: "2026-10-02" },
+  { id: "REG-CAT-PKG", type: "CATEGORY", code: "CAT-PKG", name: "PACKAGING MATERIALS", description: "Cartons, liners, bags & protective packaging", status: "ACTIVE", dateRegistered: "2026-10-02" },
+  { id: "REG-CAT-WIP", type: "CATEGORY", code: "CAT-WIP", name: "WIP (WORK IN PROGRESS)", description: "Semi-finished & sub-assembly transfers", status: "ACTIVE", dateRegistered: "2026-10-02" },
+  { id: "REG-CAT-FG", type: "CATEGORY", code: "CAT-FG", name: "FG (FINISHED GOOD)", description: "Completed outbound finished goods", status: "ACTIVE", dateRegistered: "2026-10-02" },
+  { id: "REG-CAT-OFFICE", type: "CATEGORY", code: "CAT-OFFICE", name: "OFFICE SUPPLIES", description: "Administrative & label stationery", status: "ACTIVE", dateRegistered: "2026-10-02" },
+];
 
 export const STARTER_BARCODE_PRESETS: MasterRegistryItem[] = [
   {
@@ -221,6 +233,7 @@ export const DEFAULT_SUPER_ADMIN: RegisteredAccount = {
   role: "SUPER ADMINISTRATOR",
   phoneNumber: "+639669858846",
   permission: "FULL_ACCESS",
+  maxDevices: DEFAULT_MAX_DEVICES,
   status: "ACTIVE",
   registeredBy: "INITIAL_INSTALLATION_SUPER_ADMIN",
   registeredBySuperAdmin: true,
@@ -443,7 +456,7 @@ export function createServerContext(params: {
       deliveries: INITIAL_DELIVERIES.map((item: DeliveryRecord) => normalizeBaseRecord(item, systemResetVersion) as DeliveryRecord),
       envLogs: INITIAL_ENV_LOGS.map((item: EnvironmentalLog) => normalizeBaseRecord(item, systemResetVersion) as EnvironmentalLog),
       forkliftChecks: INITIAL_FORKLIFT_CHECKS.map((item: ForkliftChecklist) => normalizeBaseRecord(item, systemResetVersion) as ForkliftChecklist),
-      registries: [...STARTER_BARCODE_PRESETS],
+      registries: [...STARTER_CATEGORY_REGISTRIES, ...STARTER_BARCODE_PRESETS],
       registeredUsers: [{ ...DEFAULT_SUPER_ADMIN }],
       stockMovements: [],
       operationalRoles: [...DEFAULT_OPERATIONAL_ROLES],

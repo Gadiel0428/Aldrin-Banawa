@@ -6,6 +6,7 @@
  */
 
 import type {
+  AuthorizedDevice,
   DeliveryRecord,
   IssuanceRecord,
   MaterialStockItem,
@@ -16,6 +17,10 @@ export const RR_FORMAT_REGEX = /^RR-\d{4}-\d{4}$/;
 export const PO_FORMAT_REGEX = /^PO-\d{4}-\d{4}$/;
 export const DR_FORMAT_REGEX = /^DR-\d{5}$/;
 export const SI_FORMAT_REGEX = /^SI-\d{5}$/;
+
+export const DEFAULT_MAX_DEVICES = 2;
+export const MIN_MAX_DEVICES = 1;
+export const MAX_MAX_DEVICES = 10;
 
 export interface ValidationResult {
   valid: boolean;
@@ -356,4 +361,78 @@ export function validateStockRecord(
   }
 
   return buildResult(fieldErrors);
+}
+
+export interface MaxDevicesValidationResult {
+  valid: boolean;
+  value?: number;
+  error?: string;
+}
+
+export function validateMaxDevices(rawValue: unknown): MaxDevicesValidationResult {
+  if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') {
+    return {
+      valid: false,
+      error: `Maximum devices must be a whole number between ${MIN_MAX_DEVICES} and ${MAX_MAX_DEVICES}.`,
+    };
+  }
+  const num = Number(rawValue);
+  if (!Number.isFinite(num) || !Number.isInteger(num) || num < MIN_MAX_DEVICES || num > MAX_MAX_DEVICES) {
+    return {
+      valid: false,
+      error: `Maximum devices must be a whole number between ${MIN_MAX_DEVICES} and ${MAX_MAX_DEVICES}.`,
+    };
+  }
+  return { valid: true, value: num };
+}
+
+export function normalizeMaxDevices(
+  rawValue: unknown,
+  fallback: number = DEFAULT_MAX_DEVICES
+): number {
+  const res = validateMaxDevices(rawValue);
+  if (res.valid && res.value !== undefined) {
+    return res.value;
+  }
+  return fallback;
+}
+
+export function isSuperAdminAccount(account?: {
+  employeeId?: string;
+  permission?: string;
+  role?: string;
+} | null): boolean {
+  if (!account) return false;
+  const empId = String(account.employeeId || '').trim().toUpperCase();
+  const perm = String(account.permission || '').trim().toUpperCase();
+  const role = String(account.role || '').trim().toUpperCase();
+  return empId === 'JPMP-002' || perm === 'FULL_ACCESS' || role.includes('SUPER ADMIN');
+}
+
+export function getDeviceBoundEmployeeId(
+  device?: { boundEmployeeId?: string; employeeId?: string } | null
+): string {
+  if (!device) return '';
+  return String(device.boundEmployeeId ?? device.employeeId ?? '').trim().toUpperCase();
+}
+
+export function countBoundDevicesForOperator(
+  devices: Iterable<AuthorizedDevice>,
+  employeeId: string
+): number {
+  const targetId = String(employeeId || '').trim().toUpperCase();
+  if (!targetId) return 0;
+  let count = 0;
+  for (const dev of devices) {
+    if (!dev || dev.status !== 'AUTHORIZED') continue;
+    const boundId = String(dev.boundEmployeeId ?? dev.employeeId ?? '').trim().toUpperCase();
+    if (boundId && boundId === targetId) {
+      count++;
+    }
+  }
+  return count;
+}
+
+export function buildDeviceLimitErrorMessage(limit: number): string {
+  return `You have reached your device limit (${limit}). Ask your Super Administrator to remove an old device or raise your limit.`;
 }

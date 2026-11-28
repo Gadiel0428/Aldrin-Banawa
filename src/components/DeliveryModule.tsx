@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { DeliveryRecord, ForkliftChecklist, MaterialStockItem, MasterRegistryItem } from '../types';
 import PrintablePickingListModal, { DocViewMode } from './PrintablePickingListModal';
+import { ExportMenu } from './ExportMenu';
 import { ConfirmModal, ConfirmActionConfig } from './ConfirmModal';
 import { motion, AnimatePresence } from 'motion/react';
 import { generateAuthoritativeId } from '../lib/idGenerator';
@@ -353,41 +354,43 @@ export default function DeliveryModule({
           <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs flex flex-col gap-3">
             {/* Action Buttons Row */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 w-full">
-              <div className="flex flex-wrap items-center gap-2 overflow-x-auto">
-                <button 
-                  type="button"
-                  onClick={() => {
-                    const target = filteredDeliveries[0] || deliveries[0];
-                    if (target) {
-                      setPrintInitialView('OFFICIAL_DOC');
-                      setSelectedPickingDocDelivery(target);
-                    } else {
-                      showPrintToast(t('delivery.noDeliveriesToPrint'), 'warning');
-                    }
-                  }}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 px-3.5 rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer whitespace-nowrap shrink-0"
-                  id="btn-print-active-dr"
-                  title={t('delivery.printDrTooltip')}
-                >
-                  <Printer className="h-4 w-4" /> {t('delivery.printDrBtn')}
-                </button>
-
-                <button 
-                  type="button"
-                  onClick={() => {
-                    if (filteredDeliveries.length > 0 || deliveries.length > 0) {
-                      setPrintInitialView('SUMMARY_LOG');
-                      setSelectedPickingDocDelivery(filteredDeliveries[0] || deliveries[0]);
-                    } else {
-                      showPrintToast(t('delivery.noSummaryToPrint'), 'warning');
-                    }
-                  }}
-                  className="bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-2 px-3.5 rounded-lg flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer whitespace-nowrap shrink-0"
-                  id="btn-print-delivery-log"
-                  title={t('delivery.printSummaryTooltip')}
-                >
-                  <Printer className="h-4 w-4 text-slate-300" /> {t('delivery.printSummaryBtn')}
-                </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <ExportMenu
+                  id="btn-delivery-export-menu"
+                  variant="indigo"
+                  menuAlign="left"
+                  items={[
+                    {
+                      id: 'btn-print-active-dr',
+                      label: t('delivery.printDrBtn'),
+                      title: t('delivery.printDrTooltip'),
+                      icon: <Printer className="h-3.5 w-3.5 text-indigo-600" />,
+                      onClick: () => {
+                        const target = filteredDeliveries[0] || deliveries[0];
+                        if (target) {
+                          setPrintInitialView('OFFICIAL_DOC');
+                          setSelectedPickingDocDelivery(target);
+                        } else {
+                          showPrintToast(t('delivery.noDeliveriesToPrint'), 'warning');
+                        }
+                      },
+                    },
+                    {
+                      id: 'btn-print-delivery-log',
+                      label: t('delivery.printSummaryBtn'),
+                      title: t('delivery.printSummaryTooltip'),
+                      icon: <Printer className="h-3.5 w-3.5 text-slate-600" />,
+                      onClick: () => {
+                        if (filteredDeliveries.length > 0 || deliveries.length > 0) {
+                          setPrintInitialView('SUMMARY_LOG');
+                          setSelectedPickingDocDelivery(filteredDeliveries[0] || deliveries[0]);
+                        } else {
+                          showPrintToast(t('delivery.noSummaryToPrint'), 'warning');
+                        }
+                      },
+                    },
+                  ]}
+                />
               </div>
 
               <div className="flex items-center sm:ml-auto shrink-0">

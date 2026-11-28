@@ -19,10 +19,10 @@ import {
   Layers, 
   Search, 
   Building, 
-  Check, 
   Eye,
   Loader2 
 } from 'lucide-react';
+import { ExportMenu } from './ExportMenu';
 import { PrintPreviewModal } from './PrintPreviewModal';
 import {
   renderDocumentPages,
@@ -90,15 +90,21 @@ export default function InventoryReportModal({
     approvedByDate: todayStr,
   });
 
-  // Extract unique customers
+  const hasCustomers = useMemo(
+    () => registries.some(r => r.type === 'CUSTOMER' && r.status !== 'INACTIVE'),
+    [registries]
+  );
+
+  // Extract unique customers only when the company has active Master Data customer entries
   const customers = useMemo(() => {
+    if (!hasCustomers) return [];
     const custSet = new Set<string>();
     stocks.forEach(s => {
       const cust = s.customer || getCustomerForPart(s.partCode, s.description);
       if (cust) custSet.add(cust);
     });
     return Array.from(custSet).sort();
-  }, [stocks]);
+  }, [stocks, hasCustomers]);
 
   const reportOptions: InventoryReportOptions = useMemo(() => ({
     customerFilter: customerFilter !== 'ALL' ? customerFilter : undefined,
@@ -282,9 +288,11 @@ export default function InventoryReportModal({
               </div>
 
               <div className="mt-3 bg-slate-50 p-2.5 rounded-xl border border-slate-200 text-xs flex flex-wrap justify-between items-center text-slate-700 gap-2">
-                <div>
-                  <span className="font-bold">Customer Scope:</span> {customerFilter !== 'ALL' ? customerFilter : 'All Customers (Canon, Brother, Dyson, General)'}
-                </div>
+                {hasCustomers && (
+                  <div>
+                    <span className="font-bold">Customer Scope:</span> {customerFilter !== 'ALL' ? customerFilter : t('modals.printChrome.allCustomers')}
+                  </div>
+                )}
                 <div>
                   <span className="font-bold">Status Scope:</span> {statusFilter === 'APPROVED' ? 'Approved Stock Only' : statusFilter === 'LOW_STOCK' ? 'Low Stock Reorder Alerts' : statusFilter === 'QUARANTINE_HOLD' ? 'Quarantine & Hold Area' : statusFilter === 'MISSING_UNIT' ? 'Missing Unit Flagged' : 'Complete Inventory'}
                 </div>
@@ -373,36 +381,38 @@ export default function InventoryReportModal({
             </div>
 
             {/* Customer Allocation Breakdown Tags */}
-            <div className="avoid-break bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs space-y-2">
-              <div className="flex justify-between items-center">
-                <span className="text-[11px] font-extrabold text-slate-700 uppercase font-mono flex items-center gap-1.5">
-                  <Building className="h-3.5 w-3.5 text-indigo-600" /> Customer Allocation Breakdown (By Unit):
-                </span>
-                <span className="text-[10px] font-mono text-slate-400">Approved & Active Stock</span>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                {Object.entries(summary.customerBreakdown).map(([cust, val]) => (
-                  <div key={cust} className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
-                    <div className="flex justify-between items-center gap-1">
-                      <span className="text-[11px] font-bold text-slate-800 block truncate">{cust}</span>
-                      <span className="text-[10px] font-mono text-slate-500 shrink-0">{val.count} lots</span>
+            {hasCustomers && Object.keys(summary.customerBreakdown).length > 0 && (
+              <div className="avoid-break bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs space-y-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-[11px] font-extrabold text-slate-700 uppercase font-mono flex items-center gap-1.5">
+                    <Building className="h-3.5 w-3.5 text-indigo-600" /> Customer Allocation Breakdown (By Unit):
+                  </span>
+                  <span className="text-[10px] font-mono text-slate-400">Approved & Active Stock</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  {Object.entries(summary.customerBreakdown).map(([cust, val]) => (
+                    <div key={cust} className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
+                      <div className="flex justify-between items-center gap-1">
+                        <span className="text-[11px] font-bold text-slate-800 block truncate">{cust}</span>
+                        <span className="text-[10px] font-mono text-slate-500 shrink-0">{val.count} lots</span>
+                      </div>
+                      <div className="space-y-0.5 font-mono">
+                        {val.byUnit.map(b => (
+                          <div key={b.key} className="flex justify-between items-baseline text-xs">
+                            <span className={`font-extrabold ${b.isMissing ? 'text-rose-700' : 'text-indigo-700'}`}>
+                              {formatNumberForUnit(b.total)}
+                            </span>
+                            <span className={`text-[10px] font-bold ${b.isMissing ? 'text-rose-700' : 'text-slate-600'}`}>
+                              {b.displayUnit}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                    <div className="space-y-0.5 font-mono">
-                      {val.byUnit.map(b => (
-                        <div key={b.key} className="flex justify-between items-baseline text-xs">
-                          <span className={`font-extrabold ${b.isMissing ? 'text-rose-700' : 'text-indigo-700'}`}>
-                            {formatNumberForUnit(b.total)}
-                          </span>
-                          <span className={`text-[10px] font-bold ${b.isMissing ? 'text-rose-700' : 'text-slate-600'}`}>
-                            {b.displayUnit}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Itemized Inventory Table */}
             <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-2xs">
@@ -412,7 +422,7 @@ export default function InventoryReportModal({
                     <tr className="bg-slate-900 text-white font-bold text-[10px] uppercase font-mono tracking-wider">
                       <th className="p-2.5">Part Code</th>
                       <th className="p-2.5">Item Description</th>
-                      <th className="p-2.5">Customer</th>
+                      {hasCustomers && <th className="p-2.5">Customer</th>}
                       <th className="p-2.5">Category</th>
                       <th className="p-2.5">Location</th>
                       <th className="p-2.5">Lot No.</th>
@@ -435,9 +445,11 @@ export default function InventoryReportModal({
                         <td className="p-2.5 font-medium text-slate-800 max-w-[200px] truncate" title={item.description}>
                           {item.description}
                         </td>
-                        <td className="p-2.5 font-bold text-slate-700 whitespace-nowrap">
-                          {item.resolvedCustomer}
-                        </td>
+                        {hasCustomers && (
+                          <td className="p-2.5 font-bold text-slate-700 whitespace-nowrap">
+                            {item.resolvedCustomer}
+                          </td>
+                        )}
                         <td className="p-2.5">
                           <span className="text-[9px] bg-slate-100 text-slate-700 font-bold px-1.5 py-0.5 rounded uppercase font-mono">
                             {item.type}
@@ -674,59 +686,43 @@ export default function InventoryReportModal({
               </div>
             </div>
 
-            {/* Quick Action Buttons in Modal Header */}
+            {/* Unified Export Menu in Modal Header */}
             <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={handleExportCSV}
-                disabled={isExportingCSV}
-                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer border border-emerald-400/30"
-                title={t('modals.printChrome.btnExportCsv')}
-              >
-                {copiedSuccess ? <Check className="h-3.5 w-3.5 text-white" /> : <Download className="h-3.5 w-3.5" />}
-                <span>{isExportingCSV ? t('modals.printChrome.btnExportingCsv') : copiedSuccess ? t('modals.printChrome.btnCsvExported') : t('modals.printChrome.btnExportCsv')}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleExportPDF}
-                disabled={isExportingPDF}
-                className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer border border-indigo-400/30"
-                title={t('modals.printChrome.btnPdfPreview')}
-              >
-                {isExportingPDF ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
-                <span>{isExportingPDF ? t('modals.printChrome.btnRenderingPdf') : t('modals.printChrome.btnPdfPreview')}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleOpenPreview}
-                disabled={isGeneratingPreview}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-indigo-300 hover:text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border border-slate-700"
-                title={t('common.printPreview')}
-              >
-                {isGeneratingPreview ? <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" /> : <Eye className="h-3.5 w-3.5 text-indigo-400" />}
-                <span className="hidden sm:inline">{isGeneratingPreview ? t('modals.printChrome.btnRenderingPdf') : t('common.printPreview')}</span>
-              </button>
-              <button
-                type="button"
-                onClick={handlePrint}
-                disabled={isPrintingPDF}
-                className={`px-3 py-1.5 ${isPrintingPDF ? 'bg-slate-800 text-slate-400 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer'} rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-slate-700`}
-                title={t('common.print')}
-              >
-                {isPrintingPDF ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-300" />
-                    <span className="hidden sm:inline">{t('modals.printChrome.btnPreparingPrint')}</span>
-                  </>
-                ) : (
-                  <>
-                    <Printer className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">{t('common.print')}</span>
-                  </>
-                )}
-              </button>
+              <ExportMenu
+                id="btn-inventory-report-header-export"
+                variant="emerald"
+                disabled={isExportingCSV || isExportingPDF || isGeneratingPreview || isPrintingPDF}
+                items={[
+                  {
+                    id: 'csv',
+                    label: isExportingCSV ? t('modals.printChrome.btnExportingCsv') : copiedSuccess ? t('modals.printChrome.btnCsvExported') : t('modals.printChrome.btnExportCsv'),
+                    icon: <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />,
+                    onClick: handleExportCSV,
+                    disabled: isExportingCSV,
+                  },
+                  {
+                    id: 'pdf',
+                    label: isExportingPDF ? t('modals.printChrome.btnRenderingPdf') : t('modals.printChrome.btnPdfPreview'),
+                    icon: isExportingPDF ? <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-600" /> : <FileText className="h-3.5 w-3.5 text-indigo-600" />,
+                    onClick: handleExportPDF,
+                    disabled: isExportingPDF,
+                  },
+                  {
+                    id: 'preview',
+                    label: isGeneratingPreview ? t('modals.printChrome.btnRenderingPdf') : t('common.printPreview'),
+                    icon: isGeneratingPreview ? <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-600" /> : <Eye className="h-3.5 w-3.5 text-indigo-600" />,
+                    onClick: handleOpenPreview,
+                    disabled: isGeneratingPreview,
+                  },
+                  {
+                    id: 'print',
+                    label: isPrintingPDF ? t('modals.printChrome.btnPreparingPrint') : t('common.print'),
+                    icon: isPrintingPDF ? <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-600" /> : <Printer className="h-3.5 w-3.5 text-slate-600" />,
+                    onClick: handlePrint,
+                    disabled: isPrintingPDF,
+                  },
+                ]}
+              />
 
               <button
                 type="button"
@@ -746,20 +742,22 @@ export default function InventoryReportModal({
                 <Filter className="h-3.5 w-3.5 text-indigo-600" /> {t('modals.printChrome.filterView')}
               </span>
 
-              {/* Customer Selector */}
-              <div className="flex items-center gap-1.5">
-                <label className="text-[11px] font-bold text-slate-500 uppercase font-mono">{t('common.customer')}:</label>
-                <select
-                  value={customerFilter}
-                  onChange={(e) => setCustomerFilter(e.target.value)}
-                  className="bg-white border border-slate-300 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-800 focus:ring-1 focus:ring-indigo-500 focus:outline-none shadow-2xs"
-                >
-                  <option value="ALL">{t('modals.printChrome.allCustomers')}</option>
-                  {customers.map(c => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-              </div>
+              {/* Customer Selector (shown only when company has active customers) */}
+              {hasCustomers && (
+                <div className="flex items-center gap-1.5">
+                  <label className="text-[11px] font-bold text-slate-500 uppercase font-mono">{t('common.customer')}:</label>
+                  <select
+                    value={customerFilter}
+                    onChange={(e) => setCustomerFilter(e.target.value)}
+                    className="bg-white border border-slate-300 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-800 focus:ring-1 focus:ring-indigo-500 focus:outline-none shadow-2xs"
+                  >
+                    <option value="ALL">{t('modals.printChrome.allCustomers')}</option>
+                    {customers.map(c => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {/* Status Filter */}
               <div className="flex items-center gap-1.5">
@@ -808,25 +806,35 @@ export default function InventoryReportModal({
             </div>
 
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleExportCSV}
-                disabled={isExportingCSV}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer"
-              >
-                <FileSpreadsheet className="h-4 w-4" />
-                <span>{isExportingCSV ? t('modals.printChrome.btnExportingCsv') : t('modals.printChrome.btnDownloadCsv')}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleExportPDF}
-                disabled={isExportingPDF}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer"
-              >
-                {isExportingPDF ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                <span>{isExportingPDF ? t('modals.printChrome.btnRenderingPdf') : t('modals.printChrome.btnPreviewSavePdf')}</span>
-              </button>
+              <ExportMenu
+                id="btn-inventory-report-footer-export"
+                variant="indigo"
+                dropUp
+                disabled={isExportingCSV || isExportingPDF || isPrintingPDF}
+                items={[
+                  {
+                    id: 'csv',
+                    label: isExportingCSV ? t('modals.printChrome.btnExportingCsv') : t('modals.printChrome.btnDownloadCsv'),
+                    icon: <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />,
+                    onClick: handleExportCSV,
+                    disabled: isExportingCSV,
+                  },
+                  {
+                    id: 'pdf',
+                    label: isExportingPDF ? t('modals.printChrome.btnRenderingPdf') : t('modals.printChrome.btnPreviewSavePdf'),
+                    icon: isExportingPDF ? <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-600" /> : <Download className="h-3.5 w-3.5 text-indigo-600" />,
+                    onClick: handleExportPDF,
+                    disabled: isExportingPDF,
+                  },
+                  {
+                    id: 'print',
+                    label: isPrintingPDF ? t('modals.printChrome.btnPreparingPrint') : t('common.print'),
+                    icon: isPrintingPDF ? <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-600" /> : <Printer className="h-3.5 w-3.5 text-slate-600" />,
+                    onClick: handlePrint,
+                    disabled: isPrintingPDF,
+                  },
+                ]}
+              />
 
               <button
                 type="button"

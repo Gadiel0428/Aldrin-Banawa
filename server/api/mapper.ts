@@ -18,6 +18,7 @@ import type {
   StockMovementType,
 } from "../../shared/types.ts";
 import { normalizeUnitCode } from "../../shared/units.ts";
+import { resolveEffectiveMaxDevices } from "../../shared/deviceLimit.ts";
 
 export interface MappedRequestMeta {
   deviceId: string;
@@ -462,6 +463,11 @@ export function mapAccountFromApi(raw: Record<string, any>): RegisteredAccount {
   const stationId = pickDefined(u.stationId, u.station_id);
   const isPrimaryAdminDevice = pickDefined(u.isPrimaryAdminDevice, u.is_primary_admin_device);
   const authorizedDevices = pickDefined(u.authorizedDevices, u.authorized_devices);
+  const rawMaxDevices = pickDefined(u.maxDevices, u.max_devices);
+  const maxDevices =
+    rawMaxDevices !== undefined && rawMaxDevices !== null && String(rawMaxDevices).trim() !== ""
+      ? Number(rawMaxDevices)
+      : undefined;
   const updated_at = pickDefined(u.updated_at, u.updatedAt);
   const reset_version = parseOptionalNumber(pickDefined(u.reset_version, u.resetVersion));
 
@@ -483,6 +489,7 @@ export function mapAccountFromApi(raw: Record<string, any>): RegisteredAccount {
   delete u.station_id;
   delete u.is_primary_admin_device;
   delete u.authorized_devices;
+  delete u.max_devices;
   delete u.updatedAt;
   delete u.resetVersion;
 
@@ -493,6 +500,7 @@ export function mapAccountFromApi(raw: Record<string, any>): RegisteredAccount {
     ...(pinHash !== undefined ? { pinHash } : {}),
     ...(pinSalt !== undefined ? { pinSalt } : {}),
     ...(phoneNumber !== undefined ? { phoneNumber } : {}),
+    ...(maxDevices !== undefined ? { maxDevices } : {}),
     ...(mustChangePin !== undefined ? { mustChangePin: Boolean(mustChangePin) } : {}),
     ...(isPinCompromised !== undefined ? { isPinCompromised: Boolean(isPinCompromised) } : {}),
     ...(pinChangedAt !== undefined ? { pinChangedAt } : {}),
@@ -533,6 +541,7 @@ export function mapAccountToApi(u: any): any {
   } = u;
   return {
     ...safe,
+    maxDevices: resolveEffectiveMaxDevices(u),
     hasPin: hasConfiguredPin,
     mustChangePin: Boolean(u.mustChangePin),
   };

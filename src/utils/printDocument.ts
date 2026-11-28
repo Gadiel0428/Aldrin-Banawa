@@ -16,6 +16,113 @@ export const A4_WIDTH_MM = 210;
 export const A4_HEIGHT_MM = 297;
 export const CLONE_WIDTH_PX = 718;
 
+export type PrintPageSizeId =
+  | 'A4_PORTRAIT'
+  | 'A4_LANDSCAPE'
+  | 'LABEL_50X30'
+  | 'LABEL_70X40'
+  | 'LABEL_100X50';
+
+export interface PrintPageSizeSpec {
+  id: PrintPageSizeId;
+  label: string;
+  widthMm: number;
+  heightMm: number;
+  marginMm: number;
+  widthPx: number;
+  heightPx: number;
+  cloneWidthPx: number;
+  isLabel?: boolean;
+}
+
+export const PRINT_PAGE_SIZE_PRESETS: Record<PrintPageSizeId, PrintPageSizeSpec> = {
+  LABEL_50X30: {
+    id: 'LABEL_50X30',
+    label: '50 × 30 mm (Label)',
+    widthMm: 50,
+    heightMm: 30,
+    marginMm: 1.5,
+    widthPx: 1200,
+    heightPx: 720,
+    cloneWidthPx: 400,
+    isLabel: true,
+  },
+  LABEL_70X40: {
+    id: 'LABEL_70X40',
+    label: '70 × 40 mm (Label)',
+    widthMm: 70,
+    heightMm: 40,
+    marginMm: 2,
+    widthPx: 1400,
+    heightPx: 800,
+    cloneWidthPx: 467,
+    isLabel: true,
+  },
+  LABEL_100X50: {
+    id: 'LABEL_100X50',
+    label: '100 × 50 mm (Label)',
+    widthMm: 100,
+    heightMm: 50,
+    marginMm: 3,
+    widthPx: 1500,
+    heightPx: 750,
+    cloneWidthPx: 500,
+    isLabel: true,
+  },
+  A4_PORTRAIT: {
+    id: 'A4_PORTRAIT',
+    label: 'ISO A4 (210 × 297 mm)',
+    widthMm: A4_WIDTH_MM,
+    heightMm: A4_HEIGHT_MM,
+    marginMm: A4_MARGIN_MM,
+    widthPx: A4_PORTRAIT_WIDTH_PX,
+    heightPx: A4_PORTRAIT_HEIGHT_PX,
+    cloneWidthPx: CLONE_WIDTH_PX,
+    isLabel: false,
+  },
+  A4_LANDSCAPE: {
+    id: 'A4_LANDSCAPE',
+    label: 'ISO A4 Landscape (297 × 210 mm)',
+    widthMm: A4_HEIGHT_MM,
+    heightMm: A4_WIDTH_MM,
+    marginMm: A4_MARGIN_MM,
+    widthPx: A4_LANDSCAPE_WIDTH_PX,
+    heightPx: A4_LANDSCAPE_HEIGHT_PX,
+    cloneWidthPx: 1015,
+    isLabel: false,
+  },
+};
+
+export const LOT_LABEL_PAGE_SIZE_IDS: readonly PrintPageSizeId[] = [
+  'LABEL_50X30',
+  'LABEL_70X40',
+  'LABEL_100X50',
+  'A4_PORTRAIT',
+];
+
+export interface PrintPageOptions {
+  pageSize?: PrintPageSizeId | PrintPageSizeSpec;
+}
+
+export function resolvePrintPageSize(pageSize?: PrintPageSizeId | PrintPageSizeSpec): PrintPageSizeSpec {
+  if (!pageSize) {
+    return PRINT_PAGE_SIZE_PRESETS.A4_PORTRAIT;
+  }
+  if (typeof pageSize === 'string') {
+    return PRINT_PAGE_SIZE_PRESETS[pageSize] || PRINT_PAGE_SIZE_PRESETS.A4_PORTRAIT;
+  }
+  return pageSize;
+}
+
+export function getPageMarginsPx(spec: PrintPageSizeSpec): { marginXPx: number; marginYPx: number } {
+  const safeWidthMm = Math.max(1, spec.widthMm);
+  const safeHeightMm = Math.max(1, spec.heightMm);
+  return {
+    marginXPx: Math.round((spec.marginMm / safeWidthMm) * spec.widthPx),
+    marginYPx: Math.round((spec.marginMm / safeHeightMm) * spec.heightPx),
+  };
+}
+
 export interface PageBreakBlockRange {
   top: number;
   bottom: number;
@@ -683,15 +790,21 @@ async function waitForFontsAndImages(root: HTMLElement): Promise<void> {
 }
 
 /**
- * Renders any DOM element into an array of crisp A4 PNG data URLs (2480x3508px, white background, 10mm margins).
- * Captures an off-screen 718px-wide clone with no transforms/zoom/overflow limits,
- * replaces inputs with text, awaits fonts and images, uses html2canvas scale 3 with allowTaint: false,
- * and respects table-row (tr) and .avoid-break page break boundaries.
+ * Renders any DOM element into an array of crisp PNG page data URLs.
+ * Defaults to ISO A4 Portrait (2480x3508px, white background, 10mm margins), or uses a custom
+ * pageSize preset such as 50 x 30 mm thermal labels when specified via options.
  */
-export async function renderDocumentPages(el: HTMLElement | null | undefined): Promise<string[]> {
+export async function renderDocumentPages(
+  el: HTMLElement | null | undefined,
+  options?: PrintPageOptions
+): Promise<string[]> {
   if (!el || typeof document === 'undefined') {
     throw new Error('Printable document element reference is not mounted.');
   }
+
+  const pageSpec = resolvePrintPageSize(options?.pageSize);
+  const cloneWidthPx = pageSpec.cloneWidthPx || CLONE_WIDTH_PX;
+  const { marginXPx, marginYPx } = getPageMarginsPx(pageSpec);
 
   const offscreenHost = document.createElement('div');
   offscreenHost.setAttribute('aria-hidden', 'true');
@@ -699,9 +812,9 @@ export async function renderDocumentPages(el: HTMLElement | null | undefined): P
     'position: fixed',
     'left: -100000px',
     'top: 0',
-    `width: ${CLONE_WIDTH_PX}px`,
-    `min-width: ${CLONE_WIDTH_PX}px`,
-    `max-width: ${CLONE_WIDTH_PX}px`,
+    `width: ${cloneWidthPx}px`,
+    `min-width: ${cloneWidthPx}px`,
+    `max-width: ${cloneWidthPx}px`,
     'margin: 0',
     'padding: 0',
     'background: #ffffff',
@@ -716,9 +829,9 @@ export async function renderDocumentPages(el: HTMLElement | null | undefined): P
   ].join(';');
 
   const clonedEl = el.cloneNode(true) as HTMLElement;
-  clonedEl.style.width = `${CLONE_WIDTH_PX}px`;
-  clonedEl.style.minWidth = `${CLONE_WIDTH_PX}px`;
-  clonedEl.style.maxWidth = `${CLONE_WIDTH_PX}px`;
+  clonedEl.style.width = `${cloneWidthPx}px`;
+  clonedEl.style.minWidth = `${cloneWidthPx}px`;
+  clonedEl.style.maxWidth = `${cloneWidthPx}px`;
   clonedEl.style.height = 'auto';
   clonedEl.style.minHeight = '0';
   clonedEl.style.maxHeight = 'none';
@@ -840,8 +953,8 @@ export async function renderDocumentPages(el: HTMLElement | null | undefined): P
         useCORS: true,
         allowTaint: false,
         logging: false,
-        width: CLONE_WIDTH_PX,
-        windowWidth: CLONE_WIDTH_PX,
+        width: cloneWidthPx,
+        windowWidth: cloneWidthPx,
         onclone: (clonedDoc, clonedNode) => {
           normalizeDocumentColorsForHtml2Canvas(clonedDoc, clonedNode, samplerCtx, colorCache);
         },
@@ -854,25 +967,51 @@ export async function renderDocumentPages(el: HTMLElement | null | undefined): P
       throw new Error('Rendered document canvas is empty.');
     }
 
+    if (pageSpec.isLabel) {
+      const destContentWidth = Math.max(1, pageSpec.widthPx - marginXPx * 2);
+      const destContentHeight = Math.max(1, pageSpec.heightPx - marginYPx * 2);
+      const fitScale = Math.min(destContentWidth / canvas.width, destContentHeight / canvas.height);
+      const drawWidth = Math.max(1, Math.round(canvas.width * fitScale));
+      const drawHeight = Math.max(1, Math.round(canvas.height * fitScale));
+      const offsetX = Math.round((pageSpec.widthPx - drawWidth) / 2);
+      const offsetY = Math.round((pageSpec.heightPx - drawHeight) / 2);
+
+      const pageCanvas = document.createElement('canvas');
+      pageCanvas.width = pageSpec.widthPx;
+      pageCanvas.height = pageSpec.heightPx;
+      const ctx = pageCanvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('Could not initialize 2D canvas context for label page composition.');
+      }
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, pageSpec.widthPx, pageSpec.heightPx);
+      ctx.drawImage(canvas, 0, 0, canvas.width, canvas.height, offsetX, offsetY, drawWidth, drawHeight);
+      return [pageCanvas.toDataURL('image/png')];
+    }
+
     const plan = planDocumentPageBreaks({
       canvasWidth: canvas.width,
       canvasHeight: canvas.height,
       domWidth: rootRect.width,
       rawRanges,
+      pageWidthPx: pageSpec.widthPx,
+      pageHeightPx: pageSpec.heightPx,
+      marginXPx,
+      marginYPx,
     });
 
     const pages: string[] = plan.pages.map((slice) => {
       const pageCanvas = document.createElement('canvas');
-      pageCanvas.width = A4_PORTRAIT_WIDTH_PX;
-      pageCanvas.height = A4_PORTRAIT_HEIGHT_PX;
+      pageCanvas.width = pageSpec.widthPx;
+      pageCanvas.height = pageSpec.heightPx;
 
       const ctx = pageCanvas.getContext('2d');
       if (!ctx) {
-        throw new Error('Could not initialize 2D canvas context for A4 page composition.');
+        throw new Error('Could not initialize 2D canvas context for page composition.');
       }
 
       ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, A4_PORTRAIT_WIDTH_PX, A4_PORTRAIT_HEIGHT_PX);
+      ctx.fillRect(0, 0, pageSpec.widthPx, pageSpec.heightPx);
 
       ctx.drawImage(
         canvas,
@@ -890,7 +1029,7 @@ export async function renderDocumentPages(el: HTMLElement | null | undefined): P
     });
 
     if (pages.length === 0) {
-      throw new Error('No A4 pages were produced from the document.');
+      throw new Error('No printable pages were produced from the document.');
     }
 
     return pages;
@@ -981,7 +1120,7 @@ function getImageDimensions(dataUrl: string): Promise<{ width: number; height: n
  * Uses CSS @page { size: A4; margin: 0 } and img { display: block; width: 210mm; height: 297mm; page-break-after: always },
  * awaits all image loads, calls iframe.contentWindow.print(), and removes the iframe afterward.
  */
-export async function printPages(pages: string[]): Promise<void> {
+export async function printPages(pages: string[], options?: PrintPageOptions): Promise<void> {
   if (typeof document === 'undefined') {
     throw new Error('Printing requires a browser document environment.');
   }
@@ -989,13 +1128,24 @@ export async function printPages(pages: string[]): Promise<void> {
     throw new Error('No pages available to print.');
   }
 
+  const customPageSpec = options?.pageSize ? resolvePrintPageSize(options.pageSize) : null;
   const firstDims = await getImageDimensions(pages[0]);
-  const isLandscape = firstDims.width > firstDims.height;
+  const isLandscape = customPageSpec
+    ? customPageSpec.widthMm > customPageSpec.heightMm
+    : firstDims.width > firstDims.height;
+
+  const pageWidthMm = customPageSpec ? customPageSpec.widthMm : isLandscape ? A4_HEIGHT_MM : A4_WIDTH_MM;
+  const pageHeightMm = customPageSpec ? customPageSpec.heightMm : isLandscape ? A4_WIDTH_MM : A4_HEIGHT_MM;
+  const cssPageRule = customPageSpec?.isLabel
+    ? `@page { size: ${pageWidthMm}mm ${pageHeightMm}mm; margin: 0; }`
+    : isLandscape
+      ? `@page { size: A4 landscape; margin: 0; }`
+      : `@page { size: A4; margin: 0; }`;
 
   const iframe = document.createElement('iframe');
   iframe.setAttribute('aria-hidden', 'true');
   iframe.style.cssText =
-    'position:fixed;left:-99999px;top:0;width:210mm;height:297mm;border:0;opacity:0;pointer-events:none;visibility:hidden;';
+    `position:fixed;left:-99999px;top:0;width:${pageWidthMm}mm;height:${pageHeightMm}mm;border:0;opacity:0;pointer-events:none;visibility:hidden;`;
 
   let cleanedUp = false;
   const cleanup = () => {
@@ -1015,19 +1165,12 @@ export async function printPages(pages: string[]): Promise<void> {
       throw new Error('Could not initialize hidden print frame.');
     }
 
-    const pageCss = isLandscape
-      ? `
-        @page { size: A4 landscape; margin: 0; }
-        html, body { margin: 0; padding: 0; background: #ffffff; }
-        img { display: block; width: 297mm; height: 210mm; page-break-after: always; break-after: page; }
-        img:last-child { page-break-after: auto; break-after: auto; }
-      `
-      : `
-        @page { size: A4; margin: 0; }
-        html, body { margin: 0; padding: 0; background: #ffffff; }
-        img { display: block; width: 210mm; height: 297mm; page-break-after: always; break-after: page; }
-        img:last-child { page-break-after: auto; break-after: auto; }
-      `;
+    const pageCss = `
+      ${cssPageRule}
+      html, body { margin: 0; padding: 0; background: #ffffff; }
+      img { display: block; width: ${pageWidthMm}mm; height: ${pageHeightMm}mm; page-break-after: always; break-after: page; }
+      img:last-child { page-break-after: auto; break-after: auto; }
+    `;
 
     const imgTags = pages
       .map((src, idx) => `<img src="${src}" alt="Page ${idx + 1}" />`)
@@ -1105,10 +1248,14 @@ function buildTimestampedPdfFilename(filename: string): string {
 }
 
 /**
- * Generates an A4 jsPDF containing full-page images and downloads it as a Blob
- * with a timestamped filename.
+ * Generates a PDF containing full-page images (ISO A4 by default, or custom label dimensions
+ * when options.pageSize is supplied) and downloads it as a Blob with a timestamped filename.
  */
-export async function savePagesAsPdf(pages: string[], filename: string = 'JUWEI-WMS-Document.pdf'): Promise<void> {
+export async function savePagesAsPdf(
+  pages: string[],
+  filename: string = 'JUWEI-WMS-Document.pdf',
+  options?: PrintPageOptions
+): Promise<void> {
   if (typeof document === 'undefined') {
     throw new Error('PDF download requires a browser document environment.');
   }
@@ -1116,26 +1263,47 @@ export async function savePagesAsPdf(pages: string[], filename: string = 'JUWEI-
     throw new Error('No pages available to save as PDF.');
   }
 
+  const customPageSpec = options?.pageSize ? resolvePrintPageSize(options.pageSize) : null;
   const firstDims = await getImageDimensions(pages[0]);
-  const firstIsLandscape = firstDims.width > firstDims.height;
 
-  const pdf = new jsPDF({
-    orientation: firstIsLandscape ? 'landscape' : 'portrait',
-    unit: 'mm',
-    format: 'a4',
-    compress: true,
-  });
-
-  for (let i = 0; i < pages.length; i++) {
-    const dims = i === 0 ? firstDims : await getImageDimensions(pages[i]);
-    const isLandscape = dims.width > dims.height;
-    const pageW = isLandscape ? A4_HEIGHT_MM : A4_WIDTH_MM;
-    const pageH = isLandscape ? A4_WIDTH_MM : A4_HEIGHT_MM;
-
-    if (i > 0) {
-      pdf.addPage('a4', isLandscape ? 'landscape' : 'portrait');
+  let pdf: jsPDF;
+  if (customPageSpec && customPageSpec.isLabel) {
+    const orientation = customPageSpec.widthMm > customPageSpec.heightMm ? 'landscape' : 'portrait';
+    pdf = new jsPDF({
+      orientation,
+      unit: 'mm',
+      format: [customPageSpec.widthMm, customPageSpec.heightMm],
+      compress: true,
+    });
+    for (let i = 0; i < pages.length; i++) {
+      if (i > 0) {
+        pdf.addPage([customPageSpec.widthMm, customPageSpec.heightMm], orientation);
+      }
+      pdf.addImage(pages[i], 'PNG', 0, 0, customPageSpec.widthMm, customPageSpec.heightMm);
     }
-    pdf.addImage(pages[i], 'PNG', 0, 0, pageW, pageH);
+  } else {
+    const firstIsLandscape = customPageSpec
+      ? customPageSpec.widthMm > customPageSpec.heightMm
+      : firstDims.width > firstDims.height;
+
+    pdf = new jsPDF({
+      orientation: firstIsLandscape ? 'landscape' : 'portrait',
+      unit: 'mm',
+      format: 'a4',
+      compress: true,
+    });
+
+    for (let i = 0; i < pages.length; i++) {
+      const dims = i === 0 ? firstDims : await getImageDimensions(pages[i]);
+      const isLandscape = dims.width > dims.height;
+      const pageW = isLandscape ? A4_HEIGHT_MM : A4_WIDTH_MM;
+      const pageH = isLandscape ? A4_WIDTH_MM : A4_HEIGHT_MM;
+
+      if (i > 0) {
+        pdf.addPage('a4', isLandscape ? 'landscape' : 'portrait');
+      }
+      pdf.addImage(pages[i], 'PNG', 0, 0, pageW, pageH);
+    }
   }
 
   const finalFilename = buildTimestampedPdfFilename(filename);

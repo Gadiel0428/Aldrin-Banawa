@@ -48,6 +48,7 @@ import {
   saveRecentPrinter,
 } from '../utils/printCheck';
 import { Code128Barcode } from './Code128Barcode';
+import { ExportMenu } from './ExportMenu';
 import BarcodeScannerModal from './BarcodeScannerModal';
 import PrintPreviewModal from './PrintPreviewModal';
 
@@ -460,37 +461,34 @@ export const PrintCheckSection: React.FC<PrintCheckSectionProps> = ({
             <span>{t('settings.newSamplesBtn')}</span>
           </button>
 
-          <button
-            type="button"
-            onClick={handlePreviewAllSamples}
-            disabled={isPreviewRendering || isPrintingAll}
-            id="btn-print-check-preview-all"
-            className="inline-flex items-center gap-1.5 px-3 h-9 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
-          >
-            {isPreviewRendering ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Eye className="h-3.5 w-3.5" />
-            )}
-            <span>{t('settings.previewAllBtn')}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handlePrintAllSamples}
+          <ExportMenu
+            id="btn-print-check-export-menu"
+            variant="indigo"
             disabled={isPrintingAll || isPreviewRendering}
-            id="btn-print-check-print-all"
-            className="inline-flex items-center gap-1.5 px-4 h-9 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
-          >
-            {isPrintingAll ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Printer className="h-3.5 w-3.5" />
-            )}
-            <span>
-              {isPrintingAll ? t('settings.printingAllBtn') : t('settings.printAllBtn')}
-            </span>
-          </button>
+            icon={
+              isPrintingAll || isPreviewRendering ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+              ) : (
+                <Printer className="h-3.5 w-3.5 shrink-0" />
+              )
+            }
+            items={[
+              {
+                id: 'btn-print-check-print-all',
+                label: isPrintingAll ? t('settings.printingAllBtn') : t('settings.printAllBtn'),
+                icon: <Printer className="h-3.5 w-3.5 text-indigo-600" />,
+                onClick: handlePrintAllSamples,
+                disabled: isPrintingAll || isPreviewRendering,
+              },
+              {
+                id: 'btn-print-check-preview-all',
+                label: t('settings.previewAllBtn'),
+                icon: <Eye className="h-3.5 w-3.5 text-slate-600" />,
+                onClick: handlePreviewAllSamples,
+                disabled: isPreviewRendering || isPrintingAll,
+              },
+            ]}
+          />
         </div>
       </div>
 
@@ -819,15 +817,20 @@ export const PrintCheckSection: React.FC<PrintCheckSectionProps> = ({
               ))}
             </div>
 
-            <button
-              type="button"
-              onClick={handleExportLogsCsv}
+            <ExportMenu
+              id="btn-print-check-logs-export"
+              variant="light"
               disabled={filteredLogs.length === 0}
-              className="inline-flex items-center gap-1.5 px-2.5 h-8 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
-            >
-              <Download className="h-3.5 w-3.5" />
-              <span>{t('settings.exportCsvBtn')}</span>
-            </button>
+              items={[
+                {
+                  id: 'btn-print-check-logs-csv',
+                  label: t('settings.exportCsvBtn'),
+                  icon: <Download className="h-3.5 w-3.5 text-slate-600" />,
+                  onClick: handleExportLogsCsv,
+                  disabled: filteredLogs.length === 0,
+                },
+              ]}
+            />
           </div>
         </div>
 
