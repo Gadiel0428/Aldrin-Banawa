@@ -16,7 +16,7 @@ import type { WebSocketServer } from 'ws';
 import type { ServerConfig } from '../config.ts';
 import { hashPinScrypt } from '../services/authService.ts';
 import { createServerContext, type ServerContext } from '../services/context.ts';
-import { closeSqliteStore, initSqliteStore } from '../sqliteStore.ts';
+import { checkpointAndClose, initSqliteStore } from '../sqliteStore.ts';
 import { registerAccountsRoutes } from './accounts.ts';
 import { registerAdminRoutes } from './admin.ts';
 import { countBoundDevicesForOperator } from '../../shared/validation.ts';
@@ -176,7 +176,7 @@ async function requestJson(
 }
 
 afterEach(() => {
-  closeSqliteStore();
+  checkpointAndClose();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir && fs.existsSync(dir)) {
@@ -203,7 +203,7 @@ describe('Per-operator maximum devices enforcement', () => {
     expect(boundDevice?.boundEmployeeId).toBe('JPMP-101');
     expect(countBoundDevicesForOperator(ctx.authorizedDevicesMap.values(), 'JPMP-101')).toBe(1);
 
-    const bindAudit = ctx.auditTrail.find(
+    const bindAudit = ctx.auditTrailLogs.find(
       (entry) => entry.action === 'DEVICE_BIND' && entry.recordId === 'DEV-PC-1'
     );
     expect(bindAudit).toBeDefined();
@@ -299,7 +299,7 @@ describe('Per-operator maximum devices enforcement', () => {
     expect(ctx.authorizedDevicesMap.get('DEV-PC-1')?.boundEmployeeId).toBeUndefined();
     expect(countBoundDevicesForOperator(ctx.authorizedDevicesMap.values(), 'JPMP-101')).toBe(1);
 
-    const unbindAudit = ctx.auditTrail.find(
+    const unbindAudit = ctx.auditTrailLogs.find(
       (entry) => entry.action === 'DEVICE_UNBIND' && entry.recordId === 'DEV-PC-1'
     );
     expect(unbindAudit).toBeDefined();
@@ -394,7 +394,7 @@ describe('Per-operator maximum devices enforcement', () => {
     expect(lowerRes.body.account.maxDevices).toBe(1);
 
     // Audit trail records actor, account, old value (2), new value (1), and timestamp
-    const maxDevAudit = ctx.auditTrail.find((entry) => entry.action === 'MAX_DEVICES_UPDATED');
+    const maxDevAudit = ctx.auditTrailLogs.find((entry) => entry.action === 'MAX_DEVICES_UPDATED');
     expect(maxDevAudit).toBeDefined();
     expect(maxDevAudit?.actorId).toBe('JPMP-002');
     expect(maxDevAudit?.recordId).toBe('JPMP-101');
